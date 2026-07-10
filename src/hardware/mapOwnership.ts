@@ -1,0 +1,179 @@
+import { readFile } from "node:fs/promises";
+
+export const F28P65X_CPU1_CORE_ID = 0;
+export const F28P65X_CPU2_CORE_ID = 2;
+export const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
+
+export interface MapOwnershipInput {
+  maps: Array<{
+    coreId: number;
+    coreName?: string;
+    mapPath: string;
+  }>;
+}
+
+export interface LinkerMapMemoryRegion {
+  name: string;
+  origin: number;
+  length: number;
+  used: number;
+  unused: number;
+  attr?: string;
+}
+
+export interface LinkerMapSection {
+  name: string;
+  page: number;
+  origin: number;
+  length: number;
+  memoryRegion?: string;
+}
+
+export interface UsedGsRamRegion extends LinkerMapMemoryRegion {
+  gsIndex: number;
+  ownerCoreId: number;
+}
+
+export interface ParsedLinkerMap {
+  coreId: number;
+  coreName?: string;
+  mapPath: string;
+  memoryRegions: LinkerMapMemoryRegion[];
+  sections: LinkerMapSection[];
+  usedGsRam: UsedGsRamRegion[];
+}
+
+export interface RamOwnershipAction {
+  ownerCoreId: number;
+  targetCoreId: number;
+  targetCoreName?: string;
+  memoryRegion: string;
+  gsIndex: number;
+  page: "DATA";
+  address: number;
+  value: number;
+  typeSize: 32;
+  reason: string;
+}
+
+export interface RamOwnershipAnalysis {
+  success: true;
+  target: "F28P65x";
+  memcfgGsxmSelAddress: number;
+  maps: ParsedLinkerMap[];
+  ownershipActions: RamOwnershipAction[];
+}
+
+export function parseLinkerMap(
+  text: string,
+  options: { coreId: number; coreName?: string; mapPath: string }
+): ParsedLinkerMap {
+  const memoryRegions = parseMemoryRegions(text);
+  const sections = parseSections(text, memoryRegions);
+  const usedGsRam = memoryRegions
+    .map(region => {
+      const match = /^RAMGS(\d+)$/i.exec(region.name);
+      if (!match || region.used === 0) {
+        return undefined;
+      }
+      return {
+        ...region,
+        gsIndex: Number.parseInt(match[1], 10),
+        ownerCoreId: options.coreId
+      };
+    })
+    .filter((region): region is UsedGsRamRegion => region !== undefined);
+  return {
+    ...options,
+    memoryRegions,
+    sections,
+    usedGsRam
+  };
+}
+
+export async function analyzeRamOwnership(input: MapOwnershipInput): Promise<RamOwnershipAnalysis> {
+  const maps = await Promise.all(input.maps.map(async map => parseLinkerMap(await readFile(map.mapPath, "utf8"), map)));
+  return {
+    success: true,
+    target: "F28P65x",
+    memcfgGsxmSelAddress: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
+    maps,
+    ownershipActions: maps.flatMap(map => ownershipActionsForMap(map))
+  };
+}
+
+export function ownershipActionsForMap(map: ParsedLinkerMap): RamOwnershipAction[] {
+  if (map.coreId !== F28P65X_CPU2_CORE_ID) {
+    return [];
+  }
+  return map.usedGsRam.map(region => ({
+    ownerCoreId: F28P65X_CPU1_CORE_ID,
+    targetCoreId: map.coreId,
+    targetCoreName: map.coreName,
+    memoryRegion: region.name,
+    gsIndex: region.gsIndex,
+    page: "DATA",
+    address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
+    value: 1 << region.gsIndex,
+    typeSize: 32,
+    reason: `CPU2 map uses ${region.name}; CPU1 must assign this GS RAM block to CPU2 before CPU2 program load.`
+  }));
+}
+
+export function mapPathForProgram(programUri: string): string | undefined {
+  if (!/\.out$/i.test(programUri)) {
+    return undefined;
+  }
+  return programUri.replace(/\.out$/i, ".map");
+}
+
+function parseMemoryRegions(text: string): LinkerMapMemoryRegion[] {
+  const regions: LinkerMapMemoryRegion[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([A-Z]+)?/.exec(line);
+    if (!match) {
+      continue;
+    }
+    regions.push({
+      name: match[1],
+      origin: Number.parseInt(match[2], 16),
+      length: Number.parseInt(match[3], 16),
+      used: Number.parseInt(match[4], 16),
+      unused: Number.parseInt(match[5], 16),
+      attr: match[6]
+    });
+  }
+  return regions;
+}
+
+function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMapSection[] {
+  const sections: LinkerMapSection[] = [];
+  const lines = text.split(/\r?\n/);
+  let inSectionMap = false;
+  for (const line of lines) {
+    if (line.includes("SECTION ALLOCATION MAP")) {
+      inSectionMap = true;
+      continue;
+    }
+    if (!inSectionMap) {
+      continue;
+    }
+    const match = /^([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const origin = Number.parseInt(match[3], 16);
+    sections.push({
+      name: match[1],
+      page: Number.parseInt(match[2], 10),
+      origin,
+      length: Number.parseInt(match[4], 16),
+      memoryRegion: regionForAddress(origin, regions)?.name
+    });
+  }
+  return sections;
+}
+
+function regionForAddress(address: number, regions: LinkerMapMemoryRegion[]): LinkerMapMemoryRegion | undefined {
+  return regions.find(region => address >= region.origin && address < region.origin + region.length);
+}

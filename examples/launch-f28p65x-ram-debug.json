@@ -1,0 +1,25 @@
+{
+  "sessionName": "hybrid30k_f28p65x_ipc",
+  "targetConfigurationName": "TMS320F28P650DK9",
+  "ccxmlPath": "D:/workspace/targetConfigs/TMS320F28P650DK9.ccxml",
+  "cores": [
+    {
+      "coreId": 0,
+      "coreName": "C28xx_CPU1",
+      "corePattern": "C28xx_CPU1",
+      "programUri": "D:/workspace/cpu1/Debug/cpu1.out",
+      "connect": true,
+      "load": true,
+      "haltAtEntry": true
+    },
+    {
+      "coreId": 2,
+      "coreName": "C28xx_CPU2",
+      "corePattern": "C28xx_CPU2",
+      "programUri": "D:/workspace/cpu2/Debug/cpu2.out",
+      "connect": true,
+      "load": true,
+      "haltAtEntry": true
+    }
+  ]
+}

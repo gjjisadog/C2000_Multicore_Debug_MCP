@@ -1,0 +1,4 @@
+interface:
+  display_name: "C2000 Multicore Debug"
+  short_description: "Use c2000-multicore MCP workflows for F28P65x CPU1/CPU2 debug."
+  default_prompt: "Use $c2000-multicore-debug-skill to diagnose or validate the connected F28P65x dual-core target with high-level c2000-multicore MCP workflow tools."

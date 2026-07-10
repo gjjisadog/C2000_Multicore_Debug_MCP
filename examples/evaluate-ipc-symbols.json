@@ -1,0 +1,10 @@
+{
+  "sessionId": "dbg-replace-with-session-id",
+  "coreId": 0,
+  "expressions": [
+    "g_emHybrid30kCpu1Stage",
+    "g_ulHybrid30kIpcPass",
+    "g_ulHybrid30kMsgRamPass",
+    "g_ulHybrid30kParamPass"
+  ]
+}
