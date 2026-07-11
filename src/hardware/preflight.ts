@@ -39,6 +39,16 @@ export interface DebugProcessInfo {
   rawLine: string;
 }
 
+export type ProbeRecoveryPolicy = "block" | "owned-and-stale" | "terminate-external";
+
+export interface ProbeRecoveryResult {
+  policy: ProbeRecoveryPolicy;
+  attempted: boolean;
+  recovered: boolean;
+  terminatedPids: number[];
+  remainingOwners: DebugProcessInfo[];
+}
+
 const execFileAsync = promisify(execFile);
 
 export async function runHardwarePreflight(options: {
@@ -82,6 +92,64 @@ export async function runHardwarePreflight(options: {
   }
 
   return preflight;
+}
+
+export async function recoverDebugProbe(options: {
+  ccsInstallPath?: string;
+  policy: ProbeRecoveryPolicy;
+  execFile?: ExecFileLike;
+  killProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
+  settleMs?: number;
+  targetCcxmlPath?: string;
+}): Promise<ProbeRecoveryResult> {
+  const killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const before = await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile });
+  const allOwners = before.debugProcessDetails.filter(isProbeOwnerProcess);
+  const owners = options.targetCcxmlPath
+    ? allOwners.filter(owner => owner.command.includes(options.targetCcxmlPath!))
+    : allOwners;
+  if (owners.length === 0) {
+    return { policy: options.policy, attempted: false, recovered: true, terminatedPids: [], remainingOwners: [] };
+  }
+  if (options.policy !== "terminate-external") {
+    return { policy: options.policy, attempted: false, recovered: false, terminatedPids: [], remainingOwners: owners };
+  }
+  const terminatedPids: number[] = [];
+  for (const owner of owners) {
+    try {
+      killProcess(owner.pid, "SIGTERM");
+      terminatedPids.push(owner.pid);
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  await delay(options.settleMs ?? 1500);
+  for (const owner of owners) {
+    try {
+      killProcess(owner.pid, 0);
+      killProcess(owner.pid, "SIGKILL");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  await delay(250);
+  const after = await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile });
+  const remainingOwners = after.debugProcessDetails
+    .filter(isProbeOwnerProcess)
+    .filter(owner => !options.targetCcxmlPath || owner.command.includes(options.targetCcxmlPath));
+  return { policy: options.policy, attempted: true, recovered: remainingOwners.length === 0, terminatedPids, remainingOwners };
+}
+
+export function isProbeOwnerProcess(processInfo: DebugProcessInfo): boolean {
+  return processInfo.kind === "DSLite" || processInfo.kind === "DebugServer" || processInfo.kind === "dss.sh";
+}
+
+function isMissingProcess(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ESRCH";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export function findDebugProcesses(processList: string): string[] {

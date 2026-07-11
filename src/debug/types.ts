@@ -34,6 +34,9 @@ export interface CreateDebugSessionOptions {
   sessionName: string;
   ccxmlPath?: string;
   coreMap: CoreConfig[];
+  probeId?: string;
+  preferredProbeIds?: string[];
+  allowAutoProbeAllocation?: boolean;
 }
 
 export interface TargetState {

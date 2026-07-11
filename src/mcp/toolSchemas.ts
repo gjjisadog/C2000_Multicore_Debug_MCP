@@ -9,7 +9,10 @@ export const coreConfigSchema = z.object({
 export const createDebugSessionSchema = z.object({
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
-  coreMap: z.array(coreConfigSchema).min(1).optional()
+  coreMap: z.array(coreConfigSchema).min(1).optional(),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false)
 });
 
 export const hardwarePreflightSchema = z.object({
@@ -229,7 +232,10 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ ses
   cpu1CoreName: z.string().min(1).default("C28xx_CPU1"),
   cpu1CorePattern: z.string().min(1).optional(),
   cpu2CoreName: z.string().min(1).default("C28xx_CPU2"),
-  cpu2CorePattern: z.string().min(1).optional()
+  cpu2CorePattern: z.string().min(1).optional(),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false)
 });
 
 export const runBootHandoffDiagnosisSchema = z.object({
@@ -296,6 +302,9 @@ export const launchMulticoreDebugSchema = z.object({
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false),
   programDiscovery: z.object({
     enabled: z.boolean().default(false),
     cpu1Program: z.string().min(1).optional(),

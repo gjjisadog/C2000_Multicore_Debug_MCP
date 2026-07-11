@@ -17,6 +17,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     logging: { level: "info" },
     toolProfile: "safe",
     filesystem: { allowedReadRoots: [process.cwd()], allowedWriteRoots: [path.join(process.cwd(), "runtime")] },
+    debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 600000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
     ...fileConfig
   });
   const ccs = { ...objectAt(merged, "ccs") };
@@ -36,9 +37,15 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   const ccs = { ...objectAt(config, "ccs") };
   const logging = { ...objectAt(config, "logging") };
   const filesystem = { ...objectAt(config, "filesystem") };
+  const debugProbe = { ...objectAt(config, "debugProbe") };
   if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
   if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_ALLOWED_WRITE_ROOTS) filesystem.allowedWriteRoots = process.env.C2000_MCP_ALLOWED_WRITE_ROOTS.split(path.delimiter).filter(Boolean);
+  if (process.env.C2000_MCP_PROBE_QUEUE_DIR) debugProbe.queueDir = process.env.C2000_MCP_PROBE_QUEUE_DIR;
+  if (process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS) debugProbe.queueTimeoutMs = Number.parseInt(process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS, 10);
+  if (process.env.C2000_MCP_PROBE_RECOVERY_POLICY) debugProbe.recoveryPolicy = process.env.C2000_MCP_PROBE_RECOVERY_POLICY;
+  if (process.env.C2000_MCP_PROBES_JSON) debugProbe.probes = JSON.parse(process.env.C2000_MCP_PROBES_JSON);
+  if (process.env.C2000_MCP_MULTI_BOARD_ENABLED) debugProbe.multiBoardEnabled = process.env.C2000_MCP_MULTI_BOARD_ENABLED === "1" || process.env.C2000_MCP_MULTI_BOARD_ENABLED === "true";
   if (process.env.C2000_MCP_ADAPTER) {
     config.adapter = process.env.C2000_MCP_ADAPTER;
     ccs.scriptingMode = process.env.C2000_MCP_ADAPTER;
@@ -64,7 +71,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_LOG_FILE) {
     logging.logFile = process.env.C2000_MCP_LOG_FILE;
   }
-  return { ...config, ccs, logging, filesystem };
+  return { ...config, ccs, logging, filesystem, debugProbe };
 }
 
 function objectAt(config: Record<string, unknown>, key: string): Record<string, unknown> {

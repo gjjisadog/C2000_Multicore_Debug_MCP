@@ -171,6 +171,11 @@ Environment overrides:
 - `C2000_MCP_CCXML_PATH`
 - `C2000_MCP_DSS_TIMEOUT_MS` (default hardware acceptance value: `300000`)
 - `C2000_MCP_REQUEST_TIMEOUT_MS` (MCP hardware acceptance client request timeout; default: `600000`)
+- `C2000_MCP_PROBE_QUEUE_DIR` (shared FIFO lease directory; every MCP instance must use the same absolute path)
+- `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `600000`)
+- `C2000_MCP_PROBE_RECOVERY_POLICY=block|owned-and-stale|terminate-external` (default: `owned-and-stale`)
+- `C2000_MCP_PROBES_JSON` (optional JSON array defining the multi-board pool)
+- `C2000_MCP_MULTI_BOARD_ENABLED=true` (explicit multi-board opt-in; default is false)
 - `C2000_PROGRAM_SEARCH_ROOTS`
 - `C2000_MCP_LOG_LEVEL=debug|info|warn|error`
 - `C2000_MCP_LOG_FILE`
@@ -859,4 +864,29 @@ High-level workflows execute their steps inside the server; they do not recursiv
 
 CCS project cleanup is workflow-scoped. Projects needed by build/debug remain available for the full workflow and are cleaned together only after success or failure. Because CCS 21 has no `Close Project` command, automation should use a dedicated temporary CCS workspace for each workflow instead of importing workflow-only projects into the user's main workspace. Final cleanup closes the logical DebugSession and the temporary workflow workspace together while preserving source projects, generated `.out`/`.map` evidence, and every project that existed in the main workspace before the workflow.
 
-Persistent DSS children also register a parent-process exit fallback. Normal cleanup still uses the structured shutdown command and `c2000_closeDebugSession`; if the MCP process is terminated unexpectedly, its own DSS child is killed to avoid an orphan process. This fallback never searches for or kills arbitrary pre-existing `DSLite` processes owned by CCS UI.
+Persistent DSS children also register a parent-process exit fallback. Normal cleanup still uses the structured shutdown command and `c2000_closeDebugSession`; if the MCP process is terminated unexpectedly, its own DSS child is killed to avoid an orphan process.
+
+All CCS-backed MCP instances coordinate through a filesystem FIFO lease. The lease is acquired before probe recovery/session creation and held until the logical debug session closes, so multiple Agents or conversations cannot interleave operations on one XDS110. Dead active owners and dead waiting tickets are reclaimed automatically. Configure every instance with the same absolute `C2000_MCP_PROBE_QUEUE_DIR`.
+
+For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique XDS110 `serialNumber`, and a separate `.ccxml` already bound to that serial number:
+
+```json
+{
+  "debugProbe": {
+    "multiBoardEnabled": true,
+    "queueDir": "/shared/c2000-probe-queue",
+    "queueTimeoutMs": 600000,
+    "recoveryPolicy": "terminate-external",
+    "probes": [
+      { "probeId": "board-01", "serialNumber": "XDS110-A", "ccxmlPath": "/targets/board-01.ccxml", "enabled": true },
+      { "probeId": "board-02", "serialNumber": "XDS110-B", "ccxmlPath": "/targets/board-02.ccxml", "enabled": true }
+    ]
+  }
+}
+```
+
+Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true` and at least two enabled, uniquely identified probes are configured. At Session creation the MCP verifies that the selected XDS110 serial is currently enumerated and that its dedicated `.ccxml` contains that serial binding. A mismatch aborts before DSS creation or target access.
+
+Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, and wait time. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
+
+The default `owned-and-stale` recovery policy blocks on a live external DSLite owner. For a dedicated unattended test machine, set `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external`; only the FIFO lease holder may then send TERM/KILL to detected DSLite, DebugServer, or dss.sh processes before starting the test. The CCS application itself is not terminated. `c2000_createDebugSession` returns `probeQueue` and `probeRecovery` evidence so callers can see queue position, wait time, and recovered PIDs.

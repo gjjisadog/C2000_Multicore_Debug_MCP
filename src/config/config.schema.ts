@@ -23,7 +23,23 @@ export const c2000McpConfigSchema = z.object({
   filesystem: z.object({
     allowedReadRoots: z.array(z.string().min(1)).default([]),
     allowedWriteRoots: z.array(z.string().min(1)).default([])
-  }).default({ allowedReadRoots: [], allowedWriteRoots: [] })
+  }).default({ allowedReadRoots: [], allowedWriteRoots: [] }),
+  debugProbe: z.object({
+    queueDir: z.string().min(1).default("runtime/debug-probe-queue"),
+    queueTimeoutMs: z.number().int().positive().default(600000),
+    recoveryPolicy: z.enum(["block", "owned-and-stale", "terminate-external"]).default("owned-and-stale"),
+    multiBoardEnabled: z.boolean().default(false),
+    probes: z.array(z.object({
+      probeId: z.string().min(1),
+      serialNumber: z.string().min(1),
+      ccxmlPath: z.string().min(1),
+      enabled: z.boolean().default(true)
+    })).optional()
+  }).superRefine((value, context) => {
+    if (value.multiBoardEnabled && (value.probes?.filter(probe => probe.enabled).length ?? 0) < 2) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "multiBoardEnabled requires at least two enabled probes", path: ["probes"] });
+    }
+  }).default({ queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 600000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false })
 });
 
 export type C2000McpConfig = z.infer<typeof c2000McpConfigSchema>;

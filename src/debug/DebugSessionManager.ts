@@ -37,6 +37,7 @@ import { normalizeProgramUri } from "../utils/pathUtils.js";
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
 import { mapPathForProgram, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import type { DebugProbeCoordinator, DebugProbeLease } from "../hardware/debugProbeCoordinator.js";
 
 interface LogicalDebugSession {
   sessionId: string;
@@ -44,6 +45,7 @@ interface LogicalDebugSession {
   ccxmlPath?: string;
   adapterSession: AdapterSession;
   cores: Map<CoreId, CoreSession>;
+  probeLease?: DebugProbeLease;
 }
 
 const F28P65X_CPU1_CORE_ID = 0;
@@ -56,18 +58,39 @@ export class DebugSessionManager {
   constructor(
     private readonly adapter: DebugAdapter,
     private readonly loadedPrograms: LoadedProgramRegistry,
-    private readonly logger: Logger = noopLogger
+    private readonly logger: Logger = noopLogger,
+    private readonly probeCoordinator?: DebugProbeCoordinator,
+    private readonly prepareProbe?: (lease?: DebugProbeLease) => Promise<unknown>
   ) {}
 
-  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[] }> {
+  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[]; probeQueue?: Record<string, unknown>; probeRecovery?: unknown }> {
     const sessionName = options.sessionName ?? "c2000-debug-session";
     const coreMap = validateCoreMap(options.coreMap ?? defaultF28P65xCoreMap);
-    const adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath: options.ccxmlPath, coreMap });
+    const probeLease = await this.probeCoordinator?.acquire(sessionName, { probeId: options.probeId, preferredProbeIds: options.preferredProbeIds, allowAutoProbeAllocation: options.allowAutoProbeAllocation });
+    let probeRecovery: unknown;
+    let adapterSession: AdapterSession;
+    try {
+      probeRecovery = await this.prepareProbe?.(probeLease);
+      adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath: probeLease?.probe?.ccxmlPath ?? options.ccxmlPath, coreMap });
+    } catch (error) {
+      await probeLease?.release();
+      throw error;
+    }
     const sessionId = `dbg-${randomUUID()}`;
     const cores = new Map(coreMap.map(core => [core.coreId, new CoreSession(core)]));
-    this.sessions.set(sessionId, { sessionId, sessionName, ccxmlPath: options.ccxmlPath, adapterSession, cores });
+    this.sessions.set(sessionId, { sessionId, sessionName, ccxmlPath: options.ccxmlPath, adapterSession, cores, probeLease });
     this.logger.info("debug session created", { sessionId, sessionName, coreMap });
-    return { sessionId, cores: await this.listCores(sessionId) };
+    try {
+      return {
+        sessionId,
+        cores: await this.listCores(sessionId),
+        ...(probeLease ? { probeQueue: { leaseId: probeLease.leaseId, queuePositionAtEntry: probeLease.queuePositionAtEntry, waitedMs: probeLease.waitedMs, ...(probeLease.probe ?? {}) } } : {}),
+        ...(probeRecovery !== undefined ? { probeRecovery } : {})
+      };
+    } catch (error) {
+      try { await this.closeDebugSession(sessionId); } catch { /* Preserve the original creation error. */ }
+      throw error;
+    }
   }
 
   async listCores(sessionId: string): Promise<CoreInfo[]> {
@@ -110,6 +133,7 @@ export class DebugSessionManager {
     } finally {
       this.sessions.delete(sessionId);
       this.loadedPrograms.deleteSession(sessionId);
+      await session.probeLease?.release();
       this.logger.info("debug session closed", { sessionId });
     }
     return { sessionId, closed: true };

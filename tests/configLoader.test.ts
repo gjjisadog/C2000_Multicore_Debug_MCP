@@ -18,6 +18,30 @@ describe("loadConfig", () => {
     expect(config.ccs.dssTimeoutMs).toBe(60000);
   });
 
+  test("loads the cross-process probe queue and automatic recovery policy", async () => {
+    process.env.C2000_MCP_PROBE_QUEUE_DIR = "/tmp/c2000-shared-probe";
+    process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS = "120000";
+    process.env.C2000_MCP_PROBE_RECOVERY_POLICY = "terminate-external";
+    process.env.C2000_MCP_PROBES_JSON = JSON.stringify([
+      { probeId: "board-01", serialNumber: "XDS-A", ccxmlPath: "/targets/a.ccxml", enabled: true },
+      { probeId: "board-02", serialNumber: "XDS-B", ccxmlPath: "/targets/b.ccxml", enabled: true }
+    ]);
+    process.env.C2000_MCP_MULTI_BOARD_ENABLED = "true";
+
+    const config = await loadConfig();
+
+    expect(config.debugProbe).toEqual({
+      queueDir: "/tmp/c2000-shared-probe",
+      queueTimeoutMs: 120000,
+      recoveryPolicy: "terminate-external",
+      multiBoardEnabled: true,
+      probes: [
+        { probeId: "board-01", serialNumber: "XDS-A", ccxmlPath: "/targets/a.ccxml", enabled: true },
+        { probeId: "board-02", serialNumber: "XDS-B", ccxmlPath: "/targets/b.ccxml", enabled: true }
+      ]
+    });
+  });
+
   test("fills missing TI paths from validated discovery", async () => {
     delete process.env.C2000_MCP_CCS_INSTALL_PATH;
     delete process.env.C2000_MCP_C2000WARE_PATH;

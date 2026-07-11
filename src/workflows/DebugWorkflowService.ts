@@ -35,6 +35,9 @@ export class DebugWorkflowService {
       const created = await this.manager.createDebugSession({
         sessionName,
         ccxmlPath: input.ccxmlPath,
+        probeId: input.probeId,
+        preferredProbeIds: input.preferredProbeIds,
+        allowAutoProbeAllocation: input.allowAutoProbeAllocation,
         coreMap: [
           { coreId: input.cpu1CoreId, coreName: input.cpu1CoreName, corePattern: input.cpu1CorePattern },
           { coreId: input.cpu2CoreId, coreName: input.cpu2CoreName, corePattern: input.cpu2CorePattern }

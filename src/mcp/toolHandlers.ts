@@ -231,14 +231,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       }
     },
 
-    async createDebugSession(input: z.infer<typeof createDebugSessionSchema>) {
+    async createDebugSession(input: z.input<typeof createDebugSessionSchema>) {
       try {
         const result = await manager.createDebugSession({
           sessionName: input.sessionName,
           ccxmlPath: input.ccxmlPath,
-          coreMap: input.coreMap
+          coreMap: input.coreMap,
+          probeId: input.probeId,
+          preferredProbeIds: input.preferredProbeIds,
+          allowAutoProbeAllocation: input.allowAutoProbeAllocation
         });
-        return ok({ sessionId: result.sessionId, cores: result.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName })) });
+        return ok({ ...result, cores: result.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName })) });
       } catch (error) {
         return fail(error);
       }
@@ -632,6 +635,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const created = await manager.createDebugSession({
           sessionName: parsed.sessionName ?? parsed.targetConfigurationName ?? "launch-multicore-debug",
           ccxmlPath: parsed.ccxmlPath,
+          probeId: parsed.probeId,
+          preferredProbeIds: parsed.preferredProbeIds,
+          allowAutoProbeAllocation: parsed.allowAutoProbeAllocation,
           coreMap: cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
         });
         createdSessionId = created.sessionId;

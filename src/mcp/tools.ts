@@ -60,7 +60,7 @@ type ToolTargetEffect =
   | "memory-write"
   | "launch-workflow";
 
-export type ToolEffect = "host-read" | "host-write" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
+export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
 type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
 
@@ -278,7 +278,7 @@ export function toolProfileFromEnv(): ToolProfile {
 function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">): ToolDefinition {
   const effects = effectsFor(definition.name, definition.targetEffect);
   const readOnlyHint = effects.every(effect => ["host-read", "target-read"].includes(effect));
-  const destructiveHint = effects.some(effect => ["target-reset", "target-memory-write", "ram-ownership-change", "fault-injection"].includes(effect));
+  const destructiveHint = effects.some(effect => ["host-process-terminate", "target-reset", "target-memory-write", "ram-ownership-change", "fault-injection"].includes(effect));
   return {
     ...definition,
     effects,
@@ -289,7 +289,7 @@ function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annota
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
   if (targetEffect === "host-read" || targetEffect === "session-read") return ["host-read"];
-  if (name === "c2000_createDebugSession") return ["session-create"];
+  if (name === "c2000_createDebugSession") return ["session-create", "host-process-terminate"];
   if (name === "c2000_closeDebugSession") return ["session-dispose"];
   if (targetEffect === "target-read") return ["target-read"];
   if (targetEffect === "connectivity-control") return [name.includes("disconnect") ? "target-disconnect" : "target-connect"];
@@ -299,8 +299,9 @@ function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] 
   if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];
   if (name === "c2000_runBootHandoffDiagnosis") return ["target-read"];
   if (name === "c2000_runFullDebugBundle") return ["target-read", "bundle-write"];
-  if (name === "c2000_launchMulticoreDebugSafe") return ["session-create", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read"];
-  if (name === "c2000_launchMulticoreDebug" || name === "c2000_launchMulticoreDebugWithActions") return ["session-create", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read", "target-memory-write", "fault-injection", "target-run"];
+  if (name === "c2000_launchAndRunIpcAcceptance") return ["session-create", "host-process-terminate", "target-connect", "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"];
+  if (name === "c2000_launchMulticoreDebugSafe") return ["session-create", "host-process-terminate", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read"];
+  if (name === "c2000_launchMulticoreDebug" || name === "c2000_launchMulticoreDebugWithActions") return ["session-create", "host-process-terminate", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read", "target-memory-write", "fault-injection", "target-run"];
   return ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"];
 }
 

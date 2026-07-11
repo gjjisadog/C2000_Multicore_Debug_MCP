@@ -229,6 +229,21 @@ Minimize approval popups:
 
 Treat one user-requested debug/acceptance operation as a single workflow lifecycle. Project cleanup belongs to the workflow boundary, never to individual atomic debug steps.
 
+### Shared XDS110 queue
+
+- Every MCP server process uses the same filesystem-backed FIFO queue. This covers multiple Agents, Codex conversations, and MCP server processes.
+- The lease starts before probe recovery or DSS session creation and remains held for the complete workflow. Release it only when `c2000_closeDebugSession` runs in final cleanup.
+- Never release and reacquire between connect, load, reset, run, wait, diagnosis, or evidence collection steps.
+- Only the queue-head lease holder may apply probe recovery. Waiting callers must not terminate DSLite or touch the target.
+- Dead owners and dead waiting tickets are reclaimed automatically. A live owner is never stolen merely because another caller has waited a long time.
+- `ProbeQueueTimeout` means the caller did not reach the head before its configured deadline; report queue evidence and do not bypass the queue.
+- For unattended hardware rigs, `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external` lets the lease holder terminate existing DSLite/DebugServer/dss.sh owners before testing. This is an explicit machine-level policy and may close a manually started debug session; it does not terminate the CCS application itself.
+- Enter multi-board mode only when configuration explicitly has `multiBoardEnabled: true`, at least two enabled unique probes, live enumeration of the selected serial number, and a `.ccxml` containing that serial binding. Fail closed on any mismatch.
+- With a configured multi-board pool, pass `probeId` when the user names a board. Automatic least-loaded allocation additionally requires `allowAutoProbeAllocation: true`; never infer that permission from an omitted `probeId` or from `preferredProbeIds`.
+- Treat the returned `probeQueue.probeId`, `serialNumber`, and `ccxmlPath` as the authoritative board identity for the entire Session. Never switch boards after Session creation.
+- Different `probeId` leases may run concurrently. The same `probeId` remains FIFO-serialized.
+- Every board must have a unique XDS110 serial number and its own `.ccxml` already bound to that serial. Never reuse a generic unbound `.ccxml` in a multi-board pool.
+
 Before the workflow:
 
 - Prefer a dedicated temporary CCS workspace for the whole workflow. Import/open CPU1, CPU2, system, dependency, generated demo, and helper projects only in that workspace.
@@ -244,7 +259,7 @@ In one final `finally` cleanup after success or failure:
 
 1. Halt targets when required by the workflow's safety contract.
 2. Close the MCP logical DebugSession so persistent DSS resources are disposed.
-3. If this workflow launched a CCS UI debug session/DSLite process, terminate that debug session and verify the owned DSLite PID exited. Never kill an unrelated pre-existing DSLite process.
+3. Terminate this workflow's DSLite process and verify it exited. An external pre-existing probe owner may be terminated only when the queue lease is held and the explicitly configured recovery policy is `terminate-external`.
 4. Close the temporary CCS workflow window/session after build/debug output is complete.
 5. Dispose the temporary workspace registration/cache when it is safe to do so; preserve source projects and generated `.out`/`.map` evidence.
 6. If the main workspace was reused, remove only projects added by this workflow and never delete their project directories or source files.

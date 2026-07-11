@@ -24,7 +24,12 @@ export type DebugErrorCode =
   | "RamOwnershipMapParseFailed"
   | "PathOutsideAllowedReadRoots"
   | "PathOutsideAllowedWriteRoots"
-  | "PathResolutionFailed";
+  | "PathResolutionFailed"
+  | "ProbeNotFound"
+  | "ProbeSelectionRequired"
+  | "ProbeIdentityMismatch"
+  | "DuplicateProbeId"
+  | "ProbeQueueTimeout";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

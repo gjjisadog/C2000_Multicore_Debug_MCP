@@ -7,6 +7,11 @@ import { DebugSessionManager } from "./debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
 import { registerC2000Tools } from "./mcp/tools.js";
 import { Logger } from "./utils/logger.js";
+import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware/debugProbeCoordinator.js";
+import { recoverDebugProbe } from "./hardware/preflight.js";
+import { runHardwarePreflight } from "./hardware/preflight.js";
+import { readFile } from "node:fs/promises";
+import { DebugMcpError } from "./utils/errors.js";
 
 export function createC2000McpServer(config: C2000McpConfig): McpServer {
   const server = new McpServer(
@@ -14,7 +19,33 @@ export function createC2000McpServer(config: C2000McpConfig): McpServer {
     { capabilities: { logging: {} } }
   );
   const logger = new Logger(config.logging.level, config.logging.logFile);
-  const manager = new DebugSessionManager(createAdapter(config), new LoadedProgramRegistry(), logger);
+  const isCcs = (config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter) === "ccs";
+  const enabledProbes = config.debugProbe.probes?.filter(probe => probe.enabled);
+  const probeCoordinator = !isCcs ? undefined : config.debugProbe.multiBoardEnabled
+    ? new DebugProbePoolCoordinator(config.debugProbe.queueDir, enabledProbes ?? [], config.debugProbe.queueTimeoutMs)
+    : new FileDebugProbeCoordinator(config.debugProbe.queueDir, config.debugProbe.queueTimeoutMs);
+  const manager = new DebugSessionManager(
+    createAdapter(config),
+    new LoadedProgramRegistry(),
+    logger,
+    probeCoordinator,
+    isCcs ? async lease => {
+      if (lease?.probe) {
+        const preflight = await runHardwarePreflight({ ccsInstallPath: config.ccs.installPath });
+        const detectedSerials = preflight.xdsdfu.devices?.map(device => device.serialNumber).filter((serial): serial is string => Boolean(serial)) ?? [];
+        if (!detectedSerials.includes(lease.probe.serialNumber)) {
+          throw new DebugMcpError("ProbeIdentityMismatch", `Configured XDS110 is not connected: ${lease.probe.probeId}`, { expectedSerialNumber: lease.probe.serialNumber, detectedSerialNumbers: detectedSerials });
+        }
+        const ccxml = await readFile(lease.probe.ccxmlPath, "utf8");
+        if (!ccxml.includes(lease.probe.serialNumber)) {
+          throw new DebugMcpError("ProbeIdentityMismatch", `The board ccxml is not bound to its configured XDS110 serial number`, { probeId: lease.probe.probeId, serialNumber: lease.probe.serialNumber, ccxmlPath: lease.probe.ccxmlPath });
+        }
+      }
+      const recovery = await recoverDebugProbe({ ccsInstallPath: config.ccs.installPath, policy: config.debugProbe.recoveryPolicy, targetCcxmlPath: lease?.probe?.ccxmlPath });
+      if (!recovery.recovered) throw new Error(`XDS110 recovery blocked: ${JSON.stringify(recovery.remainingOwners)}`);
+      return recovery;
+    } : undefined
+  );
   registerC2000Tools(server, manager, config.toolProfile, config.filesystem, {
     ccsInstallPath: config.ccs.installPath,
     c2000WarePath: config.ccs.c2000WarePath,
