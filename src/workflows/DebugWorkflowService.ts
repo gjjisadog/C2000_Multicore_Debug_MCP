@@ -163,7 +163,9 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       ipcReady,
-      ipcAcceptance: true
+      ipcAcceptance: true,
+      cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
+      cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
     });
     performedSteps.push("diagnoseBootHandoff");
     const result: ToolResult = {
@@ -382,11 +384,15 @@ export class DebugWorkflowService {
     extraExpressions?: ExpressionCondition[];
     ipcAcceptance?: boolean;
     evidence?: DebugEvidence;
+    cpu1Expressions?: string[];
+    cpu2Expressions?: string[];
   }): Promise<ToolResult> {
     const boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
-      cpu2CoreId: options.cpu2CoreId
+      cpu2CoreId: options.cpu2CoreId,
+      cpu1Expressions: options.cpu1Expressions,
+      cpu2Expressions: options.cpu2Expressions
     });
     const extraExpressions = options.extraExpressions
       ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
