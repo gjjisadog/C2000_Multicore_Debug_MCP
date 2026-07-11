@@ -50,9 +50,12 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 ## Install
 
 ```bash
-npm install
+npm ci
 npm run build
+npm run doctor
 ```
+
+`npm run build` type-checks production sources and produces a self-contained `dist/src/index.js` bundle. The runtime artifact includes its MCP SDK and schema dependencies, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. `npm run typecheck` is also available as a standalone quality gate.
 
 ## Start
 
@@ -67,6 +70,31 @@ Built server:
 ```bash
 C2000_MCP_CONFIG=./examples/f28p65x.config.json npm start
 ```
+
+Read-only startup diagnosis:
+
+```bash
+npm run doctor
+```
+
+The doctor uses only Node built-ins. It starts the built MCP without touching the target, completes the MCP initialize handshake, lists tools, and calls `c2000_getServerHealth`. On failure it prints structured JSON with a failure code, remediation, and captured server stderr.
+
+Use `npm run doctor:isolated` to copy the runtime artifact into a temporary directory with no adjacent `node_modules` and perform the same handshake. This is the strongest check that the configured artifact is genuinely self-contained.
+
+## Startup Resilience
+
+The configured entrypoint remains `dist/src/index.js`, but it is now a self-contained bundle rather than a thin file that imports runtime packages from `node_modules`. This prevents a damaged transitive package from silently removing every `c2000_*` tool on the next Codex session startup.
+
+Startup events are written as one-line JSON to stderr, never stdout. A successful process emits `c2000_mcp_ready`; failures identify `load-config`, `create-server`, or `connect-transport` and include a repair action. Set `C2000_MCP_STARTUP_DIAGNOSTICS=quiet` to suppress only the ready event; errors remain visible.
+
+If a client reports an empty tool list:
+
+1. Run `npm run doctor`.
+2. If the runtime artifact is missing, run `npm ci && npm run build`.
+3. Re-run `npm run doctor` and confirm `runtime.bundled === true`.
+4. Restart or reload the MCP client so it performs a fresh `initialize` and `tools/list` handshake.
+
+These checks do not connect XDS110, create a debug session, load programs, reset cores, or run the target.
 
 ## Client Config
 
@@ -188,6 +216,7 @@ TI paths use this priority: environment/config values, validated automatic disco
 
 Phase 0 read-only host checks:
 
+- `c2000_getServerHealth`
 - `c2000_getEnvironment`
 - `c2000_getToolContracts`
 - `c2000_getDebugBoundary`
@@ -245,6 +274,8 @@ Phase 3:
 - `c2000_runFullDebugBundle`
 
 All tool responses include `success`, `timestamp`, and scoped fields such as `sessionId`, `coreId`, `coreName`.
+
+`c2000_getServerHealth` is available in `readonly`, `safe`, and `full` profiles. It reports server/runtime version, whether the active artifact is bundled, process uptime, selected adapter and tool profile, configured TI path presence, and the exact registered tool names. It is host-read only and never enumerates or controls the target.
 
 Each registered tool definition also declares `inputScope` and `targetEffect` contracts. Core-scoped debug tools use `inputScope: "core"` and must expose both `sessionId` and `coreId`; host-only tools such as `c2000_getDebugBoundary`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, `c2000_getAcceptanceReadiness`, and `c2000_analyzeRamOwnership` use `inputScope: "host"` and do not connect to the target. MCP clients can call `c2000_getToolContracts` to inspect each tool's `inputScope`, `targetEffect`, `inputFields`, `requiredInputFields`, `coreIdentityFields`, and `responseCoreIdentityFields`. Single-core debug controls declare response identity fields `["coreId", "coreName"]`; batch tools declare per-result identity fields; multicore snapshots declare `["cores[].coreId", "cores[].coreName"]`; and `c2000_verifyRunPauseIsolation` declares `["acceptanceSummary.steps[].commandCoreId", "acceptanceSummary.steps[].commandCoreName"]`. Advanced IPC, MSGRAM, parameter-sync, CPU2 bring-up, and fault-injection tools also declare response identity paths, for example `c2000_assignExpressions` and `c2000_injectFaults` use `["results[].coreId", "results[].coreName"]`, `c2000_compareExpressions` uses `["comparisons[].left.coreId", "comparisons[].right.coreId"]`, `c2000_waitForExpressionSet` and `c2000_waitForIpcReady` use `["conditions[].coreId"]`, `c2000_analyzeRamOwnership` uses `["maps[].coreId", "ownershipActions[].targetCoreId"]`, `c2000_diagnoseCpu2Boot` uses `["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"]`, and `c2000_diagnoseBootHandoff` also includes `["ramOwnership.maps[].coreId"]` when map evidence is supplied. `c2000_reloadResetRunToMain` declares `["coreId", "coreName"]` and reports the current adapter limitation for true breakpoint/run-to-symbol behavior. Workflow tools such as `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, and `c2000_runFullDebugBundle` declare `targetEffect: "launch-workflow"` because they perform multi-step orchestration inside the MCP server. `c2000_launchMulticoreDebug` declares response identity paths for its snapshot, post-launch actions, post-launch checks, and nested run/pause isolation summary. The readiness and hardware acceptance scripts assert these response identity contracts before any target connection or launch step, so weak contracts fail fast before touching the board.
 

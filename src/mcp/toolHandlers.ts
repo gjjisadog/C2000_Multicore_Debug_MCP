@@ -46,6 +46,7 @@ import {
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
   sessionSchema,
+  serverHealthSchema,
   toolContractsSchema,
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
@@ -61,6 +62,7 @@ export interface ToolHandlerDeps {
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
   getToolProfile?: () => { activeToolProfile: string; hiddenTools: string[]; profileReason: string };
+  getServerHealth?: () => ToolResult;
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
 }
@@ -71,6 +73,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const analyzeRamOwnership = deps.analyzeRamOwnership ?? analyzeRamOwnershipDefault;
   const getToolContracts = deps.getToolContracts ?? (() => []);
   const getToolProfile = deps.getToolProfile ?? (() => ({ activeToolProfile: "full", hiddenTools: [], profileReason: "All tools are available." }));
+  const getServerHealth = deps.getServerHealth ?? (() => ({ status: "ready" }));
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
@@ -100,6 +103,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   };
 
   return {
+    async getServerHealth(_input: z.infer<typeof serverHealthSchema>) {
+      try {
+        return ok(getServerHealth());
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
     async getEnvironment(_input: z.infer<typeof environmentSchema>) {
       try {
         return ok(await resolveTiEnvironment(deps.tiEnvironment));

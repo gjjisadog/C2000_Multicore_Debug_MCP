@@ -7,6 +7,7 @@ describe("MCP tool registration contract", () => {
 
     expect(names.every(name => name.startsWith("c2000_"))).toBe(true);
     expect(names).toEqual(expect.arrayContaining([
+      "c2000_getServerHealth",
       "c2000_createDebugSession",
       "c2000_getToolContracts",
       "c2000_getDebugBoundary",
@@ -42,6 +43,18 @@ describe("MCP tool registration contract", () => {
       "c2000_compareExpressions",
       "c2000_waitForExpressionSet"
     ]));
+  });
+
+  test("server health is host-read and requires no target identity", () => {
+    const health = c2000ToolDefinitions.find(tool => tool.name === "c2000_getServerHealth");
+
+    expect(health).toEqual(expect.objectContaining({
+      handlerName: "getServerHealth",
+      inputScope: "host",
+      targetEffect: "host-read",
+      effects: ["host-read"]
+    }));
+    expect(Object.keys(health?.schema.shape ?? {})).toEqual([]);
   });
 
   test("does not register unprefixed debug control aliases", () => {

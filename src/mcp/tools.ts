@@ -38,6 +38,7 @@ import {
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
   sessionSchema,
+  serverHealthSchema,
   toolContractsSchema,
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
@@ -145,6 +146,7 @@ const launchResponseIdentity = [
 ] as const;
 
 const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">> = [
+  { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return read-only MCP runtime, startup, configuration, and tool-registration health without touching the target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read" },
   { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Discover and validate installed CCS, C2000Ware, and F28P65x target configuration paths without touching the target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read" },
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return read-only tool input scope metadata so MCP clients can distinguish host, session, core, batch, and launch tools.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read" },
   { name: "c2000_getDebugBoundary", title: "Get C2000 Debug Boundary", description: "Return read-only guarantees that F28P65x debug control uses explicit per-core c2000 tools, not TI official MCP active-target controls.", schema: debugBoundarySchema, handlerName: "getDebugBoundary", inputScope: "host", targetEffect: "host-read" },
@@ -210,11 +212,12 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
 
 export const c2000ToolDefinitions: ToolDefinition[] = baseToolDefinitions.map(definition => decorateDefinition(definition));
 
-export function registerC2000Tools(server: McpServer, manager: DebugSessionManager, profile: ToolProfile = toolProfileFromEnv(), filesystem: FilesystemPolicy = { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] }, tiEnvironment: ResolveTiEnvironmentOptions = {}) {
+export function registerC2000Tools(server: McpServer, manager: DebugSessionManager, profile: ToolProfile = toolProfileFromEnv(), filesystem: FilesystemPolicy = { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] }, tiEnvironment: ResolveTiEnvironmentOptions = {}, runtime: { getServerHealth?: () => Record<string, any> } = {}) {
   const registered = definitionsForProfile(profile);
   const handlers = createToolHandlers(manager, {
     getToolContracts: () => getToolContracts(profile),
     getToolProfile: () => ({ activeToolProfile: profile, hiddenTools: c2000ToolDefinitions.filter(tool => !registered.includes(tool)).map(tool => tool.name), profileReason: `C2000_MCP_TOOL_PROFILE=${profile}` }),
+    getServerHealth: runtime.getServerHealth,
     tiEnvironment
   });
 

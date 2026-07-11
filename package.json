@@ -7,7 +7,8 @@
     "c2000-multicore-mcp": "./dist/src/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run typecheck && node scripts/build-runtime.mjs",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
     "test": "vitest run",
@@ -15,6 +16,8 @@
     "verify:host": "tsx scripts/verify-host-gate.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "smoke:mcp": "npm run build --silent && tsx scripts/mcp-stdio-smoke.ts",
+    "doctor": "node scripts/c2000-mcp-doctor.mjs",
+    "doctor:isolated": "node scripts/c2000-mcp-doctor.mjs --isolated",
     "acceptance:preflight": "tsx scripts/ccs-preflight.ts",
     "acceptance:ready": "npm run build --silent && tsx scripts/ccs-acceptance-readiness.ts",
     "acceptance:ccs": "tsx scripts/ccs-hardware-acceptance.ts",
@@ -26,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.15",
+    "esbuild": "^0.28.1",
     "tsx": "^4.20.3",
     "typescript": "^5.5.4",
     "vitest": "^2.1.1"

@@ -7,6 +7,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
 
 const requiredTools = [
+  "c2000_getServerHealth",
   "c2000_getToolContracts",
   "c2000_getDebugBoundary",
   "c2000_getAcceptanceEvidence",

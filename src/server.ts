@@ -5,17 +5,20 @@ import type { DebugAdapter } from "./adapters/types.js";
 import type { C2000McpConfig } from "./config/config.schema.js";
 import { DebugSessionManager } from "./debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
-import { registerC2000Tools } from "./mcp/tools.js";
+import { definitionsForProfile, registerC2000Tools } from "./mcp/tools.js";
 import { Logger } from "./utils/logger.js";
 import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware/debugProbeCoordinator.js";
 import { recoverDebugProbe } from "./hardware/preflight.js";
 import { runHardwarePreflight } from "./hardware/preflight.js";
 import { readFile } from "node:fs/promises";
 import { DebugMcpError } from "./utils/errors.js";
+import { buildServerHealth, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
 
 export function createC2000McpServer(config: C2000McpConfig): McpServer {
+  const startedAt = new Date().toISOString();
+  const registeredToolNames = definitionsForProfile(config.toolProfile).map(tool => tool.name);
   const server = new McpServer(
-    { name: "c2000-multicore-mcp", version: "0.1.0" },
+    { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
   );
   const logger = new Logger(config.logging.level, config.logging.logFile);
@@ -50,6 +53,8 @@ export function createC2000McpServer(config: C2000McpConfig): McpServer {
     ccsInstallPath: config.ccs.installPath,
     c2000WarePath: config.ccs.c2000WarePath,
     ccxmlPath: config.ccs.ccxmlPath
+  }, {
+    getServerHealth: () => buildServerHealth(config, startedAt, registeredToolNames)
   });
   return server;
 }

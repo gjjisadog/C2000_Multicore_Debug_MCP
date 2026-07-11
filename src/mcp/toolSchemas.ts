@@ -48,6 +48,8 @@ export const ramOwnershipAnalysisSchema = z.object({
 
 export const toolContractsSchema = z.object({});
 
+export const serverHealthSchema = z.object({});
+
 export const environmentSchema = z.object({});
 
 export const debugBoundarySchema = z.object({});

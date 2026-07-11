@@ -24,4 +24,17 @@ describe("MCP tool safety metadata", () => {
       expect(tool?.effects).toEqual(["host-read"]);
     }
   });
+
+  test("server health is read-only and available in every profile", () => {
+    for (const profile of ["readonly", "safe", "full"] as const) {
+      const tool = definitionsForProfile(profile).find(item => item.name === "c2000_getServerHealth");
+      expect(tool?.annotations).toEqual({
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      });
+      expect(tool?.effects).toEqual(["host-read"]);
+    }
+  });
 });
