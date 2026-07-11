@@ -9,7 +9,16 @@ export interface CcsScriptingAdapterOptions {
   ccsInstallPath?: string;
   workspacePath?: string;
   dssTimeoutMs?: number;
+  timeouts?: Partial<DssTimeouts>;
 }
+
+export interface DssTimeouts {
+  startupMs: number; connectMs: number; stateReadMs: number; expressionReadMs: number;
+  addressResolveMs: number; resetMs: number; programLoadMs: number; memoryWriteMs: number;
+  shutdownRequestMs: number; processExitMs: number;
+}
+
+const DEFAULT_TIMEOUTS: DssTimeouts = { startupMs: 60000, connectMs: 30000, stateReadMs: 5000, expressionReadMs: 5000, addressResolveMs: 5000, resetMs: 30000, programLoadMs: 300000, memoryWriteMs: 10000, shutdownRequestMs: 3000, processExitMs: 5000 };
 
 export class CcsScriptingAdapter implements DebugAdapter {
   readonly name = "ccs-scripting";
@@ -19,7 +28,10 @@ export class CcsScriptingAdapter implements DebugAdapter {
     private readonly options: CcsScriptingAdapterOptions = {},
     private readonly bridge: CcsScriptingBridge = new PersistentDssBridge({
       ccsInstallPath: options.ccsInstallPath,
-      timeoutMs: options.dssTimeoutMs
+      timeoutMs: options.dssTimeoutMs,
+      startupMs: options.timeouts?.startupMs,
+      shutdownRequestMs: options.timeouts?.shutdownRequestMs,
+      processExitMs: options.timeouts?.processExitMs
     })
   ) {}
 
@@ -112,6 +124,11 @@ export class CcsScriptingAdapter implements DebugAdapter {
     };
   }
 
+  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    const result = await this.execute(session, coreId, { operation: "evaluateExpressions", expressions });
+    return Array.isArray(result.results) ? result.results as EvaluateResult[] : [];
+  }
+
   async assignExpression(session: AdapterSession, coreId: CoreId, expression: string, value: ExpressionAssignmentValue): Promise<{ success: boolean; value?: string }> {
     const result = await this.execute(session, coreId, {
       operation: "assignExpression",
@@ -141,16 +158,19 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "valueExpression" | "page" | "address" | "value" | "typeSize">
+    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "expressions" | "valueExpression" | "page" | "address" | "value" | "typeSize">
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);
+    const timeouts = { ...DEFAULT_TIMEOUTS, ...this.options.timeouts };
+    const timeoutMs = timeoutForOperation(command.operation, timeouts, this.options.dssTimeoutMs);
     const result = await this.bridge.execute({
       ...command,
       adapterSessionId: session.adapterSessionId,
       ccxmlPath: session.ccxmlPath,
       coreId,
       coreName: core.coreName,
-      corePattern: core.corePattern ?? core.coreName
+      corePattern: core.corePattern ?? core.coreName,
+      timeoutMs
     });
     this.assertResponseCoreIdentity(result, coreId, core.coreName);
     return result;
@@ -189,5 +209,18 @@ export class CcsScriptingAdapter implements DebugAdapter {
         responseCoreName: response.coreName
       });
     }
+  }
+}
+
+function timeoutForOperation(operation: CcsScriptingCommand["operation"], timeouts: DssTimeouts, fallback?: number): number {
+  switch (operation) {
+    case "connect": case "disconnect": return timeouts.connectMs;
+    case "getState": case "readPc": case "run": case "halt": return timeouts.stateReadMs;
+    case "evaluateExpression": case "evaluateExpressions": case "assignExpression": return timeouts.expressionReadMs;
+    case "resolveAddress": return timeouts.addressResolveMs;
+    case "reset": return timeouts.resetMs;
+    case "loadProgram": return timeouts.programLoadMs;
+    case "writeMemory": return timeouts.memoryWriteMs;
+    default: return fallback ?? timeouts.stateReadMs;
   }
 }

@@ -130,6 +130,10 @@ export class MockDebugAdapter implements DebugAdapter {
     return { expression, success: true, ...value };
   }
 
+  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    return Promise.all(expressions.map(expression => this.evaluateExpression(session, coreId, expression)));
+  }
+
   async assignExpression(session: AdapterSession, coreId: CoreId, expression: string, value: ExpressionAssignmentValue): Promise<{ success: boolean; value?: string }> {
     const state = this.requireConnected(session, coreId);
     const assignedValue = formatAssignmentValue(value);

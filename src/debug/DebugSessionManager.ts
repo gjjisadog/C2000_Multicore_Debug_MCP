@@ -285,8 +285,16 @@ export class DebugSessionManager {
     const results: BatchItemResult[] = [];
     for (const program of programs) {
       try {
+        const normalizedUri = normalizeProgramUri(program.programUri);
+        const existing = this.loadedPrograms.get(sessionId, program.coreId);
+        const metadata = await fileMetadata(normalizedUri);
+        const unchanged = Boolean(existing && existing.programUri === normalizedUri && existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256);
+        if (program.loadPolicy === "verify-only" || (program.loadPolicy === "if-changed" && unchanged)) {
+          results.push({ coreId: program.coreId, coreName: this.requireCore(sessionId, program.coreId).core.coreName, success: program.loadPolicy !== "verify-only" || unchanged, programUri: normalizedUri, loaded: false, skipped: true, skipReason: unchanged ? "program-unchanged" : "load-verification-failed" });
+          continue;
+        }
         const info = await this.loadProgramWithMap(sessionId, program.coreId, program.programUri, program.mapUri, program.ramOwnershipPolicy, program.fallbackGsRegions);
-        results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri });
+        results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri, loaded: true, skipped: false });
       } catch (error) {
         results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
         this.logger.error("program load failed", error);
@@ -336,6 +344,13 @@ export class DebugSessionManager {
 
   async evaluateMany(sessionId: string, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
+    if (this.adapter.evaluateExpressions) {
+      try {
+        return await this.adapter.evaluateExpressions(session.adapterSession, coreId, [...new Set(expressions)]);
+      } catch (error) {
+        this.logger.warn("batch expression evaluation failed", { sessionId, coreId, error: toStructuredError(error) });
+      }
+    }
     const results: EvaluateResult[] = [];
     for (const expression of expressions) {
       try {

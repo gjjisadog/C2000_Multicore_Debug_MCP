@@ -53,7 +53,10 @@ export interface LoadProgramRequest {
   mapUri?: string;
   ramOwnershipPolicy?: RamOwnershipPolicy;
   fallbackGsRegions?: number[];
+  loadPolicy?: LoadPolicy;
 }
+
+export type LoadPolicy = "always" | "if-changed" | "verify-only";
 
 export type RamOwnershipPolicy = "require-map" | "explicit-fallback" | "skip";
 
@@ -199,6 +202,9 @@ export interface BatchItemResult {
   coreName?: string;
   success: boolean;
   programUri?: string;
+  loaded?: boolean;
+  skipped?: boolean;
+  skipReason?: string;
   error?: {
     code: string;
     message: string;

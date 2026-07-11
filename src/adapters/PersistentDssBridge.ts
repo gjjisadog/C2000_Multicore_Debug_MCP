@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { resolveDssJson2Path, resolveDssLaunch } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { PersistentCoreChannel } from "./PersistentCoreChannel.js";
 
 export interface DssServerHandle {
   host: string;
@@ -25,11 +26,19 @@ export interface PersistentDssBridgeOptions {
   basePort?: number;
   host?: string;
   timeoutMs?: number;
+  shutdownRequestMs?: number;
+  startupMs?: number;
+  processExitMs?: number;
+}
+
+interface PersistentBridgeSession {
+  handle: DssServerHandle;
+  channels: Map<number, PersistentCoreChannel>;
 }
 
 export class PersistentDssBridge implements CcsScriptingBridge {
   private readonly launcher: DssServerLauncher;
-  private readonly sessions = new Map<string, DssServerHandle>();
+  private readonly sessions = new Map<string, PersistentBridgeSession>();
 
   constructor(private readonly options: PersistentDssBridgeOptions = {}) {
     this.launcher = options.launcher ?? new DefaultDssServerLauncher(options);
@@ -40,48 +49,43 @@ export class PersistentDssBridge implements CcsScriptingBridge {
       return;
     }
     const handle = await this.launcher.launch(options);
-    this.sessions.set(options.adapterSessionId, handle);
+    const channels = new Map(options.coreMap.flatMap(core => {
+      const port = handle.portsByCoreId.get(core.coreId);
+      if (!port) return [];
+      return [[core.coreId, new PersistentCoreChannel({
+        host: handle.host, port, coreId: core.coreId, coreName: core.coreName,
+        context: () => ({ adapterSessionId: options.adapterSessionId, diagnostics: handle.diagnostics?.() })
+      })] as const];
+    }));
+    this.sessions.set(options.adapterSessionId, { handle, channels });
   }
 
   async disposeSession(adapterSessionId: string): Promise<void> {
-    const handle = this.sessions.get(adapterSessionId);
-    if (!handle) {
+    const session = this.sessions.get(adapterSessionId);
+    if (!session) {
       return;
     }
     this.sessions.delete(adapterSessionId);
-    await this.shutdownSession(handle);
-    await handle.dispose();
+    await this.shutdownSession(session);
+    await session.handle.dispose();
   }
 
   async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
-    const handle = this.sessions.get(command.adapterSessionId);
-    if (!handle) {
+    const session = this.sessions.get(command.adapterSessionId);
+    if (!session) {
       throw new DebugMcpError("SessionNotFound", `Persistent DSS session was not found: ${command.adapterSessionId}`, {
         adapterSessionId: command.adapterSessionId
       });
     }
-    const port = handle.portsByCoreId.get(command.coreId);
-    if (!port) {
+    const channel = session.channels.get(command.coreId);
+    if (!channel) {
       throw new DebugMcpError("CoreNotFound", `Persistent DSS session has no port for core ${command.coreId}`, {
         adapterSessionId: command.adapterSessionId,
         coreId: command.coreId
       });
     }
     const dssCommand = toDssCommand(command);
-    const response = await sendJsonLine(
-      handle.host,
-      port,
-      dssCommand,
-      this.options.timeoutMs ?? command.timeoutMs ?? 15000,
-      () => ({
-        adapterSessionId: command.adapterSessionId,
-        operation: command.operation,
-        dssCommandName: dssCommand.name,
-        coreId: command.coreId,
-        coreName: command.coreName,
-        diagnostics: handle.diagnostics?.()
-      })
-    );
+    const response = await channel.execute(dssCommand, command.timeoutMs ?? this.options.timeoutMs ?? 15000);
     if (response.status === "FAIL") {
       throw new DebugMcpError("AdapterNotAvailable", String(response.message ?? "DSS command failed"), {
         command: command.operation,
@@ -96,15 +100,14 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     return result;
   }
 
-  private async shutdownSession(handle: DssServerHandle): Promise<void> {
-    const firstPort = handle.portsByCoreId.values().next().value as number | undefined;
-    if (typeof firstPort !== "number") {
-      return;
-    }
+  private async shutdownSession(session: PersistentBridgeSession): Promise<void> {
+    const firstChannel = session.channels.values().next().value as PersistentCoreChannel | undefined;
     try {
-      await requestDssServerShutdown(handle.host, firstPort, this.options.timeoutMs ?? 5000);
+      if (firstChannel) await firstChannel.execute({ name: "shutdown" }, this.options.shutdownRequestMs ?? 3000);
     } catch {
       // Disposal still has a fallback kill path in the default launcher.
+    } finally {
+      await Promise.all([...session.channels.values()].map(channel => channel.close()));
     }
   }
 }
@@ -131,7 +134,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     process.once("exit", killChildOnParentExit);
     const output = createProcessOutputBuffer();
     try {
-      await waitForReady(child, this.options.timeoutMs ?? 20000, output);
+      await waitForReady(child, this.options.startupMs ?? this.options.timeoutMs ?? 60000, output);
     } catch (error) {
       process.removeListener("exit", killChildOnParentExit);
       killChildOnParentExit();
@@ -149,7 +152,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       }),
       dispose: async () => {
         try {
-          await waitForExit(child, this.options.timeoutMs ?? 10000);
+          await waitForExit(child, this.options.processExitMs ?? 5000);
         } catch {
           if (!hasExited(child)) {
             child.kill();
@@ -226,6 +229,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "getState" };
     case "evaluateExpression":
       return { ...base, name: "evaluateExpression", expression: command.expression };
+    case "evaluateExpressions":
+      return { ...base, name: "evaluateMany", expressions: command.expressions };
     case "assignExpression":
       return { ...base, name: "assignExpression", expression: command.expression, valueExpression: command.valueExpression };
     case "resolveAddress":
@@ -538,6 +543,18 @@ function handleCommand(command) {
   } else if (command.name === "evaluateExpression") {
     var value = session.expression.evaluate(command.expression);
     return { status: "OK", value: withCoreIdentity(command, { expression: command.expression, success: true, value: String(value) }) };
+  } else if (command.name === "evaluateMany") {
+    var results = [];
+    for (var expressionIndex = 0; expressionIndex < command.expressions.length; expressionIndex++) {
+      var expression = String(command.expressions[expressionIndex]);
+      try {
+        var expressionValue = session.expression.evaluate(expression);
+        results.push({ expression: expression, success: true, value: String(expressionValue) });
+      } catch (expressionError) {
+        results.push({ expression: expression, success: false, error: { code: "ExpressionEvaluationFailed", message: String(expressionError) } });
+      }
+    }
+    return { status: "OK", value: withCoreIdentity(command, { results: results }) };
   } else if (command.name === "assignExpression") {
     var assignment = String(command.expression) + " = " + String(command.valueExpression);
     var assigned = session.expression.evaluate(assignment);
@@ -622,6 +639,11 @@ function startCoreThread(port, boundCoreId) {
               continue;
             }
             var response = handleCommand(command);
+            response.requestId = command.requestId;
+            if (response.value && command.name !== "shutdown") {
+              response.coreId = response.value.coreId;
+              response.coreName = response.value.coreName;
+            }
             writeResponse(output, response);
             logDiagnostic("command:success", {
               boundCoreId: boundCoreId,

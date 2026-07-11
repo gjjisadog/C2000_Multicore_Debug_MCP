@@ -96,6 +96,20 @@ If a client reports an empty tool list:
 
 These checks do not connect XDS110, create a debug session, load programs, reset cores, or run the target.
 
+## Debug Workflow Performance
+
+High-level one-shot workflows use `sessionMode: "ephemeral"` by default and close the logical DebugSession, Persistent DSS process, and probe lease in a unified `finally` cleanup. Use `interactive` only for consecutive read/run/halt operations, then explicitly close the session.
+
+The CCS adapter uses operation-specific timeouts under `ccs.timeouts`: short state/expression/address/shutdown deadlines remain independent from the long program-load deadline. `C2000_MCP_DSS_TIMEOUT_MS` remains a compatibility fallback.
+
+Persistent DSS now keeps one request-correlated TCP channel per explicit core. Commands on one core are serialized, responses are matched by `requestId`, and one reconnect is attempted without changing the bound `coreId`/`coreName`. Expression reads use one `evaluateMany` DSS command per core. Adaptive IPC polling groups and deduplicates conditions, using 50 ms through 500 ms, 100 ms through 2 seconds, then 250 ms unless a schedule is supplied.
+
+Program loading supports `always`, `if-changed`, and `verify-only`. The `if-changed` policy compares canonical path, size, mtime, SHA-256, and the session registry independently for CPU1 and CPU2. A bounded host cache shares hashes between loading and ELF freshness checks.
+
+Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
+
+Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run benchmark:hardware` is explicitly opt-in and reports a skip unless the CCS/XDS110 environment is supplied; it never fabricates board timings.
+
 ## Client Config
 
 Codex, Claude Desktop, ChatGPT MCP clients, or other stdio MCP hosts can spawn the built server:

@@ -29,7 +29,20 @@ export type DebugErrorCode =
   | "ProbeSelectionRequired"
   | "ProbeIdentityMismatch"
   | "DuplicateProbeId"
-  | "ProbeQueueTimeout";
+  | "ProbeQueueTimeout"
+  | "SessionClosing"
+  | "SessionClosed"
+  | "SessionIdleTimeout"
+  | "PersistentChannelDisconnected"
+  | "PersistentChannelReconnectFailed"
+  | "DssCommandTimeout"
+  | "DssCommandRejected"
+  | "DssSchedulerConflict"
+  | "BatchExpressionFailed"
+  | "EvidenceCaptureFailed"
+  | "LoadVerificationFailed"
+  | "ProgramUnchanged"
+  | "WorkflowCleanupFailed";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

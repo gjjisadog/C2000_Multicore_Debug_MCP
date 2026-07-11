@@ -30,6 +30,10 @@ Supported overrides are `C2000_MCP_CCS_INSTALL_PATH`, `C2000_MCP_C2000WARE_PATH`
 
 ## Tool Priority
 
+One-shot requests default to `sessionMode: "ephemeral"`; use `interactive` only for continuous debugging and do not create consecutive sessions unnecessarily. Interactive loads should prefer `loadPolicy: "if-changed"`.
+
+Prefer batched expression evaluation. Acceptance uses `verificationLevel: "readback"`; ordinary interactive actions use `verificationLevel: "action-response"`. Full Bundle evidence is final for that workflow: do not follow it with snapshot, expression, or PC reads. For latency issues, inspect the workflow `performance` field before increasing a timeout.
+
 Prefer one workflow tool call:
 
 - `c2000_launchAndRunIpcAcceptance`: create and connect CPU1/CPU2, then execute full IPC acceptance in one client-visible call; use when no session exists.

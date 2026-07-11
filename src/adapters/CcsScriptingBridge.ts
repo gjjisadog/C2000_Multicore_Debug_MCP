@@ -19,6 +19,7 @@ export type CcsScriptingOperation =
   | "getState"
   | "readPc"
   | "evaluateExpression"
+  | "evaluateExpressions"
   | "assignExpression"
   | "resolveAddress";
 
@@ -32,6 +33,7 @@ export interface CcsScriptingCommand {
   resetType?: ResetType;
   programUri?: string;
   expression?: string;
+  expressions?: string[];
   valueExpression?: string;
   page?: string;
   address?: string | number;
