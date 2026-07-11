@@ -166,6 +166,7 @@ Environment overrides:
 - `C2000_MCP_CONFIG`
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
+- `C2000_MCP_C2000WARE_PATH`
 - `C2000_MCP_WORKSPACE_PATH`
 - `C2000_MCP_CCXML_PATH`
 - `C2000_MCP_DSS_TIMEOUT_MS` (default hardware acceptance value: `300000`)
@@ -176,10 +177,13 @@ Environment overrides:
 
 Windows paths are plain JSON strings. Escape backslashes or use forward slashes.
 
+TI paths use this priority: environment/config values, validated automatic discovery, then an unresolved result with all attempted paths. On macOS the resolver checks `$HOME/ti/ccs*/ccs`, `$HOME/ti/c2000/C2000Ware_*`, and `/Applications/ti`; it validates CCS with the `DSLite` executable and C2000Ware with `.metadata/sdk.json`. The F28P65x `.ccxml` path is derived only from a validated C2000Ware installation. Call `c2000_getEnvironment` to see the selected canonical paths, versions, sources, and rejected candidates. Do not copy an example installation path without validating it first.
+
 ## Tools
 
 Phase 0 read-only host checks:
 
+- `c2000_getEnvironment`
 - `c2000_getToolContracts`
 - `c2000_getDebugBoundary`
 - `c2000_getAcceptanceEvidence`
@@ -820,3 +824,39 @@ c2000-multicore-mcp/
   scripts/
   tests/
 ```
+
+## Security Model
+
+Every registered tool publishes standard MCP annotations plus precise `effects`. Read-only annotations are derived from effects and never hide connect, run, halt, reset, load, memory-write, RAM-ownership, fault-injection, or host-write behavior. The explicit route remains `sessionId -> adapterSessionId -> coreId -> DebugSession`.
+
+The MCP Server can reduce approval frequency by using accurate annotations and server-internal workflows, but the MCP client remains the final approval authority.
+
+Recommended approval policy:
+
+- read-only tools: auto approve
+- safe high-level workflow: approve once
+- target mutation tools: always prompt
+
+## Tool Profiles
+
+Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exposes only tools whose annotations are read-only. `safe` adds session lifecycle, target control, loading, and safe workflows but hides arbitrary expression writes and fault injection. `full` exposes every tool. `c2000_getToolContracts` reports only the active set together with `activeToolProfile`, `hiddenTools`, and `profileReason`.
+
+## Filesystem Policy
+
+`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output.
+
+## RAM Ownership Policy
+
+CPU2 loads no longer assume RAMGS4. Use `ramOwnershipPolicy: "require-map"` (default) with a readable linker map, `"explicit-fallback"` with explicit `fallbackGsRegions`, or `"skip"`. CPU1 loading is unchanged. Results record policy, fallback use, ownership writes, and whether ownership was prepared or skipped.
+
+Migration: callers that previously omitted a CPU2 map must now provide map evidence, explicitly authorize fallback regions, or explicitly skip ownership changes.
+
+## Safe Workflow vs Mutation Workflow
+
+`c2000_launchMulticoreDebugSafe` permits session creation, connect/load/halt, snapshot, polling, comparisons, and diagnosis. It excludes assignments, fault injection, reset, automatic run, and run/pause isolation. `c2000_launchMulticoreDebugWithActions` is the explicit destructive alternative. The old `c2000_launchMulticoreDebug` remains a deprecated compatibility alias and identifies its replacement in the response.
+
+High-level workflows execute their steps inside the server; they do not recursively issue MCP tool calls. This keeps one client-visible `tools/call` while preserving truthful annotations and evidence.
+
+CCS project cleanup is workflow-scoped. Projects needed by build/debug remain available for the full workflow and are cleaned together only after success or failure. Because CCS 21 has no `Close Project` command, automation should use a dedicated temporary CCS workspace for each workflow instead of importing workflow-only projects into the user's main workspace. Final cleanup closes the logical DebugSession and the temporary workflow workspace together while preserving source projects, generated `.out`/`.map` evidence, and every project that existed in the main workspace before the workflow.
+
+Persistent DSS children also register a parent-process exit fallback. Normal cleanup still uses the structured shutdown command and `c2000_closeDebugSession`; if the MCP process is terminated unexpectedly, its own DSS child is killed to avoid an orphan process. This fallback never searches for or kills arbitrary pre-existing `DSLite` processes owned by CCS UI.

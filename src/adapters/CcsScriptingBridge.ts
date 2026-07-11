@@ -97,12 +97,12 @@ export class DssCliBridge implements CcsScriptingBridge {
 }
 
 function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = requireCcsRoot(ccsInstallPath);
   return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
 export function resolveDssJson2Path(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = requireCcsRoot(ccsInstallPath);
   return path.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
 }
 
@@ -114,7 +114,7 @@ export interface DssLaunch {
 
 export function resolveDssLaunch(dssScriptPath: string, ccsInstallPath?: string): DssLaunch {
   const env = { ...process.env };
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = requireCcsRoot(ccsInstallPath);
   const debugServerBin = path.join(ccsRoot, "ccs_base", "DebugServer", "bin");
   const commonBin = path.join(ccsRoot, "ccs_base", "common", "bin");
   env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(":");
@@ -127,6 +127,12 @@ export function resolveDssLaunch(dssScriptPath: string, ccsInstallPath?: string)
     return { command: "arch", args: ["-x86_64", dssScriptPath], env };
   }
   return { command: dssScriptPath, args: [], env };
+}
+
+function requireCcsRoot(ccsInstallPath?: string): string {
+  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH;
+  if (!ccsRoot) throw new DebugMcpError("AdapterNotAvailable", "CCS install path is unresolved; run c2000_getEnvironment or set C2000_MCP_CCS_INSTALL_PATH");
+  return ccsRoot;
 }
 
 async function assertExecutableExists(filePath: string) {

@@ -45,6 +45,8 @@ export const ramOwnershipAnalysisSchema = z.object({
 
 export const toolContractsSchema = z.object({});
 
+export const environmentSchema = z.object({});
+
 export const debugBoundarySchema = z.object({});
 
 export const acceptanceEvidenceSchema = z.object({});
@@ -69,12 +71,14 @@ export const resetCoreSchema = sessionCoreSchema.extend({
 
 export const loadProgramSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
-  mapUri: z.string().min(1).optional()
+  mapUri: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional()
 });
 
 export const loadProgramsSchema = z.object({
   sessionId: z.string().min(1),
-  programs: z.array(z.object({ coreId: z.number().int(), programUri: z.string().min(1), mapUri: z.string().min(1).optional() })).min(1)
+  programs: z.array(loadProgramSchema.omit({ sessionId: true })).min(1)
 });
 
 export const batchCoresSchema = z.object({
@@ -188,6 +192,8 @@ export const waitForIpcReadySchema = z.object({
 export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
   mapUri: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   settleMs: z.number().int().nonnegative().default(250)
 });
@@ -250,6 +256,8 @@ export const runReloadAndDiagnoseSchema = z.object({
   cpu2OutPath: z.string().min(1),
   cpu1MapPath: z.string().min(1).optional(),
   cpu2MapPath: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).default("require-map"),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   runCpu1: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
@@ -300,6 +308,9 @@ export const launchMulticoreDebugSchema = z.object({
     coreName: z.string().min(1),
     corePattern: z.string().min(1).optional(),
     programUri: z.string().min(1).optional(),
+    mapUri: z.string().min(1).optional(),
+    ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+    fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
     connect: z.boolean().default(true),
     load: z.boolean().default(true),
     haltAtEntry: z.boolean().default(true)
@@ -328,3 +339,9 @@ export const launchMulticoreDebugSchema = z.object({
     }).optional()
   }).optional()
 });
+
+export const launchMulticoreDebugSafeSchema = launchMulticoreDebugSchema
+  .omit({ postLaunchActions: true, postLaunchChecks: true })
+  .extend({ postLaunchChecks: launchMulticoreDebugSchema.shape.postLaunchChecks.unwrap().omit({ verifyRunPauseIsolation: true }).optional() });
+
+export const launchMulticoreDebugWithActionsSchema = launchMulticoreDebugSchema;

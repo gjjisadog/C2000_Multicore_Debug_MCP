@@ -22,6 +22,12 @@ Default core IDs:
 - `coreId = 0`: `C28xx_CPU1`
 - `coreId = 2`: `C28xx_CPU2`
 
+## Environment Discovery
+
+Before using any CCS, C2000Ware, or `.ccxml` path, call `c2000_getEnvironment`. Use only paths returned with `valid: true`; never guess, hardcode, or adapt a path from an example. The resolver prioritizes explicit environment/config values, then searches standard TI installation roots and validates product anchors. If a path is unresolved, report the attempted paths and reasons from `attempts` and ask for an explicit override instead of inventing a location.
+
+Supported overrides are `C2000_MCP_CCS_INSTALL_PATH`, `C2000_MCP_C2000WARE_PATH`, and `C2000_MCP_CCXML_PATH`.
+
 ## Tool Priority
 
 Prefer one workflow tool call:
@@ -209,3 +215,40 @@ Minimize approval popups:
 - Do not repeat atomic reads for data already returned by a workflow.
 - Before multiple atomic calls, tell the user that each call may trigger MCP approval.
 - Recommend auto-approving high-level workflow tools, not every low-level atomic debug tool.
+
+## Safety And Mutation Rules
+
+- "只看状态" uses read-only tools; CPU2 startup uses `c2000_runBootHandoffDiagnosis`; full IPC uses `c2000_launchAndRunIpcAcceptance`; reload uses `c2000_runReloadAndDiagnose`; bundles use `c2000_runFullDebugBundle`.
+- Use `c2000_launchMulticoreDebugSafe` for launch/read diagnosis. Fault injection or expression assignment must use `c2000_launchMulticoreDebugWithActions` or `c2000_injectFaults`.
+- Never split a complete workflow into atomic MCP calls and never re-read evidence already returned by the workflow.
+- Every CPU2 program load must explicitly choose `ramOwnershipPolicy`: `require-map` (preferred), `explicit-fallback` with `fallbackGsRegions`, or `skip`. Never assume RAMGS4.
+- Before a mutation tool call, state the affected core IDs and whether the workflow will reset, run, load, write target memory, or change RAM ownership.
+- If expected symbols are absent, ask for the actual names instead of repeatedly trying atomic expression reads.
+
+## Workflow Project Lifecycle
+
+Treat one user-requested debug/acceptance operation as a single workflow lifecycle. Project cleanup belongs to the workflow boundary, never to individual atomic debug steps.
+
+Before the workflow:
+
+- Prefer a dedicated temporary CCS workspace for the whole workflow. Import/open CPU1, CPU2, system, dependency, generated demo, and helper projects only in that workspace.
+- Do not import workflow-only projects into the user's main CCS workspace.
+- If the workflow must reuse the main workspace, record the projects that were already present and track every project added by the workflow.
+
+During the workflow:
+
+- Keep all required projects open across build, connect, load, run, wait, diagnosis, evidence collection, and bundle generation.
+- Do not close a project after an atomic tool call or intermediate phase.
+
+In one final `finally` cleanup after success or failure:
+
+1. Halt targets when required by the workflow's safety contract.
+2. Close the MCP logical DebugSession so persistent DSS resources are disposed.
+3. If this workflow launched a CCS UI debug session/DSLite process, terminate that debug session and verify the owned DSLite PID exited. Never kill an unrelated pre-existing DSLite process.
+4. Close the temporary CCS workflow window/session after build/debug output is complete.
+5. Dispose the temporary workspace registration/cache when it is safe to do so; preserve source projects and generated `.out`/`.map` evidence.
+6. If the main workspace was reused, remove only projects added by this workflow and never delete their project directories or source files.
+7. Leave projects that existed before the workflow unchanged.
+8. Return cleanup evidence with `debugSessionClosed`, `ownedDsliteExited`, `workflowWorkspaceClosed`, `removedWorkflowProjects`, `preservedProjects`, and `cleanupErrors`.
+
+CCS 21 does not provide a `Close Project` command. Do not describe its `Delete` command as closing. Prefer the isolated temporary-workspace design so cleanup closes one workflow workspace instead of deleting projects from the user's main workspace. Any UI removal from the main workspace must preserve project files and follow Computer Use confirmation requirements.

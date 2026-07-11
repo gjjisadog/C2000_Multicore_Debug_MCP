@@ -50,6 +50,9 @@ export class DebugWorkflowService {
       return {
         ...acceptance,
         workflow: "c2000_launchAndRunIpcAcceptance",
+        orchestration: "server-internal",
+        mcpToolCalls: [],
+        approvalClass: "workflow-confirmation",
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -144,6 +147,8 @@ export class DebugWorkflowService {
       workflow: "c2000_runIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -198,7 +203,7 @@ export class DebugWorkflowService {
     performedSteps.push("resetCores");
     const load = await this.manager.loadPrograms(input.sessionId, [
       { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
+      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, ramOwnershipPolicy: input.ramOwnershipPolicy, fallbackGsRegions: input.fallbackGsRegions }
     ]);
     performedSteps.push("loadPrograms");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
@@ -239,6 +244,8 @@ export class DebugWorkflowService {
       workflow: "c2000_runReloadAndDiagnose",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -291,6 +298,8 @@ export class DebugWorkflowService {
       workflow: "c2000_runFullDebugBundle",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-read", "bundle-write"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -345,6 +354,9 @@ export class DebugWorkflowService {
       workflow: "c2000_runBootHandoffDiagnosis",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "read-only",
+      performedSteps: ["snapshot", "loadedPrograms", "expressions", "pc", "ramOwnership", "elfFreshness", "diagnosis"],
+      effectsApplied: ["target-read"],
       device: options.device,
       diagnosisCode,
       severity,

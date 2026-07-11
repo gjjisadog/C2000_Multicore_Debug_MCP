@@ -150,6 +150,7 @@ describe("Direct hardware acceptance script contract", () => {
     const source = await readFile("scripts/ccs-hardware-acceptance.ts", "utf8");
 
     expect(source).toContain('const dssTimeoutMs = Number.parseInt(process.env.C2000_MCP_DSS_TIMEOUT_MS ?? "300000", 10)');
-    expect(source).toContain("new CcsScriptingAdapter({ ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH, dssTimeoutMs })");
+    expect(source).toContain("const environment = await resolveTiEnvironment({");
+    expect(source).toContain("new CcsScriptingAdapter({ ccsInstallPath, dssTimeoutMs })");
   });
 });

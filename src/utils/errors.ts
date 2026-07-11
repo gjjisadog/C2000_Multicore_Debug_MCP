@@ -18,7 +18,13 @@ export type DebugErrorCode =
   | "AdapterNotAvailable"
   | "UnsupportedResetType"
   | "PostLaunchActionFailed"
-  | "PostLaunchCheckFailed";
+  | "PostLaunchCheckFailed"
+  | "RamOwnershipEvidenceRequired"
+  | "RamOwnershipMapUnavailable"
+  | "RamOwnershipMapParseFailed"
+  | "PathOutsideAllowedReadRoots"
+  | "PathOutsideAllowedWriteRoots"
+  | "PathResolutionFailed";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

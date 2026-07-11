@@ -1,7 +1,7 @@
 interface:
   display_name: "C2000 Multicore Debug"
   short_description: "Guide F28P65x dual-core debugging."
-  default_prompt: "Use $c2000-multicore-debug to debug an F28P65x CPU1/CPU2 issue through c2000-multicore-mcp workflow tools."
+  default_prompt: "Use $c2000-multicore-debug to run F28P65x CPU1/CPU2 work in one isolated temporary CCS workspace and one server-internal workflow, then close the DebugSession and workflow workspace together in one final cleanup."
 
 dependencies:
   tools:

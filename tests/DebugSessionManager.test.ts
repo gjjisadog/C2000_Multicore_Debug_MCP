@@ -117,7 +117,7 @@ describe("DebugSessionManager", () => {
 
     const result = await manager.loadPrograms(session.sessionId, [
       { coreId: 0, programUri: cpu1Out },
-      { coreId: 2, programUri: cpu2Out }
+      { coreId: 2, programUri: cpu2Out, ramOwnershipPolicy: "skip" }
     ]);
 
     expect(result.results).toEqual([
@@ -171,7 +171,7 @@ describe("DebugSessionManager", () => {
     await manager.connectCores(session.sessionId, [0, 2]);
 
     await manager.loadProgram(session.sessionId, 0, cpu1Out);
-    await manager.loadProgram(session.sessionId, 2, cpu2Out);
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, undefined, "explicit-fallback", [4]);
 
     expect(adapter.events).toEqual([
       { type: "loadProgram", coreId: 0, programUri: cpu1Out },
@@ -191,7 +191,7 @@ describe("DebugSessionManager", () => {
     await manager.connectCores(session.sessionId, [0, 2]);
     await manager.loadPrograms(session.sessionId, [
       { coreId: 0, programUri: cpu1Out },
-      { coreId: 2, programUri: cpu2Out }
+      { coreId: 2, programUri: cpu2Out, ramOwnershipPolicy: "skip" }
     ]);
 
     const snapshot = await manager.getMulticoreSnapshot(session.sessionId);

@@ -15,7 +15,11 @@ export function createC2000McpServer(config: C2000McpConfig): McpServer {
   );
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const manager = new DebugSessionManager(createAdapter(config), new LoadedProgramRegistry(), logger);
-  registerC2000Tools(server, manager);
+  registerC2000Tools(server, manager, config.toolProfile, config.filesystem, {
+    ccsInstallPath: config.ccs.installPath,
+    c2000WarePath: config.ccs.c2000WarePath,
+    ccxmlPath: config.ccs.ccxmlPath
+  });
   return server;
 }
 

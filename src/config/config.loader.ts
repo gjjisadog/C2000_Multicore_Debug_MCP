@@ -1,28 +1,53 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { c2000McpConfigSchema, type C2000McpConfig } from "./config.schema.js";
 import { defaultF28P65xCoreMap } from "../debug/types.js";
+import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions, type TiEnvironmentResolution } from "./tiPaths.js";
 
-export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG): Promise<C2000McpConfig> {
+interface ConfigLoaderDeps {
+  resolveTiEnvironment?: (options?: ResolveTiEnvironmentOptions) => Promise<TiEnvironmentResolution>;
+}
+
+export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps: ConfigLoaderDeps = {}): Promise<C2000McpConfig> {
   const fileConfig = configPath ? JSON.parse(await readFile(configPath, "utf8")) as Record<string, unknown> : {};
   const merged = applyEnvOverrides({
     adapter: "auto",
     ccs: { scriptingMode: "auto" },
     target: { name: "F28P65x", coreMap: defaultF28P65xCoreMap },
     logging: { level: "info" },
+    toolProfile: "safe",
+    filesystem: { allowedReadRoots: [process.cwd()], allowedWriteRoots: [path.join(process.cwd(), "runtime")] },
     ...fileConfig
   });
+  const ccs = { ...objectAt(merged, "ccs") };
+  const resolved = await (deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault)({
+    ccsInstallPath: stringAt(ccs, "installPath"),
+    c2000WarePath: stringAt(ccs, "c2000WarePath"),
+    ccxmlPath: stringAt(ccs, "ccxmlPath")
+  });
+  if (resolved.ccs.path) ccs.installPath = resolved.ccs.path;
+  if (resolved.c2000Ware.path) ccs.c2000WarePath = resolved.c2000Ware.path;
+  if (resolved.ccxml.path) ccs.ccxmlPath = resolved.ccxml.path;
+  merged.ccs = ccs;
   return c2000McpConfigSchema.parse(merged);
 }
 
 function applyEnvOverrides(config: Record<string, unknown>): Record<string, unknown> {
   const ccs = { ...objectAt(config, "ccs") };
   const logging = { ...objectAt(config, "logging") };
+  const filesystem = { ...objectAt(config, "filesystem") };
+  if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
+  if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
+  if (process.env.C2000_MCP_ALLOWED_WRITE_ROOTS) filesystem.allowedWriteRoots = process.env.C2000_MCP_ALLOWED_WRITE_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_ADAPTER) {
     config.adapter = process.env.C2000_MCP_ADAPTER;
     ccs.scriptingMode = process.env.C2000_MCP_ADAPTER;
   }
   if (process.env.C2000_MCP_CCS_INSTALL_PATH) {
     ccs.installPath = process.env.C2000_MCP_CCS_INSTALL_PATH;
+  }
+  if (process.env.C2000_MCP_C2000WARE_PATH) {
+    ccs.c2000WarePath = process.env.C2000_MCP_C2000WARE_PATH;
   }
   if (process.env.C2000_MCP_WORKSPACE_PATH) {
     ccs.workspacePath = process.env.C2000_MCP_WORKSPACE_PATH;
@@ -39,10 +64,14 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_LOG_FILE) {
     logging.logFile = process.env.C2000_MCP_LOG_FILE;
   }
-  return { ...config, ccs, logging };
+  return { ...config, ccs, logging, filesystem };
 }
 
 function objectAt(config: Record<string, unknown>, key: string): Record<string, unknown> {
   const value = config[key];
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringAt(config: Record<string, unknown>, key: string): string | undefined {
+  return typeof config[key] === "string" ? config[key] : undefined;
 }

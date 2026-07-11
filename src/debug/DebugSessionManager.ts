@@ -19,6 +19,8 @@ import type {
   FaultInjectionRequest,
   LoadedProgramInfo,
   LoadProgramRequest,
+  RamOwnershipPolicy,
+  RamOwnershipPreparation,
   ResetType,
   ResolveResult,
   SessionTopology,
@@ -47,7 +49,6 @@ interface LogicalDebugSession {
 const F28P65X_CPU1_CORE_ID = 0;
 const F28P65X_CPU2_CORE_ID = 2;
 const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
-const F28P65X_GS4_CPU2_OWNER_BIT = 0x10;
 
 export class DebugSessionManager {
   private readonly sessions = new Map<string, LogicalDebugSession>();
@@ -174,7 +175,7 @@ export class DebugSessionManager {
     return this.loadProgramWithMap(sessionId, coreId, programUri);
   }
 
-  async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string): Promise<LoadedProgramInfo> {
+  async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
     const normalizedUri = normalizeProgramUri(programUri);
     const { session, core } = this.requireCore(sessionId, coreId);
     try {
@@ -182,8 +183,8 @@ export class DebugSessionManager {
     } catch {
       throw new DebugMcpError("ProgramFileNotFound", `Program file was not found: ${normalizedUri}`, { programUri: normalizedUri });
     }
+    const ramOwnership = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, mapUri, ramOwnershipPolicy, fallbackGsRegions);
     try {
-      await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, mapUri);
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
       throw new DebugMcpError("ProgramLoadFailed", `Program load failed for core ${coreId}`, {
@@ -203,22 +204,26 @@ export class DebugSessionManager {
       fileSize: metadata.fileSize,
       sha256: metadata.sha256,
       symbolsLoaded: true,
-      warning: "This info is guaranteed only if program was loaded through this MCP."
+      warning: "This info is guaranteed only if program was loaded through this MCP.",
+      ramOwnership
     };
     this.loadedPrograms.set(info);
     this.logger.info("program loaded", { sessionId, coreId, programUri: normalizedUri, sha256: info.sha256 });
     return info;
   }
 
-  private async prepareCpu2RamOwnership(sessionId: string, session: LogicalDebugSession, coreId: CoreId, programUri: string, mapUri?: string): Promise<void> {
+  private async prepareCpu2RamOwnership(sessionId: string, session: LogicalDebugSession, coreId: CoreId, programUri: string, mapUri: string | undefined, policy: RamOwnershipPolicy, fallbackGsRegions?: number[]): Promise<RamOwnershipPreparation> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
-      return;
+      return { ramOwnershipPolicy: policy, ramOwnershipPrepared: false, ramOwnershipSkipped: true, fallbackUsed: false, ownershipWrites: [] };
     }
-    const actions = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
+    if (policy === "skip") {
+      return { ramOwnershipPolicy: policy, ramOwnershipPrepared: false, ramOwnershipSkipped: true, fallbackUsed: false, ownershipWrites: [] };
+    }
+    const { actions, fallbackUsed } = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri, policy, fallbackGsRegions);
     for (const action of actions) {
       await this.adapter.writeMemory(session.adapterSession, action.ownerCoreId, action.page, action.address, action.value, action.typeSize);
     }
-    this.logger.info("cpu2 gs4 ram ownership prepared", {
+    this.logger.info("cpu2 ram ownership prepared", {
       sessionId,
       ownerCoreId: F28P65X_CPU1_CORE_ID,
       targetCoreId: F28P65X_CPU2_CORE_ID,
@@ -226,42 +231,37 @@ export class DebugSessionManager {
       value: actions.reduce((combined, action) => combined | action.value, 0),
       typeSize: 32
     });
+    return { ramOwnershipPolicy: policy, ramOwnershipPrepared: actions.length > 0, ramOwnershipSkipped: actions.length === 0, fallbackUsed, ownershipWrites: actions };
   }
 
-  private async cpu2RamOwnershipActions(coreId: CoreId, programUri: string, mapUri?: string): Promise<RamOwnershipAction[]> {
+  private async cpu2RamOwnershipActions(coreId: CoreId, programUri: string, mapUri: string | undefined, policy: RamOwnershipPolicy, fallbackGsRegions?: number[]): Promise<{ actions: RamOwnershipAction[]; fallbackUsed: boolean }> {
     const candidateMap = mapUri ?? mapPathForProgram(programUri);
     if (candidateMap) {
       try {
         await access(candidateMap);
         const parsed = parseLinkerMap(await readFile(candidateMap, "utf8"), { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
         const actions = ownershipActionsForMap(parsed);
-        if (actions.length > 0) {
-          return actions;
+        return { actions, fallbackUsed: false };
+      } catch (error) {
+        if (policy === "require-map") {
+          throw new DebugMcpError(mapUri ? "RamOwnershipMapParseFailed" : "RamOwnershipMapUnavailable", `CPU2 RAM ownership requires a readable linker map: ${candidateMap}`, { mapUri: candidateMap, cause: toStructuredError(error) });
         }
-        return [];
-      } catch {
-        // Preserve the previous safe default when the map file is unavailable.
       }
     }
-    return [{
-      ownerCoreId: F28P65X_CPU1_CORE_ID,
-      targetCoreId: F28P65X_CPU2_CORE_ID,
-      targetCoreName: "C28xx_CPU2",
-      memoryRegion: "RAMGS4",
-      gsIndex: 4,
-      page: "DATA",
-      address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-      value: F28P65X_GS4_CPU2_OWNER_BIT,
-      typeSize: 32,
-      reason: "No CPU2 map was available; preserving the F28P65x RAMGS4 handoff default for CPU2 RAM loads."
-    }];
+    if (policy === "require-map") {
+      throw new DebugMcpError("RamOwnershipEvidenceRequired", "CPU2 program load requires linker-map evidence or an explicit ownership policy", { programUri });
+    }
+    if (!fallbackGsRegions?.length) {
+      throw new DebugMcpError("RamOwnershipEvidenceRequired", "explicit-fallback requires fallbackGsRegions", { programUri });
+    }
+    return { actions: fallbackGsRegions.map(gsIndex => ({ ownerCoreId: F28P65X_CPU1_CORE_ID, targetCoreId: F28P65X_CPU2_CORE_ID, targetCoreName: "C28xx_CPU2", memoryRegion: `RAMGS${gsIndex}`, gsIndex, page: "DATA" as const, address: F28P65X_MEMCFG_GSXMSEL_ADDRESS, value: 1 << gsIndex, typeSize: 32 as const, reason: "Caller explicitly authorized fallback RAM ownership." })), fallbackUsed: true };
   }
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {
     const results: BatchItemResult[] = [];
     for (const program of programs) {
       try {
-        const info = await this.loadProgramWithMap(sessionId, program.coreId, program.programUri, program.mapUri);
+        const info = await this.loadProgramWithMap(sessionId, program.coreId, program.programUri, program.mapUri, program.ramOwnershipPolicy, program.fallbackGsRegions);
         results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri });
       } catch (error) {
         results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });

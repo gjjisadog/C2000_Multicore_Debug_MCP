@@ -11,9 +11,15 @@ import { discoverAcceptancePrograms } from "../src/hardware/programDiscovery.js"
 import { formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/preflight.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { getToolContracts } from "../src/mcp/tools.js";
+import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 
-const ccxmlPath = process.env.C2000_MCP_CCXML_PATH
-  ?? "/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml";
+const environment = await resolveTiEnvironment({
+  ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
+  c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,
+  ccxmlPath: process.env.C2000_MCP_CCXML_PATH
+});
+const ccsInstallPath = environment.ccs.path;
+const ccxmlPath = environment.ccxml.path ?? "";
 const programDiscovery = await discoverAcceptancePrograms({
   cpu1Program: process.env.C2000_CPU1_OUT,
   cpu2Program: process.env.C2000_CPU2_OUT,
@@ -34,14 +40,14 @@ const coreMap = [
 await assertFile(ccxmlPath);
 await assertFile(cpu1Program);
 await assertFile(cpu2Program);
-const preflight = await runHardwarePreflight({ ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH });
+const preflight = await runHardwarePreflight({ ccsInstallPath });
 const debugProcesses = Array.isArray(preflight.debugProcesses) ? preflight.debugProcesses : [];
 const debugProcessDetails = Array.isArray(preflight.debugProcessDetails) ? preflight.debugProcessDetails : [];
 if (!allowExistingDebugProcesses && debugProcesses.length > 0) {
   throw new Error(`Existing debug-related process(es) may own the XDS probe: ${formatDebugProcessOwners({ debugProcesses, debugProcessDetails })}. Close CCS debug sessions or set C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1 to override: ${JSON.stringify(preflight, null, 2)}`);
 }
 
-const adapter = new CcsScriptingAdapter({ ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH, dssTimeoutMs });
+const adapter = new CcsScriptingAdapter({ ccsInstallPath, dssTimeoutMs });
 const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
 const tools = createToolHandlers(manager, { getToolContracts });
 assert.equal(typeof tools.injectFaults, "function", "c2000_injectFaults handler must be available for fault-injection acceptance");

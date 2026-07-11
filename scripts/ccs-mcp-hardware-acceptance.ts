@@ -7,10 +7,15 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { assertAcceptanceEvidence, assertUiIndependenceEvidence, buildUiIndependenceEvidence } from "../src/debug/boundary.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
 import { formatDebugProcessOwners } from "../src/hardware/preflight.js";
+import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 
-const ccsInstallPath = process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-const ccxmlPath = process.env.C2000_MCP_CCXML_PATH
-  ?? "/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml";
+const environment = await resolveTiEnvironment({
+  ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
+  c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,
+  ccxmlPath: process.env.C2000_MCP_CCXML_PATH
+});
+const ccsInstallPath = environment.ccs.path ?? "";
+const ccxmlPath = environment.ccxml.path ?? "";
 const runIsolation = process.env.C2000_RUN_ISOLATION === "1";
 const runLaunch = process.env.C2000_RUN_LAUNCH === "1";
 const allowExistingDebugProcesses = process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
@@ -31,6 +36,7 @@ const transport = new StdioClientTransport({
     ...getDefaultEnvironment(),
     C2000_MCP_ADAPTER: "ccs",
     C2000_MCP_CCS_INSTALL_PATH: ccsInstallPath,
+    C2000_MCP_C2000WARE_PATH: environment.c2000Ware.path ?? "",
     C2000_MCP_CCXML_PATH: ccxmlPath,
     C2000_MCP_DSS_TIMEOUT_MS: dssTimeoutMs,
     C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",

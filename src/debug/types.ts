@@ -48,6 +48,18 @@ export interface LoadProgramRequest {
   coreId: CoreId;
   programUri: string;
   mapUri?: string;
+  ramOwnershipPolicy?: RamOwnershipPolicy;
+  fallbackGsRegions?: number[];
+}
+
+export type RamOwnershipPolicy = "require-map" | "explicit-fallback" | "skip";
+
+export interface RamOwnershipPreparation {
+  ramOwnershipPolicy: RamOwnershipPolicy;
+  ramOwnershipPrepared: boolean;
+  ramOwnershipSkipped: boolean;
+  fallbackUsed: boolean;
+  ownershipWrites: Array<unknown>;
 }
 
 export interface LoadedProgramInfo {
@@ -61,6 +73,7 @@ export interface LoadedProgramInfo {
   sha256: string;
   symbolsLoaded: boolean;
   warning: string;
+  ramOwnership?: RamOwnershipPreparation;
 }
 
 export interface EvaluateResult {

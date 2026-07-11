@@ -123,8 +123,20 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     await writeFile(configPath, JSON.stringify({ ...options, host, basePort, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
     await writeFile(scriptPath, persistentServerScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
     const child = spawn(launch.command, [...launch.args, scriptPath, configPath], { stdio: ["ignore", "pipe", "pipe"], env: launch.env });
+    const killChildOnParentExit = () => {
+      if (!hasExited(child)) {
+        child.kill("SIGKILL");
+      }
+    };
+    process.once("exit", killChildOnParentExit);
     const output = createProcessOutputBuffer();
-    await waitForReady(child, this.options.timeoutMs ?? 20000, output);
+    try {
+      await waitForReady(child, this.options.timeoutMs ?? 20000, output);
+    } catch (error) {
+      process.removeListener("exit", killChildOnParentExit);
+      killChildOnParentExit();
+      throw error;
+    }
     return {
       host,
       portsByCoreId: new Map(options.coreMap.map((core, index) => [core.coreId, basePort + index])),
@@ -150,6 +162,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
             }
           }
         } finally {
+          process.removeListener("exit", killChildOnParentExit);
           await rm(tempDir, { recursive: true, force: true });
         }
       }
@@ -185,7 +198,8 @@ function validateResponseCoreIdentity(command: CcsScriptingCommand, result: Reco
 }
 
 function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH;
+  if (!ccsRoot) throw new DebugMcpError("AdapterNotAvailable", "CCS install path is unresolved; run c2000_getEnvironment or set C2000_MCP_CCS_INSTALL_PATH");
   return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
