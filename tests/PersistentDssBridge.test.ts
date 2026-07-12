@@ -9,9 +9,11 @@ const coreMap = [
 ];
 
 const startedServers: net.Server[] = [];
+const acceptedSockets: net.Socket[] = [];
 
 describe("PersistentDssBridge", () => {
   afterEach(async () => {
+    for (const socket of acceptedSockets.splice(0)) socket.destroy();
     await Promise.all(startedServers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
   });
 
@@ -352,11 +354,11 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
-        rawResponse: "not-json"
+        secondError: expect.stringContaining("SyntaxError")
       })
     });
   });
@@ -388,7 +390,7 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: closedPort
@@ -423,11 +425,11 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
-        rawResponse: ""
+        secondError: expect.stringContaining("PersistentChannelDisconnected")
       })
     });
   });
@@ -460,11 +462,11 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
-        rawResponse: partialResponse
+        firstError: expect.stringContaining("DssCommandTimeout")
       })
     });
   });
@@ -497,15 +499,14 @@ describe("PersistentDssBridge", () => {
       corePattern: "C28xx_CPU2",
       programUri: "/tmp/cpu2.out"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         adapterSessionId: "ccs-session-timeout-context",
-        operation: "loadProgram",
-        dssCommandName: "load",
         coreId: 2,
         coreName: "C28xx_CPU2",
         host: "127.0.0.1",
-        port: cpu2.port
+        port: cpu2.port,
+        firstError: expect.stringContaining("DssCommandTimeout")
       })
     });
   });
@@ -545,7 +546,7 @@ describe("PersistentDssBridge", () => {
       corePattern: "C28xx_CPU2",
       programUri: "/tmp/cpu2.out"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "PersistentChannelReconnectFailed",
       details: expect.objectContaining({
         diagnostics: expect.objectContaining({
           pid: 4321,
@@ -595,6 +596,7 @@ async function startJsonLineServer(
   receivedByPort: Map<number, unknown[]>
 ): Promise<{ port: number }> {
   const server = net.createServer(socket => {
+    acceptedSockets.push(socket);
     let buffer = "";
     socket.on("data", chunk => {
       buffer += chunk.toString("utf8");
@@ -623,6 +625,7 @@ async function startJsonLineServer(
 
 async function startRawLineServer(responseLine: string): Promise<{ port: number }> {
   const server = net.createServer(socket => {
+    acceptedSockets.push(socket);
     socket.on("data", () => {
       socket.write(`${responseLine}\n`);
     });
@@ -638,6 +641,7 @@ async function startRawLineServer(responseLine: string): Promise<{ port: number 
 
 async function startEarlyCloseServer(): Promise<{ port: number }> {
   const server = net.createServer(socket => {
+    acceptedSockets.push(socket);
     socket.on("data", () => {
       socket.end();
     });
@@ -653,6 +657,7 @@ async function startEarlyCloseServer(): Promise<{ port: number }> {
 
 async function startPartialNoNewlineServer(responsePrefix: string): Promise<{ port: number }> {
   const server = net.createServer(socket => {
+    acceptedSockets.push(socket);
     socket.on("data", () => {
       socket.write(responsePrefix);
     });

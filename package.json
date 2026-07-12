@@ -18,6 +18,8 @@
     "smoke:mcp": "npm run build --silent && tsx scripts/mcp-stdio-smoke.ts",
     "doctor": "node scripts/c2000-mcp-doctor.mjs",
     "doctor:isolated": "node scripts/c2000-mcp-doctor.mjs --isolated",
+    "benchmark:debug": "tsx scripts/debug-performance-benchmark.ts",
+    "benchmark:hardware": "tsx scripts/debug-hardware-benchmark.ts",
     "acceptance:preflight": "tsx scripts/ccs-preflight.ts",
     "acceptance:ready": "npm run build --silent && tsx scripts/ccs-acceptance-readiness.ts",
     "acceptance:ccs": "tsx scripts/ccs-hardware-acceptance.ts",

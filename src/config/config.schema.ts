@@ -10,6 +10,18 @@ export const c2000McpConfigSchema = z.object({
     workspacePath: z.string().optional(),
     ccxmlPath: z.string().optional(),
     dssTimeoutMs: z.number().int().positive().optional(),
+    timeouts: z.object({
+      startupMs: z.number().int().positive().default(60000),
+      connectMs: z.number().int().positive().default(30000),
+      stateReadMs: z.number().int().positive().default(5000),
+      expressionReadMs: z.number().int().positive().default(5000),
+      addressResolveMs: z.number().int().positive().default(5000),
+      resetMs: z.number().int().positive().default(30000),
+      programLoadMs: z.number().int().positive().default(300000),
+      memoryWriteMs: z.number().int().positive().default(10000),
+      shutdownRequestMs: z.number().int().positive().default(3000),
+      processExitMs: z.number().int().positive().default(5000)
+    }).default({}),
     scriptingMode: z.enum(["auto", "mock", "ccs"]).default("auto")
   }).default({ scriptingMode: "auto" }),
   target: z.object({

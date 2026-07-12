@@ -65,7 +65,8 @@ function createAdapter(config: C2000McpConfig): DebugAdapter {
     return new CcsScriptingAdapter({
       ccsInstallPath: config.ccs.installPath,
       workspacePath: config.ccs.workspacePath,
-      dssTimeoutMs: config.ccs.dssTimeoutMs
+      dssTimeoutMs: config.ccs.dssTimeoutMs,
+      timeouts: config.ccs.timeouts
     });
   }
   return new MockDebugAdapter();

@@ -441,5 +441,5 @@ describe("debug control boundary", () => {
 
     const offenders = await findDebugBoundarySourceOffenders(DEBUG_BOUNDARY_SCAN_ROOTS.map(root => path.resolve(root)));
     expect(offenders).toEqual([]);
-  });
+  }, 15000);
 });

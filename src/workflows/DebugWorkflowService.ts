@@ -15,6 +15,7 @@ import type {
   runReloadAndDiagnoseSchema
 } from "../mcp/toolSchemas.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import type { DebugEvidence } from "../debug/DebugEvidence.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -30,6 +31,8 @@ export class DebugWorkflowService {
     const sessionName = input.sessionName ?? "launch-and-run-ipc-acceptance";
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     let sessionId: string | undefined;
+    const workflowStartedAt = performance.now();
+    const cleanup: ToolResult = { sessionClosed: false, probeLeaseReleased: false, cleanupErrors: [], cleanupDurationMs: 0 };
 
     try {
       const created = await this.manager.createDebugSession({
@@ -56,6 +59,9 @@ export class DebugWorkflowService {
         orchestration: "server-internal",
         mcpToolCalls: [],
         approvalClass: "workflow-confirmation",
+        sessionMode: input.sessionMode,
+        cleanup,
+        performance: { ...acceptance.performance, totalMs: performance.now() - workflowStartedAt },
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -71,7 +77,7 @@ export class DebugWorkflowService {
       };
     } catch (error) {
       const launch: ToolResult = { sessionName, coreIds };
-      if (sessionId) {
+      if (sessionId && input.sessionMode === "interactive") {
         launch.sessionId = sessionId;
         try {
           await this.manager.closeDebugSession(sessionId);
@@ -86,10 +92,24 @@ export class DebugWorkflowService {
         "Launch and IPC acceptance workflow failed",
         { launch, cause: toStructuredError(error) }
       );
+    } finally {
+      if (sessionId && input.sessionMode === "ephemeral") {
+        const cleanupStartedAt = performance.now();
+        try {
+          await this.manager.closeDebugSession(sessionId);
+          cleanup.sessionClosed = true;
+          cleanup.probeLeaseReleased = true;
+        } catch (cleanupError) {
+          cleanup.cleanupErrors.push(toStructuredError(cleanupError));
+        } finally {
+          cleanup.cleanupDurationMs = performance.now() - cleanupStartedAt;
+        }
+      }
     }
   }
 
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
+    const workflowStartedAt = performance.now();
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = mapsFromPaths(input);
@@ -99,8 +119,8 @@ export class DebugWorkflowService {
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
     const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
+      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
+      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy }
     ]);
     performedSteps.push("loadPrograms");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
@@ -126,7 +146,7 @@ export class DebugWorkflowService {
       await sleep(input.runSequence.settleMs);
     }
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
-    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs);
+    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule);
     performedSteps.push("waitForIpcReady");
     const timeoutRecovery = ipcReady.timedOut
       ? await this.haltAndResolvePc(input.sessionId, coreIds)
@@ -143,7 +163,9 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       ipcReady,
-      ipcAcceptance: true
+      ipcAcceptance: true,
+      cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
+      cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
     });
     performedSteps.push("diagnoseBootHandoff");
     const result: ToolResult = {
@@ -168,7 +190,14 @@ export class DebugWorkflowService {
       runtimeRamOwnership,
       ipcReady,
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
-      diagnosis
+      diagnosis,
+      performance: {
+        totalMs: performance.now() - workflowStartedAt,
+        ipcPollMs: ipcReady.pollDurationMs,
+        ipcPollIterations: ipcReady.pollIterations,
+        expressionBatchCount: ipcReady.expressionBatchCalls,
+        expressionCount: ipcReady.expressionCount
+      }
     };
     if (input.collectDebugBundle) {
       result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("ipc-acceptance"), result);
@@ -205,8 +234,8 @@ export class DebugWorkflowService {
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
     const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, ramOwnershipPolicy: input.ramOwnershipPolicy, fallbackGsRegions: input.fallbackGsRegions }
+      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
+      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, ramOwnershipPolicy: input.ramOwnershipPolicy, fallbackGsRegions: input.fallbackGsRegions, loadPolicy: input.loadPolicy }
     ]);
     performedSteps.push("loadPrograms");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
@@ -227,7 +256,7 @@ export class DebugWorkflowService {
       performedSteps.push("runCpu2");
     }
     const wait = input.waitExpressions && input.timeoutMs
-      ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs)
+      ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule)
       : undefined;
     if (wait) {
       performedSteps.push("waitExpressions");
@@ -288,6 +317,26 @@ export class DebugWorkflowService {
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
     ]);
     const runtimeRamOwnership = this.runtimeRamOwnershipStatus(input.verifyRuntimeRamOwnership);
+    const evidence: DebugEvidence = {
+      sessionId: input.sessionId,
+      capturedAt: new Date().toISOString(),
+      cores: coreIds.map(coreId => {
+        const snapshotCore = snapshot.cores.find((core: ToolResult) => core.coreId === coreId);
+        return {
+          coreId,
+          coreName: snapshotCore?.coreName,
+          connected: snapshotCore?.connected,
+          state: snapshotCore?.state,
+          pc: pc.find(item => item.coreId === coreId),
+          loadedProgramInfo: loadedPrograms.find(item => item.coreId === coreId)?.loadedProgramInfo,
+          expressions: expressions.find(item => item.coreId === coreId)?.results
+        };
+      }),
+      ramOwnership,
+      runtimeRamOwnership,
+      elfFreshness,
+      commandStats: { total: 0, byOperation: {} }
+    };
     const bootHandoff = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,
@@ -295,7 +344,8 @@ export class DebugWorkflowService {
       cpu2CoreId: input.cpu2CoreId,
       ramOwnership,
       elfFreshness,
-      runtimeRamOwnership
+      runtimeRamOwnership,
+      evidence
     });
     const result: ToolResult = {
       workflow: "c2000_runFullDebugBundle",
@@ -315,7 +365,8 @@ export class DebugWorkflowService {
       ...(ramOwnership ? { ramOwnership } : {}),
       elfFreshness,
       runtimeRamOwnership,
-      bootHandoff
+      bootHandoff,
+      evidence
     };
     result.bundle = await this.writeDebugBundle(input.outputDir, result);
     return result;
@@ -332,11 +383,16 @@ export class DebugWorkflowService {
     ipcReady?: ToolResult;
     extraExpressions?: ExpressionCondition[];
     ipcAcceptance?: boolean;
+    evidence?: DebugEvidence;
+    cpu1Expressions?: string[];
+    cpu2Expressions?: string[];
   }): Promise<ToolResult> {
-    const boot = await this.manager.diagnoseCpu2Boot({
+    const boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
-      cpu2CoreId: options.cpu2CoreId
+      cpu2CoreId: options.cpu2CoreId,
+      cpu1Expressions: options.cpu1Expressions,
+      cpu2Expressions: options.cpu2Expressions
     });
     const extraExpressions = options.extraExpressions
       ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
@@ -394,17 +450,40 @@ export class DebugWorkflowService {
     }));
   }
 
-  private async waitForExpressionSet(sessionId: string, conditions: ExpressionCondition[], timeoutMs: number, intervalMs: number) {
-    const deadline = Date.now() + timeoutMs;
+  private async waitForExpressionSet(
+    sessionId: string,
+    conditions: ExpressionCondition[],
+    timeoutMs: number,
+    intervalMs: number,
+    strategy: "fixed" | "adaptive" = "adaptive",
+    schedule?: Array<{ untilMs?: number; intervalMs: number }>
+  ) {
+    const startedAt = performance.now();
+    const deadline = startedAt + timeoutMs;
     let lastConditions: ToolResult[] = [];
-    while (Date.now() <= deadline) {
-      lastConditions = await this.evaluateConditions(sessionId, conditions);
+    let pollIterations = 0;
+    let expressionBatchCalls = 0;
+    const grouped = groupConditionsByCore(conditions);
+    while (performance.now() <= deadline) {
+      pollIterations++;
+      const batches = await Promise.all(grouped.map(async group => ({
+        group,
+        results: await this.manager.evaluateMany(sessionId, group.coreId, group.expressions)
+      })));
+      expressionBatchCalls += batches.length;
+      lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
+        conditionResult(condition, results.find(result => result.expression === condition.expression))
+      ));
       if (lastConditions.every(condition => condition.matched)) {
-        return { sessionId, matched: true, timedOut: false, conditions: lastConditions };
+        const pollDurationMs = performance.now() - startedAt;
+        return { sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs, matchedAtMs: pollDurationMs };
       }
-      await sleep(intervalMs);
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) break;
+      const elapsedMs = performance.now() - startedAt;
+      await sleep(Math.min(strategy === "fixed" ? intervalMs : adaptiveInterval(elapsedMs, schedule), remainingMs));
     }
-    return { sessionId, matched: false, timedOut: true, conditions: lastConditions };
+    return { sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs: performance.now() - startedAt };
   }
 
   private async haltAndResolvePc(sessionId: string, coreIds: CoreId[]) {
@@ -499,6 +578,20 @@ function conditionResult(condition: ExpressionCondition, result?: EvaluateResult
   };
 }
 
+function bootEvidence(evidence: DebugEvidence, cpu1CoreId: CoreId, cpu2CoreId: CoreId): ToolResult {
+  const cpu1 = evidence.cores.find(core => core.coreId === cpu1CoreId);
+  const cpu2 = evidence.cores.find(core => core.coreId === cpu2CoreId);
+  return {
+    sessionId: evidence.sessionId,
+    snapshot: {
+      sessionId: evidence.sessionId,
+      cores: evidence.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, connected: core.connected, state: core.state, pc: core.pc?.pc }))
+    },
+    cpu1: { coreId: cpu1CoreId, pc: cpu1?.pc, expressions: cpu1?.expressions ?? [] },
+    cpu2: { coreId: cpu2CoreId, pc: cpu2?.pc, expressions: cpu2?.expressions ?? [] }
+  };
+}
+
 function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: RamOwnershipAnalysis) {
   const cpu1Expressions = Array.isArray(boot.cpu1?.expressions) ? boot.cpu1.expressions as ToolResult[] : [];
   const cpu2Expressions = Array.isArray(boot.cpu2?.expressions) ? boot.cpu2.expressions as ToolResult[] : [];
@@ -565,4 +658,19 @@ function sleep(ms: number): Promise<void> {
     return Promise.resolve();
   }
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function groupConditionsByCore(conditions: ExpressionCondition[]) {
+  const groups = new Map<CoreId, ExpressionCondition[]>();
+  for (const condition of conditions) groups.set(condition.coreId, [...(groups.get(condition.coreId) ?? []), condition]);
+  return [...groups.entries()].map(([coreId, coreConditions]) => ({
+    coreId,
+    conditions: coreConditions,
+    expressions: [...new Set(coreConditions.map(condition => condition.expression))]
+  }));
+}
+
+function adaptiveInterval(elapsedMs: number, schedule?: Array<{ untilMs?: number; intervalMs: number }>) {
+  const selected = schedule ?? [{ untilMs: 500, intervalMs: 50 }, { untilMs: 2000, intervalMs: 100 }, { intervalMs: 250 }];
+  return selected.find(item => item.untilMs === undefined || elapsedMs < item.untilMs)?.intervalMs ?? selected[selected.length - 1]!.intervalMs;
 }
