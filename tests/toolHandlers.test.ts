@@ -57,6 +57,32 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   }
 }
 
+class OwnershipMismatchAdapter extends MockDebugAdapter {
+  override async readMemory(
+    session: AdapterSession,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    typeSize: number
+  ): Promise<number> {
+    await super.readMemory(session, coreId, page, address, typeSize);
+    return 0;
+  }
+}
+
+class OwnershipMismatchRecordingAdapter extends WorkflowRecordingAdapter {
+  override async readMemory(
+    session: AdapterSession,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    typeSize: number
+  ): Promise<number> {
+    await super.readMemory(session, coreId, page, address, typeSize);
+    return 0;
+  }
+}
+
 describe("tool handlers", () => {
   test("getToolContracts returns injected scope metadata", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
@@ -81,7 +107,8 @@ describe("tool handlers", () => {
           inputScope: "core",
           requiredInputFields: ["sessionId", "coreId"]
         })
-      ]
+      ],
+      toolSurface: expect.any(Object)
     }));
   });
 
@@ -457,16 +484,17 @@ describe("tool handlers", () => {
       "SECTION ALLOCATION MAP",
       ".text      0    00018000    000007bc"
     ].join("\n"));
-    const adapter = new WorkflowRecordingAdapter({
+    const adapter = new OwnershipMismatchRecordingAdapter({
       expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
+        "customCpu1.ipcPass": { value: "1" },
+        "customCpu1.msgRamPass": { value: "1" },
+        "customCpu1.paramPass": { value: "1" },
+        "customCpu2.stage": { value: "5" }
       }
     });
-    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, {
+      defaultWorkspacePath: tempDir
+    });
     const handlers = createToolHandlers(manager);
     const created = await handlers.createDebugSession({ sessionName: "ipc-acceptance-workflow", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
@@ -477,14 +505,21 @@ describe("tool handlers", () => {
       device: "F28P65x",
       cpu1CoreId: 0,
       cpu2CoreId: 2,
-      cpu1OutPath,
-      cpu2OutPath,
-      cpu1MapPath,
-      cpu2MapPath,
+      cpu1OutPath: path.basename(cpu1OutPath),
+      cpu2OutPath: path.basename(cpu2OutPath),
+      cpu1MapPath: path.basename(cpu1MapPath),
+      cpu2MapPath: path.basename(cpu2MapPath),
       resetType: "cpu",
-      runSequence: { runCpu1First: true, runCpu2: true },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [
+        { label: "ipc", coreId: 0, expression: "customCpu1.ipcPass", expected: 1 },
+        { label: "msgram", coreId: 0, expression: "customCpu1.msgRamPass", expected: 1 },
+        { label: "param", coreId: 0, expression: "customCpu1.paramPass", expected: 1 },
+        { label: "cpu2", coreId: 2, expression: "customCpu2.stage", expected: 5 }
+      ],
       timeoutMs: 20,
       intervalMs: 1,
+      verifyRuntimeRamOwnership: true,
       collectDebugBundle: true,
       outputDir
     });
@@ -502,16 +537,17 @@ describe("tool handlers", () => {
       "run:2"
     ]);
     expect(result).toEqual(expect.objectContaining({
-      success: true,
+      success: false,
       workflow: "c2000_runIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
       sessionId: created.sessionId,
+      runPlan: expect.objectContaining({ mode: "debugger_runs_both", coreOrder: [0, 2] }),
       ipcReady: expect.objectContaining({
         matched: true,
         conditions: expect.arrayContaining([
-          expect.objectContaining({ coreId: 0, expression: "g_ulHybrid30kIpcPass", matched: true }),
-          expect.objectContaining({ coreId: 2, expression: "g_emHybrid30kCpu2Stage", matched: true })
+          expect.objectContaining({ coreId: 0, expression: "customCpu1.ipcPass", matched: true }),
+          expect.objectContaining({ coreId: 2, expression: "customCpu2.stage", matched: true })
         ])
       }),
       snapshot: expect.objectContaining({
@@ -531,15 +567,23 @@ describe("tool handlers", () => {
         ])
       }),
       diagnosis: expect.objectContaining({
-        diagnosisCode: "IPC_ACCEPTANCE_READY",
-        severity: "info",
+        diagnosisCode: "BOOT_HANDOFF_NOT_READY",
+        severity: "warning",
         cpu1: expect.objectContaining({ coreId: 0 }),
-        cpu2: expect.objectContaining({ coreId: 2 })
+        cpu2: expect.objectContaining({ coreId: 2 }),
+        verdict: expect.objectContaining({
+          cpu1Ready: true,
+          cpu2Ready: true,
+          runtimeRamOwnershipReady: false,
+          ready: false
+        })
       }),
+      runtimeRamOwnership: expect.objectContaining({ requested: true, matched: false }),
       debugBundle: expect.objectContaining({
         files: expect.arrayContaining([
           expect.stringContaining("summary.md"),
-          expect.stringContaining("snapshot.json")
+          expect.stringContaining("snapshot.json"),
+          expect.stringContaining("evidence.json")
         ])
       })
     }));
@@ -740,7 +784,7 @@ describe("tool handlers", () => {
       "MEMORY CONFIGURATION",
       "  RAMGS4                00018000   00002000  00000871  0000178f  RWIX"
     ].join("\n"));
-    const handlers = createHandlers(new MockDebugAdapter({
+    const handlers = createHandlers(new OwnershipMismatchAdapter({
       expressionValues: {
         g_emHybrid30kCpu1Stage: { value: "1" },
         g_ulHybrid30kIpcPass: { value: "1" },
@@ -772,11 +816,12 @@ describe("tool handlers", () => {
         { coreId: 0, expressions: ["g_ulHybrid30kIpcPass"] },
         { coreId: 2, expressions: ["g_emHybrid30kCpu2Stage"] }
       ],
+      verifyRuntimeRamOwnership: true,
       outputDir
     });
 
     expect(result).toEqual(expect.objectContaining({
-      success: true,
+      success: false,
       workflow: "c2000_runFullDebugBundle",
       bundle: expect.objectContaining({
         outputDir,
@@ -796,8 +841,10 @@ describe("tool handlers", () => {
         expect.objectContaining({ coreId: 0, results: [expect.objectContaining({ expression: "g_ulHybrid30kIpcPass" })] })
       ]),
       bootHandoff: expect.objectContaining({
-        diagnosisCode: "BOOT_HANDOFF_READY"
-      })
+        diagnosisCode: "BOOT_HANDOFF_NOT_READY",
+        verdict: expect.objectContaining({ runtimeRamOwnershipReady: false, ready: false })
+      }),
+      runtimeRamOwnership: expect.objectContaining({ requested: true, matched: false })
     }));
   });
 
@@ -947,6 +994,52 @@ describe("tool handlers", () => {
         xds110: expect.objectContaining({ ok: true }),
         debugProcessOwnership: expect.objectContaining({ ok: true })
       })
+    }));
+  });
+
+  test("getAcceptanceReadiness waits for an existing probe owner to release", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-wait-"));
+    const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
+    const cpu1Program = path.join(tempDir, "cpu1.out");
+    const cpu2Program = path.join(tempDir, "cpu2.out");
+    await writeFile(ccxmlPath, "<configurations />");
+    await writeFile(cpu1Program, "cpu1");
+    await writeFile(cpu2Program, "cpu2");
+    let preflightCalls = 0;
+    const handlers = createToolHandlers(new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry()), {
+      runHardwarePreflight: async () => {
+        preflightCalls++;
+        const owned = preflightCalls === 1;
+        return {
+          xdsdfuPath: "/Applications/ti/ccs2100/ccs/ccs_base/common/uscif/xds110/xdsdfu",
+          xdsdfu: {
+            ok: true,
+            devices: [{ serialNumber: "CL650001", mode: "Runtime", configuration: "Standard", version: "3.0.0.43", name: "XDS110" }]
+          },
+          debugProcesses: owned ? ["93717 ./DSLite"] : [],
+          debugProcessDetails: owned
+            ? [{ pid: 93717, ppid: 93710, elapsed: "00:00:01", command: "./DSLite", kind: "DSLite", rawLine: "93717 ./DSLite" }]
+            : []
+        };
+      },
+      discoverAcceptancePrograms: async () => ({
+        searchRoots: [tempDir],
+        cpu1: { selected: cpu1Program, source: "discovered", candidates: [cpu1Program] },
+        cpu2: { selected: cpu2Program, source: "discovered", candidates: [cpu2Program] }
+      })
+    });
+
+    const result = await handlers.getAcceptanceReadiness({
+      ccxmlPath,
+      searchRoots: [tempDir],
+      waitForProbeMs: 50,
+      probePollIntervalMs: 1
+    });
+
+    expect(preflightCalls).toBe(2);
+    expect(result).toEqual(expect.objectContaining({
+      readyForHardwareAcceptance: true,
+      probeWait: expect.objectContaining({ requestedMs: 50, attempts: 2, released: true })
     }));
   });
 
@@ -1196,10 +1289,18 @@ describe("tool handlers", () => {
     await handlers.connectTarget({ sessionId: created.sessionId, coreId: 0 });
 
     await expect(handlers.resolvePc({ sessionId: created.sessionId, coreId: 0 })).resolves.toEqual(
-      expect.objectContaining({ success: true, coreId: 0, coreName: "C28xx_CPU1" })
+      expect.objectContaining({ success: true, coreId: 0, coreName: "C28xx_CPU1", partial: true })
     );
+    // resolveAddress is honest about missing symbol/source mapping (partial, success=false).
     await expect(handlers.resolveAddress({ sessionId: created.sessionId, coreId: 0, address: "0x00C4E1" })).resolves.toEqual(
-      expect.objectContaining({ success: true, coreId: 0, coreName: "C28xx_CPU1", address: "0x00C4E1" })
+      expect.objectContaining({
+        success: false,
+        coreId: 0,
+        coreName: "C28xx_CPU1",
+        address: "0x00C4E1",
+        partial: true,
+        error: expect.objectContaining({ code: "AddressResolveFailed" })
+      })
     );
     await expect(handlers.waitUntilExpression({
       sessionId: created.sessionId,

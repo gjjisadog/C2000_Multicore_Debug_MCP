@@ -14,6 +14,10 @@ export const c2000McpConfigSchema = z.object({
     name: z.string().default("F28P65x"),
     coreMap: z.array(coreConfigSchema).min(1)
   }),
+  diagnostics: z.object({
+    cpu1BootExpressions: z.array(z.string().min(1)).optional(),
+    cpu2BootExpressions: z.array(z.string().min(1)).optional()
+  }).default({}),
   logging: z.object({
     level: z.enum(["debug", "info", "warn", "error"]).default("info"),
     logFile: z.string().optional()

@@ -19,9 +19,15 @@ export class CcsScriptingAdapter implements DebugAdapter {
     private readonly options: CcsScriptingAdapterOptions = {},
     private readonly bridge: CcsScriptingBridge = new PersistentDssBridge({
       ccsInstallPath: options.ccsInstallPath,
+      workspacePath: options.workspacePath,
       timeoutMs: options.dssTimeoutMs
     })
   ) {}
+
+  /** CCS workspace used for relative program/map resolution and DSS process cwd/env. */
+  get workspacePath(): string | undefined {
+    return this.options.workspacePath;
+  }
 
   async createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession> {
     if (!options.ccxmlPath) {
@@ -84,6 +90,26 @@ export class CcsScriptingAdapter implements DebugAdapter {
     await this.execute(session, coreId, { operation: "writeMemory", page, address, value, typeSize });
   }
 
+  async readMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
+    const result = await this.execute(session, coreId, { operation: "readMemory", page, address, typeSize });
+    if (typeof result.value === "number" && Number.isFinite(result.value)) {
+      return result.value;
+    }
+    if (typeof result.value === "string" && result.value.length > 0) {
+      const parsed = Number(result.value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    throw new DebugMcpError("MemoryReadFailed", "CCS bridge readMemory did not return a numeric value", {
+      coreId,
+      page,
+      address,
+      typeSize,
+      result
+    });
+  }
+
   async getState(session: AdapterSession, coreId: CoreId): Promise<TargetState> {
     const result = await this.execute(session, coreId, { operation: "getState" });
     const core = this.requireCore(session, coreId);
@@ -126,15 +152,29 @@ export class CcsScriptingAdapter implements DebugAdapter {
 
   async resolveAddress(session: AdapterSession, coreId: CoreId, address: string): Promise<ResolveResult> {
     const result = await this.execute(session, coreId, { operation: "resolveAddress", address });
+    const hasSymbolMapping = typeof result.function === "string"
+      || typeof result.sourceFile === "string"
+      || typeof result.line === "number";
+    const explicitSuccess = result.success === true && hasSymbolMapping;
     return {
-      success: result.success !== false,
+      success: explicitSuccess,
       address,
       pc: typeof result.pc === "string" ? result.pc : address,
       function: typeof result.function === "string" ? result.function : undefined,
       sourceFile: typeof result.sourceFile === "string" ? result.sourceFile : undefined,
       line: typeof result.line === "number" ? result.line : undefined,
       offset: typeof result.offset === "string" ? result.offset : undefined,
-      partial: typeof result.partial === "boolean" ? result.partial : true
+      partial: typeof result.partial === "boolean" ? result.partial : !explicitSuccess,
+      ...(explicitSuccess
+        ? {}
+        : {
+          error: {
+            code: "AddressResolveFailed",
+            message: typeof result.error === "string"
+              ? result.error
+              : "Address-to-source mapping is not implemented by the CCS scripting adapter"
+          }
+        })
     };
   }
 

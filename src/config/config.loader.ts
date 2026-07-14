@@ -8,6 +8,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG): Pro
     adapter: "auto",
     ccs: { scriptingMode: "auto" },
     target: { name: "F28P65x", coreMap: defaultF28P65xCoreMap },
+    diagnostics: {},
     logging: { level: "info" },
     ...fileConfig
   });

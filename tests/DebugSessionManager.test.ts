@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -135,6 +135,21 @@ describe("DebugSessionManager", () => {
     expect(info!.sha256).toHaveLength(64);
   });
 
+  test("requires CPU1 to be connected before writing GS ownership for CPU2 load", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-owner-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu2Out, "cpu2-image");
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "cpu2-owner-required", coreMap });
+    // Connect only CPU2 so ownership write on CPU1 must fail closed.
+    await manager.connectTarget(session.sessionId, 2);
+
+    await expect(manager.loadProgram(session.sessionId, 2, cpu2Out)).rejects.toMatchObject({
+      code: "OwnerCoreNotConnected",
+      details: expect.objectContaining({ ownerCoreId: 0, targetCoreId: 2 })
+    });
+  });
+
   test("assigns F28P65x GS4 RAM ownership to CPU2 through CPU1 before loading CPU2 RAM programs", async () => {
     type AdapterEvent =
       | { type: "writeMemory"; coreId: CoreId; page: string; address: number; value: number; typeSize: number }
@@ -178,6 +193,169 @@ describe("DebugSessionManager", () => {
       { type: "writeMemory", coreId: 0, page: "DATA", address: 0x0005F444, value: 0x10, typeSize: 32 },
       { type: "loadProgram", coreId: 2, programUri: cpu2Out }
     ]);
+  });
+
+  test("OR-combines multi-GS RAM ownership into a single MEMCFG write before CPU2 load", async () => {
+    type AdapterEvent =
+      | { type: "writeMemory"; coreId: CoreId; page: string; address: number; value: number; typeSize: number }
+      | { type: "loadProgram"; coreId: CoreId; programUri: string };
+    class RecordingOwnershipAdapter extends MockDebugAdapter {
+      readonly events: AdapterEvent[] = [];
+
+      async writeMemory(
+        session: AdapterSession,
+        coreId: CoreId,
+        page: string,
+        address: number,
+        value: number,
+        typeSize: number
+      ): Promise<void> {
+        this.events.push({ type: "writeMemory", coreId, page, address, value, typeSize });
+        await super.writeMemory(session, coreId, page, address, value, typeSize);
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.events.push({ type: "loadProgram", coreId, programUri });
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-multi-gs-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, `
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  RAMGS4                00018000   00002000  00000800  00001800  RWIX
+  RAMGS5                0001a000   00002000  00000400  00001c00  RWIX
+`);
+    const adapter = new RecordingOwnershipAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "cpu2-multi-gs-ownership", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
+
+    expect(adapter.events).toEqual([
+      { type: "writeMemory", coreId: 0, page: "DATA", address: 0x0005F444, value: 0x10 | 0x20, typeSize: 32 },
+      { type: "loadProgram", coreId: 2, programUri: cpu2Out }
+    ]);
+  });
+
+  test("resolves relative program paths against configured workspacePath", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-workspace-"));
+    const programRel = "cpu1/Debug/cpu1.out";
+    const programAbs = path.join(tempDir, programRel);
+    await mkdir(path.dirname(programAbs), { recursive: true });
+    await writeFile(programAbs, "cpu1-image");
+    const manager = new DebugSessionManager(
+      new MockDebugAdapter(),
+      new LoadedProgramRegistry(),
+      undefined,
+      { defaultWorkspacePath: tempDir }
+    );
+    const session = await manager.createDebugSession({ sessionName: "workspace-rel", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    const loaded = await manager.loadProgram(session.sessionId, 0, programRel);
+    const topology = await manager.getSessionTopology(session.sessionId);
+
+    expect(loaded.programUri).toBe(programAbs);
+    expect(topology.workspacePath).toBe(tempDir);
+  });
+
+  test("GS ownership write RMW preserves existing MEMCFG bits and warns on map fallback", async () => {
+    type AdapterEvent =
+      | { type: "writeMemory"; coreId: CoreId; page: string; address: number; value: number; typeSize: number }
+      | { type: "loadProgram"; coreId: CoreId; programUri: string };
+    class RecordingOwnershipAdapter extends MockDebugAdapter {
+      readonly events: AdapterEvent[] = [];
+
+      async writeMemory(
+        session: AdapterSession,
+        coreId: CoreId,
+        page: string,
+        address: number,
+        value: number,
+        typeSize: number
+      ): Promise<void> {
+        this.events.push({ type: "writeMemory", coreId, page, address, value, typeSize });
+        await super.writeMemory(session, coreId, page, address, value, typeSize);
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.events.push({ type: "loadProgram", coreId, programUri });
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-gs-rmw-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu2Out, "cpu2-image");
+    const adapter = new RecordingOwnershipAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "cpu2-gs-rmw-fallback", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    const topology = await manager.getSessionTopology(session.sessionId);
+    await adapter.writeMemory(
+      {
+        adapterSessionId: topology.adapterSessionId,
+        sessionName: topology.sessionName,
+        ccxmlPath: topology.ccxmlPath,
+        coreMap
+      },
+      0,
+      "DATA",
+      0x0005F444,
+      0x08,
+      32
+    );
+    adapter.events.length = 0;
+
+    const loaded = await manager.loadProgram(session.sessionId, 2, cpu2Out);
+
+    expect(loaded.warning).toContain("RAMGS4-only handoff default");
+    expect(adapter.events).toEqual([
+      { type: "writeMemory", coreId: 0, page: "DATA", address: 0x0005F444, value: 0x08 | 0x10, typeSize: 32 },
+      { type: "loadProgram", coreId: 2, programUri: cpu2Out }
+    ]);
+  });
+
+  test("fails assignExpression when verify readback does not match the assigned value", async () => {
+    class LyingAssignAdapter extends MockDebugAdapter {
+      override async assignExpression(
+        session: AdapterSession,
+        coreId: CoreId,
+        expression: string,
+        value: string | number | boolean
+      ) {
+        // Pretend the write succeeded without updating stored state.
+        void session;
+        void coreId;
+        void expression;
+        void value;
+        return { success: true, value: String(value) };
+      }
+    }
+    const manager = new DebugSessionManager(new LyingAssignAdapter({
+      expressionValues: {
+        g_ulHybrid30kIpcPass: { value: "1", type: "uint32_t", address: "0x00002000" }
+      }
+    }), new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "assign-verify-fail", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await expect(manager.assignExpression(session.sessionId, 0, "g_ulHybrid30kIpcPass", 0)).rejects.toMatchObject({
+      code: "ExpressionVerifyFailed",
+      details: expect.objectContaining({
+        assignedValue: "0",
+        readback: expect.objectContaining({ value: "1" })
+      })
+    });
   });
 
   test("includes trusted loaded program metadata in multicore snapshots", async () => {
@@ -238,9 +416,48 @@ describe("DebugSessionManager", () => {
     const manager = createManager();
     const session = await manager.createDebugSession({ sessionName: "close-me", coreMap });
 
-    await manager.closeDebugSession(session.sessionId);
+    const result = await manager.closeDebugSession(session.sessionId);
 
+    expect(result).toEqual(expect.objectContaining({
+      sessionId: session.sessionId,
+      closed: true,
+      cleanup: expect.objectContaining({
+        startedAt: expect.any(String),
+        finishedAt: expect.any(String),
+        durationMs: expect.any(Number),
+        adapterDisposed: true
+      })
+    }));
+    expect(result.cleanup.durationMs).toBeGreaterThanOrEqual(0);
     await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("falls back to the loaded linker map when CCS cannot resolve an address", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-map-resolve-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu1Map = path.join(tempDir, "cpu1.map");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu1Map, [
+      "MEMORY CONFIGURATION",
+      "  RAMD1                 0000d000   00001000  00000800  00000800  RWIX",
+      "SECTION ALLOCATION MAP",
+      ".text      0    0000d000    00001000",
+      "GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name",
+      "       0    0000dd4e  IPC_isFlagBusyRtoL"
+    ].join("\n"));
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "map-resolve", coreMap });
+    await manager.connectTarget(session.sessionId, 0);
+    await manager.loadProgramWithMap(session.sessionId, 0, cpu1Out, cpu1Map);
+
+    await expect(manager.resolveAddress(session.sessionId, 0, "0xDD58")).resolves.toEqual(expect.objectContaining({
+      success: true,
+      function: "IPC_isFlagBusyRtoL",
+      offset: "0xA",
+      memoryRegion: "RAMD1",
+      resolutionSource: "linker-map",
+      partial: true
+    }));
   });
 
   test("clears loaded program metadata when a debug session is closed", async () => {

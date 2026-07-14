@@ -15,6 +15,11 @@ import type {
   runReloadAndDiagnoseSchema
 } from "../mcp/toolSchemas.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { buildBootHandoffVerdict } from "../debug/bootHandoffVerdict.js";
+import { defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
+import { valuesEqual } from "../utils/expressionMatch.js";
+import { sleep } from "../utils/async.js";
+import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -86,7 +91,7 @@ export class DebugWorkflowService {
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
-    const maps = mapsFromPaths(input);
+    const maps = this.normalizeMaps(mapsFromPaths(input));
 
     const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
@@ -108,15 +113,15 @@ export class DebugWorkflowService {
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
     ]);
     performedSteps.push("checkElfFreshness");
-    const runtimeRamOwnership = this.runtimeRamOwnershipStatus(input.verifyRuntimeRamOwnership);
-    if (input.runSequence.runCpu1First) {
-      await this.manager.runCore(input.sessionId, input.cpu1CoreId);
-      performedSteps.push("runCpu1");
-      await sleep(input.runSequence.settleMs);
-    }
-    if (input.runSequence.runCpu2) {
-      await this.manager.runCore(input.sessionId, input.cpu2CoreId);
-      performedSteps.push("runCpu2");
+    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+      input.sessionId,
+      input.verifyRuntimeRamOwnership,
+      ramOwnership.ownershipActions
+    );
+    const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
+    for (const coreId of runPlan.coreOrder) {
+      await this.manager.runCore(input.sessionId, coreId);
+      performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
       await sleep(input.runSequence.settleMs);
     }
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
@@ -137,6 +142,7 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       ipcReady,
+      extraExpressions: conditions,
       ipcAcceptance: true
     });
     performedSteps.push("diagnoseBootHandoff");
@@ -148,7 +154,10 @@ export class DebugWorkflowService {
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
       cpu2CoreId: input.cpu2CoreId,
-      success: ipcReady.matched === true && load.results.every((item: ToolResult) => item.success === true) && elfFreshness.allFresh === true,
+      success: ipcReady.matched === true
+        && load.results.every((item: ToolResult) => item.success === true)
+        && elfFreshness.allFresh === true
+        && runtimeRamOwnershipAccepted(runtimeRamOwnership),
       performedSteps,
       initialHalt,
       reset,
@@ -158,6 +167,7 @@ export class DebugWorkflowService {
       ramOwnership,
       elfFreshness,
       runtimeRamOwnership,
+      runPlan,
       ipcReady,
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
       diagnosis
@@ -169,13 +179,17 @@ export class DebugWorkflowService {
   }
 
   async runBootHandoffDiagnosis(input: z.infer<typeof runBootHandoffDiagnosisSchema>): Promise<ToolResult> {
-    const maps = input.maps ?? mapsFromPaths(input);
+    const maps = this.normalizeMaps(input.maps ?? mapsFromPaths(input));
     const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
     ]);
-    const runtimeRamOwnership = this.runtimeRamOwnershipStatus(input.verifyRuntimeRamOwnership);
+    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+      input.sessionId,
+      input.verifyRuntimeRamOwnership,
+      ramOwnership?.ownershipActions
+    );
     return this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,
@@ -191,7 +205,7 @@ export class DebugWorkflowService {
   async runReloadAndDiagnose(input: z.infer<typeof runReloadAndDiagnoseSchema>): Promise<ToolResult> {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
-    const maps = mapsFromPaths(input);
+    const maps = this.normalizeMaps(mapsFromPaths(input));
     const halt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
@@ -224,7 +238,11 @@ export class DebugWorkflowService {
     if (wait) {
       performedSteps.push("waitExpressions");
     }
-    const runtimeRamOwnership = this.runtimeRamOwnershipStatus(input.verifyRuntimeRamOwnership);
+    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+      input.sessionId,
+      input.verifyRuntimeRamOwnership,
+      ramOwnership?.ownershipActions
+    );
     const diagnosis = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,
@@ -243,7 +261,9 @@ export class DebugWorkflowService {
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
       cpu2CoreId: input.cpu2CoreId,
-      success: load.results.every((item: ToolResult) => item.success === true) && (!wait || wait.matched === true),
+      success: load.results.every((item: ToolResult) => item.success === true)
+        && (!wait || wait.matched === true)
+        && runtimeRamOwnershipAccepted(runtimeRamOwnership),
       performedSteps,
       halt,
       reset,
@@ -264,7 +284,7 @@ export class DebugWorkflowService {
 
   async runFullDebugBundle(input: z.infer<typeof runFullDebugBundleSchema>): Promise<ToolResult> {
     const coreIds = input.coreIds ?? [input.cpu1CoreId, input.cpu2CoreId];
-    const maps = input.maps ?? mapsFromPaths(input);
+    const maps = this.normalizeMaps(input.maps ?? mapsFromPaths(input));
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     const loadedPrograms = await Promise.all(coreIds.map(async coreId => ({
       coreId,
@@ -277,7 +297,11 @@ export class DebugWorkflowService {
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
     ]);
-    const runtimeRamOwnership = this.runtimeRamOwnershipStatus(input.verifyRuntimeRamOwnership);
+    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+      input.sessionId,
+      input.verifyRuntimeRamOwnership,
+      ramOwnership?.ownershipActions
+    );
     const bootHandoff = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,
@@ -295,7 +319,7 @@ export class DebugWorkflowService {
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
       cpu2CoreId: input.cpu2CoreId,
-      success: true,
+      success: runtimeRamOwnershipAccepted(runtimeRamOwnership),
       snapshot,
       loadedPrograms,
       expressions,
@@ -321,15 +345,32 @@ export class DebugWorkflowService {
     extraExpressions?: ExpressionCondition[];
     ipcAcceptance?: boolean;
   }): Promise<ToolResult> {
+    const cpu1Expressions = options.extraExpressions
+      ?.filter(condition => condition.coreId === options.cpu1CoreId)
+      .map(condition => condition.expression);
+    const cpu2Expressions = options.extraExpressions
+      ?.filter(condition => condition.coreId === options.cpu2CoreId)
+      .map(condition => condition.expression);
     const boot = await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
-      cpu2CoreId: options.cpu2CoreId
+      cpu2CoreId: options.cpu2CoreId,
+      ...(cpu1Expressions?.length ? { cpu1Expressions } : {}),
+      ...(cpu2Expressions?.length ? { cpu2Expressions } : {})
     });
     const extraExpressions = options.extraExpressions
       ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
       : undefined;
-    const verdict = buildBootHandoffVerdict(boot, options.ramOwnership);
+    const bootVerdict = buildBootHandoffVerdict(boot, options.ramOwnership);
+    const runtimeOwnershipReady = runtimeRamOwnershipAccepted(options.runtimeRamOwnership);
+    const verdict = {
+      ...bootVerdict,
+      runtimeRamOwnershipReady: runtimeOwnershipReady,
+      ready: bootVerdict.ready && runtimeOwnershipReady,
+      reasons: runtimeOwnershipReady
+        ? bootVerdict.reasons
+        : [...bootVerdict.reasons, "Runtime RAM ownership verification was requested but did not match."]
+    };
     const ipcTimedOut = options.ipcReady?.timedOut === true;
     const diagnosisCode = ipcTimedOut
       ? "IPC_READY_TIMEOUT"
@@ -402,14 +443,15 @@ export class DebugWorkflowService {
     const checked = await Promise.all(programs
       .filter((program): program is { coreId: CoreId; outPath: string } => typeof program.outPath === "string" && program.outPath.length > 0)
       .map(async program => {
+        const expectedPath = this.manager.normalizeArtifactUri(program.outPath);
         const loadedProgramInfo = await this.manager.getLoadedProgramInfo(sessionId, program.coreId);
-        const metadata = await fileMetadata(program.outPath);
-        const fresh = loadedProgramInfo?.programUri === program.outPath
+        const metadata = await fileMetadata(expectedPath);
+        const fresh = loadedProgramInfo?.programUri === expectedPath
           && loadedProgramInfo.fileSize === metadata.fileSize
           && loadedProgramInfo.sha256 === metadata.sha256;
         return {
           coreId: program.coreId,
-          expectedPath: program.outPath,
+          expectedPath,
           fresh,
           hostFile: metadata,
           loadedProgramInfo
@@ -421,13 +463,38 @@ export class DebugWorkflowService {
     };
   }
 
-  private runtimeRamOwnershipStatus(requested: boolean) {
-    return {
-      requested,
-      supported: false,
-      skipped: true,
-      reason: "Current DebugAdapter contract exposes GS RAM ownership writes but no runtime MEMCFG read API yet."
-    };
+  private normalizeMaps(maps: MapOwnershipInput["maps"]): MapOwnershipInput["maps"] {
+    return maps.map(map => ({
+      ...map,
+      mapPath: this.manager.normalizeArtifactUri(map.mapPath)
+    }));
+  }
+
+  private async runtimeRamOwnershipStatus(
+    sessionId: string,
+    requested: boolean,
+    actions?: RamOwnershipAction[]
+  ) {
+    if (!requested) {
+      return {
+        requested: false,
+        supported: true,
+        skipped: true,
+        reason: "Runtime RAM ownership verification was not requested."
+      };
+    }
+    try {
+      return await this.manager.verifyRuntimeRamOwnership(sessionId, actions ?? []);
+    } catch (error) {
+      return {
+        requested: true,
+        supported: true,
+        skipped: false,
+        matched: false,
+        error: toStructuredError(error),
+        reason: error instanceof Error ? error.message : String(error)
+      };
+    }
   }
 
   private async writeDebugBundle(outputDir: string, result: ToolResult) {
@@ -442,6 +509,7 @@ export class DebugWorkflowService {
     await writeJson("ram-ownership.json", result.ramOwnership ?? result.diagnosis?.ramOwnership ?? result.bootHandoff?.ramOwnership ?? null);
     await writeJson("elf-freshness.json", result.elfFreshness ?? result.diagnosis?.elfFreshness ?? result.bootHandoff?.elfFreshness ?? null);
     await writeJson("boot-handoff.json", result.diagnosis ?? result.bootHandoff ?? result);
+    await writeJson("evidence.json", compactEvidence(result));
     const summaryPath = path.join(outputDir, "summary.md");
     await writeFile(summaryPath, summaryMarkdown(result));
     files.unshift(summaryPath);
@@ -457,22 +525,6 @@ function mapsFromPaths(input: { cpu1CoreId: CoreId; cpu2CoreId: CoreId; cpu1MapP
   return maps.filter((map): map is MapOwnershipInput["maps"][number] => map !== undefined);
 }
 
-function defaultIpcReadyConditions(cpu1CoreId: CoreId, cpu2CoreId: CoreId): ExpressionCondition[] {
-  return [
-    { label: "cpu1-ipc-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kIpcPass", expected: 1 },
-    { label: "cpu1-msgram-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kMsgRamPass", expected: 1 },
-    { label: "cpu1-param-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kParamPass", expected: 1 },
-    { label: "cpu2-stage-ready", coreId: cpu2CoreId, expression: "g_emHybrid30kCpu2Stage", expected: 1 }
-  ];
-}
-
-function defaultExpressionReadSets(cpu1CoreId: CoreId, cpu2CoreId: CoreId): ExpressionReadSet[] {
-  return [
-    { label: "cpu1-boot-ipc", coreId: cpu1CoreId, expressions: ["g_emHybrid30kCpu1Stage", "g_ulHybrid30kIpcPass", "g_ulHybrid30kMsgRamPass", "g_ulHybrid30kParamPass"] },
-    { label: "cpu2-boot-stage", coreId: cpu2CoreId, expressions: ["g_emHybrid30kCpu2Stage"] }
-  ];
-}
-
 function conditionResult(condition: ExpressionCondition, result?: EvaluateResult): ToolResult {
   return {
     label: condition.label,
@@ -481,20 +533,6 @@ function conditionResult(condition: ExpressionCondition, result?: EvaluateResult
     expected: condition.expected,
     matched: result?.success === true && valuesEqual(result.value, condition.expected),
     result
-  };
-}
-
-function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: RamOwnershipAnalysis) {
-  const cpu1Expressions = Array.isArray(boot.cpu1?.expressions) ? boot.cpu1.expressions as ToolResult[] : [];
-  const cpu2Expressions = Array.isArray(boot.cpu2?.expressions) ? boot.cpu2.expressions as ToolResult[] : [];
-  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
-  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
-  const ramOwnershipReady = !ramOwnership || Array.isArray(ramOwnership.ownershipActions);
-  return {
-    cpu1Ready,
-    cpu2Ready,
-    ramOwnershipReady,
-    ready: cpu1Ready && cpu2Ready && ramOwnershipReady
   };
 }
 
@@ -517,6 +555,11 @@ function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwner
 
 function summaryMarkdown(result: ToolResult): string {
   const diagnosis = result.diagnosis ?? result.bootHandoff ?? result;
+  const evidence = compactEvidence(result);
+  const conditionLines = evidence.conditions.length > 0
+    ? evidence.conditions.map((condition: ToolResult) =>
+      `- ${condition.label ?? condition.expression}: ${condition.actual ?? "n/a"} (expected ${condition.expected}, matched=${condition.matched})`)
+    : ["- No IPC conditions recorded."];
   return [
     `# ${result.workflow ?? "c2000 workflow"} Debug Bundle`,
     "",
@@ -527,27 +570,99 @@ function summaryMarkdown(result: ToolResult): string {
     `- severity: ${diagnosis.severity ?? "n/a"}`,
     `- orchestration: ${result.orchestration ?? "server-internal"}`,
     `- mcpToolCalls: ${JSON.stringify(result.mcpToolCalls ?? [])}`,
+    `- verdictReady: ${String(evidence.verdictReady)}`,
+    `- runtimeRamOwnershipMatched: ${String(evidence.runtimeRamOwnership?.matched ?? "n/a")}`,
+    "",
+    "## IPC conditions",
+    "",
+    ...conditionLines,
+    "",
+    "## Loaded programs",
+    "",
+    ...evidence.programs.map((program: ToolResult) =>
+      `- CPU${program.coreId === 0 ? "1" : "2"}: ${program.path ?? "unknown"} sha256=${program.sha256 ?? "unknown"} fresh=${String(program.fresh)}`),
+    "",
+    "## PC evidence",
+    "",
+    ...evidence.pc.map((entry: ToolResult) =>
+      `- core ${entry.coreId}: ${entry.address ?? "unknown"}${entry.function ? ` ${entry.function}+${entry.offset ?? "0x0"}` : ""}${entry.memoryRegion ? ` [${entry.memoryRegion}]` : ""}`),
     ""
   ].join("\n");
+}
+
+function compactEvidence(result: ToolResult) {
+  const diagnosis = result.diagnosis ?? result.bootHandoff ?? result;
+  const freshness = result.elfFreshness ?? diagnosis.elfFreshness;
+  const conditions = (result.ipcReady?.conditions ?? []).map((condition: ToolResult) => ({
+    label: condition.label,
+    coreId: condition.coreId,
+    expression: condition.expression,
+    expected: condition.expected,
+    actual: condition.result?.value,
+    matched: condition.matched === true
+  }));
+  const programs = (freshness?.programs ?? []).map((program: ToolResult) => ({
+    coreId: program.coreId,
+    path: program.expectedPath,
+    sha256: program.hostFile?.sha256,
+    fresh: program.fresh === true
+  }));
+  const pc = [diagnosis.cpu1, diagnosis.cpu2]
+    .filter(Boolean)
+    .map((core: ToolResult) => ({ coreId: core.coreId, ...(core.pc ?? {}) }));
+  return {
+    success: result.success === true,
+    workflow: result.workflow,
+    diagnosisCode: diagnosis.diagnosisCode,
+    severity: diagnosis.severity,
+    verdictReady: diagnosis.verdict?.ready,
+    conditions,
+    runtimeRamOwnership: result.runtimeRamOwnership ?? diagnosis.runtimeRamOwnership,
+    programs,
+    pc,
+    runPlan: result.runPlan,
+    performedSteps: result.performedSteps ?? []
+  };
 }
 
 function defaultBundleDir(label: string): string {
   return path.join(process.cwd(), ".c2000-debug-bundles", `${label}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 }
 
-function valuesEqual(actual: unknown, expected: unknown): boolean {
-  if (typeof expected === "number") {
-    return Number(actual) === expected;
-  }
-  if (typeof expected === "boolean") {
-    return String(actual).toLowerCase() === String(expected);
-  }
-  return String(actual) === String(expected);
+function runtimeRamOwnershipAccepted(status: ToolResult | undefined): boolean {
+  return status?.requested !== true || status.matched === true;
 }
 
-function sleep(ms: number): Promise<void> {
-  if (ms <= 0) {
-    return Promise.resolve();
+function resolveRunPlan(
+  sequence: { runMode?: "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running"; runCpu1First: boolean; runCpu2: boolean },
+  cpu1CoreId: CoreId,
+  cpu2CoreId: CoreId
+) {
+  if (sequence.runMode === "cpu1_boots_cpu2") {
+    return {
+      mode: sequence.runMode,
+      coreOrder: [cpu1CoreId],
+      warnings: ["CPU2 is not run by the debugger; use this mode only when CPU1 firmware releases CPU2 from reset."]
+    };
   }
-  return new Promise(resolve => setTimeout(resolve, ms));
+  if (sequence.runMode === "debugger_runs_both") {
+    return { mode: sequence.runMode, coreOrder: [cpu1CoreId, cpu2CoreId], warnings: [] };
+  }
+  if (sequence.runMode === "cpu2_pre_running") {
+    return {
+      mode: sequence.runMode,
+      coreOrder: [cpu2CoreId, cpu1CoreId],
+      warnings: ["CPU2 is started before CPU1; use only for firmware designed for this ordering."]
+    };
+  }
+  return {
+    mode: "legacy_flags" as const,
+    coreOrder: [
+      ...(sequence.runCpu1First ? [cpu1CoreId] : []),
+      ...(sequence.runCpu2 ? [cpu2CoreId] : [])
+    ],
+    warnings: sequence.runCpu1First && !sequence.runCpu2
+      ? ["CPU2 remains debugger-halted unless CPU1 firmware explicitly releases it."]
+      : []
+  };
 }

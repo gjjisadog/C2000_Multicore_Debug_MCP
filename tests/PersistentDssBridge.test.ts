@@ -1,7 +1,14 @@
 import net from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
-import { PersistentDssBridge, type DssServerHandle, type DssServerLauncher } from "../src/adapters/PersistentDssBridge.js";
+import {
+  isRetryableXdsLaunchError,
+  PersistentDssBridge,
+  type DssServerHandle,
+  type DssServerLauncher,
+  xdsRetryDelayMs
+} from "../src/adapters/PersistentDssBridge.js";
 import type { CcsBridgeCreateSessionOptions } from "../src/adapters/CcsScriptingBridge.js";
+import { DebugMcpError } from "../src/utils/errors.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -9,6 +16,19 @@ const coreMap = [
 ];
 
 const startedServers: net.Server[] = [];
+
+describe("XDS launch retry policy", () => {
+  test("only classifies transient XDS110 connection failures as probe-retryable", () => {
+    expect(isRetryableXdsLaunchError(new DebugMcpError("DssLaunchFailed", "launch failed", {
+      stderr: "Error -260 @ 0x0: An attempt to connect to the XDS110 failed"
+    }))).toBe(true);
+    expect(isRetryableXdsLaunchError(new Error("invalid ccxml"))).toBe(false);
+  });
+
+  test("uses capped exponential backoff", () => {
+    expect([0, 1, 2, 3, 4].map(attempt => xdsRetryDelayMs(attempt))).toEqual([250, 500, 1000, 2000, 2000]);
+  });
+});
 
 describe("PersistentDssBridge", () => {
   afterEach(async () => {
@@ -352,7 +372,7 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTransportFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
@@ -388,7 +408,7 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTransportFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: closedPort
@@ -423,7 +443,7 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTransportFailed",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
@@ -460,7 +480,7 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTimeout",
       details: expect.objectContaining({
         host: "127.0.0.1",
         port: cpu2.port,
@@ -497,7 +517,7 @@ describe("PersistentDssBridge", () => {
       corePattern: "C28xx_CPU2",
       programUri: "/tmp/cpu2.out"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTimeout",
       details: expect.objectContaining({
         adapterSessionId: "ccs-session-timeout-context",
         operation: "loadProgram",
@@ -545,7 +565,7 @@ describe("PersistentDssBridge", () => {
       corePattern: "C28xx_CPU2",
       programUri: "/tmp/cpu2.out"
     })).rejects.toMatchObject({
-      code: "AdapterNotAvailable",
+      code: "DssTimeout",
       details: expect.objectContaining({
         diagnostics: expect.objectContaining({
           pid: 4321,

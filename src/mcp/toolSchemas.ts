@@ -30,7 +30,9 @@ export const acceptanceReadinessSchema = z.object({
   cpu2Program: z.string().min(1).optional(),
   searchRoots: z.array(z.string().min(1)).optional(),
   maxDepth: z.number().int().nonnegative().optional(),
-  allowExistingDebugProcesses: z.boolean().optional()
+  allowExistingDebugProcesses: z.boolean().optional(),
+  waitForProbeMs: z.number().int().nonnegative().default(0),
+  probePollIntervalMs: z.number().int().positive().default(250)
 });
 
 export const ramOwnershipMapSchema = z.object({
@@ -193,6 +195,7 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
 });
 
 export const workflowRunSequenceSchema = z.object({
+  runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
   runCpu1First: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
   settleMs: z.number().int().nonnegative().default(0)
@@ -300,6 +303,7 @@ export const launchMulticoreDebugSchema = z.object({
     coreName: z.string().min(1),
     corePattern: z.string().min(1).optional(),
     programUri: z.string().min(1).optional(),
+    mapUri: z.string().min(1).optional(),
     connect: z.boolean().default(true),
     load: z.boolean().default(true),
     haltAtEntry: z.boolean().default(true)

@@ -31,10 +31,15 @@ import { fileMetadata } from "../utils/fileHash.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import type { Logger } from "../utils/logger.js";
 import { noopLogger } from "../utils/logger.js";
-import { normalizeProgramUri } from "../utils/pathUtils.js";
+import { normalizeProgramUri, normalizeWorkspacePath } from "../utils/pathUtils.js";
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
-import { mapPathForProgram, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import { mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import { resolveDiagnosticsDefaults, type DiagnosticsDefaults } from "./defaultDiagnostics.js";
+import { valuesEqual } from "../utils/expressionMatch.js";
+import { sleep } from "../utils/async.js";
+import { SessionQueue } from "../utils/sessionQueue.js";
+import { resolveAddressFromMap } from "../hardware/mapSymbols.js";
 
 interface LogicalDebugSession {
   sessionId: string;
@@ -44,6 +49,14 @@ interface LogicalDebugSession {
   cores: Map<CoreId, CoreSession>;
 }
 
+export interface DebugSessionManagerOptions {
+  defaultCcxmlPath?: string;
+  defaultCoreMap?: CoreConfig[];
+  /** Base directory for relative program/map paths (usually ccs.workspacePath). */
+  defaultWorkspacePath?: string;
+  diagnostics?: Partial<DiagnosticsDefaults>;
+}
+
 const F28P65X_CPU1_CORE_ID = 0;
 const F28P65X_CPU2_CORE_ID = 2;
 const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
@@ -51,36 +64,75 @@ const F28P65X_GS4_CPU2_OWNER_BIT = 0x10;
 
 export class DebugSessionManager {
   private readonly sessions = new Map<string, LogicalDebugSession>();
+  private readonly queue = new SessionQueue();
+  private readonly diagnostics: DiagnosticsDefaults;
+  private readonly defaultCcxmlPath?: string;
+  private readonly defaultCoreMap: CoreConfig[];
+  private readonly defaultWorkspacePath?: string;
 
   constructor(
     private readonly adapter: DebugAdapter,
     private readonly loadedPrograms: LoadedProgramRegistry,
-    private readonly logger: Logger = noopLogger
-  ) {}
+    private readonly logger: Logger = noopLogger,
+    options: DebugSessionManagerOptions = {}
+  ) {
+    this.defaultCcxmlPath = options.defaultCcxmlPath;
+    this.defaultCoreMap = options.defaultCoreMap ?? defaultF28P65xCoreMap;
+    this.defaultWorkspacePath = normalizeWorkspacePath(options.defaultWorkspacePath);
+    this.diagnostics = resolveDiagnosticsDefaults(options.diagnostics);
+  }
+
+  /** Normalize program/map input consistently for manager and workflow checks. */
+  normalizeArtifactUri(uri: string): string {
+    return normalizeProgramUri(uri, this.defaultWorkspacePath);
+  }
+
+  private exclusive<T>(sessionId: string, work: () => Promise<T>): Promise<T> {
+    return this.queue.run(sessionId, work);
+  }
 
   async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[] }> {
     const sessionName = options.sessionName ?? "c2000-debug-session";
-    const coreMap = validateCoreMap(options.coreMap ?? defaultF28P65xCoreMap);
-    const adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath: options.ccxmlPath, coreMap });
+    const coreMap = validateCoreMap(options.coreMap ?? this.defaultCoreMap);
+    const ccxmlPath = options.ccxmlPath ?? this.defaultCcxmlPath;
+    const adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath, coreMap });
     const sessionId = `dbg-${randomUUID()}`;
     const cores = new Map(coreMap.map(core => [core.coreId, new CoreSession(core)]));
-    this.sessions.set(sessionId, { sessionId, sessionName, ccxmlPath: options.ccxmlPath, adapterSession, cores });
-    this.logger.info("debug session created", { sessionId, sessionName, coreMap });
+    this.sessions.set(sessionId, { sessionId, sessionName, ccxmlPath, adapterSession, cores });
+    this.logger.info("debug session created", { sessionId, sessionName, ccxmlPath, coreMap });
     return { sessionId, cores: await this.listCores(sessionId) };
   }
 
   async listCores(sessionId: string): Promise<CoreInfo[]> {
-    const session = this.requireSession(sessionId);
-    const adapterCores = await this.adapter.listCores(session.adapterSession);
-    for (const info of adapterCores) {
-      const core = session.cores.get(info.coreId);
-      if (core) {
-        core.connected = info.connected;
-        core.active = info.active;
-        core.state = info.connected ? core.state === "Disconnected" ? "Connected" : core.state : "Disconnected";
+    return this.exclusive(sessionId, async () => {
+      const session = this.requireSession(sessionId);
+      const cores: CoreInfo[] = [];
+      for (const core of session.cores.values()) {
+        try {
+          const state = await this.adapter.getState(session.adapterSession, core.coreId);
+          core.connected = state.connected;
+          core.state = state.state;
+          core.pc = state.pc ?? core.pc;
+          core.active = state.connected;
+          cores.push({
+            coreId: core.coreId,
+            coreName: core.coreName,
+            corePattern: core.corePattern,
+            connected: state.connected,
+            active: state.connected
+          });
+        } catch {
+          cores.push({
+            coreId: core.coreId,
+            coreName: core.coreName,
+            corePattern: core.corePattern,
+            connected: core.connected,
+            active: core.active
+          });
+        }
       }
-    }
-    return adapterCores;
+      return cores;
+    });
   }
 
   async getSessionTopology(sessionId: string): Promise<SessionTopology> {
@@ -89,6 +141,7 @@ export class DebugSessionManager {
       sessionId,
       sessionName: session.sessionName,
       ccxmlPath: session.ccxmlPath,
+      workspacePath: this.defaultWorkspacePath,
       adapterName: this.adapter.name,
       adapterSessionId: session.adapterSession.adapterSessionId,
       debugSessionRoute: "sessionId -> adapterSessionId -> coreId -> DebugSession",
@@ -102,66 +155,101 @@ export class DebugSessionManager {
     };
   }
 
-  async closeDebugSession(sessionId: string): Promise<{ sessionId: string; closed: true }> {
-    const session = this.requireSession(sessionId);
-    try {
-      await this.adapter.disposeSession?.(session.adapterSession);
-    } finally {
-      this.sessions.delete(sessionId);
-      this.loadedPrograms.deleteSession(sessionId);
-      this.logger.info("debug session closed", { sessionId });
-    }
-    return { sessionId, closed: true };
+  async closeDebugSession(sessionId: string) {
+    return this.exclusive(sessionId, async () => {
+      const startedAtMs = Date.now();
+      const session = this.requireSession(sessionId);
+      try {
+        await this.adapter.disposeSession?.(session.adapterSession);
+      } finally {
+        this.sessions.delete(sessionId);
+        this.loadedPrograms.deleteSession(sessionId);
+        this.logger.info("debug session closed", { sessionId });
+      }
+      const finishedAtMs = Date.now();
+      return {
+        sessionId,
+        closed: true as const,
+        cleanup: {
+          startedAt: new Date(startedAtMs).toISOString(),
+          finishedAt: new Date(finishedAtMs).toISOString(),
+          durationMs: finishedAtMs - startedAtMs,
+          adapterDisposed: true
+        }
+      };
+    });
   }
 
   async connectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
+    return this.exclusive(sessionId, async () => this.connectTargetUnlocked(sessionId, coreId));
+  }
+
+  private async connectTargetUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.connect(session.adapterSession, coreId);
     core.connected = true;
     core.active = true;
     core.state = "Connected";
     this.logger.info("core connected", { sessionId, coreId, coreName: core.coreName });
-    return this.getTargetState(sessionId, coreId);
+    return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
   async disconnectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
-    const { session, core } = this.requireCore(sessionId, coreId);
-    await this.adapter.disconnect(session.adapterSession, coreId);
-    core.connected = false;
-    core.active = false;
-    core.state = "Disconnected";
-    this.logger.info("core disconnected", { sessionId, coreId, coreName: core.coreName });
-    return this.getTargetState(sessionId, coreId);
+    return this.exclusive(sessionId, async () => {
+      const { session, core } = this.requireCore(sessionId, coreId);
+      await this.adapter.disconnect(session.adapterSession, coreId);
+      core.connected = false;
+      core.active = false;
+      core.state = "Disconnected";
+      this.logger.info("core disconnected", { sessionId, coreId, coreName: core.coreName });
+      return this.getTargetStateUnlocked(sessionId, coreId);
+    });
   }
 
   async runCore(sessionId: string, coreId: CoreId): Promise<TargetState> {
+    return this.exclusive(sessionId, async () => this.runCoreUnlocked(sessionId, coreId));
+  }
+
+  private async runCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.run(session.adapterSession, coreId);
     core.state = "Running";
     core.active = true;
     this.logger.info("core run", { sessionId, coreId, coreName: core.coreName });
-    return this.getTargetState(sessionId, coreId);
+    return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
   async haltCore(sessionId: string, coreId: CoreId): Promise<TargetState> {
+    return this.exclusive(sessionId, async () => this.haltCoreUnlocked(sessionId, coreId));
+  }
+
+  private async haltCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.halt(session.adapterSession, coreId);
     core.state = "Halted";
     core.active = true;
     this.logger.info("core halted", { sessionId, coreId, coreName: core.coreName });
-    return this.getTargetState(sessionId, coreId);
+    return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
   async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetState> {
+    return this.exclusive(sessionId, async () => this.resetCoreUnlocked(sessionId, coreId, resetType));
+  }
+
+  private async resetCoreUnlocked(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.reset(session.adapterSession, coreId, resetType);
     core.state = "Halted";
     core.pc = "0x00000000";
     this.logger.info("core reset", { sessionId, coreId, coreName: core.coreName, resetType });
-    return this.getTargetState(sessionId, coreId);
+    return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
   async getTargetState(sessionId: string, coreId: CoreId): Promise<TargetState> {
+    return this.exclusive(sessionId, async () => this.getTargetStateUnlocked(sessionId, coreId));
+  }
+
+  private async getTargetStateUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     const state = await this.adapter.getState(session.adapterSession, coreId);
     core.connected = state.connected;
@@ -175,17 +263,26 @@ export class DebugSessionManager {
   }
 
   async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string): Promise<LoadedProgramInfo> {
-    const normalizedUri = normalizeProgramUri(programUri);
+    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, coreId, programUri, mapUri));
+  }
+
+  private async loadProgramWithMapUnlocked(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string): Promise<LoadedProgramInfo> {
+    const normalizedUri = this.normalizeArtifactUri(programUri);
+    const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
     const { session, core } = this.requireCore(sessionId, coreId);
     try {
       await access(normalizedUri);
     } catch {
       throw new DebugMcpError("ProgramFileNotFound", `Program file was not found: ${normalizedUri}`, { programUri: normalizedUri });
     }
+    let ownershipNote: string | undefined;
     try {
-      await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, mapUri);
+      ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri);
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
+      if (error instanceof DebugMcpError && (error.code === "OwnerCoreNotConnected" || error.code === "CoreNotConnected")) {
+        throw error;
+      }
       throw new DebugMcpError("ProgramLoadFailed", `Program load failed for core ${coreId}`, {
         coreId,
         programUri: normalizedUri,
@@ -193,42 +290,190 @@ export class DebugSessionManager {
       });
     }
     const metadata = await fileMetadata(normalizedUri);
+    const warnings = ["This info is guaranteed only if program was loaded through this MCP."];
+    if (ownershipNote) {
+      warnings.push(ownershipNote);
+    }
     const info: LoadedProgramInfo = {
       sessionId,
       coreId,
       coreName: core.coreName,
       programUri: normalizedUri,
+      ...(normalizedMapUri ? { mapUri: normalizedMapUri } : {}),
       loadedAt: new Date().toISOString(),
       fileMTime: metadata.fileMTime,
       fileSize: metadata.fileSize,
       sha256: metadata.sha256,
       symbolsLoaded: true,
-      warning: "This info is guaranteed only if program was loaded through this MCP."
+      warning: warnings.join(" ")
     };
     this.loadedPrograms.set(info);
     this.logger.info("program loaded", { sessionId, coreId, programUri: normalizedUri, sha256: info.sha256 });
     return info;
   }
 
-  private async prepareCpu2RamOwnership(sessionId: string, session: LogicalDebugSession, coreId: CoreId, programUri: string, mapUri?: string): Promise<void> {
+  private async prepareCpu2RamOwnership(
+    sessionId: string,
+    session: LogicalDebugSession,
+    coreId: CoreId,
+    programUri: string,
+    mapUri?: string
+  ): Promise<string | undefined> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
-      return;
+      return undefined;
     }
-    const actions = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
+    const ownership = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
+    const actions = mergeOwnershipActions(ownership.actions);
+    if (actions.length === 0) {
+      return ownership.fallbackWarning;
+    }
+    if (ownership.fallbackWarning) {
+      this.logger.warn("cpu2 gs ram ownership using map fallback", {
+        sessionId,
+        programUri,
+        mapUri,
+        reason: ownership.fallbackWarning
+      });
+    }
+    const ownerState = await this.adapter.getState(session.adapterSession, F28P65X_CPU1_CORE_ID);
+    if (!ownerState.connected) {
+      throw new DebugMcpError(
+        "OwnerCoreNotConnected",
+        "CPU1 must be connected before CPU2 GS RAM ownership can be written",
+        {
+          sessionId,
+          ownerCoreId: F28P65X_CPU1_CORE_ID,
+          targetCoreId: F28P65X_CPU2_CORE_ID,
+          programUri
+        }
+      );
+    }
+    const writes: Array<{ address: number; requestedValue: number; writtenValue: number; rmw: boolean; memoryRegion: string }> = [];
     for (const action of actions) {
-      await this.adapter.writeMemory(session.adapterSession, action.ownerCoreId, action.page, action.address, action.value, action.typeSize);
+      let writtenValue = action.value;
+      let rmw = false;
+      if (this.adapter.readMemory) {
+        try {
+          const current = await this.adapter.readMemory(
+            session.adapterSession,
+            action.ownerCoreId,
+            action.page,
+            action.address,
+            action.typeSize
+          );
+          writtenValue = current | action.value;
+          rmw = true;
+        } catch (error) {
+          this.logger.warn("cpu2 gs ownership RMW read failed; writing absolute mask", {
+            sessionId,
+            address: action.address,
+            value: action.value,
+            error: toStructuredError(error)
+          });
+        }
+      }
+      await this.adapter.writeMemory(
+        session.adapterSession,
+        action.ownerCoreId,
+        action.page,
+        action.address,
+        writtenValue,
+        action.typeSize
+      );
+      writes.push({
+        address: action.address,
+        requestedValue: action.value,
+        writtenValue,
+        rmw,
+        memoryRegion: action.memoryRegion
+      });
     }
-    this.logger.info("cpu2 gs4 ram ownership prepared", {
+    this.logger.info("cpu2 gs ram ownership prepared", {
       sessionId,
       ownerCoreId: F28P65X_CPU1_CORE_ID,
       targetCoreId: F28P65X_CPU2_CORE_ID,
-      address: actions[0]?.address ?? F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-      value: actions.reduce((combined, action) => combined | action.value, 0),
-      typeSize: 32
+      fallback: Boolean(ownership.fallbackWarning),
+      writes
+    });
+    return ownership.fallbackWarning;
+  }
+
+  async readMemory(sessionId: string, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
+    return this.exclusive(sessionId, async () => {
+      const { session } = this.requireCore(sessionId, coreId);
+      if (!this.adapter.readMemory) {
+        throw new DebugMcpError("MemoryReadFailed", "Debug adapter does not implement readMemory", {
+          adapter: this.adapter.name,
+          coreId
+        });
+      }
+      return this.adapter.readMemory(session.adapterSession, coreId, page, address, typeSize);
     });
   }
 
-  private async cpu2RamOwnershipActions(coreId: CoreId, programUri: string, mapUri?: string): Promise<RamOwnershipAction[]> {
+  async verifyRuntimeRamOwnership(
+    sessionId: string,
+    actions: RamOwnershipAction[]
+  ): Promise<{
+    requested: true;
+    supported: boolean;
+    skipped: boolean;
+    matched?: boolean;
+    expectedMask?: number;
+    actualValue?: number;
+    reason?: string;
+    reads?: Array<{ address: number; value: number; expectedBits: number }>;
+  }> {
+    return this.exclusive(sessionId, async () => {
+      if (!this.adapter.readMemory) {
+        return {
+          requested: true as const,
+          supported: false,
+          skipped: true,
+          reason: "Debug adapter does not implement readMemory for MEMCFG verification."
+        };
+      }
+      if (actions.length === 0) {
+        return {
+          requested: true as const,
+          supported: true,
+          skipped: true,
+          reason: "No ownership actions to verify."
+        };
+      }
+      const expectedMask = actions.reduce((mask, action) => mask | action.value, 0);
+      const address = actions[0]!.address;
+      const ownerCoreId = actions[0]!.ownerCoreId;
+      const page = actions[0]!.page;
+      const typeSize = actions[0]!.typeSize;
+      const { session } = this.requireCore(sessionId, ownerCoreId);
+      const actualValue = await this.adapter.readMemory!(session.adapterSession, ownerCoreId, page, address, typeSize);
+      const matched = (actualValue & expectedMask) === expectedMask;
+      if (!matched) {
+        throw new DebugMcpError("RamOwnershipVerifyFailed", "Runtime MEMCFG GS ownership bits did not match expected mask", {
+          sessionId,
+          address,
+          expectedMask,
+          actualValue
+        });
+      }
+      return {
+        requested: true as const,
+        supported: true,
+        skipped: false,
+        matched: true,
+        expectedMask,
+        actualValue,
+        reads: [{ address, value: actualValue, expectedBits: expectedMask }]
+      };
+    });
+  }
+
+  private async cpu2RamOwnershipActions(
+    coreId: CoreId,
+    programUri: string,
+    mapUri?: string
+  ): Promise<{ actions: RamOwnershipAction[]; fallbackWarning?: string }> {
     const candidateMap = mapUri ?? mapPathForProgram(programUri);
     if (candidateMap) {
       try {
@@ -236,65 +481,76 @@ export class DebugSessionManager {
         const parsed = parseLinkerMap(await readFile(candidateMap, "utf8"), { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
         const actions = ownershipActionsForMap(parsed);
         if (actions.length > 0) {
-          return actions;
+          return { actions };
         }
-        return [];
+        return { actions: [] };
       } catch {
-        // Preserve the previous safe default when the map file is unavailable.
+        // Fall through to the RAMGS4 default when the map is missing or unreadable.
       }
     }
-    return [{
-      ownerCoreId: F28P65X_CPU1_CORE_ID,
-      targetCoreId: F28P65X_CPU2_CORE_ID,
-      targetCoreName: "C28xx_CPU2",
-      memoryRegion: "RAMGS4",
-      gsIndex: 4,
-      page: "DATA",
-      address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-      value: F28P65X_GS4_CPU2_OWNER_BIT,
-      typeSize: 32,
-      reason: "No CPU2 map was available; preserving the F28P65x RAMGS4 handoff default for CPU2 RAM loads."
-    }];
+    const reason =
+      "No CPU2 map was available; using F28P65x RAMGS4-only handoff default (0x10). Supply mapUri or a sibling .map to avoid silent multi-GS misconfiguration.";
+    return {
+      actions: [{
+        ownerCoreId: F28P65X_CPU1_CORE_ID,
+        targetCoreId: F28P65X_CPU2_CORE_ID,
+        targetCoreName: "C28xx_CPU2",
+        memoryRegion: "RAMGS4",
+        gsIndex: 4,
+        page: "DATA",
+        address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
+        value: F28P65X_GS4_CPU2_OWNER_BIT,
+        typeSize: 32,
+        reason
+      }],
+      fallbackWarning: reason
+    };
   }
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {
-    const results: BatchItemResult[] = [];
-    for (const program of programs) {
-      try {
-        const info = await this.loadProgramWithMap(sessionId, program.coreId, program.programUri, program.mapUri);
-        results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri });
-      } catch (error) {
-        results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
-        this.logger.error("program load failed", error);
+    return this.exclusive(sessionId, async () => {
+      const results: BatchItemResult[] = [];
+      for (const program of programs) {
+        try {
+          const info = await this.loadProgramWithMapUnlocked(sessionId, program.coreId, program.programUri, program.mapUri);
+          results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri });
+        } catch (error) {
+          results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
+          this.logger.error("program load failed", error);
+        }
       }
-    }
-    return { sessionId, results };
+      return { sessionId, results };
+    });
   }
 
   async connectCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.connectTarget(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.connectTargetUnlocked(sessionId, coreId));
   }
 
   async haltCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.haltCore(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.haltCoreUnlocked(sessionId, coreId));
   }
 
   async resetCores(sessionId: string, coreIds: CoreId[], resetType: ResetType = "default") {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.resetCore(sessionId, coreId, resetType));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.resetCoreUnlocked(sessionId, coreId, resetType));
   }
 
   async runCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.runCore(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.runCoreUnlocked(sessionId, coreId));
   }
 
   async getMulticoreSnapshot(sessionId: string, coreIds?: CoreId[]): Promise<{ sessionId: string; cores: CoreSnapshot[] }> {
+    return this.exclusive(sessionId, async () => this.getMulticoreSnapshotUnlocked(sessionId, coreIds));
+  }
+
+  private async getMulticoreSnapshotUnlocked(sessionId: string, coreIds?: CoreId[]): Promise<{ sessionId: string; cores: CoreSnapshot[] }> {
     const session = this.requireSession(sessionId);
     const cores: CoreSnapshot[] = [];
     const selectedCores = coreIds === undefined
       ? Array.from(session.cores.values())
       : coreIds.map(coreId => this.requireCore(sessionId, coreId).core);
     for (const core of selectedCores) {
-      const state = await this.getTargetState(sessionId, core.coreId);
+      const state = await this.getTargetStateUnlocked(sessionId, core.coreId);
       const loadedProgramInfo = this.loadedPrograms.get(sessionId, core.coreId);
       cores.push({
         coreId: core.coreId,
@@ -311,6 +567,10 @@ export class DebugSessionManager {
   }
 
   async evaluateMany(sessionId: string, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    return this.exclusive(sessionId, async () => this.evaluateManyUnlocked(sessionId, coreId, expressions));
+  }
+
+  private async evaluateManyUnlocked(sessionId: string, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
     const results: EvaluateResult[] = [];
     for (const expression of expressions) {
@@ -334,10 +594,42 @@ export class DebugSessionManager {
     value: ExpressionAssignmentValue,
     verify = true
   ): Promise<ExpressionAssignmentResult> {
+    return this.exclusive(sessionId, async () => this.assignExpressionUnlocked(sessionId, coreId, expression, value, verify));
+  }
+
+  private async assignExpressionUnlocked(
+    sessionId: string,
+    coreId: CoreId,
+    expression: string,
+    value: ExpressionAssignmentValue,
+    verify = true
+  ): Promise<ExpressionAssignmentResult> {
     const { session, core } = this.requireCore(sessionId, coreId);
     const assignedValue = formatAssignmentValue(value);
     const write = await this.adapter.assignExpression(session.adapterSession, coreId, expression, assignedValue);
-    const readback = verify ? await this.adapter.evaluateExpression(session.adapterSession, coreId, expression) : undefined;
+    if (write.success === false) {
+      throw new DebugMcpError("ExpressionAssignFailed", `Expression assignment failed for ${expression}`, {
+        sessionId,
+        coreId,
+        expression,
+        assignedValue,
+        write
+      });
+    }
+    let readback: EvaluateResult | undefined;
+    if (verify) {
+      readback = await this.adapter.evaluateExpression(session.adapterSession, coreId, expression);
+      if (readback.success !== true || !assignmentValuesEqual(readback.value, assignedValue)) {
+        throw new DebugMcpError("ExpressionVerifyFailed", `Expression readback did not match assigned value for ${expression}`, {
+          sessionId,
+          coreId,
+          expression,
+          assignedValue,
+          write,
+          readback
+        });
+      }
+    }
     this.logger.info("expression assigned", { sessionId, coreId, expression, assignedValue, verify });
     return {
       sessionId,
@@ -354,91 +646,95 @@ export class DebugSessionManager {
     sessionId: string,
     assignments: ExpressionAssignmentRequest[]
   ): Promise<{ sessionId: string; results: ExpressionAssignmentBatchItemResult[] }> {
-    const results: ExpressionAssignmentBatchItemResult[] = [];
-    for (const assignment of assignments) {
-      try {
-        const result = await this.assignExpression(
-          sessionId,
-          assignment.coreId,
-          assignment.expression,
-          assignment.value,
-          assignment.verify ?? true
-        );
-        results.push({ ...result, success: true });
-      } catch (error) {
-        results.push({
-          coreId: assignment.coreId,
-          expression: assignment.expression,
-          success: false,
-          error: toStructuredError(error)
-        });
-        this.logger.error("expression assignment failed", error);
+    return this.exclusive(sessionId, async () => {
+      const results: ExpressionAssignmentBatchItemResult[] = [];
+      for (const assignment of assignments) {
+        try {
+          const result = await this.assignExpressionUnlocked(
+            sessionId,
+            assignment.coreId,
+            assignment.expression,
+            assignment.value,
+            assignment.verify ?? true
+          );
+          results.push({ ...result, success: true });
+        } catch (error) {
+          results.push({
+            coreId: assignment.coreId,
+            expression: assignment.expression,
+            success: false,
+            error: toStructuredError(error)
+          });
+          this.logger.error("expression assignment failed", error);
+        }
       }
-    }
-    return { sessionId, results };
+      return { sessionId, results };
+    });
   }
 
   async injectFaults(
     sessionId: string,
     faults: FaultInjectionRequest[]
   ): Promise<{ sessionId: string; summary: { total: number; succeeded: number; failed: number }; results: FaultInjectionBatchItemResult[] }> {
-    const results: FaultInjectionBatchItemResult[] = [];
-    for (const fault of faults) {
-      try {
-        const result = await this.assignExpression(
-          sessionId,
-          fault.coreId,
-          fault.expression,
-          fault.value,
-          fault.verify ?? true
-        );
-        results.push({ ...result, label: fault.label, success: true });
-      } catch (error) {
-        results.push({
-          label: fault.label,
-          coreId: fault.coreId,
-          expression: fault.expression,
-          success: false,
-          error: toStructuredError(error)
-        });
-        this.logger.error("fault injection failed", error);
+    return this.exclusive(sessionId, async () => {
+      const results: FaultInjectionBatchItemResult[] = [];
+      for (const fault of faults) {
+        try {
+          const result = await this.assignExpressionUnlocked(
+            sessionId,
+            fault.coreId,
+            fault.expression,
+            fault.value,
+            fault.verify ?? true
+          );
+          results.push({ ...result, label: fault.label, success: true });
+        } catch (error) {
+          results.push({
+            label: fault.label,
+            coreId: fault.coreId,
+            expression: fault.expression,
+            success: false,
+            error: toStructuredError(error)
+          });
+          this.logger.error("fault injection failed", error);
+        }
       }
-    }
-    const failed = results.filter(result => result.success === false).length;
-    return {
-      sessionId,
-      summary: {
-        total: faults.length,
-        succeeded: faults.length - failed,
-        failed
-      },
-      results
-    };
+      const failed = results.filter(result => result.success === false).length;
+      return {
+        sessionId,
+        summary: {
+          total: faults.length,
+          succeeded: faults.length - failed,
+          failed
+        },
+        results
+      };
+    });
   }
 
   async compareExpressions(
     sessionId: string,
     comparisons: ExpressionComparisonRequest[]
   ): Promise<{ sessionId: string; matched: boolean; comparisons: ExpressionComparisonResult[] }> {
-    const results: ExpressionComparisonResult[] = [];
-    for (const comparison of comparisons) {
-      const [left, right] = await Promise.all([
-        this.evaluateEndpoint(sessionId, comparison.left),
-        this.evaluateEndpoint(sessionId, comparison.right)
-      ]);
-      const matched = Boolean(left.success && right.success && String(left.value) === String(right.value));
-      results.push({
-        label: comparison.label,
-        matched,
-        left,
-        right
-      });
-    }
-    return {
-      sessionId,
-      matched: results.every(result => result.matched),
-      comparisons: results
-    };
+    return this.exclusive(sessionId, async () => {
+      const results: ExpressionComparisonResult[] = [];
+      for (const comparison of comparisons) {
+        const left = await this.evaluateEndpointUnlocked(sessionId, comparison.left);
+        const right = await this.evaluateEndpointUnlocked(sessionId, comparison.right);
+        const matched = Boolean(left.success && right.success && valuesEqual(left.value, right.value));
+        results.push({
+          label: comparison.label,
+          matched,
+          left,
+          right
+        });
+      }
+      return {
+        sessionId,
+        matched: results.every(result => result.matched),
+        comparisons: results
+      };
+    });
   }
 
   async getLoadedProgramInfo(sessionId: string, coreId: CoreId): Promise<LoadedProgramInfo | undefined> {
@@ -447,24 +743,71 @@ export class DebugSessionManager {
   }
 
   async resolvePc(sessionId: string, coreId: CoreId): Promise<ResolveResult> {
+    return this.exclusive(sessionId, async () => this.resolvePcUnlocked(sessionId, coreId));
+  }
+
+  private async resolvePcUnlocked(sessionId: string, coreId: CoreId): Promise<ResolveResult> {
     const { session } = this.requireCore(sessionId, coreId);
     const pc = await this.adapter.readPc(session.adapterSession, coreId);
     try {
       const resolved = await this.adapter.resolveAddress(session.adapterSession, coreId, pc);
-      return { ...resolved, pc };
+      if (resolved.success !== true) {
+        const fallback = await this.resolveLoadedProgramMap(sessionId, coreId, pc);
+        if (fallback?.success) return { ...fallback, pc };
+      }
+      return {
+        success: true,
+        pc,
+        address: resolved.address ?? pc,
+        function: resolved.function,
+        sourceFile: resolved.sourceFile,
+        line: resolved.line,
+        offset: resolved.offset,
+        memoryRegion: resolved.memoryRegion,
+        resolutionSource: resolved.resolutionSource ?? "ccs",
+        partial: resolved.partial ?? resolved.success !== true,
+        ...(resolved.error ? { error: resolved.error } : resolved.success === false
+          ? { error: { code: "AddressResolveFailed", message: "Address-to-source mapping is partial or unavailable" } }
+          : {})
+      };
     } catch (error) {
-      return { success: true, pc, address: pc, partial: true, error: toStructuredError(error) };
+      const fallback = await this.resolveLoadedProgramMap(sessionId, coreId, pc);
+      return fallback?.success
+        ? { ...fallback, pc }
+        : { success: true, pc, address: pc, partial: true, error: toStructuredError(error) };
     }
   }
 
   async resolveAddress(sessionId: string, coreId: CoreId, address: string): Promise<ResolveResult> {
-    const { session } = this.requireCore(sessionId, coreId);
+    return this.exclusive(sessionId, async () => {
+      const { session } = this.requireCore(sessionId, coreId);
+      try {
+        const resolved = await this.adapter.resolveAddress(session.adapterSession, coreId, address);
+        this.logger.debug("address resolved", { sessionId, coreId, address, resolved });
+        if (resolved.success !== true) {
+          return await this.resolveLoadedProgramMap(sessionId, coreId, address) ?? resolved;
+        }
+        return { ...resolved, resolutionSource: resolved.resolutionSource ?? "ccs" };
+      } catch (error) {
+        return await this.resolveLoadedProgramMap(sessionId, coreId, address)
+          ?? { success: false, address, partial: true, error: toStructuredError(error) };
+      }
+    });
+  }
+
+  private async resolveLoadedProgramMap(sessionId: string, coreId: CoreId, address: string) {
+    const mapUri = this.loadedPrograms.get(sessionId, coreId)?.mapUri;
+    if (!mapUri) return undefined;
     try {
-      const resolved = await this.adapter.resolveAddress(session.adapterSession, coreId, address);
-      this.logger.debug("address resolved", { sessionId, coreId, address, resolved });
-      return resolved;
+      return await resolveAddressFromMap(mapUri, address);
     } catch (error) {
-      return { success: false, address, partial: true, error: toStructuredError(error) };
+      return {
+        success: false,
+        address,
+        partial: true,
+        resolutionSource: "linker-map" as const,
+        error: toStructuredError(error)
+      };
     }
   }
 
@@ -475,37 +818,32 @@ export class DebugSessionManager {
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
   }) {
-    const cpu1CoreId = options.cpu1CoreId;
-    const cpu2CoreId = options.cpu2CoreId;
-    const cpu1Expressions = options.cpu1Expressions ?? [
-      "g_emHybrid30kCpu1Stage",
-      "g_ulHybrid30kIpcPass",
-      "g_ulHybrid30kMsgRamPass",
-      "g_ulHybrid30kParamPass"
-    ];
-    const cpu2Expressions = options.cpu2Expressions ?? ["g_emHybrid30kCpu2Stage"];
-    const [snapshot, cpu1Pc, cpu2Pc, cpu1Results, cpu2Results] = await Promise.all([
-      this.getMulticoreSnapshot(options.sessionId),
-      this.resolvePc(options.sessionId, cpu1CoreId),
-      this.resolvePc(options.sessionId, cpu2CoreId),
-      this.evaluateMany(options.sessionId, cpu1CoreId, cpu1Expressions),
-      this.evaluateMany(options.sessionId, cpu2CoreId, cpu2Expressions)
-    ]);
+    return this.exclusive(options.sessionId, async () => {
+      const cpu1CoreId = options.cpu1CoreId;
+      const cpu2CoreId = options.cpu2CoreId;
+      const cpu1Expressions = options.cpu1Expressions ?? this.diagnostics.cpu1BootExpressions;
+      const cpu2Expressions = options.cpu2Expressions ?? this.diagnostics.cpu2BootExpressions;
+      const snapshot = await this.getMulticoreSnapshotUnlocked(options.sessionId);
+      const cpu1Pc = await this.resolvePcUnlocked(options.sessionId, cpu1CoreId);
+      const cpu2Pc = await this.resolvePcUnlocked(options.sessionId, cpu2CoreId);
+      const cpu1Results = await this.evaluateManyUnlocked(options.sessionId, cpu1CoreId, cpu1Expressions);
+      const cpu2Results = await this.evaluateManyUnlocked(options.sessionId, cpu2CoreId, cpu2Expressions);
 
-    return {
-      sessionId: options.sessionId,
-      snapshot,
-      cpu1: {
-        coreId: cpu1CoreId,
-        pc: cpu1Pc,
-        expressions: cpu1Results
-      },
-      cpu2: {
-        coreId: cpu2CoreId,
-        pc: cpu2Pc,
-        expressions: cpu2Results
-      }
-    };
+      return {
+        sessionId: options.sessionId,
+        snapshot,
+        cpu1: {
+          coreId: cpu1CoreId,
+          pc: cpu1Pc,
+          expressions: cpu1Results
+        },
+        cpu2: {
+          coreId: cpu2CoreId,
+          pc: cpu2Pc,
+          expressions: cpu2Results
+        }
+      };
+    });
   }
 
   async verifyRunPauseIsolation(options: {
@@ -514,68 +852,74 @@ export class DebugSessionManager {
     cpu2CoreId?: CoreId;
     settleMs?: number;
   }) {
-    const cpu1CoreId = options.cpu1CoreId ?? 0;
-    const cpu2CoreId = options.cpu2CoreId ?? 2;
-    const cpu1CoreName = this.requireCore(options.sessionId, cpu1CoreId).core.coreName;
-    const cpu2CoreName = this.requireCore(options.sessionId, cpu2CoreId).core.coreName;
-    const settleMs = options.settleMs ?? 250;
-    const steps = [];
-    const initialSnapshot = await this.getMulticoreSnapshot(options.sessionId);
-    let currentSnapshot: MulticoreSnapshotLike = initialSnapshot;
+    return this.exclusive(options.sessionId, async () => {
+      const cpu1CoreId = options.cpu1CoreId ?? 0;
+      const cpu2CoreId = options.cpu2CoreId ?? 2;
+      const cpu1CoreName = this.requireCore(options.sessionId, cpu1CoreId).core.coreName;
+      const cpu2CoreName = this.requireCore(options.sessionId, cpu2CoreId).core.coreName;
+      const settleMs = options.settleMs ?? 250;
+      const steps = [];
 
-    const cpu1Run = await this.runIsolatedOperation({
-      label: "c2000_continue(cpu1)",
-      sessionId: options.sessionId,
-      beforeSnapshot: currentSnapshot,
-      targetCoreId: cpu1CoreId,
-      expectedTargetState: "Running",
-      settleMs,
-      command: () => this.runCore(options.sessionId, cpu1CoreId)
+      // Start from a known halted baseline so peer PC drift cannot false-fail isolation.
+      await this.haltCoreUnlocked(options.sessionId, cpu1CoreId);
+      await this.haltCoreUnlocked(options.sessionId, cpu2CoreId);
+      const initialSnapshot = await this.getMulticoreSnapshotUnlocked(options.sessionId);
+      let currentSnapshot: MulticoreSnapshotLike = initialSnapshot;
+
+      const cpu1Run = await this.runIsolatedOperation({
+        label: "c2000_continue(cpu1)",
+        sessionId: options.sessionId,
+        beforeSnapshot: currentSnapshot,
+        targetCoreId: cpu1CoreId,
+        expectedTargetState: "Running",
+        settleMs,
+        command: () => this.runCoreUnlocked(options.sessionId, cpu1CoreId)
+      });
+      steps.push(cpu1Run);
+      currentSnapshot = cpu1Run.afterSnapshot;
+
+      const cpu1Pause = await this.runIsolatedOperation({
+        label: "c2000_pause(cpu1)",
+        sessionId: options.sessionId,
+        beforeSnapshot: currentSnapshot,
+        targetCoreId: cpu1CoreId,
+        expectedTargetState: "Halted",
+        command: () => this.haltCoreUnlocked(options.sessionId, cpu1CoreId)
+      });
+      steps.push(cpu1Pause);
+      currentSnapshot = cpu1Pause.afterSnapshot;
+
+      const cpu2Run = await this.runIsolatedOperation({
+        label: "c2000_continue(cpu2)",
+        sessionId: options.sessionId,
+        beforeSnapshot: currentSnapshot,
+        targetCoreId: cpu2CoreId,
+        expectedTargetState: "Running",
+        settleMs,
+        command: () => this.runCoreUnlocked(options.sessionId, cpu2CoreId)
+      });
+      steps.push(cpu2Run);
+      currentSnapshot = cpu2Run.afterSnapshot;
+
+      const cpu2Pause = await this.runIsolatedOperation({
+        label: "c2000_pause(cpu2)",
+        sessionId: options.sessionId,
+        beforeSnapshot: currentSnapshot,
+        targetCoreId: cpu2CoreId,
+        expectedTargetState: "Halted",
+        command: () => this.haltCoreUnlocked(options.sessionId, cpu2CoreId)
+      });
+      steps.push(cpu2Pause);
+      currentSnapshot = cpu2Pause.afterSnapshot;
+
+      return {
+        sessionId: options.sessionId,
+        initialSnapshot,
+        steps,
+        acceptanceSummary: buildRunPauseAcceptanceSummary(steps, { cpu1CoreId, cpu2CoreId, cpu1CoreName, cpu2CoreName }),
+        finalSnapshot: currentSnapshot
+      };
     });
-    steps.push(cpu1Run);
-    currentSnapshot = cpu1Run.afterSnapshot;
-
-    const cpu1Pause = await this.runIsolatedOperation({
-      label: "c2000_pause(cpu1)",
-      sessionId: options.sessionId,
-      beforeSnapshot: currentSnapshot,
-      targetCoreId: cpu1CoreId,
-      expectedTargetState: "Halted",
-      command: () => this.haltCore(options.sessionId, cpu1CoreId)
-    });
-    steps.push(cpu1Pause);
-    currentSnapshot = cpu1Pause.afterSnapshot;
-
-    const cpu2Run = await this.runIsolatedOperation({
-      label: "c2000_continue(cpu2)",
-      sessionId: options.sessionId,
-      beforeSnapshot: currentSnapshot,
-      targetCoreId: cpu2CoreId,
-      expectedTargetState: "Running",
-      settleMs,
-      command: () => this.runCore(options.sessionId, cpu2CoreId)
-    });
-    steps.push(cpu2Run);
-    currentSnapshot = cpu2Run.afterSnapshot;
-
-    const cpu2Pause = await this.runIsolatedOperation({
-      label: "c2000_pause(cpu2)",
-      sessionId: options.sessionId,
-      beforeSnapshot: currentSnapshot,
-      targetCoreId: cpu2CoreId,
-      expectedTargetState: "Halted",
-      command: () => this.haltCore(options.sessionId, cpu2CoreId)
-    });
-    steps.push(cpu2Pause);
-    currentSnapshot = cpu2Pause.afterSnapshot;
-
-    return {
-      sessionId: options.sessionId,
-      initialSnapshot,
-      steps,
-      acceptanceSummary: buildRunPauseAcceptanceSummary(steps, { cpu1CoreId, cpu2CoreId, cpu1CoreName, cpu2CoreName }),
-      finalSnapshot: currentSnapshot
-    };
   }
 
   private async batchCoreOperation(
@@ -583,17 +927,19 @@ export class DebugSessionManager {
     coreIds: CoreId[],
     operation: (coreId: CoreId) => Promise<TargetState>
   ): Promise<{ sessionId: string; sequential: boolean; results: BatchItemResult[] }> {
-    const results: BatchItemResult[] = [];
-    for (const coreId of coreIds) {
-      try {
-        const state = await operation(coreId);
-        results.push({ coreId, coreName: state.coreName, success: true });
-      } catch (error) {
-        results.push({ coreId, success: false, error: toStructuredError(error) });
-        this.logger.error("batch core operation failed", error);
+    return this.exclusive(sessionId, async () => {
+      const results: BatchItemResult[] = [];
+      for (const coreId of coreIds) {
+        try {
+          const state = await operation(coreId);
+          results.push({ coreId, coreName: state.coreName, success: true });
+        } catch (error) {
+          results.push({ coreId, success: false, error: toStructuredError(error) });
+          this.logger.error("batch core operation failed", error);
+        }
       }
-    }
-    return { sessionId, sequential: !this.adapter.supportsSimultaneousOperations, results };
+      return { sessionId, sequential: !this.adapter.supportsSimultaneousOperations, results };
+    });
   }
 
   private async runIsolatedOperation(input: {
@@ -617,7 +963,7 @@ export class DebugSessionManager {
     if (input.settleMs && input.settleMs > 0) {
       await sleep(input.settleMs);
     }
-    const afterSnapshot = await this.getMulticoreSnapshot(input.sessionId);
+    const afterSnapshot = await this.getMulticoreSnapshotUnlocked(input.sessionId);
     let assertion;
     try {
       assertion = assertCoreIsolation({
@@ -657,9 +1003,9 @@ export class DebugSessionManager {
     };
   }
 
-  private async evaluateEndpoint(sessionId: string, endpoint: { coreId: CoreId; expression: string }) {
+  private async evaluateEndpointUnlocked(sessionId: string, endpoint: { coreId: CoreId; expression: string }) {
     this.requireCore(sessionId, endpoint.coreId);
-    const [result] = await this.evaluateMany(sessionId, endpoint.coreId, [endpoint.expression]);
+    const [result] = await this.evaluateManyUnlocked(sessionId, endpoint.coreId, [endpoint.expression]);
     return {
       coreId: endpoint.coreId,
       expression: endpoint.expression,
@@ -717,13 +1063,13 @@ function validateCoreMap(coreMap: CoreConfig[]): CoreConfig[] {
   return coreMap;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function formatAssignmentValue(value: ExpressionAssignmentValue): string {
   if (typeof value === "boolean") {
     return value ? "1" : "0";
   }
   return String(value);
+}
+
+function assignmentValuesEqual(actual: unknown, expected: string): boolean {
+  return valuesEqual(actual, expected);
 }

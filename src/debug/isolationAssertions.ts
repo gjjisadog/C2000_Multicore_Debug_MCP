@@ -37,12 +37,17 @@ export function assertCoreIsolation(input: CoreIsolationAssertionInput): CoreIso
   }
 
   const peerCoreIds: CoreId[] = [];
+  const checkedFields = new Set<CheckedPeerField>();
   for (const beforePeer of input.before.cores) {
     if (beforePeer.coreId === input.targetCoreId) {
       continue;
     }
     const afterPeer = findCore(input.after, beforePeer.coreId, input.label, "after");
-    assertPeerUnchanged(input.label, beforePeer, afterPeer);
+    const peerFields = peerFieldsToCheck(beforePeer);
+    for (const field of peerFields) {
+      checkedFields.add(field);
+    }
+    assertPeerUnchanged(input.label, beforePeer, afterPeer, peerFields);
     peerCoreIds.push(beforePeer.coreId);
   }
 
@@ -51,9 +56,20 @@ export function assertCoreIsolation(input: CoreIsolationAssertionInput): CoreIso
     targetCoreId: beforeTarget.coreId,
     expectedTargetState: input.expectedTargetState,
     peerCoreIds,
-    checkedPeerFields: [...CHECKED_PEER_FIELDS],
+    checkedPeerFields: CHECKED_PEER_FIELDS.filter(field => checkedFields.has(field)),
     success: true
   };
+}
+
+/**
+ * Running peers freely advance PC; only compare PC when the peer was Halted
+ * (or otherwise not Running) so isolation checks stay meaningful on hardware.
+ */
+export function peerFieldsToCheck(beforePeer: CoreSnapshot): CheckedPeerField[] {
+  if (beforePeer.state === "Running") {
+    return CHECKED_PEER_FIELDS.filter(field => field !== "pc");
+  }
+  return [...CHECKED_PEER_FIELDS];
 }
 
 function findCore(snapshot: MulticoreSnapshotLike, coreId: CoreId, label: string, phase: string): CoreSnapshot {
@@ -64,11 +80,16 @@ function findCore(snapshot: MulticoreSnapshotLike, coreId: CoreId, label: string
   return core;
 }
 
-function assertPeerUnchanged(label: string, before: CoreSnapshot, after: CoreSnapshot) {
-  const changedFields: CheckedPeerField[] = CHECKED_PEER_FIELDS
+function assertPeerUnchanged(
+  label: string,
+  before: CoreSnapshot,
+  after: CoreSnapshot,
+  fields: readonly CheckedPeerField[]
+) {
+  const changedFields: CheckedPeerField[] = fields
     .filter(field => field !== "loadedProgramInfo")
     .filter(field => before[field] !== after[field]);
-  if (stableJson(before.loadedProgramInfo) !== stableJson(after.loadedProgramInfo)) {
+  if (fields.includes("loadedProgramInfo") && stableJson(before.loadedProgramInfo) !== stableJson(after.loadedProgramInfo)) {
     changedFields.push("loadedProgramInfo");
   }
   if (changedFields.length > 0) {
@@ -77,8 +98,24 @@ function assertPeerUnchanged(label: string, before: CoreSnapshot, after: CoreSna
 }
 
 function stableJson(value: unknown): string {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return "";
   }
-  return JSON.stringify(value, Object.keys(value as Record<string, unknown>).sort());
+  return JSON.stringify(canonicalizeJson(value));
+}
+
+/** Recursively sort object keys so nested loadedProgramInfo comparisons are order-stable. */
+function canonicalizeJson(value: unknown): unknown {
+  if (value === undefined || value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => canonicalizeJson(item));
+  }
+  const record = value as Record<string, unknown>;
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(record).sort()) {
+    sorted[key] = canonicalizeJson(record[key]);
+  }
+  return sorted;
 }

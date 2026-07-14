@@ -133,4 +133,29 @@ describe("assertCoreIsolation", () => {
       expectedTargetState: "Running"
     })).toThrow(/snapshot session mismatch/i);
   });
+
+  test("ignores PC drift on a Running peer core", () => {
+    const runningPeer = { ...haltedCpu2, state: "Running" as const, pc: "0x00002000" };
+    const assertion = assertCoreIsolation({
+      label: "c2000_continue(cpu1)",
+      before: { sessionId: "dbg-1", cores: [haltedCpu1, runningPeer] },
+      after: {
+        sessionId: "dbg-1",
+        cores: [
+          { ...haltedCpu1, state: "Running" },
+          { ...runningPeer, pc: "0x00002ABC" }
+        ]
+      },
+      targetCoreId: 0,
+      expectedTargetState: "Running"
+    });
+
+    expect(assertion.success).toBe(true);
+    expect(assertion.checkedPeerFields).toEqual([
+      "connected",
+      "state",
+      "loadedProgram",
+      "loadedProgramInfo"
+    ]);
+  });
 });

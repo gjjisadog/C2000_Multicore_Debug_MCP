@@ -5,6 +5,7 @@ import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { resolveCcsInstallPath, resolveCcsInstallPathSync } from "./ccsInstallPath.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +17,7 @@ export type CcsScriptingOperation =
   | "reset"
   | "loadProgram"
   | "writeMemory"
+  | "readMemory"
   | "getState"
   | "readPc"
   | "evaluateExpression"
@@ -55,6 +57,7 @@ export interface CcsScriptingBridge {
 
 export interface DssCliBridgeOptions {
   ccsInstallPath?: string;
+  workspacePath?: string;
   dssScriptPath?: string;
   timeoutMs?: number;
 }
@@ -70,7 +73,7 @@ export class DssCliBridge implements CcsScriptingBridge {
   async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
     const dssScriptPath = this.options.dssScriptPath ?? resolveDssScriptPath(this.options.ccsInstallPath);
     await assertExecutableExists(dssScriptPath);
-    const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath);
+    const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath, this.options.workspacePath);
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-dss-"));
     const commandPath = path.join(tempDir, "command.json");
     const scriptPath = path.join(tempDir, "c2000-dss-command.js");
@@ -80,11 +83,17 @@ export class DssCliBridge implements CcsScriptingBridge {
       const { stdout, stderr } = await execFileAsync(launch.command, [...launch.args, scriptPath, commandPath], {
         timeout: command.timeoutMs ?? this.options.timeoutMs ?? 30000,
         maxBuffer: 1024 * 1024 * 8,
-        env: launch.env
+        env: launch.env,
+        cwd: this.options.workspacePath && this.options.workspacePath.length > 0
+          ? this.options.workspacePath
+          : undefined
       });
       return parseDssResult(stdout, stderr);
     } catch (error) {
-      throw new DebugMcpError("AdapterNotAvailable", "DSS command execution failed", {
+      if (error instanceof DebugMcpError) {
+        throw error;
+      }
+      throw new DebugMcpError("DssCommandFailed", "DSS command execution failed", {
         operation: command.operation,
         coreId: command.coreId,
         coreName: command.coreName,
@@ -96,13 +105,46 @@ export class DssCliBridge implements CcsScriptingBridge {
   }
 }
 
-function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+export function resolveCcsRoot(ccsInstallPath?: string): string {
+  if (ccsInstallPath && ccsInstallPath.length > 0) {
+    return path.resolve(ccsInstallPath);
+  }
+  return resolveCcsInstallPathSync().installPath;
+}
+
+export function resolveDssScriptPath(ccsInstallPath?: string): string {
+  const ccsRoot = resolveCcsRoot(ccsInstallPath);
   return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
+export async function isCcsDssAvailable(ccsInstallPath?: string): Promise<boolean> {
+  if (ccsInstallPath) {
+    try {
+      await access(resolveDssScriptPath(ccsInstallPath));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  const resolved = await resolveCcsInstallPath();
+  if (resolved.source === "default-fallback") {
+    try {
+      await access(resolved.dssLauncherPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    await access(resolved.dssLauncherPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveDssJson2Path(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = resolveCcsRoot(ccsInstallPath);
   return path.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
 }
 
@@ -110,11 +152,16 @@ export interface DssLaunch {
   command: string;
   args: string[];
   env: ExecFileOptions["env"];
+  cwd?: string;
 }
 
-export function resolveDssLaunch(dssScriptPath: string, ccsInstallPath?: string): DssLaunch {
+export function resolveDssLaunch(
+  dssScriptPath: string,
+  ccsInstallPath?: string,
+  workspacePath?: string
+): DssLaunch {
   const env = { ...process.env };
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = resolveCcsRoot(ccsInstallPath);
   const debugServerBin = path.join(ccsRoot, "ccs_base", "DebugServer", "bin");
   const commonBin = path.join(ccsRoot, "ccs_base", "common", "bin");
   env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(":");
@@ -122,18 +169,28 @@ export function resolveDssLaunch(dssScriptPath: string, ccsInstallPath?: string)
   const bundledJavaHome = path.join(ccsRoot, "ccs-server.app", "jre", "Contents", "Home");
   env.JAVA_HOME = env.C2000_MCP_JAVA_HOME ?? bundledJavaHome;
   env.PATH = [path.join(env.JAVA_HOME, "bin"), env.PATH].filter(Boolean).join(":");
-
-  if (process.platform === "darwin" && process.arch === "arm64") {
-    return { command: "arch", args: ["-x86_64", dssScriptPath], env };
+  env.C2000_MCP_CCS_INSTALL_PATH = ccsRoot;
+  if (workspacePath && workspacePath.length > 0) {
+    env.C2000_MCP_WORKSPACE_PATH = workspacePath;
+    // Common CCS Scripting / Eclipse-style workspace hints used by tooling and relative path resolution.
+    env.WORKSPACE = workspacePath;
+    env.CCS_WORKSPACE = workspacePath;
   }
-  return { command: dssScriptPath, args: [], env };
+
+  const launch: DssLaunch = process.platform === "darwin" && process.arch === "arm64"
+    ? { command: "arch", args: ["-x86_64", dssScriptPath], env }
+    : { command: dssScriptPath, args: [], env };
+  if (workspacePath && workspacePath.length > 0) {
+    launch.cwd = workspacePath;
+  }
+  return launch;
 }
 
 async function assertExecutableExists(filePath: string) {
   try {
     await access(filePath);
   } catch {
-    throw new DebugMcpError("AdapterNotAvailable", `DSS launcher was not found: ${filePath}`, { dssScriptPath: filePath });
+    throw new DebugMcpError("DssNotFound", `DSS launcher was not found: ${filePath}`, { dssScriptPath: filePath });
   }
 }
 
@@ -141,11 +198,11 @@ function parseDssResult(stdout: string, stderr: string): Record<string, unknown>
   const marker = "__C2000_MCP_RESULT__";
   const line = stdout.split(/\r?\n/).find(item => item.startsWith(marker));
   if (!line) {
-    throw new DebugMcpError("AdapterNotAvailable", "DSS command did not return a structured result", { stdout, stderr });
+    throw new DebugMcpError("DssCommandFailed", "DSS command did not return a structured result", { stdout, stderr });
   }
   const payload = JSON.parse(line.slice(marker.length));
   if (payload.success === false) {
-    throw new DebugMcpError("AdapterNotAvailable", String(payload.error ?? "DSS command failed"), { payload, stdout, stderr });
+    throw new DebugMcpError("DssCommandFailed", String(payload.error ?? "DSS command failed"), { payload, stdout, stderr });
   }
   return payload.result ?? {};
 }
@@ -216,14 +273,17 @@ try {
     debugSession.target.halt();
     result = { state: "Halted" };
   } else if (command.operation === "reset") {
-    debugSession.target.reset();
-    result = { state: "Halted" };
+    applyTargetReset(debugSession, command.resetType);
+    result = { state: "Halted", resetType: command.resetType || "default" };
   } else if (command.operation === "loadProgram") {
     debugSession.memory.loadProgram(command.programUri);
     result = { symbolsLoaded: true };
   } else if (command.operation === "writeMemory") {
     debugSession.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     result = { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };
+  } else if (command.operation === "readMemory") {
+    var readValue = debugSession.memory.readData(resolveMemoryPage(command.page), command.address, command.typeSize);
+    result = { page: command.page, address: command.address, value: Number(readValue), typeSize: command.typeSize };
   } else if (command.operation === "readPc") {
     result = { pc: String(debugSession.expression.evaluate("PC")) };
   } else if (command.operation === "getState") {
@@ -242,7 +302,13 @@ try {
     var assigned = debugSession.expression.evaluate(assignment);
     result = { expression: command.expression, assignedValue: String(command.valueExpression), success: true, value: String(assigned) };
   } else if (command.operation === "resolveAddress") {
-    result = { success: true, address: command.address, pc: command.address, partial: true };
+    result = {
+      success: false,
+      address: command.address,
+      pc: command.address,
+      partial: true,
+      error: "Address-to-source mapping is not implemented by the CCS scripting adapter"
+    };
   } else {
     throw "Unsupported operation: " + command.operation;
   }
@@ -261,6 +327,27 @@ try {
       debugServer.stop();
     }
   } catch (ignoreServer) {}
+}
+
+function applyTargetReset(session, resetType) {
+  var type = resetType || "default";
+  if (type === "system") {
+    try {
+      session.target.systemReset();
+      return;
+    } catch (systemResetError) {
+      try {
+        session.expression.evaluate("GEL_SystemReset()");
+        return;
+      } catch (gelSystemResetError) {}
+    }
+  } else if (type === "restart") {
+    try {
+      session.target.restart();
+      return;
+    } catch (restartError) {}
+  }
+  session.target.reset();
 }
 
 function resolveMemoryPage(page) {

@@ -5,7 +5,7 @@ import { createC2000McpServer } from "./server.js";
 
 async function main() {
   const config = await loadConfig();
-  const server = createC2000McpServer(config);
+  const server = await createC2000McpServer(config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

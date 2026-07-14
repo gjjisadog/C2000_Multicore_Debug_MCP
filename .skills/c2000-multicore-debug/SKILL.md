@@ -32,6 +32,8 @@ Prefer one workflow tool call:
 - `c2000_runReloadAndDiagnose`: halt/reset/load/halt, optional run/wait, then diagnosis.
 - `c2000_runFullDebugBundle`: snapshot, loaded programs, expressions, PC, map/RAM evidence, ELF freshness, diagnosis, and `summary.md`.
 
+When atomics are required, prefer **primary** names over aliases: `c2000_runCore` (not `c2000_continue`), `c2000_haltCore` (not `c2000_pause`). Call `c2000_getToolContracts` for `toolSurface` guidance.
+
 Use these only if `c2000_getToolContracts` shows they exist:
 
 - `c2000_collectDebugBundle`
@@ -63,9 +65,10 @@ Use atomic tools only when the user explicitly asks for a single step, a workflo
 - "CPU2 没起来", "CPU2 卡住", "CPU2 一跑就飞", "CPU1 放核了吗" -> `c2000_runBootHandoffDiagnosis`.
 - "重新加载两个 out 再看", "reload/reset/run 后诊断" -> `c2000_runReloadAndDiagnose`.
 - "打包现场", "生成报告", "保存失败信息" -> `c2000_runFullDebugBundle`.
-- "RAMGS4", "GS RAM", "MEMCFG_GSXMSEL", "0x0005F444", "ownership" -> workflow diagnosis first; use `c2000_analyzeRamOwnership` for focused static map evidence.
+- "RAMGS4", "GS RAM", "MEMCFG_GSXMSEL", "0x0005F444", "ownership" -> workflow diagnosis first; use `c2000_analyzeRamOwnership` for focused static map evidence. Multi-GS maps are OR-merged into one `MEMCFG_GSXMSEL` write before CPU2 load.
 - "watch 变量读不到", "旧变量名", "明明编译了但读不到" -> workflow ELF freshness evidence first; use `c2000_checkLoadedElfFreshness` only if exposed.
-- "CPU2 PC 在 ..." -> workflow PC diagnosis first; use `c2000_diagnoseCpu2IllegalPc` if exposed, otherwise `c2000_resolveAddress` as a focused read.
+- "CPU2 PC 在 ..." -> workflow PC diagnosis first; use `c2000_diagnoseCpu2IllegalPc` if exposed, otherwise `c2000_resolveAddress` as a focused read. Treat `resolveAddress` with `success: false` + `partial: true` as "PC known, symbol/source mapping not implemented", not as a successful source resolve.
+- "写变量 / 注入故障" -> `c2000_assignExpression` / `c2000_injectFaults` default `verify: true` and fail with `ExpressionVerifyFailed` if readback mismatches; do not claim injection success without verify evidence.
 
 ## Required Inputs
 
@@ -141,7 +144,7 @@ Call `c2000_runReloadAndDiagnose` when the user asks to reload both images or pr
 
 Prefer workflow evidence. For focused static analysis, call `c2000_analyzeRamOwnership` with `.map` files.
 
-If CPU2 sections use `RAMGSx`, the conclusion must name the region and the CPU1 handoff bit. For RAMGS4, suggest placing this before CPU2 release:
+If CPU2 sections use `RAMGSx`, the conclusion must name each region and the CPU1 handoff bits. Before CPU2 load, the MCP OR-combines all required GS bits into a single `MEMCFG_GSXMSEL` write on CPU1 (for example RAMGS4+RAMGS5 → `0x30`). For a single RAMGS4 case, firmware-side handoff looks like:
 
 ```c
 EALLOW;
@@ -149,7 +152,7 @@ MemCfg_setGSRAMMasterSel(MEMCFG_SECT_GS4, MEMCFG_GSRAMMASTER_CPU2);
 EDIS;
 ```
 
-Mention raw register patch evidence only when the workflow reports `MEMCFG_GSXMSEL` or `0x0005F444` evidence.
+Mention raw register patch evidence only when the workflow reports `MEMCFG_GSXMSEL` or `0x0005F444` evidence. When `verifyRuntimeRamOwnership: true`, the manager can read back `MEMCFG_GSXMSEL` via adapter `readMemory` and fail with `RamOwnershipVerifyFailed` if expected GS bits are missing. Before write, ownership bits are OR-merged and applied with RMW when `readMemory` is available so pre-existing GS owner bits are preserved.
 
 ### ELF Freshness
 
@@ -195,7 +198,10 @@ BOOT_HANDOFF_OK | CPU2_DISCONNECTED | CPU2_NOT_LOADED | CPU2_NOT_RELEASED_BY_CPU
 - If CPU2 is disconnected, diagnose connectivity before symbols.
 - If CPU2 has no loaded program, reload before expression analysis.
 - If ELF freshness fails, rebuild/reload before trusting watch variables.
-- If CPU2 `.text` or `.ebss` is in RAMGSx and ownership is missing, prioritize RAM ownership handoff.
+- If CPU2 `.text` or `.ebss` is in RAMGSx and ownership is missing, prioritize RAM ownership handoff (all used GS bits, not only GS4).
+- If assignment/fault inject returns `ExpressionVerifyFailed`, treat the write as unconfirmed; re-evaluate or halt and inspect before continuing acceptance.
+- If CPU2 load fails with `OwnerCoreNotConnected`, connect CPU1 first (launch paths already order CPU1 before CPU2).
+- If runtime ownership verify fails, re-check CPU1 MEMCFG writes and the CPU2 `.map` GS regions before reloading CPU2.
 - If IPC expressions are missing, ask for real symbol names.
 - If IPC expressions exist but stay false, inspect CPU1 release path and CPU2 stage.
 - If PC is illegal, classify memory region before recommending code changes.

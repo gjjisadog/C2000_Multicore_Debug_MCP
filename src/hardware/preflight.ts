@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveCcsInstallPathSync } from "../adapters/ccsInstallPath.js";
 
 export interface CommandOutput {
   stdout: string;
@@ -44,7 +45,8 @@ export async function runHardwarePreflight(options: {
   ccsInstallPath?: string;
   execFile?: ExecFileLike;
 } = {}): Promise<HardwarePreflightResult> {
-  const ccsRoot = options.ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
+  const ccsRoot = options.ccsInstallPath
+    ?? resolveCcsInstallPathSync().installPath;
   const xdsdfuPath = `${ccsRoot}/ccs_base/common/uscif/xds110/xdsdfu`;
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const preflight: HardwarePreflightResult = {

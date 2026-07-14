@@ -21,6 +21,17 @@
       }
     ]
   },
+  "diagnostics": {
+    "cpu1BootExpressions": [
+      "g_emHybrid30kCpu1Stage",
+      "g_ulHybrid30kIpcPass",
+      "g_ulHybrid30kMsgRamPass",
+      "g_ulHybrid30kParamPass"
+    ],
+    "cpu2BootExpressions": [
+      "g_emHybrid30kCpu2Stage"
+    ]
+  },
   "logging": {
     "level": "info",
     "logFile": "./logs/c2000-multicore-mcp.log"

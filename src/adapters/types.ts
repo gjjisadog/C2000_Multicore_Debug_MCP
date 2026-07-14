@@ -35,6 +35,7 @@ export interface DebugAdapter {
   reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<void>;
   loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void>;
   writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void>;
+  readMemory?(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number>;
   getState(session: AdapterSession, coreId: CoreId): Promise<TargetState>;
   readPc(session: AdapterSession, coreId: CoreId): Promise<string>;
   evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult>;
