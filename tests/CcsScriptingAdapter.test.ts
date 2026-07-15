@@ -82,6 +82,7 @@ describe("CcsScriptingAdapter", () => {
     await adapter.halt(session, 0);
     await adapter.reset(session, 2, "cpu");
     await adapter.loadProgram(session, 0, "/tmp/cpu1.out");
+    await adapter.prepareFlashLoad(session, 2, [3, 4]);
     await adapter.writeMemory(session, 0, "DATA", 0x0005F444, 0x10, 32);
     await adapter.assignExpression(session, 2, "g_ulHybrid30kIpcPass", "0");
 
@@ -96,9 +97,11 @@ describe("CcsScriptingAdapter", () => {
       { operation: "halt", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
       { operation: "reset", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" },
       { operation: "loadProgram", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
+      { operation: "prepareFlashLoad", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" },
       { operation: "writeMemory", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
       { operation: "assignExpression", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
     ]);
+    expect(bridge.commands.find(command => command.operation === "prepareFlashLoad")?.flashBanks).toEqual([3, 4]);
     expect(bridge.commands.at(-2)).toEqual(expect.objectContaining({
       page: "DATA",
       address: 0x0005F444,

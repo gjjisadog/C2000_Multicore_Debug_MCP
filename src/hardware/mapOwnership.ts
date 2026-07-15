@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 export const F28P65X_CPU1_CORE_ID = 0;
 export const F28P65X_CPU2_CORE_ID = 2;
 export const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
+export const F28P65X_DEVCFG_BANKMUXSEL_ADDRESS = 0x0005D060;
 
 export interface MapOwnershipInput {
   maps: Array<{
@@ -34,6 +35,11 @@ export interface UsedGsRamRegion extends LinkerMapMemoryRegion {
   ownerCoreId: number;
 }
 
+export interface UsedFlashBankRegion extends LinkerMapMemoryRegion {
+  bankIndex: number;
+  ownerCoreId: number;
+}
+
 export interface ParsedLinkerMap {
   coreId: number;
   coreName?: string;
@@ -41,6 +47,7 @@ export interface ParsedLinkerMap {
   memoryRegions: LinkerMapMemoryRegion[];
   sections: LinkerMapSection[];
   usedGsRam: UsedGsRamRegion[];
+  usedFlashBanks: UsedFlashBankRegion[];
 }
 
 export interface RamOwnershipAction {
@@ -60,8 +67,23 @@ export interface RamOwnershipAnalysis {
   success: true;
   target: "F28P65x";
   memcfgGsxmSelAddress: number;
+  flashBankMuxSelAddress: number;
   maps: ParsedLinkerMap[];
   ownershipActions: RamOwnershipAction[];
+  flashOwnershipActions: FlashOwnershipAction[];
+}
+
+export interface FlashOwnershipAction {
+  ownerCoreId: number;
+  targetCoreId: number;
+  targetCoreName?: string;
+  memoryRegions: string[];
+  flashBanks: number[];
+  page: "DATA";
+  address: number;
+  value: number;
+  typeSize: 32;
+  reason: string;
 }
 
 export function parseLinkerMap(
@@ -83,11 +105,25 @@ export function parseLinkerMap(
       };
     })
     .filter((region): region is UsedGsRamRegion => region !== undefined);
+  const usedFlashBanks = memoryRegions
+    .map(region => {
+      const match = /^FLASH_BANK(\d+)$/i.exec(region.name);
+      if (!match || region.used === 0) {
+        return undefined;
+      }
+      return {
+        ...region,
+        bankIndex: Number.parseInt(match[1], 10),
+        ownerCoreId: options.coreId
+      };
+    })
+    .filter((region): region is UsedFlashBankRegion => region !== undefined);
   return {
     ...options,
     memoryRegions,
     sections,
-    usedGsRam
+    usedGsRam,
+    usedFlashBanks
   };
 }
 
@@ -97,9 +133,35 @@ export async function analyzeRamOwnership(input: MapOwnershipInput): Promise<Ram
     success: true,
     target: "F28P65x",
     memcfgGsxmSelAddress: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
+    flashBankMuxSelAddress: F28P65X_DEVCFG_BANKMUXSEL_ADDRESS,
     maps,
-    ownershipActions: maps.flatMap(map => ownershipActionsForMap(map))
+    ownershipActions: maps.flatMap(map => ownershipActionsForMap(map)),
+    flashOwnershipActions: maps.flatMap(map => flashOwnershipActionsForMap(map))
   };
+}
+
+export function flashOwnershipActionsForMap(map: ParsedLinkerMap): FlashOwnershipAction[] {
+  if (map.coreId !== F28P65X_CPU2_CORE_ID || map.usedFlashBanks.length === 0) {
+    return [];
+  }
+  const banks = [...new Set(map.usedFlashBanks.map(region => region.bankIndex))].sort((left, right) => left - right);
+  const invalidBanks = banks.filter(bank => bank < 0 || bank > 4);
+  if (invalidBanks.length > 0) {
+    throw new Error(`Unsupported F28P65x flash bank index: ${invalidBanks.join(", ")}`);
+  }
+  const value = banks.reduce((combined, bank) => combined | (0x3 << (bank * 2)), 0);
+  return [{
+    ownerCoreId: F28P65X_CPU1_CORE_ID,
+    targetCoreId: map.coreId,
+    targetCoreName: map.coreName,
+    memoryRegions: map.usedFlashBanks.map(region => region.name),
+    flashBanks: banks,
+    page: "DATA",
+    address: F28P65X_DEVCFG_BANKMUXSEL_ADDRESS,
+    value,
+    typeSize: 32,
+    reason: `CPU2 map uses ${banks.map(bank => `FLASH_BANK${bank}`).join(", ")}; CPU1 must assign those flash banks to CPU2 before CPU2 program load.`
+  }];
 }
 
 export function ownershipActionsForMap(map: ParsedLinkerMap): RamOwnershipAction[] {

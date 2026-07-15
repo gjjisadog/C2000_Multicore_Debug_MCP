@@ -34,7 +34,14 @@ import { noopLogger } from "../utils/logger.js";
 import { normalizeProgramUri } from "../utils/pathUtils.js";
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
-import { mapPathForProgram, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import {
+  flashOwnershipActionsForMap,
+  mapPathForProgram,
+  ownershipActionsForMap,
+  parseLinkerMap,
+  type FlashOwnershipAction,
+  type RamOwnershipAction
+} from "../hardware/mapOwnership.js";
 
 interface LogicalDebugSession {
   sessionId: string;
@@ -114,6 +121,25 @@ export class DebugSessionManager {
     return { sessionId, closed: true };
   }
 
+  async disposeAllSessions(): Promise<{
+    closedSessionIds: string[];
+    failures: Array<{ sessionId: string; error: ReturnType<typeof toStructuredError> }>;
+  }> {
+    const sessionIds = Array.from(this.sessions.keys());
+    const closedSessionIds: string[] = [];
+    const failures: Array<{ sessionId: string; error: ReturnType<typeof toStructuredError> }> = [];
+    for (const sessionId of sessionIds) {
+      try {
+        await this.closeDebugSession(sessionId);
+        closedSessionIds.push(sessionId);
+      } catch (error) {
+        failures.push({ sessionId, error: toStructuredError(error) });
+        this.logger.error("debug session cleanup failed", { sessionId, error: toStructuredError(error) });
+      }
+    }
+    return { closedSessionIds, failures };
+  }
+
   async connectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.connect(session.adapterSession, coreId);
@@ -183,7 +209,10 @@ export class DebugSessionManager {
       throw new DebugMcpError("ProgramFileNotFound", `Program file was not found: ${normalizedUri}`, { programUri: normalizedUri });
     }
     try {
-      await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, mapUri);
+      const ownership = await this.prepareCpu2MemoryOwnership(sessionId, session, coreId, normalizedUri, mapUri);
+      if (ownership.flashBanks.length > 0) {
+        await this.adapter.prepareFlashLoad?.(session.adapterSession, coreId, ownership.flashBanks);
+      }
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
       throw new DebugMcpError("ProgramLoadFailed", `Program load failed for core ${coreId}`, {
@@ -210,51 +239,53 @@ export class DebugSessionManager {
     return info;
   }
 
-  private async prepareCpu2RamOwnership(sessionId: string, session: LogicalDebugSession, coreId: CoreId, programUri: string, mapUri?: string): Promise<void> {
+  private async prepareCpu2MemoryOwnership(sessionId: string, session: LogicalDebugSession, coreId: CoreId, programUri: string, mapUri?: string): Promise<{ flashBanks: number[] }> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
-      return;
+      return { flashBanks: [] };
     }
-    const actions = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
-    for (const action of actions) {
+    const actions = await this.cpu2OwnershipActions(coreId, programUri, mapUri);
+    for (const action of [...actions.ram, ...actions.flash]) {
       await this.adapter.writeMemory(session.adapterSession, action.ownerCoreId, action.page, action.address, action.value, action.typeSize);
     }
-    this.logger.info("cpu2 gs4 ram ownership prepared", {
+    this.logger.info("cpu2 memory ownership prepared", {
       sessionId,
       ownerCoreId: F28P65X_CPU1_CORE_ID,
       targetCoreId: F28P65X_CPU2_CORE_ID,
-      address: actions[0]?.address ?? F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-      value: actions.reduce((combined, action) => combined | action.value, 0),
-      typeSize: 32
+      ramActions: actions.ram,
+      flashActions: actions.flash
     });
+    return { flashBanks: [...new Set(actions.flash.flatMap(action => action.flashBanks))] };
   }
 
-  private async cpu2RamOwnershipActions(coreId: CoreId, programUri: string, mapUri?: string): Promise<RamOwnershipAction[]> {
+  private async cpu2OwnershipActions(coreId: CoreId, programUri: string, mapUri?: string): Promise<{ ram: RamOwnershipAction[]; flash: FlashOwnershipAction[] }> {
     const candidateMap = mapUri ?? mapPathForProgram(programUri);
     if (candidateMap) {
       try {
         await access(candidateMap);
         const parsed = parseLinkerMap(await readFile(candidateMap, "utf8"), { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
-        const actions = ownershipActionsForMap(parsed);
-        if (actions.length > 0) {
-          return actions;
-        }
-        return [];
+        return {
+          ram: ownershipActionsForMap(parsed),
+          flash: flashOwnershipActionsForMap(parsed)
+        };
       } catch {
         // Preserve the previous safe default when the map file is unavailable.
       }
     }
-    return [{
-      ownerCoreId: F28P65X_CPU1_CORE_ID,
-      targetCoreId: F28P65X_CPU2_CORE_ID,
-      targetCoreName: "C28xx_CPU2",
-      memoryRegion: "RAMGS4",
-      gsIndex: 4,
-      page: "DATA",
-      address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-      value: F28P65X_GS4_CPU2_OWNER_BIT,
-      typeSize: 32,
-      reason: "No CPU2 map was available; preserving the F28P65x RAMGS4 handoff default for CPU2 RAM loads."
-    }];
+    return {
+      ram: [{
+        ownerCoreId: F28P65X_CPU1_CORE_ID,
+        targetCoreId: F28P65X_CPU2_CORE_ID,
+        targetCoreName: "C28xx_CPU2",
+        memoryRegion: "RAMGS4",
+        gsIndex: 4,
+        page: "DATA",
+        address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
+        value: F28P65X_GS4_CPU2_OWNER_BIT,
+        typeSize: 32,
+        reason: "No CPU2 map was available; preserving the F28P65x RAMGS4 handoff default for CPU2 RAM loads."
+      }],
+      flash: []
+    };
   }
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {

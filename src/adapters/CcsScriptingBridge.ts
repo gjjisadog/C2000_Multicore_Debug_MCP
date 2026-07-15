@@ -15,6 +15,7 @@ export type CcsScriptingOperation =
   | "halt"
   | "reset"
   | "loadProgram"
+  | "prepareFlashLoad"
   | "writeMemory"
   | "getState"
   | "readPc"
@@ -37,6 +38,7 @@ export interface CcsScriptingCommand {
   address?: string | number;
   value?: number;
   typeSize?: number;
+  flashBanks?: number[];
   timeoutMs?: number;
 }
 

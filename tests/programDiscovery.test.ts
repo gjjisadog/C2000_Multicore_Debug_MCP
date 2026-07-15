@@ -23,6 +23,7 @@ describe("hardware acceptance program discovery", () => {
     expect(result.cpu1.source).toBe("env");
     expect(result.cpu2.selected).toBe(explicitCpu2);
     expect(result.cpu2.source).toBe("env");
+    expect(result.pairing).toEqual(expect.objectContaining({ complete: true, compatible: true, issues: [] }));
   });
 
   test("discovers CPU1 and CPU2 .out files from search roots when env paths are missing", async () => {
@@ -46,6 +47,11 @@ describe("hardware acceptance program discovery", () => {
     expect(result.cpu2.selected).toBe(cpu2Out);
     expect(result.cpu2.source).toBe("discovered");
     expect(result.cpu2.candidates).toContain(cpu2Out);
+    expect(result.pairing).toEqual(expect.objectContaining({
+      compatible: true,
+      cpu1: expect.objectContaining({ device: "f28p65x", configuration: "RAM", core: "cpu1" }),
+      cpu2: expect.objectContaining({ device: "f28p65x", configuration: "RAM", core: "cpu2" })
+    }));
   });
 
   test("returns unresolved entries instead of guessing when no matching .out exists", async () => {
@@ -60,5 +66,42 @@ describe("hardware acceptance program discovery", () => {
     expect(result.cpu1.source).toBe("missing");
     expect(result.cpu2.selected).toBeUndefined();
     expect(result.cpu2.source).toBe("missing");
+    expect(result.pairing).toEqual(expect.objectContaining({ complete: false, compatible: false }));
+  });
+
+  test("selects a compatible device pair instead of independently taking mismatched top candidates", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-program-pairing-"));
+    const paths = [
+      path.join(tempDir, "a_f28374s", "CPU1_RAM", "ipc_ex1_c28x1.out"),
+      path.join(tempDir, "b_f28p65x", "CPU1_RAM", "ipc_ex1_c28x1.out"),
+      path.join(tempDir, "b_f28p65x", "CPU2_RAM", "ipc_ex1_c28x2.out")
+    ];
+    for (const artifact of paths) {
+      await mkdir(path.dirname(artifact), { recursive: true });
+      await writeFile(artifact, "image");
+    }
+
+    const result = await discoverAcceptancePrograms({ searchRoots: [tempDir] });
+
+    expect(result.cpu1.selected).toBe(paths[1]);
+    expect(result.cpu2.selected).toBe(paths[2]);
+    expect(result.pairing).toEqual(expect.objectContaining({ compatible: true }));
+  });
+
+  test("reports explicit RAM/FLASH and device mismatches", async () => {
+    const result = await discoverAcceptancePrograms({
+      cpu1Program: "C:/build/f28p65x/ipc_ex1_c28x1/CPU1_RAM/ipc_ex1_c28x1.out",
+      cpu2Program: "C:/build/f28374s/ipc_ex1_c28x2/CPU2_FLASH/ipc_ex1_c28x2.out"
+    });
+
+    expect(result.pairing).toEqual(expect.objectContaining({
+      complete: true,
+      compatible: false,
+      issues: expect.arrayContaining([
+        expect.stringContaining("device mismatch"),
+        expect.stringContaining("configuration mismatch"),
+        expect.stringContaining("does not match expected")
+      ])
+    }));
   });
 });

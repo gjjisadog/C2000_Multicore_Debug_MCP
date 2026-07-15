@@ -5,9 +5,10 @@ import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridg
 describe("DSS generated scripts", () => {
   test("load json2.js by absolute path before using JSON", () => {
     const json2Path = resolveDssJson2Path("/Applications/ti/ccs2100/ccs");
+    const escapedJson2Path = json2Path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
-    expect(dssCommandScriptSource(json2Path)).toContain(`load("${json2Path}")`);
-    expect(persistentServerScriptSource(json2Path)).toContain(`load("${json2Path}")`);
+    expect(dssCommandScriptSource(json2Path)).toContain(`load("${escapedJson2Path}");`);
+    expect(persistentServerScriptSource(json2Path)).toContain(`load("${escapedJson2Path}");`);
   });
 
   test("DSS getState reports Disconnected before evaluating run or halt state", () => {
@@ -31,6 +32,16 @@ describe("DSS generated scripts", () => {
     expect(source).toContain("importClass(java.lang.Runtime)");
     expect(source).toContain("Runtime.getRuntime().addShutdownHook");
     expect(source).toContain("cleanupPersistentDebugServer()");
+  });
+
+  test("persistent DSS server configures F28P65x Flash mapping, clock, and selected erase banks", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+
+    expect(source).toContain('command.name === "prepareFlashLoad"');
+    expect(source).toContain('flash.options.setString("FlashMapC28Bank"');
+    expect(source).toContain('flash.options.setString("FlashEraseSelection", "Selected Banks Only")');
+    expect(source).toContain('flash.performOperation("ConfigureClock")');
+    expect(source).toContain('flash.performOperation("ConfigureBanks")');
   });
 
   test("persistent DSS server resolves every command through coreId to DebugSession mapping", () => {

@@ -11,6 +11,8 @@ MEMORY CONFIGURATION
 ----------------------  --------  ---------  --------  --------  ----  --------
   RAMGS3                00016000   00002000  00000000  00002000  RWIX
   RAMGS4                00018000   00002000  00000871  0000178f  RWIX
+  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX
+  FLASH_BANK4           00100000   00020000  00000001  0001ffff  RWIX
   CPU1TOCPU2RAM         0003a000   00000400  000000ba  00000346  RWIX
 
 SECTION ALLOCATION MAP
@@ -32,6 +34,10 @@ describe("map RAM ownership analysis", () => {
     ]));
     expect(parsed.usedGsRam).toEqual([
       expect.objectContaining({ name: "RAMGS4", gsIndex: 4, ownerCoreId: 2 })
+    ]);
+    expect(parsed.usedFlashBanks).toEqual([
+      expect.objectContaining({ name: "FLASH_BANK3", bankIndex: 3, ownerCoreId: 2 }),
+      expect.objectContaining({ name: "FLASH_BANK4", bankIndex: 4, ownerCoreId: 2 })
     ]);
     expect(parsed.sections).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: ".text", page: 0, origin: 0x18000, length: 0x7bc, memoryRegion: "RAMGS4" }),
@@ -63,6 +69,20 @@ describe("map RAM ownership analysis", () => {
           value: 0x10,
           typeSize: 32,
           reason: expect.stringContaining("RAMGS4")
+        })
+      ],
+      flashBankMuxSelAddress: 0x0005D060,
+      flashOwnershipActions: [
+        expect.objectContaining({
+          ownerCoreId: 0,
+          targetCoreId: 2,
+          memoryRegions: ["FLASH_BANK3", "FLASH_BANK4"],
+          flashBanks: [3, 4],
+          page: "DATA",
+          address: 0x0005D060,
+          value: 0x3c0,
+          typeSize: 32,
+          reason: expect.stringContaining("FLASH_BANK3, FLASH_BANK4")
         })
       ]
     }));
