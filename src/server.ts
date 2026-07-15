@@ -8,7 +8,13 @@ import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
 import { registerC2000Tools } from "./mcp/tools.js";
 import { Logger } from "./utils/logger.js";
 
-export function createC2000McpServer(config: C2000McpConfig): McpServer {
+export interface C2000McpRuntime {
+  server: McpServer;
+  manager: DebugSessionManager;
+  dispose(): Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>>;
+}
+
+export function createC2000McpRuntime(config: C2000McpConfig): C2000McpRuntime {
   const server = new McpServer(
     { name: "c2000-multicore-mcp", version: "0.1.0" },
     { capabilities: { logging: {} } }
@@ -16,7 +22,16 @@ export function createC2000McpServer(config: C2000McpConfig): McpServer {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const manager = new DebugSessionManager(createAdapter(config), new LoadedProgramRegistry(), logger);
   registerC2000Tools(server, manager);
-  return server;
+  let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
+  return {
+    server,
+    manager,
+    dispose: () => disposal ??= manager.disposeAllSessions()
+  };
+}
+
+export function createC2000McpServer(config: C2000McpConfig): McpServer {
+  return createC2000McpRuntime(config).server;
 }
 
 function createAdapter(config: C2000McpConfig): DebugAdapter {

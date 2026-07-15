@@ -2,10 +2,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { resolveDssJson2Path, resolveDssLaunch } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface DssServerHandle {
   host: string;
@@ -122,7 +125,11 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath);
     await writeFile(configPath, JSON.stringify({ ...options, host, basePort, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
     await writeFile(scriptPath, persistentServerScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
-    const child = spawn(launch.command, [...launch.args, scriptPath, configPath], { stdio: ["ignore", "pipe", "pipe"], env: launch.env });
+    const child = spawn(launch.command, [...launch.args, scriptPath, configPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: launch.env,
+      windowsHide: true
+    });
     const output = createProcessOutputBuffer();
     await waitForReady(child, this.options.timeoutMs ?? 20000, output);
     return {
@@ -140,13 +147,13 @@ class DefaultDssServerLauncher implements DssServerLauncher {
           await waitForExit(child, this.options.timeoutMs ?? 10000);
         } catch {
           if (!hasExited(child)) {
-            child.kill();
+            await terminateProcessTree(child);
           }
           try {
             await waitForExit(child, 5000);
           } catch {
             if (!hasExited(child)) {
-              child.kill("SIGKILL");
+              await terminateProcessTree(child, true);
             }
           }
         } finally {
@@ -155,6 +162,24 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       }
     };
   }
+}
+
+async function terminateProcessTree(child: ChildProcess, force = false): Promise<void> {
+  if (hasExited(child)) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid !== undefined) {
+    try {
+      await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", ...(force ? ["/F"] : [])], {
+        timeout: 5000,
+        windowsHide: true
+      });
+      return;
+    } catch {
+      // Fall through to Node's direct child termination if taskkill cannot run.
+    }
+  }
+  child.kill(force ? "SIGKILL" : undefined);
 }
 
 function validateResponseCoreIdentity(command: CcsScriptingCommand, result: Record<string, unknown>): void {
@@ -204,6 +229,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "reset", resetType: command.resetType };
     case "loadProgram":
       return { ...base, name: "load", program: command.programUri };
+    case "prepareFlashLoad":
+      return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
     case "writeMemory":
       return { ...base, name: "writeData", page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };
     case "readPc":
@@ -238,7 +265,6 @@ async function sendJsonLine(
     const cleanup = () => {
       clearTimeout(timer);
       socket.off("close", onClose);
-      socket.off("error", onError);
     };
     const resolveOnce = (value: Record<string, any>) => {
       if (settled) {
@@ -518,6 +544,23 @@ function handleCommand(command) {
   } else if (command.name === "load") {
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
+  } else if (command.name === "prepareFlashLoad") {
+    var cpu1Session = sessionsByCoreId["0"];
+    if (!cpu1Session) {
+      throw "CPU1 DebugSession is required to configure F28P65x Flash banks";
+    }
+    var selectedBanks = {};
+    for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
+      selectedBanks[String(command.flashBanks[selectedIndex])] = true;
+    }
+    for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
+      cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, selectedBanks[String(bankIndex)] ? "1" : "0");
+      session.flash.options.setBoolean("FlashC28Bank" + bankIndex, selectedBanks[String(bankIndex)] === true);
+    }
+    session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
+    cpu1Session.flash.performOperation("ConfigureClock");
+    cpu1Session.flash.performOperation("ConfigureBanks");
+    return { status: "OK", value: withCoreIdentity(command, { flashBanks: command.flashBanks, configured: true }) };
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize }) };

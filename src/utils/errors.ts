@@ -8,6 +8,8 @@ export type DebugErrorCode =
   | "CoreNotConnected"
   | "ProgramFileNotFound"
   | "ProgramLoadFailed"
+  | "BatchOperationFailed"
+  | "ArtifactPairInvalid"
   | "LaunchProgramMissing"
   | "TargetConnectFailed"
   | "TargetRunFailed"

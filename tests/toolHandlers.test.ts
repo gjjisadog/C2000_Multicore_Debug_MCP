@@ -57,6 +57,16 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   }
 }
 
+class Cpu2LoadFailureAdapter extends WorkflowRecordingAdapter {
+  override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    this.events.push(`load:${coreId}:${path.basename(programUri)}`);
+    if (coreId === 2) {
+      throw new Error("simulated CPU2 load failure");
+    }
+    await MockDebugAdapter.prototype.loadProgram.call(this, session, coreId, programUri);
+  }
+}
+
 describe("tool handlers", () => {
   test("getToolContracts returns injected scope metadata", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
@@ -545,6 +555,89 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("runIpcAcceptance fails closed before running either core when CPU2 program load fails", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-load-failure-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+    const adapter = new Cpu2LoadFailureAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-load-failure", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      resetType: "cpu",
+      runSequence: { runCpu1First: true, runCpu2: true },
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "BatchOperationFailed",
+        details: expect.objectContaining({
+          failed: [expect.objectContaining({ coreId: 2, success: false })]
+        })
+      })
+    }));
+    expect(adapter.events).toEqual([
+      "halt:0",
+      "halt:2",
+      "reset:0:cpu",
+      "reset:2:cpu",
+      "load:0:cpu1.out",
+      "load:2:cpu2.out"
+    ]);
+    expect(adapter.events).not.toContain("run:0");
+    expect(adapter.events).not.toContain("run:2");
+  });
+
+  test("runIpcAcceptance rejects output/map configuration mismatch before touching either core", async () => {
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "artifact-mismatch", coreMap });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "C:/f28p65x/ipc_ex1_c28x1/CPU1_RAM/ipc_ex1_c28x1.out",
+      cpu2OutPath: "C:/f28p65x/ipc_ex1_c28x2/CPU2_RAM/ipc_ex1_c28x2.out",
+      cpu1MapPath: "C:/f28p65x/ipc_ex1_c28x1/CPU1_FLASH/ipc_ex1_c28x1.map",
+      cpu2MapPath: "C:/f28p65x/ipc_ex1_c28x2/CPU2_RAM/ipc_ex1_c28x2.map",
+      runSequence: { runCpu1First: true, runCpu2: true },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "ArtifactPairInvalid",
+        details: expect.objectContaining({ issues: expect.arrayContaining([expect.stringContaining("configuration mismatch")]) })
+      })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
   test("launchAndRunIpcAcceptance creates and connects both cores before one server-side IPC workflow", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
@@ -571,7 +664,7 @@ describe("tool handlers", () => {
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
 
-    const result = await handlers.launchAndRunIpcAcceptance({
+    const input = {
       sessionName: "single-approval-ipc",
       ccxmlPath: "/tmp/f28p65x.ccxml",
       device: "F28P65x",
@@ -581,11 +674,12 @@ describe("tool handlers", () => {
       cpu2OutPath,
       cpu1MapPath,
       cpu2MapPath,
-      resetType: "cpu",
+      resetType: "cpu" as const,
       runSequence: { runCpu1First: true, runCpu2: true },
       timeoutMs: 20,
       intervalMs: 1
-    });
+    };
+    const result = await handlers.launchAndRunIpcAcceptance(input);
 
     expect(adapter.events).toEqual([
       "connect:0",
@@ -606,6 +700,7 @@ describe("tool handlers", () => {
       workflow: "c2000_launchAndRunIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      autoCloseOnComplete: false,
       sessionId: expect.any(String),
       launch: expect.objectContaining({
         sessionName: "single-approval-ipc",
@@ -614,6 +709,21 @@ describe("tool handlers", () => {
       }),
       ipcReady: expect.objectContaining({ matched: true })
     }));
+    await expect(manager.listCores(result.sessionId)).resolves.toHaveLength(2);
+
+    const autoCloseResult = await handlers.launchAndRunIpcAcceptance({
+      ...input,
+      sessionName: "single-approval-ipc-auto-close",
+      autoCloseOnComplete: true,
+      autoCloseIdleTimeoutMs: 1000
+    });
+    expect(autoCloseResult).toEqual(expect.objectContaining({
+      success: true,
+      autoCloseOnComplete: true,
+      autoClose: expect.objectContaining({ armed: true, idleTimeoutMs: 1000 }),
+      sessionId: expect.any(String)
+    }));
+    await expect(manager.listCores(autoCloseResult.sessionId)).resolves.toHaveLength(2);
   });
 
   test("runBootHandoffDiagnosis returns explicit diagnosis evidence without client-side tool chaining", async () => {
@@ -1553,6 +1663,7 @@ describe("tool handlers", () => {
 
     expect(result).toEqual(expect.objectContaining({
       success: true,
+      autoCloseOnComplete: false,
       sessionId: expect.any(String),
       snapshot: expect.objectContaining({
         cores: expect.arrayContaining([
@@ -1571,6 +1682,29 @@ describe("tool handlers", () => {
         })
       })
     }));
+  });
+
+  test("launchMulticoreDebug arms activity-aware idle cleanup after successful checks when requested", async () => {
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "auto-close-successful-launch",
+      autoCloseOnComplete: true,
+      autoCloseIdleTimeoutMs: 1000,
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", connect: true, load: false, haltAtEntry: true }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      autoCloseOnComplete: true,
+      autoClose: expect.objectContaining({ armed: true, idleTimeoutMs: 1000 }),
+      sessionId: expect.any(String),
+      snapshot: expect.objectContaining({ cores: [expect.objectContaining({ coreId: 0 })] })
+    }));
+    await expect(manager.listCores(result.sessionId)).resolves.toHaveLength(1);
   });
 
   test("launchMulticoreDebug can discover missing CPU1 and CPU2 programs before loading", async () => {
@@ -1613,11 +1747,12 @@ describe("tool handlers", () => {
     }));
   });
 
-  test("launchMulticoreDebug fails and cleans up when discovery cannot provide a required program", async () => {
+  test("launchMulticoreDebug rejects incomplete discovery before creating a target session", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-discovery-missing-"));
     const cpu1Out = path.join(tempDir, "cpu1.out");
     await writeFile(cpu1Out, "cpu1-image");
-    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const adapter = new CountingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager, {
       discoverAcceptancePrograms: async (options = {}) => ({
         searchRoots: options.searchRoots ?? [],
@@ -1637,8 +1772,6 @@ describe("tool handlers", () => {
 
     expect(result).toEqual(expect.objectContaining({
       success: false,
-      sessionId: expect.any(String),
-      cleanedUp: true,
       programDiscovery: expect.objectContaining({
         cpu1: expect.objectContaining({ selected: cpu1Out }),
         cpu2: expect.objectContaining({ source: "missing", candidates: [] })
@@ -1648,7 +1781,29 @@ describe("tool handlers", () => {
         details: expect.objectContaining({ coreId: 2 })
       })
     }));
-    await expect(manager.listCores(result.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+    expect(result.sessionId).toBeUndefined();
+    expect(result.cleanedUp).toBeUndefined();
+    expect(adapter.createSessionCount).toBe(0);
+  });
+
+  test("launchMulticoreDebug rejects incompatible RAM/FLASH pairs before creating a target session", async () => {
+    const adapter = new CountingAdapter();
+    const handlers = createHandlers(adapter);
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "mismatched-build-configs",
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", programUri: "C:/f28p65x/ipc_ex1_c28x1/CPU1_RAM/ipc_ex1_c28x1.out" },
+        { coreId: 2, coreName: "C28xx_CPU2", programUri: "C:/f28p65x/ipc_ex1_c28x2/CPU2_FLASH/ipc_ex1_c28x2.out" }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "ArtifactPairInvalid" }),
+      artifactPair: expect.objectContaining({ compatible: false })
+    }));
+    expect(adapter.createSessionCount).toBe(0);
   });
 
   test("launchMulticoreDebug passes explicit isolation core ids from postLaunchChecks", async () => {

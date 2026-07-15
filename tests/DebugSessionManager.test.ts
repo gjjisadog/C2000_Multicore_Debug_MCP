@@ -180,6 +180,55 @@ describe("DebugSessionManager", () => {
     ]);
   });
 
+  test("assigns F28P65x flash banks to CPU2 through CPU1 before loading a mapped CPU2 flash program", async () => {
+    type AdapterEvent =
+      | { type: "writeMemory"; coreId: CoreId; page: string; address: number; value: number; typeSize: number }
+      | { type: "prepareFlashLoad"; coreId: CoreId; flashBanks: number[] }
+      | { type: "loadProgram"; coreId: CoreId; programUri: string };
+    class RecordingOwnershipAdapter extends MockDebugAdapter {
+      readonly events: AdapterEvent[] = [];
+
+      override async writeMemory(_session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void> {
+        this.events.push({ type: "writeMemory", coreId, page, address, value, typeSize });
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.events.push({ type: "loadProgram", coreId, programUri });
+        await super.loadProgram(session, coreId, programUri);
+      }
+
+      async prepareFlashLoad(_session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void> {
+        this.events.push({ type: "prepareFlashLoad", coreId, flashBanks });
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-flash-ownership-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX",
+      "  FLASH_BANK4           00100000   00020000  00000001  0001ffff  RWIX"
+    ].join("\n"));
+    const adapter = new RecordingOwnershipAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "cpu2-flash-ownership", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await manager.loadProgram(session.sessionId, 0, cpu1Out);
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
+
+    expect(adapter.events).toEqual([
+      { type: "loadProgram", coreId: 0, programUri: cpu1Out },
+      { type: "writeMemory", coreId: 0, page: "DATA", address: 0x0005D060, value: 0x3c0, typeSize: 32 },
+      { type: "prepareFlashLoad", coreId: 2, flashBanks: [3, 4] },
+      { type: "loadProgram", coreId: 2, programUri: cpu2Out }
+    ]);
+  });
+
   test("includes trusted loaded program metadata in multicore snapshots", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-snapshot-metadata-"));
     const cpu1Out = path.join(tempDir, "cpu1.out");
@@ -269,6 +318,81 @@ describe("DebugSessionManager", () => {
 
     await expect(manager.closeDebugSession(session.sessionId)).rejects.toThrow("dispose failed");
     await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("auto-closes an armed debug session only after it remains idle", async () => {
+    class RecordingDisposeAdapter extends MockDebugAdapter {
+      readonly disposed: string[] = [];
+
+      async disposeSession(session: AdapterSession): Promise<void> {
+        this.disposed.push(session.adapterSessionId);
+      }
+    }
+    const adapter = new RecordingDisposeAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "idle-auto-close", coreMap });
+
+    const policy = manager.armIdleAutoClose(session.sessionId, 20);
+    expect(policy).toEqual(expect.objectContaining({ armed: true, idleTimeoutMs: 20 }));
+    await expect(manager.listCores(session.sessionId)).resolves.toHaveLength(2);
+    await delay(50);
+
+    expect(adapter.disposed).toHaveLength(1);
+    await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("does not auto-close while a session-scoped operation is in flight and restarts idle timing afterward", async () => {
+    class RecordingDisposeAdapter extends MockDebugAdapter {
+      readonly disposed: string[] = [];
+
+      async disposeSession(session: AdapterSession): Promise<void> {
+        this.disposed.push(session.adapterSessionId);
+      }
+    }
+    const adapter = new RecordingDisposeAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "active-auto-close", coreMap });
+    manager.armIdleAutoClose(session.sessionId, 20);
+    let release!: () => void;
+    const active = manager.withSessionActivity(session.sessionId, () => new Promise<void>(resolve => { release = resolve; }));
+
+    await delay(50);
+    expect(adapter.disposed).toHaveLength(0);
+    await expect(manager.listCores(session.sessionId)).resolves.toHaveLength(2);
+
+    release();
+    await active;
+    await delay(50);
+    expect(adapter.disposed).toHaveLength(1);
+    await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("disposes every session during global cleanup and reports individual failures", async () => {
+    class PartiallyFailingDisposeAdapter extends MockDebugAdapter {
+      readonly disposed: string[] = [];
+
+      async disposeSession(session: AdapterSession): Promise<void> {
+        this.disposed.push(session.adapterSessionId);
+        if (this.disposed.length === 1) {
+          throw new Error("first disposal failed");
+        }
+      }
+    }
+    const adapter = new PartiallyFailingDisposeAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const first = await manager.createDebugSession({ sessionName: "cleanup-1", coreMap });
+    const second = await manager.createDebugSession({ sessionName: "cleanup-2", coreMap });
+
+    const result = await manager.disposeAllSessions();
+
+    expect(adapter.disposed).toHaveLength(2);
+    expect(result.closedSessionIds).toEqual([second.sessionId]);
+    expect(result.failures).toEqual([
+      expect.objectContaining({ sessionId: first.sessionId, error: expect.objectContaining({ message: "first disposal failed" }) })
+    ]);
+    await expect(manager.listCores(first.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+    await expect(manager.listCores(second.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+    await expect(manager.disposeAllSessions()).resolves.toEqual({ closedSessionIds: [], failures: [] });
   });
 
   test("verifies CPU1 and CPU2 run/pause isolation with snapshots after each command", async () => {
@@ -646,3 +770,7 @@ describe("DebugSessionManager", () => {
     });
   });
 });
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}

@@ -6,7 +6,7 @@ import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import type { ResetType } from "../debug/types.js";
 import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js";
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
-import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault } from "../hardware/programDiscovery.js";
+import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault } from "../hardware/mapOwnership.js";
 import { formatDebugProcessOwners, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
@@ -152,20 +152,29 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const acceptanceEvidence = buildAcceptanceEvidencePlan();
         const cpu1Program = discoveredProgramForCore(0, programDiscovery);
         const cpu2Program = discoveredProgramForCore(2, programDiscovery);
+        const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, "F28P65x");
         const debugProcessOwners = formatDebugProcessOwners(preflight);
         const hasDebugProcessOwners = preflight.debugProcessDetails.length > 0 || preflight.debugProcesses.length > 0;
         const checks = {
           ccxml: await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required"),
           cpu1Program: await hostFileCheck(cpu1Program, "CPU1 .out program was not discovered"),
           cpu2Program: await hostFileCheck(cpu2Program, "CPU2 .out program was not discovered"),
+          artifactPair: {
+            ok: artifactPair.compatible,
+            ...artifactPair
+          },
           xds110: {
-            ok: preflight.xdsdfu.ok === true && Array.isArray(preflight.xdsdfu.devices) && preflight.xdsdfu.devices.length > 0,
+            ok: preflight.xdsdfu.probeReady ?? (preflight.xdsdfu.ok === true && Array.isArray(preflight.xdsdfu.devices) && preflight.xdsdfu.devices.length > 0),
+            commandOk: preflight.xdsdfu.commandOk ?? preflight.xdsdfu.ok,
+            probeReady: preflight.xdsdfu.probeReady ?? (Array.isArray(preflight.xdsdfu.devices) && preflight.xdsdfu.devices.length > 0),
+            attempts: preflight.xdsdfu.attempts,
             xdsdfuPath: preflight.xdsdfuPath,
             devices: preflight.xdsdfu.devices ?? [],
             error: preflight.xdsdfu.error
           },
           debugProcessOwnership: {
-            ok: !hasDebugProcessOwners || allowExistingDebugProcesses,
+            ok: preflight.processInspection?.ok !== false && (!hasDebugProcessOwners || allowExistingDebugProcesses),
+            inspection: preflight.processInspection,
             owners: debugProcessOwners,
             overrideAccepted: hasDebugProcessOwners && allowExistingDebugProcesses,
             details: preflight.debugProcessDetails
@@ -612,6 +621,24 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             programUri: core.programUri ?? discoveredProgramForCore(core.coreId, programDiscovery)
           }))
           : parsed.cores;
+        for (const core of cores) {
+          if (core.load && !core.programUri) {
+            throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
+              coreId: core.coreId,
+              coreName: core.coreName,
+              programDiscovery
+            });
+          }
+        }
+        const cpu1Core = cores.find(core => core.load && isCpuCore(core, "cpu1"));
+        const cpu2Core = cores.find(core => core.load && isCpuCore(core, "cpu2"));
+        if (cpu1Core && cpu2Core) {
+          const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri, programDiscovery ? "F28P65x" : undefined);
+          failureContext = { ...failureContext, artifactPair: pairing };
+          if (!pairing.compatible) {
+            throw new DebugMcpError("ArtifactPairInvalid", "CPU1/CPU2 launch artifacts are incomplete or incompatible", { pairing });
+          }
+        }
         const created = await manager.createDebugSession({
           sessionName: parsed.sessionName ?? parsed.targetConfigurationName ?? "launch-multicore-debug",
           ccxmlPath: parsed.ccxmlPath,
@@ -621,13 +648,6 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         for (const core of cores) {
           if (core.connect) {
             await manager.connectTarget(created.sessionId, core.coreId);
-          }
-          if (core.load && !core.programUri) {
-            throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
-              coreId: core.coreId,
-              coreName: core.coreName,
-              programDiscovery
-            });
           }
           if (core.load) {
             const programUri = core.programUri;
@@ -701,12 +721,20 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             verifyRunPauseIsolation: parsed.postLaunchChecks?.verifyRunPauseIsolation
           });
         }
-        return ok({
+        const result = {
           sessionId: created.sessionId,
           snapshot,
+          autoCloseOnComplete: parsed.autoCloseOnComplete,
           ...(programDiscovery ? { programDiscovery } : {}),
           ...(Object.keys(postLaunchActions).length > 0 ? { postLaunchActions } : {}),
           ...(Object.keys(postLaunchChecks).length > 0 ? { postLaunchChecks } : {})
+        };
+        if (!parsed.autoCloseOnComplete) {
+          return ok(result);
+        }
+        return ok({
+          ...result,
+          autoClose: manager.armIdleAutoClose(created.sessionId, parsed.autoCloseIdleTimeoutMs)
         });
       } catch (error) {
         const body: ToolResult = { ...failureContext };
@@ -876,6 +904,13 @@ function discoveredProgramForCore(coreId: number, programDiscovery: ToolResult):
   return undefined;
 }
 
+function isCpuCore(core: { coreId: number; coreName: string }, expected: "cpu1" | "cpu2"): boolean {
+  const normalized = core.coreName.toLowerCase();
+  return expected === "cpu1"
+    ? core.coreId === 0 || normalized.includes("cpu1") || normalized.includes("c28x1")
+    : core.coreId === 2 || normalized.includes("cpu2") || normalized.includes("c28x2");
+}
+
 function programSearchRoots(): string[] {
   const configured = process.env.C2000_PROGRAM_SEARCH_ROOTS;
   if (configured) {
@@ -918,11 +953,16 @@ function acceptanceBlockers(checks: ToolResult): string[] {
   if (!checks.cpu2Program?.ok) {
     blockers.push(`CPU2 program is not ready: ${checks.cpu2Program?.reason ?? checks.cpu2Program?.path ?? "missing .out"}`);
   }
+  if (!checks.artifactPair?.ok) {
+    blockers.push(`CPU1/CPU2 artifacts are incompatible: ${(checks.artifactPair?.issues ?? []).join("; ")}`);
+  }
   if (!checks.xds110?.ok) {
     blockers.push("XDS110 probe is not enumerated by xdsdfu");
   }
   if (!checks.debugProcessOwnership?.ok) {
-    blockers.push(`Existing debug-related process(es) may own the XDS probe: ${checks.debugProcessOwnership.owners}`);
+    blockers.push(checks.debugProcessOwnership?.inspection?.ok === false
+      ? `Could not inspect debug-process ownership: ${checks.debugProcessOwnership.inspection.error ?? "process enumeration failed"}`
+      : `Existing debug-related process(es) may own the XDS probe: ${checks.debugProcessOwnership.owners}`);
   }
   if (!checks.debugBoundary?.ok) {
     blockers.push("Debug boundary contract is not ready for F28P65x explicit per-core automation");
