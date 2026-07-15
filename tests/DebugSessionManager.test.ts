@@ -320,6 +320,53 @@ describe("DebugSessionManager", () => {
     await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
   });
 
+  test("auto-closes an armed debug session only after it remains idle", async () => {
+    class RecordingDisposeAdapter extends MockDebugAdapter {
+      readonly disposed: string[] = [];
+
+      async disposeSession(session: AdapterSession): Promise<void> {
+        this.disposed.push(session.adapterSessionId);
+      }
+    }
+    const adapter = new RecordingDisposeAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "idle-auto-close", coreMap });
+
+    const policy = manager.armIdleAutoClose(session.sessionId, 20);
+    expect(policy).toEqual(expect.objectContaining({ armed: true, idleTimeoutMs: 20 }));
+    await expect(manager.listCores(session.sessionId)).resolves.toHaveLength(2);
+    await delay(50);
+
+    expect(adapter.disposed).toHaveLength(1);
+    await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("does not auto-close while a session-scoped operation is in flight and restarts idle timing afterward", async () => {
+    class RecordingDisposeAdapter extends MockDebugAdapter {
+      readonly disposed: string[] = [];
+
+      async disposeSession(session: AdapterSession): Promise<void> {
+        this.disposed.push(session.adapterSessionId);
+      }
+    }
+    const adapter = new RecordingDisposeAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "active-auto-close", coreMap });
+    manager.armIdleAutoClose(session.sessionId, 20);
+    let release!: () => void;
+    const active = manager.withSessionActivity(session.sessionId, () => new Promise<void>(resolve => { release = resolve; }));
+
+    await delay(50);
+    expect(adapter.disposed).toHaveLength(0);
+    await expect(manager.listCores(session.sessionId)).resolves.toHaveLength(2);
+
+    release();
+    await active;
+    await delay(50);
+    expect(adapter.disposed).toHaveLength(1);
+    await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
   test("disposes every session during global cleanup and reports individual failures", async () => {
     class PartiallyFailingDisposeAdapter extends MockDebugAdapter {
       readonly disposed: string[] = [];
@@ -723,3 +770,7 @@ describe("DebugSessionManager", () => {
     });
   });
 });
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}

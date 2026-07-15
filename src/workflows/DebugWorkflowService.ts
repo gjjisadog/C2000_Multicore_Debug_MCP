@@ -49,9 +49,10 @@ export class DebugWorkflowService {
         sessionId
       });
 
-      return {
+      const result = {
         ...acceptance,
         workflow: "c2000_launchAndRunIpcAcceptance",
+        autoCloseOnComplete: input.autoCloseOnComplete,
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -64,6 +65,13 @@ export class DebugWorkflowService {
           created,
           connected
         }
+      };
+      if (!input.autoCloseOnComplete) {
+        return result;
+      }
+      return {
+        ...result,
+        autoClose: this.manager.armIdleAutoClose(sessionId, input.autoCloseIdleTimeoutMs)
       };
     } catch (error) {
       const launch: ToolResult = { sessionName, coreIds };

@@ -664,7 +664,7 @@ describe("tool handlers", () => {
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
 
-    const result = await handlers.launchAndRunIpcAcceptance({
+    const input = {
       sessionName: "single-approval-ipc",
       ccxmlPath: "/tmp/f28p65x.ccxml",
       device: "F28P65x",
@@ -674,11 +674,12 @@ describe("tool handlers", () => {
       cpu2OutPath,
       cpu1MapPath,
       cpu2MapPath,
-      resetType: "cpu",
+      resetType: "cpu" as const,
       runSequence: { runCpu1First: true, runCpu2: true },
       timeoutMs: 20,
       intervalMs: 1
-    });
+    };
+    const result = await handlers.launchAndRunIpcAcceptance(input);
 
     expect(adapter.events).toEqual([
       "connect:0",
@@ -699,6 +700,7 @@ describe("tool handlers", () => {
       workflow: "c2000_launchAndRunIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      autoCloseOnComplete: false,
       sessionId: expect.any(String),
       launch: expect.objectContaining({
         sessionName: "single-approval-ipc",
@@ -707,6 +709,21 @@ describe("tool handlers", () => {
       }),
       ipcReady: expect.objectContaining({ matched: true })
     }));
+    await expect(manager.listCores(result.sessionId)).resolves.toHaveLength(2);
+
+    const autoCloseResult = await handlers.launchAndRunIpcAcceptance({
+      ...input,
+      sessionName: "single-approval-ipc-auto-close",
+      autoCloseOnComplete: true,
+      autoCloseIdleTimeoutMs: 1000
+    });
+    expect(autoCloseResult).toEqual(expect.objectContaining({
+      success: true,
+      autoCloseOnComplete: true,
+      autoClose: expect.objectContaining({ armed: true, idleTimeoutMs: 1000 }),
+      sessionId: expect.any(String)
+    }));
+    await expect(manager.listCores(autoCloseResult.sessionId)).resolves.toHaveLength(2);
   });
 
   test("runBootHandoffDiagnosis returns explicit diagnosis evidence without client-side tool chaining", async () => {
@@ -1646,6 +1663,7 @@ describe("tool handlers", () => {
 
     expect(result).toEqual(expect.objectContaining({
       success: true,
+      autoCloseOnComplete: false,
       sessionId: expect.any(String),
       snapshot: expect.objectContaining({
         cores: expect.arrayContaining([
@@ -1664,6 +1682,29 @@ describe("tool handlers", () => {
         })
       })
     }));
+  });
+
+  test("launchMulticoreDebug arms activity-aware idle cleanup after successful checks when requested", async () => {
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "auto-close-successful-launch",
+      autoCloseOnComplete: true,
+      autoCloseIdleTimeoutMs: 1000,
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", connect: true, load: false, haltAtEntry: true }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      autoCloseOnComplete: true,
+      autoClose: expect.objectContaining({ armed: true, idleTimeoutMs: 1000 }),
+      sessionId: expect.any(String),
+      snapshot: expect.objectContaining({ cores: [expect.objectContaining({ coreId: 0 })] })
+    }));
+    await expect(manager.listCores(result.sessionId)).resolves.toHaveLength(1);
   });
 
   test("launchMulticoreDebug can discover missing CPU1 and CPU2 programs before loading", async () => {

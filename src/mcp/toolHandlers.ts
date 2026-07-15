@@ -721,12 +721,20 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             verifyRunPauseIsolation: parsed.postLaunchChecks?.verifyRunPauseIsolation
           });
         }
-        return ok({
+        const result = {
           sessionId: created.sessionId,
           snapshot,
+          autoCloseOnComplete: parsed.autoCloseOnComplete,
           ...(programDiscovery ? { programDiscovery } : {}),
           ...(Object.keys(postLaunchActions).length > 0 ? { postLaunchActions } : {}),
           ...(Object.keys(postLaunchChecks).length > 0 ? { postLaunchChecks } : {})
+        };
+        if (!parsed.autoCloseOnComplete) {
+          return ok(result);
+        }
+        return ok({
+          ...result,
+          autoClose: manager.armIdleAutoClose(created.sessionId, parsed.autoCloseIdleTimeoutMs)
         });
       } catch (error) {
         const body: ToolResult = { ...failureContext };

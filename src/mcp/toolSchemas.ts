@@ -220,6 +220,8 @@ export const runIpcAcceptanceSchema = z.object({
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ sessionId: true }).extend({
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
+  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
   cpu1CoreName: z.string().min(1).default("C28xx_CPU1"),
   cpu1CorePattern: z.string().min(1).optional(),
   cpu2CoreName: z.string().min(1).default("C28xx_CPU2"),
@@ -288,6 +290,8 @@ export const launchMulticoreDebugSchema = z.object({
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
+  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
   programDiscovery: z.object({
     enabled: z.boolean().default(false),
     cpu1Program: z.string().min(1).optional(),
