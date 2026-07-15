@@ -478,12 +478,16 @@ export class DebugSessionManager {
     const cpu1CoreId = options.cpu1CoreId;
     const cpu2CoreId = options.cpu2CoreId;
     const cpu1Expressions = options.cpu1Expressions ?? [
-      "g_emHybrid30kCpu1Stage",
-      "g_ulHybrid30kIpcPass",
-      "g_ulHybrid30kMsgRamPass",
-      "g_ulHybrid30kParamPass"
+      "g_stCoreCommCpu1Watch.emStage",
+      "g_stCoreCommCpu1Watch.ulIpcPass",
+      "g_stCoreCommCpu1Watch.ulCpu2Ready",
+      "g_stCoreCommCpu1Watch.ulCpu2BootLastError"
     ];
-    const cpu2Expressions = options.cpu2Expressions ?? ["g_emHybrid30kCpu2Stage"];
+    const cpu2Expressions = options.cpu2Expressions ?? [
+      "g_stCoreCommCpu2Watch.emStage",
+      "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq",
+      "g_stCoreCommCpu2Watch.ulInitialParameterApplied"
+    ];
     const [snapshot, cpu1Pc, cpu2Pc, cpu1Results, cpu2Results] = await Promise.all([
       this.getMulticoreSnapshot(options.sessionId),
       this.resolvePc(options.sessionId, cpu1CoreId),

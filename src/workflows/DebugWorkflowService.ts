@@ -459,17 +459,37 @@ function mapsFromPaths(input: { cpu1CoreId: CoreId; cpu2CoreId: CoreId; cpu1MapP
 
 function defaultIpcReadyConditions(cpu1CoreId: CoreId, cpu2CoreId: CoreId): ExpressionCondition[] {
   return [
-    { label: "cpu1-ipc-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kIpcPass", expected: 1 },
-    { label: "cpu1-msgram-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kMsgRamPass", expected: 1 },
-    { label: "cpu1-param-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kParamPass", expected: 1 },
-    { label: "cpu2-stage-ready", coreId: cpu2CoreId, expression: "g_emHybrid30kCpu2Stage", expected: 1 }
+    { label: "cpu1-stage-running", coreId: cpu1CoreId, expression: "g_stCoreCommCpu1Watch.emStage", expected: 5 },
+    { label: "cpu1-ipc-pass", coreId: cpu1CoreId, expression: "g_stCoreCommCpu1Watch.ulIpcPass", expected: 1 },
+    { label: "cpu1-cpu2-ready", coreId: cpu1CoreId, expression: "g_stCoreCommCpu1Watch.ulCpu2Ready", expected: 1 },
+    { label: "cpu1-boot-error-clear", coreId: cpu1CoreId, expression: "g_stCoreCommCpu1Watch.ulCpu2BootLastError", expected: 0 },
+    { label: "cpu2-stage-running", coreId: cpu2CoreId, expression: "g_stCoreCommCpu2Watch.emStage", expected: 5 },
+    { label: "cpu2-initial-param-published", coreId: cpu2CoreId, expression: "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq", expected: 1 },
+    { label: "cpu2-initial-param-applied", coreId: cpu2CoreId, expression: "g_stCoreCommCpu2Watch.ulInitialParameterApplied", expected: 1 }
   ];
 }
 
 function defaultExpressionReadSets(cpu1CoreId: CoreId, cpu2CoreId: CoreId): ExpressionReadSet[] {
   return [
-    { label: "cpu1-boot-ipc", coreId: cpu1CoreId, expressions: ["g_emHybrid30kCpu1Stage", "g_ulHybrid30kIpcPass", "g_ulHybrid30kMsgRamPass", "g_ulHybrid30kParamPass"] },
-    { label: "cpu2-boot-stage", coreId: cpu2CoreId, expressions: ["g_emHybrid30kCpu2Stage"] }
+    {
+      label: "cpu1-boot-ipc",
+      coreId: cpu1CoreId,
+      expressions: [
+        "g_stCoreCommCpu1Watch.emStage",
+        "g_stCoreCommCpu1Watch.ulIpcPass",
+        "g_stCoreCommCpu1Watch.ulCpu2Ready",
+        "g_stCoreCommCpu1Watch.ulCpu2BootLastError"
+      ]
+    },
+    {
+      label: "cpu2-boot-stage",
+      coreId: cpu2CoreId,
+      expressions: [
+        "g_stCoreCommCpu2Watch.emStage",
+        "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq",
+        "g_stCoreCommCpu2Watch.ulInitialParameterApplied"
+      ]
+    }
   ];
 }
 
@@ -487,8 +507,8 @@ function conditionResult(condition: ExpressionCondition, result?: EvaluateResult
 function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: RamOwnershipAnalysis) {
   const cpu1Expressions = Array.isArray(boot.cpu1?.expressions) ? boot.cpu1.expressions as ToolResult[] : [];
   const cpu2Expressions = Array.isArray(boot.cpu2?.expressions) ? boot.cpu2.expressions as ToolResult[] : [];
-  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
-  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
+  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(bootExpressionReady);
+  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(bootExpressionReady);
   const ramOwnershipReady = !ramOwnership || Array.isArray(ramOwnership.ownershipActions);
   return {
     cpu1Ready,
@@ -496,6 +516,20 @@ function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: RamOwnershipAn
     ramOwnershipReady,
     ready: cpu1Ready && cpu2Ready && ramOwnershipReady
   };
+}
+
+function bootExpressionReady(result: ToolResult): boolean {
+  if (result.success !== true) {
+    return false;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.ulCpu2BootLastError") {
+    return Number(result.value) === 0;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.emStage" ||
+      result.expression === "g_stCoreCommCpu2Watch.emStage") {
+    return Number(result.value) === 5;
+  }
+  return !["0", "false", "undefined"].includes(String(result.value).toLowerCase());
 }
 
 function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwnership?: RamOwnershipAnalysis): string[] {

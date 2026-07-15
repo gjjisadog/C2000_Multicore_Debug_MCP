@@ -14,6 +14,16 @@ const coreMap = [
   { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
 ];
 
+const hybrid30kReadyExpressionValues = {
+  "g_stCoreCommCpu1Watch.emStage": { value: "5" },
+  "g_stCoreCommCpu1Watch.ulIpcPass": { value: "1" },
+  "g_stCoreCommCpu1Watch.ulCpu2Ready": { value: "1" },
+  "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "0" },
+  "g_stCoreCommCpu2Watch.emStage": { value: "5" },
+  "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq": { value: "1" },
+  "g_stCoreCommCpu2Watch.ulInitialParameterApplied": { value: "1" }
+};
+
 function createHandlers(adapter = new MockDebugAdapter()) {
   const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
   return createToolHandlers(manager);
@@ -314,13 +324,7 @@ describe("tool handlers", () => {
       ".text      0    00018000    000007bc"
     ].join("\n"));
     const handlers = createHandlers(new MockDebugAdapter({
-      expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
-      }
+      expressionValues: hybrid30kReadyExpressionValues
     }));
     const created = await handlers.createDebugSession({ sessionName: "boot-handoff", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
@@ -363,10 +367,9 @@ describe("tool handlers", () => {
   test("waitForIpcReady uses default explicit CPU1 and CPU2 ready conditions", async () => {
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
+        ...hybrid30kReadyExpressionValues,
+        "g_stCoreCommCpu1Watch.ulMsgRamPass": { value: "0" },
+        "g_stCoreCommCpu1Watch.ulParamPass": { value: "0" }
       }
     }));
     const created = await handlers.createDebugSession({ sessionName: "ipc-ready", coreMap });
@@ -383,10 +386,17 @@ describe("tool handlers", () => {
       success: true,
       matched: true,
       conditions: expect.arrayContaining([
-        expect.objectContaining({ coreId: 0, expression: "g_ulHybrid30kIpcPass", matched: true }),
-        expect.objectContaining({ coreId: 2, expression: "g_emHybrid30kCpu2Stage", matched: true })
+        expect.objectContaining({ coreId: 0, expression: "g_stCoreCommCpu1Watch.ulIpcPass", matched: true }),
+        expect.objectContaining({ coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", matched: true })
       ])
     }));
+    expect(result.conditions).toHaveLength(7);
+    expect(result.conditions.map((condition: { expression: string }) => condition.expression)).not.toEqual(
+      expect.arrayContaining([
+        "g_stCoreCommCpu1Watch.ulMsgRamPass",
+        "g_stCoreCommCpu1Watch.ulParamPass"
+      ])
+    );
   });
 
   test("reloadResetRunToMain performs supported per-core reload reset run steps and reports run-to-main limitation", async () => {
@@ -458,13 +468,7 @@ describe("tool handlers", () => {
       ".text      0    00018000    000007bc"
     ].join("\n"));
     const adapter = new WorkflowRecordingAdapter({
-      expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
-      }
+      expressionValues: hybrid30kReadyExpressionValues
     });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
@@ -510,8 +514,8 @@ describe("tool handlers", () => {
       ipcReady: expect.objectContaining({
         matched: true,
         conditions: expect.arrayContaining([
-          expect.objectContaining({ coreId: 0, expression: "g_ulHybrid30kIpcPass", matched: true }),
-          expect.objectContaining({ coreId: 2, expression: "g_emHybrid30kCpu2Stage", matched: true })
+          expect.objectContaining({ coreId: 0, expression: "g_stCoreCommCpu1Watch.ulIpcPass", matched: true }),
+          expect.objectContaining({ coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", matched: true })
         ])
       }),
       snapshot: expect.objectContaining({
@@ -561,12 +565,7 @@ describe("tool handlers", () => {
       ".text      0    00018000    000007bc"
     ].join("\n"));
     const adapter = new WorkflowRecordingAdapter({
-      expressionValues: {
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
-      }
+      expressionValues: hybrid30kReadyExpressionValues
     });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
@@ -627,11 +626,8 @@ describe("tool handlers", () => {
     ].join("\n"));
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "0" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "0" }
+        ...hybrid30kReadyExpressionValues,
+        "g_stCoreCommCpu1Watch.ulIpcPass": { value: "0" }
       }
     }));
     const created = await handlers.createDebugSession({ sessionName: "boot-handoff-workflow", coreMap });
@@ -671,13 +667,7 @@ describe("tool handlers", () => {
     await writeFile(cpu1OutPath, "cpu1-image");
     await writeFile(cpu2OutPath, "cpu2-image");
     const adapter = new WorkflowRecordingAdapter({
-      expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
-      }
+      expressionValues: hybrid30kReadyExpressionValues
     });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
@@ -696,8 +686,8 @@ describe("tool handlers", () => {
       runCpu1: true,
       runCpu2: false,
       waitExpressions: [
-        { coreId: 0, expression: "g_ulHybrid30kIpcPass", expected: 1 },
-        { coreId: 2, expression: "g_emHybrid30kCpu2Stage", expected: 1 }
+        { coreId: 0, expression: "g_stCoreCommCpu1Watch.ulIpcPass", expected: 1 },
+        { coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", expected: 5 }
       ],
       timeoutMs: 20,
       intervalMs: 1
@@ -741,13 +731,7 @@ describe("tool handlers", () => {
       "  RAMGS4                00018000   00002000  00000871  0000178f  RWIX"
     ].join("\n"));
     const handlers = createHandlers(new MockDebugAdapter({
-      expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "1" },
-        g_ulHybrid30kIpcPass: { value: "1" },
-        g_ulHybrid30kMsgRamPass: { value: "1" },
-        g_ulHybrid30kParamPass: { value: "1" },
-        g_emHybrid30kCpu2Stage: { value: "1" }
-      }
+      expressionValues: hybrid30kReadyExpressionValues
     }));
     const created = await handlers.createDebugSession({ sessionName: "full-debug-bundle", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
@@ -769,8 +753,8 @@ describe("tool handlers", () => {
       cpu2OutPath,
       maps: [{ coreId: 2, coreName: "C28xx_CPU2", mapPath: cpu2MapPath }],
       expressions: [
-        { coreId: 0, expressions: ["g_ulHybrid30kIpcPass"] },
-        { coreId: 2, expressions: ["g_emHybrid30kCpu2Stage"] }
+        { coreId: 0, expressions: ["g_stCoreCommCpu1Watch.ulIpcPass"] },
+        { coreId: 2, expressions: ["g_stCoreCommCpu2Watch.emStage"] }
       ],
       outputDir
     });
@@ -793,7 +777,10 @@ describe("tool handlers", () => {
         ])
       }),
       expressions: expect.arrayContaining([
-        expect.objectContaining({ coreId: 0, results: [expect.objectContaining({ expression: "g_ulHybrid30kIpcPass" })] })
+        expect.objectContaining({
+          coreId: 0,
+          results: [expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.ulIpcPass" })]
+        })
       ]),
       bootHandoff: expect.objectContaining({
         diagnosisCode: "BOOT_HANDOFF_READY"
@@ -1228,11 +1215,13 @@ describe("tool handlers", () => {
   test("diagnoseCpu2Boot returns snapshot and per-core boot expressions", async () => {
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "2", type: "enum", address: "0x0000A844" },
-        g_ulHybrid30kIpcPass: { value: "0", type: "uint32_t", address: "0x0000A802" },
-        g_ulHybrid30kMsgRamPass: { value: "0", type: "uint32_t", address: "0x0000A80A" },
-        g_ulHybrid30kParamPass: { value: "0", type: "uint32_t", address: "0x0000A816" },
-        g_emHybrid30kCpu2Stage: { value: "0", type: "enum", address: "0x00018870" }
+        "g_stCoreCommCpu1Watch.emStage": { value: "2", type: "enum", address: "0x0000A844" },
+        "g_stCoreCommCpu1Watch.ulIpcPass": { value: "0", type: "uint32_t", address: "0x0000A802" },
+        "g_stCoreCommCpu1Watch.ulCpu2Ready": { value: "0", type: "uint32_t", address: "0x0000A80A" },
+        "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "1", type: "uint32_t", address: "0x0000A816" },
+        "g_stCoreCommCpu2Watch.emStage": { value: "0", type: "enum", address: "0x00018870" },
+        "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq": { value: "0", type: "uint32_t" },
+        "g_stCoreCommCpu2Watch.ulInitialParameterApplied": { value: "0", type: "uint32_t" }
       }
     }));
     const created = await handlers.createDebugSession({ sessionName: "diag-cpu2", coreMap });
@@ -1246,14 +1235,14 @@ describe("tool handlers", () => {
       cpu1: expect.objectContaining({
         coreId: 0,
         expressions: expect.arrayContaining([
-          expect.objectContaining({ expression: "g_emHybrid30kCpu1Stage", success: true, value: "2" }),
-          expect.objectContaining({ expression: "g_ulHybrid30kIpcPass", success: true, value: "0" })
+          expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.emStage", success: true, value: "2" }),
+          expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.ulIpcPass", success: true, value: "0" })
         ])
       }),
       cpu2: expect.objectContaining({
         coreId: 2,
         expressions: expect.arrayContaining([
-          expect.objectContaining({ expression: "g_emHybrid30kCpu2Stage", success: true, value: "0" })
+          expect.objectContaining({ expression: "g_stCoreCommCpu2Watch.emStage", success: true, value: "0" })
         ])
       }),
       snapshot: expect.objectContaining({
@@ -1523,10 +1512,8 @@ describe("tool handlers", () => {
     await writeFile(cpu2Out, "cpu2-image");
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
-        g_emHybrid30kCpu1Stage: { value: "3", type: "uint16_t", address: "0x00001234" },
+        ...hybrid30kReadyExpressionValues,
         g_ulHybrid30kIpcPass: { value: "1", type: "uint32_t", address: "0x00002000" },
-        g_ulHybrid30kMsgRamPass: { value: "1", type: "uint32_t", address: "0x00002004" },
-        g_ulHybrid30kParamPass: { value: "1", type: "uint32_t", address: "0x00002008" },
         g_emHybrid30kCpu2Stage: { value: "0", type: "uint16_t", address: "0x00018870" }
       }
     }));
