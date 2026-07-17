@@ -3,3 +3,6 @@ dist/
 logs/
 runtime/
 .env
+
+# Runtime debug evidence bundles
+.c2000-debug-bundles/
