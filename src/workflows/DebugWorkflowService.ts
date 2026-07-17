@@ -4,6 +4,7 @@ import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import type { CoreId, EvaluateResult, LoadedProgramInfo, ResetType } from "../debug/types.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput, type RamOwnershipAnalysis } from "../hardware/mapOwnership.js";
+import { describeProgramArtifact, validateProgramPair } from "../hardware/programDiscovery.js";
 import { fileMetadata } from "../utils/fileHash.js";
 import type {
   expressionConditionSchema,
@@ -32,6 +33,7 @@ export class DebugWorkflowService {
   ) {}
 
   async launchAndRunIpcAcceptance(input: z.infer<typeof launchAndRunIpcAcceptanceSchema>): Promise<ToolResult> {
+    assertIpcArtifactSet(input);
     const sessionName = input.sessionName ?? "launch-and-run-ipc-acceptance";
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     let sessionId: string | undefined;
@@ -52,9 +54,10 @@ export class DebugWorkflowService {
         sessionId
       });
 
-      return {
+      const result = {
         ...acceptance,
         workflow: "c2000_launchAndRunIpcAcceptance",
+        autoCloseOnComplete: input.autoCloseOnComplete,
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -67,6 +70,13 @@ export class DebugWorkflowService {
           created,
           connected
         }
+      };
+      if (!input.autoCloseOnComplete) {
+        return result;
+      }
+      return {
+        ...result,
+        autoClose: this.manager.armIdleAutoClose(sessionId, input.autoCloseIdleTimeoutMs)
       };
     } catch (error) {
       const launch: ToolResult = { sessionName, coreIds };
@@ -89,6 +99,7 @@ export class DebugWorkflowService {
   }
 
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
+    assertIpcArtifactSet(input);
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
@@ -102,6 +113,7 @@ export class DebugWorkflowService {
       { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
     ]);
     performedSteps.push("loadPrograms");
+    assertBatchSucceeded("loadPrograms", load);
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
@@ -215,6 +227,7 @@ export class DebugWorkflowService {
       { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
     ]);
     performedSteps.push("loadPrograms");
+    assertBatchSucceeded("loadPrograms", load);
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
@@ -514,6 +527,46 @@ export class DebugWorkflowService {
     await writeFile(summaryPath, summaryMarkdown(result));
     files.unshift(summaryPath);
     return { outputDir, files };
+  }
+}
+
+function assertIpcArtifactSet(input: {
+  device: string;
+  cpu1OutPath: string;
+  cpu2OutPath: string;
+  cpu1MapPath: string;
+  cpu2MapPath: string;
+}): void {
+  const programPair = validateProgramPair(input.cpu1OutPath, input.cpu2OutPath, input.device);
+  const mapPair = validateProgramPair(input.cpu1MapPath, input.cpu2MapPath, input.device);
+  const issues = [...programPair.issues, ...mapPair.issues.map(issue => `map: ${issue}`)];
+  const cpu1Out = describeProgramArtifact(input.cpu1OutPath);
+  const cpu1Map = describeProgramArtifact(input.cpu1MapPath);
+  const cpu2Out = describeProgramArtifact(input.cpu2OutPath);
+  const cpu2Map = describeProgramArtifact(input.cpu2MapPath);
+  if (cpu1Out.configuration && cpu1Map.configuration && cpu1Out.configuration !== cpu1Map.configuration) {
+    issues.push(`CPU1 output/map configuration mismatch: ${cpu1Out.configuration} vs ${cpu1Map.configuration}`);
+  }
+  if (cpu2Out.configuration && cpu2Map.configuration && cpu2Out.configuration !== cpu2Map.configuration) {
+    issues.push(`CPU2 output/map configuration mismatch: ${cpu2Out.configuration} vs ${cpu2Map.configuration}`);
+  }
+  if (issues.length > 0) {
+    throw new DebugMcpError("ArtifactPairInvalid", "IPC acceptance artifacts are incomplete or incompatible", {
+      programPair,
+      mapPair,
+      issues
+    });
+  }
+}
+
+function assertBatchSucceeded(label: string, result: ToolResult): void {
+  const failed = Array.isArray(result.results)
+    ? (result.results as ToolResult[]).filter(item => item.success !== true)
+    : [];
+  if (failed.length > 0) {
+    throw new DebugMcpError("BatchOperationFailed", `${label} failed for ${failed.length} item(s)`, {
+      failed
+    });
   }
 }
 

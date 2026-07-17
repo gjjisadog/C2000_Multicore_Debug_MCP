@@ -86,6 +86,10 @@ export class CcsScriptingAdapter implements DebugAdapter {
     await this.execute(session, coreId, { operation: "loadProgram", programUri });
   }
 
+  async prepareFlashLoad(session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void> {
+    await this.execute(session, coreId, { operation: "prepareFlashLoad", flashBanks });
+  }
+
   async writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void> {
     await this.execute(session, coreId, { operation: "writeMemory", page, address, value, typeSize });
   }
@@ -181,7 +185,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "valueExpression" | "page" | "address" | "value" | "typeSize">
+    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);
     const result = await this.bridge.execute({

@@ -393,6 +393,8 @@ Recommended one-approval call from an unconnected target through `c2000_launchAn
   },
   "timeoutMs": 5000,
   "intervalMs": 100,
+  "autoCloseOnComplete": true,
+  "autoCloseIdleTimeoutMs": 60000,
   "collectDebugBundle": true,
   "outputDir": "/tmp/c2000-ipc-acceptance"
 }
@@ -644,7 +646,7 @@ When `programDiscovery.enabled` is true, `c2000_launchMulticoreDebug` runs the s
 
 When post-launch actions or checks are requested, they are part of the launch verdict. `assignExpressions` and `injectFaults` must return successful per-item results, `waitForExpressionSet` must return `matched: true`, `compareExpressions` must return `matched: true`, and `verifyRunPauseIsolation` must return `acceptanceSummary.success: true`. A failed action returns `success: false` with `error.code: "PostLaunchActionFailed"`. A timeout, failed comparison, failed isolation step, or malformed isolation summary returns `success: false` with `error.code: "PostLaunchCheckFailed"` plus the captured `snapshot`, `postLaunchActions`, and/or `postLaunchChecks` evidence.
 
-If `c2000_launchMulticoreDebug` fails after creating a logical session, it calls `c2000_closeDebugSession` internally and returns the failed `sessionId` with `cleanedUp: true` when cleanup succeeds. This avoids leaving persistent DSS sessions alive after a partial connect/load/check failure.
+If `c2000_launchMulticoreDebug` fails after creating a logical session, it calls `c2000_closeDebugSession` internally and returns the failed `sessionId` with `cleanedUp: true` when cleanup succeeds. This avoids leaving persistent DSS sessions alive after a partial connect/load/check failure. Successful launches preserve the session by default. With `autoCloseOnComplete: true`, the session remains usable and is closed only after `autoCloseIdleTimeoutMs` passes with no in-flight or recent session-scoped MCP call. This prevents a long-running load, expression wait, snapshot, or diagnosis from being terminated by automatic cleanup.
 
 ## Mock Verification
 

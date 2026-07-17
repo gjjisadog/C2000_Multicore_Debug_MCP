@@ -2,6 +2,8 @@
   "sessionName": "hybrid30k_f28p65x_ipc",
   "targetConfigurationName": "TMS320F28P650DK9",
   "ccxmlPath": "D:/workspace/targetConfigs/TMS320F28P650DK9.ccxml",
+  "autoCloseOnComplete": false,
+  "autoCloseIdleTimeoutMs": 60000,
   "cores": [
     {
       "coreId": 0,

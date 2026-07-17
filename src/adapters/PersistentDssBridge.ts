@@ -2,10 +2,13 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
+
+const execFileAsync = promisify(execFile);
 
 export interface DssServerHandle {
   host: string;
@@ -202,13 +205,13 @@ class DefaultDssServerLauncher implements DssServerLauncher {
           await waitForExit(child, this.options.timeoutMs ?? 10000);
         } catch {
           if (!hasExited(child)) {
-            child.kill();
+            await terminateProcessTree(child);
           }
           try {
             await waitForExit(child, 5000);
           } catch {
             if (!hasExited(child)) {
-              child.kill("SIGKILL");
+              await terminateProcessTree(child, true);
             }
           }
         } finally {
@@ -328,6 +331,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "reset", resetType: command.resetType };
     case "loadProgram":
       return { ...base, name: "load", program: command.programUri };
+    case "prepareFlashLoad":
+      return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
     case "writeMemory":
       return { ...base, name: "writeData", page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };
     case "readMemory":
@@ -364,7 +369,6 @@ async function sendJsonLine(
     const cleanup = () => {
       clearTimeout(timer);
       socket.off("close", onClose);
-      socket.off("error", onError);
     };
     const resolveOnce = (value: Record<string, any>) => {
       if (settled) {
@@ -644,6 +648,23 @@ function handleCommand(command) {
   } else if (command.name === "load") {
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
+  } else if (command.name === "prepareFlashLoad") {
+    var cpu1Session = sessionsByCoreId["0"];
+    if (!cpu1Session) {
+      throw "CPU1 DebugSession is required to configure F28P65x Flash banks";
+    }
+    var selectedBanks = {};
+    for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
+      selectedBanks[String(command.flashBanks[selectedIndex])] = true;
+    }
+    for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
+      cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, selectedBanks[String(bankIndex)] ? "1" : "0");
+      session.flash.options.setBoolean("FlashC28Bank" + bankIndex, selectedBanks[String(bankIndex)] === true);
+    }
+    session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
+    cpu1Session.flash.performOperation("ConfigureClock");
+    cpu1Session.flash.performOperation("ConfigureBanks");
+    return { status: "OK", value: withCoreIdentity(command, { flashBanks: command.flashBanks, configured: true }) };
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize }) };

@@ -223,7 +223,10 @@ export function registerC2000Tools(server: McpServer, manager: DebugSessionManag
         inputSchema: definition.schema.shape
       },
       async (input: any) => {
-        const result = await (handlers[definition.handlerName] as Handler)(input);
+        const invoke = () => (handlers[definition.handlerName] as Handler)(input);
+        const result = typeof input?.sessionId === "string" && definition.name !== "c2000_closeDebugSession"
+          ? await manager.withSessionActivity(input.sessionId, invoke)
+          : await invoke();
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

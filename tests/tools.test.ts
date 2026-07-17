@@ -254,12 +254,20 @@ describe("MCP tool registration contract", () => {
       targetEffect: "memory-write",
       requiredInputFields: expect.arrayContaining(["sessionId", "faults"])
     }));
-    expect(byName.get("c2000_launchMulticoreDebug")).toEqual(expect.objectContaining({ targetEffect: "launch-workflow" }));
+    expect(byName.get("c2000_launchMulticoreDebug")).toEqual(expect.objectContaining({
+      targetEffect: "launch-workflow",
+      inputFields: expect.arrayContaining(["autoCloseOnComplete", "autoCloseIdleTimeoutMs"]),
+      requiredInputFields: ["cores"]
+    }));
     expect(byName.get("c2000_analyzeRamOwnership")).toEqual(expect.objectContaining({ inputScope: "host", targetEffect: "host-read" }));
     expect(byName.get("c2000_diagnoseBootHandoff")).toEqual(expect.objectContaining({ inputScope: "session", targetEffect: "target-read" }));
     expect(byName.get("c2000_waitForIpcReady")).toEqual(expect.objectContaining({ inputScope: "session", targetEffect: "target-read" }));
     expect(byName.get("c2000_reloadResetRunToMain")).toEqual(expect.objectContaining({ inputScope: "core", targetEffect: "launch-workflow" }));
-    expect(byName.get("c2000_launchAndRunIpcAcceptance")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
+    expect(byName.get("c2000_launchAndRunIpcAcceptance")).toEqual(expect.objectContaining({
+      inputScope: "launch",
+      targetEffect: "launch-workflow",
+      inputFields: expect.arrayContaining(["autoCloseOnComplete", "autoCloseIdleTimeoutMs"])
+    }));
     expect(byName.get("c2000_runIpcAcceptance")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runBootHandoffDiagnosis")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runReloadAndDiagnose")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));

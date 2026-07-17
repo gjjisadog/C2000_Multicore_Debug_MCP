@@ -58,7 +58,16 @@ function buildServer(config: C2000McpConfig, adapterResolution: AdapterResolutio
     }
   );
   registerC2000Tools(server, manager);
-  return server;
+  let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
+  return {
+    server,
+    manager,
+    dispose: () => disposal ??= manager.disposeAllSessions()
+  };
+}
+
+export function createC2000McpServer(config: C2000McpConfig): McpServer {
+  return createC2000McpRuntime(config).server;
 }
 
 function createAdapterFromMode(

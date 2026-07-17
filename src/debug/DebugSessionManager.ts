@@ -47,6 +47,15 @@ interface LogicalDebugSession {
   ccxmlPath?: string;
   adapterSession: AdapterSession;
   cores: Map<CoreId, CoreSession>;
+  activity: {
+    inFlightCalls: number;
+    lastActivityAt: number;
+    closing: boolean;
+    autoClose?: {
+      idleTimeoutMs: number;
+      timer?: ReturnType<typeof setTimeout>;
+    };
+  };
 }
 
 export interface DebugSessionManagerOptions {
@@ -178,6 +187,101 @@ export class DebugSessionManager {
         }
       };
     });
+  }
+
+  async withSessionActivity<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const session = this.requireSession(sessionId);
+    if (session.activity.closing) {
+      throw new DebugMcpError("SessionNotFound", `Debug session ${sessionId} is closing`, { sessionId });
+    }
+    this.cancelIdleAutoClose(session);
+    session.activity.inFlightCalls += 1;
+    session.activity.lastActivityAt = Date.now();
+    try {
+      return await operation();
+    } finally {
+      const current = this.sessions.get(sessionId);
+      if (current) {
+        current.activity.inFlightCalls = Math.max(0, current.activity.inFlightCalls - 1);
+        current.activity.lastActivityAt = Date.now();
+        this.scheduleIdleAutoClose(current);
+      }
+    }
+  }
+
+  armIdleAutoClose(sessionId: string, idleTimeoutMs: number): {
+    armed: true;
+    idleTimeoutMs: number;
+    lastActivityAt: string;
+    scheduledCloseAt: string;
+  } {
+    const session = this.requireSession(sessionId);
+    session.activity.autoClose = { idleTimeoutMs };
+    session.activity.lastActivityAt = Date.now();
+    this.scheduleIdleAutoClose(session);
+    return {
+      armed: true,
+      idleTimeoutMs,
+      lastActivityAt: new Date(session.activity.lastActivityAt).toISOString(),
+      scheduledCloseAt: new Date(session.activity.lastActivityAt + idleTimeoutMs).toISOString()
+    };
+  }
+
+  async disposeAllSessions(): Promise<{
+    closedSessionIds: string[];
+    failures: Array<{ sessionId: string; error: ReturnType<typeof toStructuredError> }>;
+  }> {
+    const sessionIds = Array.from(this.sessions.keys());
+    const closedSessionIds: string[] = [];
+    const failures: Array<{ sessionId: string; error: ReturnType<typeof toStructuredError> }> = [];
+    for (const sessionId of sessionIds) {
+      try {
+        await this.closeDebugSession(sessionId);
+        closedSessionIds.push(sessionId);
+      } catch (error) {
+        failures.push({ sessionId, error: toStructuredError(error) });
+        this.logger.error("debug session cleanup failed", { sessionId, error: toStructuredError(error) });
+      }
+    }
+    return { closedSessionIds, failures };
+  }
+
+  private cancelIdleAutoClose(session: LogicalDebugSession): void {
+    const timer = session.activity.autoClose?.timer;
+    if (timer) {
+      clearTimeout(timer);
+      session.activity.autoClose!.timer = undefined;
+    }
+  }
+
+  private scheduleIdleAutoClose(session: LogicalDebugSession): void {
+    this.cancelIdleAutoClose(session);
+    const policy = session.activity.autoClose;
+    if (!policy || session.activity.closing || session.activity.inFlightCalls > 0) {
+      return;
+    }
+    const remainingMs = Math.max(1, session.activity.lastActivityAt + policy.idleTimeoutMs - Date.now());
+    policy.timer = setTimeout(() => { void this.closeIdleSession(session.sessionId); }, remainingMs);
+    policy.timer.unref?.();
+  }
+
+  private async closeIdleSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    const policy = session?.activity.autoClose;
+    if (!session || !policy || session.activity.closing) {
+      return;
+    }
+    const idleForMs = Date.now() - session.activity.lastActivityAt;
+    if (session.activity.inFlightCalls > 0 || idleForMs < policy.idleTimeoutMs) {
+      this.scheduleIdleAutoClose(session);
+      return;
+    }
+    try {
+      await this.closeDebugSession(sessionId);
+      this.logger.info("idle debug session auto-closed", { sessionId, idleForMs, idleTimeoutMs: policy.idleTimeoutMs });
+    } catch (error) {
+      this.logger.error("idle debug session cleanup failed", { sessionId, error: toStructuredError(error) });
+    }
   }
 
   async connectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
@@ -409,6 +513,7 @@ export class DebugSessionManager {
       }
       return this.adapter.readMemory(session.adapterSession, coreId, page, address, typeSize);
     });
+    return { flashBanks: [...new Set(actions.flash.flatMap(action => action.flashBanks))] };
   }
 
   async verifyRuntimeRamOwnership(

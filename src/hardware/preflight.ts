@@ -21,6 +21,9 @@ export interface HardwarePreflightResult {
   xdsdfuPath: string;
   xdsdfu: {
     ok: boolean;
+    commandOk?: boolean;
+    probeReady?: boolean;
+    attempts?: number;
     stdout?: string;
     stderr?: string;
     error?: string;
@@ -28,6 +31,7 @@ export interface HardwarePreflightResult {
   };
   debugProcesses: string[];
   debugProcessDetails: DebugProcessInfo[];
+  processInspection?: { ok: boolean; platform: NodeJS.Platform; error?: string };
 }
 
 export interface DebugProcessInfo {
@@ -35,7 +39,7 @@ export interface DebugProcessInfo {
   ppid?: number;
   elapsed?: string;
   command: string;
-  kind: "DSLite" | "ccstudio" | "DebugServer" | "dss.sh";
+  kind: "DSLite" | "ccstudio" | "DebugServer" | "dss.sh" | "c2000-dss";
   rawLine: string;
 }
 
@@ -44,40 +48,69 @@ const execFileAsync = promisify(execFile);
 export async function runHardwarePreflight(options: {
   ccsInstallPath?: string;
   execFile?: ExecFileLike;
+  platform?: NodeJS.Platform;
+  enumerationAttempts?: number;
+  enumerationRetryDelayMs?: number;
+  sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<HardwarePreflightResult> {
   const ccsRoot = options.ccsInstallPath
     ?? resolveCcsInstallPathSync().installPath;
   const xdsdfuPath = `${ccsRoot}/ccs_base/common/uscif/xds110/xdsdfu`;
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
+  const platform = options.platform ?? process.platform;
+  const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
+  const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const preflight: HardwarePreflightResult = {
     xdsdfuPath,
-    xdsdfu: { ok: false },
+    xdsdfu: { ok: false, commandOk: false, probeReady: false, attempts: 0 },
     debugProcesses: [],
-    debugProcessDetails: []
+    debugProcessDetails: [],
+    processInspection: { ok: false, platform }
   };
 
-  try {
-    const { stdout, stderr } = await run(xdsdfuPath, ["-e"], { timeout: 10000 });
-    preflight.xdsdfu = {
-      ok: true,
-      stdout,
-      stderr,
-      devices: parseXds110Devices(stdout)
-    };
-  } catch (error) {
-    preflight.xdsdfu = {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error)
-    };
+  for (let attempt = 1; attempt <= enumerationAttempts; attempt += 1) {
+    try {
+      const { stdout, stderr } = await run(xdsdfuPath, ["-e"], { timeout: 10000 });
+      const devices = parseXds110Devices(stdout);
+      preflight.xdsdfu = {
+        ok: true,
+        commandOk: true,
+        probeReady: devices.length > 0,
+        attempts: attempt,
+        stdout,
+        stderr,
+        devices
+      };
+      if (devices.length > 0 || attempt === enumerationAttempts) {
+        break;
+      }
+      await sleep(options.enumerationRetryDelayMs ?? 250);
+    } catch (error) {
+      preflight.xdsdfu = {
+        ok: false,
+        commandOk: false,
+        probeReady: false,
+        attempts: attempt,
+        error: error instanceof Error ? error.message : String(error)
+      };
+      break;
+    }
   }
 
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,etime=,command="], { timeout: 10000 });
+    const processCommand = processListCommand(platform);
+    const { stdout } = await run(processCommand.command, processCommand.args, { timeout: 10000 });
     preflight.debugProcessDetails = findDebugProcessDetails(stdout);
     preflight.debugProcesses = preflight.debugProcessDetails.map(process => process.rawLine);
-  } catch {
+    preflight.processInspection = { ok: true, platform };
+  } catch (error) {
     preflight.debugProcesses = [];
     preflight.debugProcessDetails = [];
+    preflight.processInspection = {
+      ok: false,
+      platform,
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 
   return preflight;
@@ -143,7 +176,7 @@ function parseDebugProcess(rawLine: string): DebugProcessInfo | undefined {
 }
 
 function parseProcessFields(rest: string): { ppid?: number; elapsed?: string; command: string } {
-  const match = rest.match(/^(\d+)\s+((?:\d+-)?\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
+  const match = rest.match(/^(\d+)\s+((?:\d+-)?\d+:\d{2}(?::\d{2})?)\s+(.+)$/);
   if (!match) {
     return { command: rest };
   }
@@ -155,20 +188,35 @@ function parseProcessFields(rest: string): { ppid?: number; elapsed?: string; co
 }
 
 function debugProcessKind(command: string): DebugProcessInfo["kind"] | undefined {
-  const executable = commandExecutableBasename(command);
-  if (executable === "DSLite") {
+  const executable = commandExecutableBasename(command).toLowerCase().replace(/\.exe$/, "");
+  const loweredCommand = command.toLowerCase();
+  if (loweredCommand.includes("c2000-persistent-server.js") || loweredCommand.includes("c2000-dss-server-")) {
+    return "c2000-dss";
+  }
+  if (executable === "dslite") {
     return "DSLite";
   }
   if (executable === "ccstudio") {
+    if (/--type=|resources[\\/]app(?:\.asar)?[\\/]lib[\\/]backend|--node-ipc/i.test(command)) {
+      return undefined;
+    }
     return "ccstudio";
   }
-  if (executable === "DebugServer") {
+  if (executable === "debugserver") {
     return "DebugServer";
   }
   if (executable === "dss.sh") {
     return "dss.sh";
   }
   return undefined;
+}
+
+function processListCommand(platform: NodeJS.Platform): { command: string; args: string[] } {
+  if (platform === "win32") {
+    const script = "Get-CimInstance Win32_Process | ForEach-Object { $cmd = if ($_.CommandLine) { $_.CommandLine } else { $_.ExecutablePath }; if ($cmd) { $elapsed = if ($_.CreationDate) { (Get-Date) - $_.CreationDate } else { [TimeSpan]::Zero }; $etime = '{0}:{1:00}:{2:00}' -f [Math]::Floor($elapsed.TotalHours), $elapsed.Minutes, $elapsed.Seconds; '{0} {1} {2} {3}' -f $_.ProcessId, $_.ParentProcessId, $etime, ($cmd -replace '[\\r\\n]+',' ') } }";
+    return { command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", script] };
+  }
+  return { command: "ps", args: ["-axo", "pid=,ppid=,etime=,command="] };
 }
 
 function commandExecutableBasename(command: string): string {

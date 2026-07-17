@@ -9,6 +9,8 @@ export type DebugErrorCode =
   | "OwnerCoreNotConnected"
   | "ProgramFileNotFound"
   | "ProgramLoadFailed"
+  | "BatchOperationFailed"
+  | "ArtifactPairInvalid"
   | "LaunchProgramMissing"
   | "MemoryReadFailed"
   | "RamOwnershipVerifyFailed"

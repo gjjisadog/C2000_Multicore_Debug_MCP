@@ -23,6 +23,7 @@ describe("hardware preflight", () => {
   test("enumerates XDS110 devices and filters possible debug owners", async () => {
     const result = await runHardwarePreflight({
       ccsInstallPath: "/Applications/ti/ccs2100/ccs",
+      platform: "darwin",
       execFile: async (command, args) => {
         if (command.endsWith("/xdsdfu") && args[0] === "-e") {
           return { stdout: xdsdfuOutput, stderr: "" };
@@ -75,6 +76,7 @@ describe("hardware preflight", () => {
 
   test("includes parent process and elapsed runtime for possible debug owners", async () => {
     const result = await runHardwarePreflight({
+      platform: "darwin",
       execFile: async (command, args) => {
         if (command.endsWith("/xdsdfu") && args[0] === "-e") {
           return { stdout: xdsdfuOutput, stderr: "" };
@@ -105,6 +107,7 @@ describe("hardware preflight", () => {
 
   test("does not treat shell commands that mention debug executable names as debug owners", async () => {
     const result = await runHardwarePreflight({
+      platform: "darwin",
       execFile: async (command, args) => {
         if (command.endsWith("/xdsdfu") && args[0] === "-e") {
           return { stdout: xdsdfuOutput, stderr: "" };
@@ -137,6 +140,7 @@ describe("hardware preflight", () => {
 
   test("returns a structured xdsdfu failure without throwing", async () => {
     const result = await runHardwarePreflight({
+      platform: "darwin",
       execFile: async command => {
         if (command.endsWith("/xdsdfu")) {
           throw new Error("xdsdfu failed");
@@ -151,5 +155,95 @@ describe("hardware preflight", () => {
     }));
     expect(result.debugProcesses).toEqual([]);
     expect(result.debugProcessDetails).toEqual([]);
+  });
+
+  test("uses Windows process inspection and identifies an MCP-owned DSS Java process", async () => {
+    const result = await runHardwarePreflight({
+      platform: "win32",
+      execFile: async (command, args) => {
+        if (command.endsWith("/xdsdfu") && args[0] === "-e") {
+          return { stdout: xdsdfuOutput, stderr: "" };
+        }
+        expect(command).toBe("powershell.exe");
+        expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+        return {
+          stdout: '54536 1200 00:00:00 "C:\\Program Files\\Java\\bin\\java.exe" c2000-persistent-server.js C:\\Temp\\c2000-dss-server-123\\server-config.json',
+          stderr: ""
+        };
+      }
+    });
+
+    expect(result.processInspection).toEqual({ ok: true, platform: "win32" });
+    expect(result.debugProcessDetails).toEqual([
+      expect.objectContaining({ pid: 54536, ppid: 1200, kind: "c2000-dss" })
+    ]);
+  });
+
+  test("ignores CCS renderer/backend helpers while retaining the main UI and DSLite owner", async () => {
+    const result = await runHardwarePreflight({
+      platform: "win32",
+      execFile: async (command, args) => {
+        if (command.endsWith("/xdsdfu") && args[0] === "-e") {
+          return { stdout: xdsdfuOutput, stderr: "" };
+        }
+        return {
+          stdout: [
+            '18156 6388 00:05:00 "D:\\ccs21.0\\ccs\\theia\\ccstudio.exe"',
+            '11604 18156 00:04:59 "D:\\ccs21.0\\ccs\\theia\\ccstudio.exe" --type=gpu-process',
+            '58748 18156 00:04:58 D:\\ccs21.0\\ccs\\theia\\ccstudio.exe D:\\ccs21.0\\ccs\\theia\\resources\\app.asar\\lib\\backend\\main.js',
+            '4944 57484 183:12:07 D:\\ccs21.0\\ccs\\ccs_base\\DebugServer\\bin\\DSLite.exe'
+          ].join("\n"),
+          stderr: ""
+        };
+      }
+    });
+
+    expect(result.debugProcessDetails.map(process => ({ pid: process.pid, kind: process.kind, elapsed: process.elapsed }))).toEqual([
+      { pid: 18156, kind: "ccstudio", elapsed: "00:05:00" },
+      { pid: 4944, kind: "DSLite", elapsed: "183:12:07" }
+    ]);
+  });
+
+  test("retries a successful but empty enumeration and reports probe readiness separately", async () => {
+    let enumerations = 0;
+    const result = await runHardwarePreflight({
+      platform: "darwin",
+      enumerationAttempts: 3,
+      sleep: async () => undefined,
+      execFile: async command => {
+        if (command.endsWith("/xdsdfu")) {
+          enumerations += 1;
+          return { stdout: enumerations === 1 ? "Found 0 devices." : xdsdfuOutput, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(enumerations).toBe(2);
+    expect(result.xdsdfu).toEqual(expect.objectContaining({
+      ok: true,
+      commandOk: true,
+      probeReady: true,
+      attempts: 2
+    }));
+  });
+
+  test("reports command success without claiming readiness when no probe appears", async () => {
+    const result = await runHardwarePreflight({
+      platform: "darwin",
+      enumerationAttempts: 2,
+      sleep: async () => undefined,
+      execFile: async command => command.endsWith("/xdsdfu")
+        ? { stdout: "Found 0 devices.", stderr: "" }
+        : { stdout: "", stderr: "" }
+    });
+
+    expect(result.xdsdfu).toEqual(expect.objectContaining({
+      ok: true,
+      commandOk: true,
+      probeReady: false,
+      attempts: 2,
+      devices: []
+    }));
   });
 });
