@@ -57,6 +57,16 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   }
 }
 
+class Cpu2LoadFailureAdapter extends WorkflowRecordingAdapter {
+  override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    this.events.push(`load:${coreId}:${path.basename(programUri)}`);
+    if (coreId === 2) {
+      throw new Error("simulated CPU2 load failure");
+    }
+    await MockDebugAdapter.prototype.loadProgram.call(this, session, coreId, programUri);
+  }
+}
+
 class OwnershipMismatchAdapter extends MockDebugAdapter {
   override async readMemory(
     session: AdapterSession,

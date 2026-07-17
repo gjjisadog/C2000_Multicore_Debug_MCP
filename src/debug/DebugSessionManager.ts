@@ -107,7 +107,14 @@ export class DebugSessionManager {
     const adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath, coreMap });
     const sessionId = `dbg-${randomUUID()}`;
     const cores = new Map(coreMap.map(core => [core.coreId, new CoreSession(core)]));
-    this.sessions.set(sessionId, { sessionId, sessionName, ccxmlPath, adapterSession, cores });
+    this.sessions.set(sessionId, {
+      sessionId,
+      sessionName,
+      ccxmlPath,
+      adapterSession,
+      cores,
+      activity: { inFlightCalls: 0, lastActivityAt: Date.now(), closing: false }
+    });
     this.logger.info("debug session created", { sessionId, sessionName, ccxmlPath, coreMap });
     return { sessionId, cores: await this.listCores(sessionId) };
   }
@@ -168,6 +175,8 @@ export class DebugSessionManager {
     return this.exclusive(sessionId, async () => {
       const startedAtMs = Date.now();
       const session = this.requireSession(sessionId);
+      session.activity.closing = true;
+      this.cancelIdleAutoClose(session);
       try {
         await this.adapter.disposeSession?.(session.adapterSession);
       } finally {
@@ -513,7 +522,6 @@ export class DebugSessionManager {
       }
       return this.adapter.readMemory(session.adapterSession, coreId, page, address, typeSize);
     });
-    return { flashBanks: [...new Set(actions.flash.flatMap(action => action.flashBanks))] };
   }
 
   async verifyRuntimeRamOwnership(

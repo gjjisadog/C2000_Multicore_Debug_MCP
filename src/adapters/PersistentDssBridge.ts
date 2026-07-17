@@ -222,6 +222,24 @@ class DefaultDssServerLauncher implements DssServerLauncher {
   }
 }
 
+async function terminateProcessTree(child: ChildProcess, force = false): Promise<void> {
+  if (hasExited(child)) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid !== undefined) {
+    try {
+      await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", ...(force ? ["/F"] : [])], {
+        timeout: 5000,
+        windowsHide: true
+      });
+      return;
+    } catch {
+      // Fall through to Node's direct child termination if taskkill cannot run.
+    }
+  }
+  child.kill(force ? "SIGKILL" : undefined);
+}
+
 export function isRetryableXdsLaunchError(error: unknown): boolean {
   const text = error instanceof DebugMcpError
     ? `${error.message} ${JSON.stringify(error.details ?? {})}`

@@ -17,7 +17,7 @@ const config: C2000McpConfig = {
 
 describe("server lifecycle", () => {
   test("runtime disposal is idempotent and closes all active logical sessions", async () => {
-    const runtime = createC2000McpRuntime(config);
+    const runtime = await createC2000McpRuntime(config);
     const first = await runtime.manager.createDebugSession({ sessionName: "one" });
     const second = await runtime.manager.createDebugSession({ sessionName: "two" });
 

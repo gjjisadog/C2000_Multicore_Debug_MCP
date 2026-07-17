@@ -18,25 +18,46 @@ import { normalizeWorkspacePath } from "./utils/pathUtils.js";
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
 
-export async function createC2000McpServer(config: C2000McpConfig): Promise<McpServer> {
+export interface C2000McpRuntime {
+  server: McpServer;
+  manager: DebugSessionManager;
+  dispose(): Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>>;
+}
+
+export async function createC2000McpRuntime(config: C2000McpConfig): Promise<C2000McpRuntime> {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const adapterResolution = await resolveAdapterMode(config);
   logger.info("debug adapter selected", adapterResolution);
-  return buildServer(config, adapterResolution, logger);
+  return buildRuntime(config, adapterResolution, logger);
 }
 
 /**
  * Synchronous construction for tests/scripts that already know the adapter mode.
- * For `auto`, prefer {@link createC2000McpServer} so DSS availability is probed.
+ * For `auto`, prefer {@link createC2000McpRuntime} so DSS availability is probed.
  */
-export function createC2000McpServerSync(config: C2000McpConfig, resolution?: AdapterResolution): McpServer {
+export function createC2000McpRuntimeSync(
+  config: C2000McpConfig,
+  resolution?: AdapterResolution
+): C2000McpRuntime {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const adapterResolution = resolution ?? resolveAdapterModeSync(config);
   logger.info("debug adapter selected", adapterResolution);
-  return buildServer(config, adapterResolution, logger);
+  return buildRuntime(config, adapterResolution, logger);
 }
 
-function buildServer(config: C2000McpConfig, adapterResolution: AdapterResolution, logger: Logger): McpServer {
+export async function createC2000McpServer(config: C2000McpConfig): Promise<McpServer> {
+  return (await createC2000McpRuntime(config)).server;
+}
+
+export function createC2000McpServerSync(config: C2000McpConfig, resolution?: AdapterResolution): McpServer {
+  return createC2000McpRuntimeSync(config, resolution).server;
+}
+
+function buildRuntime(
+  config: C2000McpConfig,
+  adapterResolution: AdapterResolution,
+  logger: Logger
+): C2000McpRuntime {
   const server = new McpServer(
     { name: "c2000-multicore-mcp", version: "0.1.0" },
     { capabilities: { logging: {} } }
@@ -62,12 +83,8 @@ function buildServer(config: C2000McpConfig, adapterResolution: AdapterResolutio
   return {
     server,
     manager,
-    dispose: () => disposal ??= manager.disposeAllSessions()
+    dispose: () => (disposal ??= manager.disposeAllSessions())
   };
-}
-
-export function createC2000McpServer(config: C2000McpConfig): McpServer {
-  return createC2000McpRuntime(config).server;
 }
 
 function createAdapterFromMode(
