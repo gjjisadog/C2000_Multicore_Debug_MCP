@@ -642,8 +642,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const connectedProbeSet = new Set(connectedProbeSerials);
         const requestedBoardIds = new Set<string>();
         const requestedProbeSerials = new Set<string>();
+        const boards = parsed.boards.map(board => ({ ...board, ccxmlPath: path.resolve(board.ccxmlPath) }));
 
-        for (const board of parsed.boards) {
+        for (const board of boards) {
           const boardId = board.boardId ?? board.probeSerial;
           if (requestedBoardIds.has(boardId)) {
             throw new DebugMcpError("DuplicateBoardId", `Duplicate boardId ${boardId}`, { boardId });
@@ -673,7 +674,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           requestedProbeSerials.add(board.probeSerial);
         }
 
-        for (const board of parsed.boards) {
+        for (const board of boards) {
           const boardId = board.boardId ?? board.probeSerial;
           for (const core of board.cores) {
             if (core.load && !core.programUri) {

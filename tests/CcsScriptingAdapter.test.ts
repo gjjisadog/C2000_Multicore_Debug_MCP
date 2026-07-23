@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { CcsScriptingAdapter } from "../src/adapters/CcsScriptingAdapter.js";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "../src/adapters/CcsScriptingBridge.js";
@@ -66,6 +67,17 @@ describe("CcsScriptingAdapter", () => {
       coreId: 0,
       coreName: "C28xx_CPU1"
     }));
+  });
+
+  test("resolves a relative CCXML path before launching the DSS bridge", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const relativeCcxmlPath = "examples/targetConfigs/board-a.ccxml";
+
+    const session = await adapter.createSession({ sessionName: "relative-ccxml", ccxmlPath: relativeCcxmlPath, coreMap });
+
+    expect(session.ccxmlPath).toBe(path.resolve(relativeCcxmlPath));
+    expect(bridge.sessions[0]?.ccxmlPath).toBe(path.resolve(relativeCcxmlPath));
   });
 
   test("sends per-core connect, run, halt, reset and load commands through the bridge", async () => {
