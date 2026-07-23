@@ -36,6 +36,7 @@ describe("MCP tool registration contract", () => {
       "c2000_runReloadAndDiagnose",
       "c2000_runFullDebugBundle",
       "c2000_verifyRunPauseIsolation",
+      "c2000_launchMultiBoardDebug",
       "c2000_assignExpression",
       "c2000_assignExpressions",
       "c2000_injectFaults",
@@ -178,6 +179,21 @@ describe("MCP tool registration contract", () => {
         targetEffect: "host-read",
         inputFields: [],
         requiredInputFields: []
+      }),
+      expect.objectContaining({
+        name: "c2000_launchMultiBoardDebug",
+        inputScope: "launch",
+        targetEffect: "launch-workflow",
+        inputFields: ["ccsInstallPath", "rollbackOnFailure", "boards"],
+        requiredInputFields: ["boards"],
+        coreIdentityFields: ["boards[].cores[].coreId"],
+        responseCoreIdentityFields: [
+          "results[].boardId",
+          "results[].probeSerial",
+          "results[].sessionId",
+          "results[].snapshot.cores[].coreId",
+          "results[].snapshot.cores[].coreName"
+        ]
       }),
       expect.objectContaining({
         name: "c2000_continue",

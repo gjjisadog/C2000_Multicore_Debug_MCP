@@ -11,6 +11,7 @@
     "build:all": "node scripts/build.mjs -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
+    "start:supervised": "node scripts/mcp-supervisor.mjs -- node dist/src/index.js",
     "test": "vitest run",
     "postinstall": "node -e \"try{require('fs').accessSync('node_modules/typescript/lib/_tsc.js')}catch{console.warn('[c2000-multicore-mcp] typescript CLI missing; run npm install typescript --save-dev')}\"",
     "verify:debug-boundary": "tsx scripts/verify-debug-boundary.ts",

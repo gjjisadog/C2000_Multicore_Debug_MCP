@@ -6,8 +6,8 @@ import { normalizeProgramUri } from "../src/utils/pathUtils.js";
 
 describe("normalizeProgramUri", () => {
   test("trims surrounding quotes", () => {
-    expect(normalizeProgramUri(`"/tmp/cpu1.out"`)).toBe(path.resolve("/tmp/cpu1.out"));
-    expect(normalizeProgramUri(`'/tmp/cpu2.out'`)).toBe(path.resolve("/tmp/cpu2.out"));
+    expect(normalizeProgramUri(`"/tmp/cpu1.out"`)).toBe("/tmp/cpu1.out");
+    expect(normalizeProgramUri(`'/tmp/cpu2.out'`)).toBe("/tmp/cpu2.out");
   });
 
   test("converts file:// URLs to filesystem paths", () => {

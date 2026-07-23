@@ -177,7 +177,9 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const child = spawn(launch.command, [...launch.args, scriptPath, configPath], {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
-      cwd: launch.cwd
+      cwd: launch.cwd,
+      shell: launch.shell,
+      windowsHide: true
     });
     const output = createProcessOutputBuffer();
     try {

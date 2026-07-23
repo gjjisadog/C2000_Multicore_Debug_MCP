@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { runHardwarePreflight } from "../src/hardware/preflight.js";
+import { defaultCcsInstallPath, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
 
 const xdsdfuOutput = `
 USB Device Firmware Upgrade Utility
@@ -20,6 +20,17 @@ Found 1 device.
 `;
 
 describe("hardware preflight", () => {
+  test("resolves the platform-native XDS110 executable path", () => {
+    expect(defaultCcsInstallPath("darwin")).toBe("/Applications/ti/ccs2100/ccs");
+    expect(defaultCcsInstallPath("win32")).toBe("C:\\ti\\ccs2100\\ccs");
+    expect(resolveXdsdfuPath("/Applications/ti/ccs2100/ccs", "darwin")).toBe(
+      "/Applications/ti/ccs2100/ccs/ccs_base/common/uscif/xds110/xdsdfu"
+    );
+    expect(resolveXdsdfuPath("D:\\ccs21.0\\ccs", "win32")).toBe(
+      "D:\\ccs21.0\\ccs\\ccs_base\\common\\uscif\\xds110\\xdsdfu.exe"
+    );
+  });
+
   test("enumerates XDS110 devices and filters possible debug owners", async () => {
     const result = await runHardwarePreflight({
       ccsInstallPath: "/Applications/ti/ccs2100/ccs",
@@ -159,9 +170,10 @@ describe("hardware preflight", () => {
 
   test("uses Windows process inspection and identifies an MCP-owned DSS Java process", async () => {
     const result = await runHardwarePreflight({
+      ccsInstallPath: "D:\\ccs21.0\\ccs",
       platform: "win32",
       execFile: async (command, args) => {
-        if (command.endsWith("/xdsdfu") && args[0] === "-e") {
+        if (command.endsWith("xdsdfu.exe") && args[0] === "-e") {
           return { stdout: xdsdfuOutput, stderr: "" };
         }
         expect(command).toBe("powershell.exe");
@@ -181,9 +193,10 @@ describe("hardware preflight", () => {
 
   test("ignores CCS renderer/backend helpers while retaining the main UI and DSLite owner", async () => {
     const result = await runHardwarePreflight({
+      ccsInstallPath: "D:\\ccs21.0\\ccs",
       platform: "win32",
       execFile: async (command, args) => {
-        if (command.endsWith("/xdsdfu") && args[0] === "-e") {
+        if (command.endsWith("xdsdfu.exe") && args[0] === "-e") {
           return { stdout: xdsdfuOutput, stderr: "" };
         }
         return {

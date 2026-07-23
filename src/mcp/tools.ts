@@ -17,6 +17,7 @@ import {
   hardwarePreflightSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
+  launchMultiBoardDebugSchema,
   launchMulticoreDebugSchema,
   loadProgramsSchema,
   loadProgramSchema,
@@ -149,6 +150,13 @@ const launchResponseIdentity = [
   "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreId",
   "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreName"
 ] as const;
+const multiBoardLaunchResponseIdentity = [
+  "results[].boardId",
+  "results[].probeSerial",
+  "results[].sessionId",
+  "results[].snapshot.cores[].coreId",
+  "results[].snapshot.cores[].coreName"
+] as const;
 
 export const c2000ToolDefinitions: ToolDefinition[] = [
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return tool taxonomy: families, preferred atomic tools vs aliases, and input scope metadata.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
@@ -197,6 +205,7 @@ export const c2000ToolDefinitions: ToolDefinition[] = [
   { name: "c2000_runReloadAndDiagnose", title: "Run C2000 Reload And Diagnose Workflow", description: "Preferred reload path: halt/reset/load/run/wait then boot handoff diagnosis in one workflow.", schema: runReloadAndDiagnoseSchema, handlerName: "runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: [...workflowReloadAndDiagnoseResponseIdentity] },
   { name: "c2000_runFullDebugBundle", title: "Run C2000 Full Debug Bundle Workflow", description: "Preferred evidence capture: full multicore debug bundle with summary files in one workflow.", schema: runFullDebugBundleSchema, handlerName: "runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: [...workflowFullBundleResponseIdentity] },
   { name: "c2000_verifyRunPauseIsolation", title: "Verify C2000 Run/Pause Isolation", description: "Run and pause CPU1/CPU2 one at a time, proving each command affects only the requested core.", schema: verifyRunPauseIsolationSchema, handlerName: "verifyRunPauseIsolation", inputScope: "session", targetEffect: "execution-control", role: "diagnostic", family: "execution", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...runPauseAcceptanceResponseIdentity] },
+  { name: "c2000_launchMultiBoardDebug", title: "Launch C2000 Multi-Board Debug", description: "Allocate explicit XDS110 serial numbers to independently bound .ccxml configurations, then create isolated multicore sessions for every connected board in one MCP call.", schema: launchMultiBoardDebugSchema, handlerName: "launchMultiBoardDebug", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["boards[].cores[].coreId"], responseCoreIdentityFields: [...multiBoardLaunchResponseIdentity] },
   { name: "c2000_launchMulticoreDebug", title: "Launch C2000 Multicore Debug", description: "Create, connect, load and snapshot a multicore debug flow. Prefer workflow tools for IPC/boot diagnosis after launch.", schema: launchMulticoreDebugSchema, handlerName: "launchMulticoreDebug", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: [
     "cores[].coreId",
     "postLaunchActions.assignExpressions[].coreId",

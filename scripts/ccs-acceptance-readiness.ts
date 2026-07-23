@@ -4,11 +4,10 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { assertAcceptanceEvidence } from "../src/debug/boundary.js";
+import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
 
-import { resolveCcsInstallPathSync } from "../src/adapters/ccsInstallPath.js";
-const ccsInstallPath = process.env.C2000_MCP_CCS_INSTALL_PATH ?? resolveCcsInstallPathSync().installPath;
-const ccxmlPath = process.env.C2000_MCP_CCXML_PATH
-  ?? "/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml";
+const ccsInstallPath = resolveCcsInstallPath();
+const ccxmlPath = resolveCcxmlPath();
 const allowExistingDebugProcesses = process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
 
 const transport = new StdioClientTransport({

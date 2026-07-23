@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveCcsInstallPath } from "../ccs/paths.js";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
-import { resolveCcsInstallPath, resolveCcsInstallPathSync } from "./ccsInstallPath.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,9 +86,8 @@ export class DssCliBridge implements CcsScriptingBridge {
         timeout: command.timeoutMs ?? this.options.timeoutMs ?? 30000,
         maxBuffer: 1024 * 1024 * 8,
         env: launch.env,
-        cwd: this.options.workspacePath && this.options.workspacePath.length > 0
-          ? this.options.workspacePath
-          : undefined
+        cwd: launch.cwd,
+        shell: launch.shell
       });
       return parseDssResult(stdout, stderr);
     } catch (error) {
@@ -107,47 +106,29 @@ export class DssCliBridge implements CcsScriptingBridge {
   }
 }
 
-export function resolveCcsRoot(ccsInstallPath?: string): string {
-  if (ccsInstallPath && ccsInstallPath.length > 0) {
-    return path.resolve(ccsInstallPath);
-  }
-  return resolveCcsInstallPathSync().installPath;
+export function resolveCcsRoot(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
+  return resolveCcsInstallPath(ccsInstallPath, platform);
 }
 
-export function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = resolveCcsRoot(ccsInstallPath);
-  return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
+export function resolveDssScriptPath(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
+  const ccsRoot = resolveCcsRoot(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  return platformPath.join(ccsRoot, "ccs_base", "scripting", "bin", platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
 export async function isCcsDssAvailable(ccsInstallPath?: string): Promise<boolean> {
-  if (ccsInstallPath) {
-    try {
-      await access(resolveDssScriptPath(ccsInstallPath));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  const resolved = await resolveCcsInstallPath();
-  if (resolved.source === "default-fallback") {
-    try {
-      await access(resolved.dssLauncherPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
   try {
-    await access(resolved.dssLauncherPath);
+    await access(resolveDssScriptPath(ccsInstallPath));
     return true;
   } catch {
     return false;
   }
 }
 
-export function resolveDssJson2Path(ccsInstallPath?: string): string {
-  const ccsRoot = resolveCcsRoot(ccsInstallPath);
-  return path.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
+export function resolveDssJson2Path(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
+  const ccsRoot = resolveCcsRoot(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  return platformPath.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
 }
 
 export interface DssLaunch {
@@ -155,22 +136,43 @@ export interface DssLaunch {
   args: string[];
   env: ExecFileOptions["env"];
   cwd?: string;
+  shell?: boolean;
 }
 
 export function resolveDssLaunch(
   dssScriptPath: string,
   ccsInstallPath?: string,
-  workspacePath?: string
+  workspacePathOrPlatform?: string,
+  platformOrArchitecture?: NodeJS.Platform | string,
+  architecture = process.arch
 ): DssLaunch {
+  const platform = isPlatform(workspacePathOrPlatform)
+    ? workspacePathOrPlatform
+    : isPlatform(platformOrArchitecture)
+      ? platformOrArchitecture
+      : process.platform;
+  const workspacePath = isPlatform(workspacePathOrPlatform) ? undefined : workspacePathOrPlatform;
+  const resolvedArchitecture = isPlatform(workspacePathOrPlatform) && typeof platformOrArchitecture === "string"
+    ? platformOrArchitecture
+    : architecture;
   const env = { ...process.env };
-  const ccsRoot = resolveCcsRoot(ccsInstallPath);
-  const debugServerBin = path.join(ccsRoot, "ccs_base", "DebugServer", "bin");
-  const commonBin = path.join(ccsRoot, "ccs_base", "common", "bin");
-  env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(":");
-
-  const bundledJavaHome = path.join(ccsRoot, "ccs-server.app", "jre", "Contents", "Home");
-  env.JAVA_HOME = env.C2000_MCP_JAVA_HOME ?? bundledJavaHome;
-  env.PATH = [path.join(env.JAVA_HOME, "bin"), env.PATH].filter(Boolean).join(":");
+  const ccsRoot = resolveCcsRoot(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  const debugServerBin = platformPath.join(ccsRoot, "ccs_base", "DebugServer", "bin");
+  const commonBin = platformPath.join(ccsRoot, "ccs_base", "common", "bin");
+  const pathDelimiter = platform === "win32" ? ";" : ":";
+  if (platform === "darwin") {
+    env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(pathDelimiter);
+    env.JAVA_HOME = env.C2000_MCP_JAVA_HOME ?? platformPath.join(ccsRoot, "ccs-server.app", "jre", "Contents", "Home");
+  } else if (env.C2000_MCP_JAVA_HOME) {
+    env.JAVA_HOME = env.C2000_MCP_JAVA_HOME;
+  }
+  env.PATH = [
+    debugServerBin,
+    commonBin,
+    ...(env.JAVA_HOME ? [platformPath.join(env.JAVA_HOME, "bin")] : []),
+    env.PATH ?? env.Path
+  ].filter(Boolean).join(pathDelimiter);
   env.C2000_MCP_CCS_INSTALL_PATH = ccsRoot;
   if (workspacePath && workspacePath.length > 0) {
     env.C2000_MCP_WORKSPACE_PATH = workspacePath;
@@ -179,13 +181,17 @@ export function resolveDssLaunch(
     env.CCS_WORKSPACE = workspacePath;
   }
 
-  const launch: DssLaunch = process.platform === "darwin" && process.arch === "arm64"
+  const launch: DssLaunch = platform === "darwin" && resolvedArchitecture === "arm64"
     ? { command: "arch", args: ["-x86_64", dssScriptPath], env }
-    : { command: dssScriptPath, args: [], env };
+    : { command: dssScriptPath, args: [], env, ...(platform === "win32" ? { shell: true } : {}) };
   if (workspacePath && workspacePath.length > 0) {
     launch.cwd = workspacePath;
   }
   return launch;
+}
+
+function isPlatform(value: string | undefined): value is NodeJS.Platform {
+  return value === "darwin" || value === "win32" || value === "linux" || value === "aix" || value === "android" || value === "freebsd" || value === "haiku" || value === "openbsd" || value === "sunos" || value === "cygwin" || value === "netbsd";
 }
 
 async function assertExecutableExists(filePath: string) {

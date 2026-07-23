@@ -289,6 +289,17 @@ export const verifyRunPauseIsolationSchema = z.object({
   settleMs: z.number().int().nonnegative().default(250)
 });
 
+export const launchCoreSchema = z.object({
+  coreId: z.number().int(),
+  coreName: z.string().min(1),
+  corePattern: z.string().min(1).optional(),
+  programUri: z.string().min(1).optional(),
+  mapUri: z.string().min(1).optional(),
+  connect: z.boolean().default(true),
+  load: z.boolean().default(true),
+  haltAtEntry: z.boolean().default(true)
+});
+
 export const launchMulticoreDebugSchema = z.object({
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
@@ -302,16 +313,7 @@ export const launchMulticoreDebugSchema = z.object({
     searchRoots: z.array(z.string().min(1)).optional(),
     maxDepth: z.number().int().nonnegative().optional()
   }).optional(),
-  cores: z.array(z.object({
-    coreId: z.number().int(),
-    coreName: z.string().min(1),
-    corePattern: z.string().min(1).optional(),
-    programUri: z.string().min(1).optional(),
-    mapUri: z.string().min(1).optional(),
-    connect: z.boolean().default(true),
-    load: z.boolean().default(true),
-    haltAtEntry: z.boolean().default(true)
-  })).min(1),
+  cores: z.array(launchCoreSchema).min(1),
   postLaunchActions: z.object({
     assignExpressions: z.array(expressionAssignmentSchema).min(1).optional(),
     injectFaults: z.array(faultInjectionSchema).min(1).optional()
@@ -335,4 +337,21 @@ export const launchMulticoreDebugSchema = z.object({
       settleMs: z.number().int().nonnegative().default(250)
     }).optional()
   }).optional()
+});
+
+const multiBoardLaunchEntrySchema = z.object({
+  boardId: z.string().min(1).optional(),
+  probeSerial: z.string().min(1),
+  sessionName: z.string().min(1).optional(),
+  targetConfigurationName: z.string().min(1).optional(),
+  ccxmlPath: z.string().min(1),
+  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
+  cores: z.array(launchCoreSchema).min(1)
+});
+
+export const launchMultiBoardDebugSchema = z.object({
+  ccsInstallPath: z.string().min(1).optional(),
+  rollbackOnFailure: z.boolean().default(true),
+  boards: z.array(multiBoardLaunchEntrySchema).min(1).max(8)
 });
