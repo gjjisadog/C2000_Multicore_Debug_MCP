@@ -660,11 +660,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             });
           }
           const ccxml = await readFile(board.ccxmlPath, "utf8");
-          if (!ccxml.includes(board.probeSerial)) {
-            throw new DebugMcpError("ProbeBindingMissing", `Target configuration does not bind XDS110 serial ${board.probeSerial}`, {
+          const probeBinding = inspectXds110SerialBinding(ccxml, board.probeSerial);
+          if (!probeBinding.valid) {
+            throw new DebugMcpError(probeBinding.code, probeBinding.message, {
               boardId,
               probeSerial: board.probeSerial,
-              ccxmlPath: board.ccxmlPath
+              ccxmlPath: board.ccxmlPath,
+              ...probeBinding.details
             });
           }
           requestedBoardIds.add(boardId);
@@ -1055,6 +1057,75 @@ function isCpuCore(core: { coreId: number; coreName: string }, expected: "cpu1" 
   return expected === "cpu1"
     ? core.coreId === 0 || normalized.includes("cpu1") || normalized.includes("c28x1")
     : core.coreId === 2 || normalized.includes("cpu2") || normalized.includes("c28x2");
+}
+
+function inspectXds110SerialBinding(ccxml: string, expectedSerial: string): {
+  valid: boolean;
+  code: "ProbeBindingMissing" | "ProbeBindingInvalid";
+  message: string;
+  details: ToolResult;
+} {
+  const selection = findXmlElementAttributes(ccxml, "property", attributes => attributes.id === "Debug Probe Selection");
+  if (!selection) {
+    return {
+      valid: false,
+      code: "ProbeBindingMissing",
+      message: `Target configuration does not declare XDS110 Debug Probe Selection for ${expectedSerial}`,
+      details: { expectedSerial }
+    };
+  }
+  if (selection.Value !== "0") {
+    return {
+      valid: false,
+      code: "ProbeBindingInvalid",
+      message: `Target configuration does not select XDS110 by serial number for ${expectedSerial}`,
+      details: { expectedSerial, actualDebugProbeSelection: selection.Value ?? null, expectedDebugProbeSelection: "0" }
+    };
+  }
+
+  const serialChoice = findXmlElementAttributes(ccxml, "choice", attributes => attributes.Name === "Select by serial number");
+  if (!serialChoice || serialChoice.value !== "0") {
+    return {
+      valid: false,
+      code: "ProbeBindingInvalid",
+      message: `Target configuration has no valid Select by serial number choice for ${expectedSerial}`,
+      details: { expectedSerial, actualSerialChoice: serialChoice?.value ?? null, expectedSerialChoice: "0" }
+    };
+  }
+
+  const serialField = findXmlElementAttributes(ccxml, "property", attributes => attributes.id === "-- Enter the serial number");
+  if (!serialField) {
+    return {
+      valid: false,
+      code: "ProbeBindingMissing",
+      message: `Target configuration does not provide an XDS110 serial number for ${expectedSerial}`,
+      details: { expectedSerial }
+    };
+  }
+  if (serialField.Value !== expectedSerial) {
+    return {
+      valid: false,
+      code: "ProbeBindingInvalid",
+      message: `Target configuration binds XDS110 serial ${serialField.Value ?? "<missing>"}, not ${expectedSerial}`,
+      details: { expectedSerial, configuredSerial: serialField.Value ?? null }
+    };
+  }
+  return { valid: true, code: "ProbeBindingInvalid", message: "", details: {} };
+}
+
+function findXmlElementAttributes(
+  xml: string,
+  element: string,
+  predicate: (attributes: Record<string, string>) => boolean
+): Record<string, string> | undefined {
+  const tags = xml.match(new RegExp(`<${element}\\b[^>]*>`, "g")) ?? [];
+  for (const tag of tags) {
+    const attributes = Object.fromEntries(
+      Array.from(tag.matchAll(/([:\w-]+)\s*=\s*(["'])(.*?)\2/g), match => [match[1], match[3]])
+    );
+    if (predicate(attributes)) return attributes;
+  }
+  return undefined;
 }
 
 function programSearchRoots(): string[] {

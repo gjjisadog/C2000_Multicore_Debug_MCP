@@ -14,6 +14,16 @@ const coreMap = [
   { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
 ];
 
+function serialBoundCcxml(serial: string, debugProbeSelection = "0"): string {
+  return `<configurations>
+  <property Type="choicelist" Value="${debugProbeSelection}" id="Debug Probe Selection">
+    <choice Name="Select by serial number" value="0">
+      <property Type="stringfield" Value="${serial}" id="-- Enter the serial number"/>
+    </choice>
+  </property>
+</configurations>`;
+}
+
 function createHandlers(adapter = new MockDebugAdapter()) {
   const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
   return createToolHandlers(manager);
@@ -603,8 +613,8 @@ describe("tool handlers", () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-multiboard-"));
     const boardAConfig = path.join(tempDir, "board-a.ccxml");
     const boardBConfig = path.join(tempDir, "board-b.ccxml");
-    await writeFile(boardAConfig, "<ccxml>CL650001</ccxml>");
-    await writeFile(boardBConfig, "<ccxml>CL650002</ccxml>");
+    await writeFile(boardAConfig, serialBoundCcxml("CL650001"));
+    await writeFile(boardBConfig, serialBoundCcxml("CL650002"));
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager, {
       runHardwarePreflight: async () => ({
@@ -653,6 +663,41 @@ describe("tool handlers", () => {
     const sessionIds = result.results.map((item: { sessionId: string }) => item.sessionId);
     expect(sessionIds[0]).not.toBe(sessionIds[1]);
     await Promise.all(sessionIds.map((sessionId: string) => manager.closeDebugSession(sessionId)));
+  });
+
+  test("launchMultiBoardDebug rejects a ccxml that contains a serial but does not select by serial number", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-invalid-binding-"));
+    const ccxmlPath = path.join(tempDir, "invalid-binding.ccxml");
+    await writeFile(ccxmlPath, serialBoundCcxml("CL650001", "1"));
+    const adapter = new CountingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager, {
+      runHardwarePreflight: async () => ({
+        xdsdfuPath: "xdsdfu",
+        xdsdfu: { ok: true, commandOk: true, probeReady: true, devices: [{ serialNumber: "CL650001", mode: "Runtime" }] },
+        debugProcesses: [],
+        debugProcessDetails: [],
+        processInspection: { ok: true, platform: "win32" }
+      })
+    });
+
+    const result = await handlers.launchMultiBoardDebug({
+      boards: [{
+        boardId: "board-a",
+        probeSerial: "CL650001",
+        ccxmlPath,
+        cores: coreMap.map(core => ({ ...core, connect: false, load: false, haltAtEntry: false }))
+      }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "ProbeBindingInvalid",
+        details: expect.objectContaining({ actualDebugProbeSelection: "1", expectedDebugProbeSelection: "0" })
+      })
+    }));
+    expect(adapter.createSessionCount).toBe(0);
   });
 
   test("runIpcAcceptance fails closed before running either core when CPU2 program load fails", async () => {
