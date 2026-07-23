@@ -4,6 +4,7 @@ import type { CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBrid
 import { formatExpressionAssignmentValue } from "./CcsScriptingBridge.js";
 import { PersistentDssBridge } from "./PersistentDssBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { normalizeProgramUri } from "../utils/pathUtils.js";
 
 export interface CcsScriptingAdapterOptions {
   ccsInstallPath?: string;
@@ -38,7 +39,10 @@ export class CcsScriptingAdapter implements DebugAdapter {
     const session = {
       adapterSessionId: `ccs-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       sessionName: options.sessionName,
-      ccxmlPath: options.ccxmlPath,
+      // DSS runs with the configured CCS workspace as its cwd, which can differ
+      // from the MCP process cwd. Resolve before launching DSS so a caller's
+      // relative target configuration is never reinterpreted by CCS.
+      ccxmlPath: normalizeProgramUri(options.ccxmlPath),
       coreMap: options.coreMap
     };
     await this.bridge.createSession?.({

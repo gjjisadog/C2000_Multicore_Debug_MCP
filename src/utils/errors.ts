@@ -7,6 +7,7 @@ export type DebugErrorCode =
   | "DuplicateProbeAllocation"
   | "ProbeNotConnected"
   | "ProbeBindingMissing"
+  | "ProbeBindingInvalid"
   | "CoreIdentityMissing"
   | "CoreIdentityMismatch"
   | "CoreNotConnected"
