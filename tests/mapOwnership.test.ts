@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { analyzeRamOwnership, parseLinkerMap } from "../src/hardware/mapOwnership.js";
+import { analyzeRamOwnership, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap } from "../src/hardware/mapOwnership.js";
 
 const cpu2MapText = `
 MEMORY CONFIGURATION
@@ -92,5 +92,46 @@ describe("map RAM ownership analysis", () => {
       mapPath: cpu2Map,
       usedGsRam: [expect.objectContaining({ name: "RAMGS4", gsIndex: 4 })]
     }));
+  });
+
+  test("merges multi-GS ownership actions into one OR-combined MEMCFG write", () => {
+    const parsed = parseLinkerMap(`
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  RAMGS4                00018000   00002000  00000800  00001800  RWIX
+  RAMGS5                0001a000   00002000  00000400  00001c00  RWIX
+`, { coreId: 2, coreName: "C28xx_CPU2", mapPath: "/tmp/cpu2.map" });
+
+    const merged = mergeOwnershipActions(ownershipActionsForMap(parsed));
+
+    expect(merged).toEqual([
+      expect.objectContaining({
+        ownerCoreId: 0,
+        targetCoreId: 2,
+        address: 0x0005F444,
+        value: 0x10 | 0x20,
+        typeSize: 32,
+        memoryRegion: expect.stringContaining("RAMGS4")
+      })
+    ]);
+    expect(merged[0]?.memoryRegion).toContain("RAMGS5");
+  });
+
+  test("ignores MEMORY-like lines outside MEMORY CONFIGURATION", () => {
+    const parsed = parseLinkerMap(`
+GLOBAL SYMBOLS
+  RAMGS9                00020000   00002000  00000100  00001f00  RWIX
+
+MEMORY CONFIGURATION
+  RAMGS4                00018000   00002000  00000800  00001800  RWIX
+
+SECTION ALLOCATION MAP
+  RAMGS8                0001c000   00002000  00000200  00001e00  RWIX
+`, { coreId: 2, mapPath: "/tmp/cpu2.map" });
+
+    expect(parsed.memoryRegions.map(region => region.name)).toEqual(["RAMGS4"]);
+    expect(parsed.usedGsRam.map(region => region.name)).toEqual(["RAMGS4"]);
   });
 });

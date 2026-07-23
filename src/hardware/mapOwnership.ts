@@ -182,6 +182,36 @@ export function ownershipActionsForMap(map: ParsedLinkerMap): RamOwnershipAction
   }));
 }
 
+/**
+ * Collapse ownership actions that target the same MEMCFG register into a single
+ * OR-combined write. Sequential per-bit writes would overwrite earlier GS bits.
+ */
+export function mergeOwnershipActions(actions: RamOwnershipAction[]): RamOwnershipAction[] {
+  const merged = new Map<string, RamOwnershipAction>();
+  for (const action of actions) {
+    const key = `${action.ownerCoreId}:${action.page}:${action.address}:${action.typeSize}:${action.targetCoreId}`;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, { ...action });
+      continue;
+    }
+    const regions = new Set(
+      `${existing.memoryRegion}+${action.memoryRegion}`
+        .split("+")
+        .map(region => region.trim())
+        .filter(Boolean)
+    );
+    merged.set(key, {
+      ...existing,
+      value: existing.value | action.value,
+      gsIndex: Math.min(existing.gsIndex, action.gsIndex),
+      memoryRegion: Array.from(regions).join("+"),
+      reason: `${existing.reason} ${action.reason}`
+    });
+  }
+  return Array.from(merged.values());
+}
+
 export function mapPathForProgram(programUri: string): string | undefined {
   if (!/\.out$/i.test(programUri)) {
     return undefined;
@@ -191,7 +221,21 @@ export function mapPathForProgram(programUri: string): string | undefined {
 
 function parseMemoryRegions(text: string): LinkerMapMemoryRegion[] {
   const regions: LinkerMapMemoryRegion[] = [];
+  let inMemoryConfiguration = false;
   for (const line of text.split(/\r?\n/)) {
+    if (/MEMORY\s+CONFIGURATION/i.test(line)) {
+      inMemoryConfiguration = true;
+      continue;
+    }
+    if (
+      inMemoryConfiguration &&
+      /^(SECTION\s+ALLOCATION\s+MAP|GLOBAL\s+SYMBOLS|DATA\s+TABLES|LINKER\s+GENERATED|HOLE\s+REPORT)/i.test(line.trim())
+    ) {
+      break;
+    }
+    if (!inMemoryConfiguration) {
+      continue;
+    }
     const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})\s+([A-Z]+)?/.exec(line);
     if (!match) {
       continue;

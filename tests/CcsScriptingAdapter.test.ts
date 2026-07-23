@@ -131,7 +131,12 @@ describe("CcsScriptingAdapter", () => {
       expect.objectContaining({ expression: "g_emHybrid30kCpu1Stage", success: true, value: "3" })
     );
     await expect(adapter.resolveAddress(session, 2, "0x00C4E1")).resolves.toEqual(
-      expect.objectContaining({ success: true, address: "0x00C4E1", partial: true })
+      expect.objectContaining({
+        success: false,
+        address: "0x00C4E1",
+        partial: true,
+        error: expect.objectContaining({ code: "AddressResolveFailed" })
+      })
     );
   });
 

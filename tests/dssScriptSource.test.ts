@@ -110,8 +110,25 @@ describe("DSS generated scripts", () => {
 
     expect(source).toContain('command.name === "writeData"');
     expect(source).toContain("session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize)");
+    expect(source).toContain('command.name === "readData"');
+    expect(source).toContain("session.memory.readData(resolveMemoryPage(command.page), command.address, command.typeSize)");
     expect(source).toContain("function resolveMemoryPage(page)");
     expect(source).toContain("return Memory.Page.DATA");
+  });
+
+  test("DSS scripts apply resetType-aware reset helpers and report resolveAddress as partial", () => {
+    const statelessSource = dssCommandScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+    const persistentSource = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+
+    for (const source of [statelessSource, persistentSource]) {
+      expect(source).toContain("function applyTargetReset(session, resetType)");
+      expect(source).toContain('if (type === "system")');
+      expect(source).toContain('if (type === "restart")');
+      expect(source).toContain("session.target.reset()");
+      expect(source).toContain("Address-to-source mapping is not implemented");
+      expect(source).toContain("partial: true");
+      expect(source).toContain("success: false");
+    }
   });
 
   test("stateless DSS command script includes requested core identity in every successful result", () => {

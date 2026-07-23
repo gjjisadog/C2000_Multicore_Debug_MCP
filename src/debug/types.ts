@@ -24,6 +24,7 @@ export interface SessionTopology {
   sessionId: string;
   sessionName: string;
   ccxmlPath?: string;
+  workspacePath?: string;
   adapterName: string;
   adapterSessionId: string;
   debugSessionRoute: "sessionId -> adapterSessionId -> coreId -> DebugSession";
@@ -55,6 +56,7 @@ export interface LoadedProgramInfo {
   coreId: CoreId;
   coreName: string;
   programUri: string;
+  mapUri?: string;
   loadedAt: string;
   fileMTime: string;
   fileSize: number;
@@ -159,6 +161,8 @@ export interface ResolveResult {
   sourceFile?: string;
   line?: number;
   offset?: string;
+  memoryRegion?: string;
+  resolutionSource?: "ccs" | "linker-map";
   partial?: boolean;
   error?: {
     code: string;

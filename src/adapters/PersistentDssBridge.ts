@@ -24,11 +24,17 @@ export interface DssServerLauncher {
 export interface PersistentDssBridgeOptions {
   launcher?: DssServerLauncher;
   ccsInstallPath?: string;
+  workspacePath?: string;
   dssScriptPath?: string;
   basePort?: number;
   host?: string;
   timeoutMs?: number;
+  probeRetryAttempts?: number;
+  probeRetryBaseDelayMs?: number;
 }
+
+const processCleanupBridges = new Set<PersistentDssBridge>();
+let processCleanupHooksInstalled = false;
 
 export class PersistentDssBridge implements CcsScriptingBridge {
   private readonly launcher: DssServerLauncher;
@@ -36,6 +42,8 @@ export class PersistentDssBridge implements CcsScriptingBridge {
 
   constructor(private readonly options: PersistentDssBridgeOptions = {}) {
     this.launcher = options.launcher ?? new DefaultDssServerLauncher(options);
+    processCleanupBridges.add(this);
+    installProcessCleanupHooks();
   }
 
   async createSession(options: CcsBridgeCreateSessionOptions): Promise<void> {
@@ -54,6 +62,17 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     this.sessions.delete(adapterSessionId);
     await this.shutdownSession(handle);
     await handle.dispose();
+  }
+
+  async disposeAllSessions(): Promise<void> {
+    const ids = Array.from(this.sessions.keys());
+    for (const id of ids) {
+      try {
+        await this.disposeSession(id);
+      } catch {
+        // Best-effort process teardown.
+      }
+    }
   }
 
   async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
@@ -86,7 +105,7 @@ export class PersistentDssBridge implements CcsScriptingBridge {
       })
     );
     if (response.status === "FAIL") {
-      throw new DebugMcpError("AdapterNotAvailable", String(response.message ?? "DSS command failed"), {
+      throw new DebugMcpError("DssCommandFailed", String(response.message ?? "DSS command failed"), {
         command: command.operation,
         coreId: command.coreId,
         response
@@ -117,22 +136,61 @@ class DefaultDssServerLauncher implements DssServerLauncher {
 
   async launch(options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
     const host = this.options.host ?? "127.0.0.1";
-    const basePort = this.options.basePort ?? 45600 + Math.floor(Math.random() * 5000);
+    const coreCount = Math.max(1, options.coreMap.length);
+    const attempts = this.options.basePort === undefined
+      ? 12
+      : Math.max(1, this.options.probeRetryAttempts ?? 3);
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      const basePort = this.options.basePort
+        ?? await allocateEphemeralBasePort(host, coreCount);
+      try {
+        return await this.launchOnPort(options, host, basePort);
+      } catch (error) {
+        lastError = error;
+        const retryableProbeError = isRetryableXdsLaunchError(error);
+        if (this.options.basePort !== undefined && !retryableProbeError) {
+          throw error;
+        }
+        if (retryableProbeError && attempt < attempts - 1) {
+          await retryDelay(attempt, this.options.probeRetryBaseDelayMs ?? 250);
+        }
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new DebugMcpError("DssLaunchFailed", "Failed to launch persistent DSS server after port retries");
+  }
+
+  private async launchOnPort(
+    options: CcsBridgeCreateSessionOptions,
+    host: string,
+    basePort: number
+  ): Promise<DssServerHandle> {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-dss-server-"));
     const configPath = path.join(tempDir, "server-config.json");
     const scriptPath = path.join(tempDir, "c2000-persistent-server.js");
     const dssScriptPath = this.options.dssScriptPath ?? resolveDssScriptPath(this.options.ccsInstallPath);
-    const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath);
+    const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath, this.options.workspacePath);
     await writeFile(configPath, JSON.stringify({ ...options, host, basePort, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
     await writeFile(scriptPath, persistentServerScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
     const child = spawn(launch.command, [...launch.args, scriptPath, configPath], {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
+      cwd: launch.cwd,
       shell: launch.shell,
       windowsHide: true
     });
     const output = createProcessOutputBuffer();
-    await waitForReady(child, this.options.timeoutMs ?? 20000, output);
+    try {
+      await waitForReady(child, this.options.timeoutMs ?? 20000, output);
+    } catch (error) {
+      if (!hasExited(child)) {
+        child.kill("SIGKILL");
+      }
+      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
     return {
       host,
       portsByCoreId: new Map(options.coreMap.map((core, index) => [core.coreId, basePort + index])),
@@ -140,6 +198,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
         pid: child.pid,
         exitCode: child.exitCode,
         signalCode: child.signalCode,
+        basePort,
         stdoutTail: output.stdoutTail(),
         stderrTail: output.stderrTail()
       }),
@@ -181,6 +240,73 @@ async function terminateProcessTree(child: ChildProcess, force = false): Promise
     }
   }
   child.kill(force ? "SIGKILL" : undefined);
+}
+
+export function isRetryableXdsLaunchError(error: unknown): boolean {
+  const text = error instanceof DebugMcpError
+    ? `${error.message} ${JSON.stringify(error.details ?? {})}`
+    : error instanceof Error ? error.message : String(error);
+  return /Error\s*-260|attempt to connect to the XDS110 failed|IcePick_C_0/i.test(text);
+}
+
+export function xdsRetryDelayMs(attempt: number, baseDelayMs = 250): number {
+  return Math.min(2000, Math.max(0, baseDelayMs) * (2 ** Math.max(0, attempt)));
+}
+
+function retryDelay(attempt: number, baseDelayMs: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, xdsRetryDelayMs(attempt, baseDelayMs)));
+}
+
+function installProcessCleanupHooks() {
+  if (processCleanupHooksInstalled) {
+    return;
+  }
+  processCleanupHooksInstalled = true;
+  const disposeAll = async () => {
+    await Promise.allSettled(
+      Array.from(processCleanupBridges, bridge => bridge.disposeAllSessions())
+    );
+  };
+  const exitAfterCleanup = (exitCode: number) => {
+    void disposeAll().finally(() => process.exit(exitCode));
+  };
+  process.once("SIGINT", () => exitAfterCleanup(130));
+  process.once("SIGTERM", () => exitAfterCleanup(143));
+  process.once("beforeExit", () => {
+    void disposeAll();
+  });
+}
+
+async function allocateEphemeralBasePort(host: string, coreCount: number): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = 45600 + Math.floor(Math.random() * 10000);
+    const free = await portsAvailable(host, candidate, coreCount);
+    if (free) {
+      return candidate;
+    }
+  }
+  return 45600 + Math.floor(Math.random() * 10000);
+}
+
+async function portsAvailable(host: string, basePort: number, count: number): Promise<boolean> {
+  for (let offset = 0; offset < count; offset++) {
+    const ok = await canBindPort(host, basePort + offset);
+    if (!ok) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function canBindPort(host: string, port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    server.once("error", () => resolve(false));
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, host);
+  });
 }
 
 function validateResponseCoreIdentity(command: CcsScriptingCommand, result: Record<string, unknown>): void {
@@ -229,6 +355,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
     case "writeMemory":
       return { ...base, name: "writeData", page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };
+    case "readMemory":
+      return { ...base, name: "readData", page: command.page, address: command.address, typeSize: command.typeSize };
     case "readPc":
       return { ...base, name: "evaluateExpression", expression: "PC" };
     case "getState":
@@ -282,7 +410,7 @@ async function sendJsonLine(
       settled = true;
       socket.destroy();
       cleanup();
-      reject(new DebugMcpError("AdapterNotAvailable", `Timed out waiting for DSS server on ${host}:${port}`, {
+      reject(new DebugMcpError("DssTimeout", `Timed out waiting for DSS server on ${host}:${port}`, {
         ...errorDetails({
         rawResponse: buffer
         })
@@ -290,7 +418,7 @@ async function sendJsonLine(
     }, timeoutMs);
     let buffer = "";
     const onError = (error: Error) => {
-      rejectOnce(new DebugMcpError("AdapterNotAvailable", `DSS socket error on ${host}:${port}`, {
+      rejectOnce(new DebugMcpError("DssTransportFailed", `DSS socket error on ${host}:${port}`, {
         ...errorDetails({
         error: error.message
         })
@@ -300,7 +428,7 @@ async function sendJsonLine(
       if (settled) {
         return;
       }
-      rejectOnce(new DebugMcpError("AdapterNotAvailable", "DSS server closed the socket before returning a JSON line", {
+      rejectOnce(new DebugMcpError("DssTransportFailed", "DSS server closed the socket before returning a JSON line", {
         ...errorDetails({
         rawResponse: buffer
         })
@@ -321,7 +449,7 @@ async function sendJsonLine(
       try {
         resolveOnce(JSON.parse(rawResponse));
       } catch (error) {
-        rejectOnce(new DebugMcpError("AdapterNotAvailable", "DSS server returned malformed JSON", {
+        rejectOnce(new DebugMcpError("DssTransportFailed", "DSS server returned malformed JSON", {
           ...errorDetails({
           rawResponse,
           error: error instanceof Error ? error.message : String(error)
@@ -349,7 +477,7 @@ async function waitForExit(child: ChildProcess, timeoutMs: number): Promise<void
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup();
-      reject(new DebugMcpError("AdapterNotAvailable", "Timed out waiting for persistent DSS server exit", {
+      reject(new DebugMcpError("DssTimeout", "Timed out waiting for persistent DSS server exit", {
         pid: child.pid
       }));
     }, timeoutMs);
@@ -397,7 +525,7 @@ async function waitForReady(child: ChildProcess, timeoutMs: number, output = cre
       fn();
     };
     const timer = setTimeout(() => finish(() => reject(new DebugMcpError(
-      "AdapterNotAvailable",
+      "DssTimeout",
       "Timed out waiting for persistent DSS server readiness",
       {
         pid: child.pid,
@@ -415,7 +543,7 @@ async function waitForReady(child: ChildProcess, timeoutMs: number, output = cre
       output.appendStderr(chunk.toString("utf8"));
     });
     child.on("exit", code => {
-      finish(() => reject(new DebugMcpError("AdapterNotAvailable", `Persistent DSS server exited before ready: ${code}`, {
+      finish(() => reject(new DebugMcpError("DssLaunchFailed", `Persistent DSS server exited before ready: ${code}`, {
         exitCode: code,
         stdout: output.stdoutTail(),
         stderr: output.stderrTail()
@@ -535,8 +663,8 @@ function handleCommand(command) {
     session.target.halt();
     return { status: "OK", value: withCoreIdentity(command, { state: "Halted" }) };
   } else if (command.name === "reset") {
-    session.target.reset();
-    return { status: "OK", value: withCoreIdentity(command, { state: "Halted" }) };
+    applyTargetReset(session, command.resetType);
+    return { status: "OK", value: withCoreIdentity(command, { state: "Halted", resetType: command.resetType || "default" }) };
   } else if (command.name === "load") {
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
@@ -560,6 +688,9 @@ function handleCommand(command) {
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize }) };
+  } else if (command.name === "readData") {
+    var readValue = session.memory.readData(resolveMemoryPage(command.page), command.address, command.typeSize);
+    return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: Number(readValue), typeSize: command.typeSize }) };
   } else if (command.name === "evaluateExpression") {
     var value = session.expression.evaluate(command.expression);
     return { status: "OK", value: withCoreIdentity(command, { expression: command.expression, success: true, value: String(value) }) };
@@ -574,9 +705,39 @@ function handleCommand(command) {
     var state = connected ? (session.target.isHalted() ? "Halted" : "Running") : "Disconnected";
     return { status: "OK", value: withCoreIdentity(command, { connected: connected, state: state, pc: pc }) };
   } else if (command.name === "resolveAddress") {
-    return { status: "OK", value: withCoreIdentity(command, { success: true, address: command.address, pc: command.address, partial: true }) };
+    return {
+      status: "OK",
+      value: withCoreIdentity(command, {
+        success: false,
+        address: command.address,
+        pc: command.address,
+        partial: true,
+        error: "Address-to-source mapping is not implemented by the CCS scripting adapter"
+      })
+    };
   }
   return { status: "FAIL", message: "Unsupported command: " + command.name };
+}
+
+function applyTargetReset(session, resetType) {
+  var type = resetType || "default";
+  if (type === "system") {
+    try {
+      session.target.systemReset();
+      return;
+    } catch (systemResetError) {
+      try {
+        session.expression.evaluate("GEL_SystemReset()");
+        return;
+      } catch (gelSystemResetError) {}
+    }
+  } else if (type === "restart") {
+    try {
+      session.target.restart();
+      return;
+    } catch (restartError) {}
+  }
+  session.target.reset();
 }
 
 function resolveMemoryPage(page) {

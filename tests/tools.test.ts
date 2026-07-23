@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { c2000ToolDefinitions, getToolContracts } from "../src/mcp/tools.js";
+import { c2000ToolDefinitions, getToolContracts, getToolSurfaceGuide } from "../src/mcp/tools.js";
 
 describe("MCP tool registration contract", () => {
   test("registers only c2000-prefixed tool names to avoid TI official MCP collisions", () => {
@@ -56,6 +56,37 @@ describe("MCP tool registration contract", () => {
     expect(names).not.toContain("getTargetState");
   });
 
+  test("marks continue/pause as aliases of primary run/halt tools", () => {
+    const byName = new Map(c2000ToolDefinitions.map(tool => [tool.name, tool]));
+    expect(byName.get("c2000_continue")).toEqual(expect.objectContaining({
+      role: "alias",
+      aliasOf: "c2000_runCore",
+      family: "execution"
+    }));
+    expect(byName.get("c2000_pause")).toEqual(expect.objectContaining({
+      role: "alias",
+      aliasOf: "c2000_haltCore",
+      family: "execution"
+    }));
+    expect(byName.get("c2000_runCore")?.role).toBe("primary");
+    expect(byName.get("c2000_haltCore")?.role).toBe("primary");
+  });
+
+  test("tool surface guide prefers workflows and primary atomics", () => {
+    const guide = getToolSurfaceGuide();
+    expect(guide.aliases).toEqual(expect.arrayContaining([
+      { name: "c2000_continue", useInstead: "c2000_runCore" },
+      { name: "c2000_pause", useInstead: "c2000_haltCore" }
+    ]));
+    expect(guide.preferredWorkflows).toEqual(expect.arrayContaining([
+      "c2000_launchAndRunIpcAcceptance",
+      "c2000_runIpcAcceptance",
+      "c2000_runBootHandoffDiagnosis"
+    ]));
+    expect(guide.counts.total).toBe(c2000ToolDefinitions.length);
+    expect(guide.counts.alias).toBe(2);
+  });
+
   test("hardware preflight is read-only and does not require sessionId or coreId", () => {
     const preflight = c2000ToolDefinitions.find(tool => tool.name === "c2000_getHardwarePreflight");
 
@@ -95,7 +126,9 @@ describe("MCP tool registration contract", () => {
       "cpu2Program",
       "searchRoots",
       "maxDepth",
-      "allowExistingDebugProcesses"
+      "allowExistingDebugProcesses",
+      "waitForProbeMs",
+      "probePollIntervalMs"
     ]);
   });
 
@@ -121,7 +154,7 @@ describe("MCP tool registration contract", () => {
         name: "c2000_getAcceptanceReadiness",
         inputScope: "host",
         targetEffect: "host-read",
-        inputFields: ["ccsInstallPath", "ccxmlPath", "cpu1Program", "cpu2Program", "searchRoots", "maxDepth", "allowExistingDebugProcesses"],
+        inputFields: ["ccsInstallPath", "ccxmlPath", "cpu1Program", "cpu2Program", "searchRoots", "maxDepth", "allowExistingDebugProcesses", "waitForProbeMs", "probePollIntervalMs"],
         requiredInputFields: []
       }),
       expect.objectContaining({

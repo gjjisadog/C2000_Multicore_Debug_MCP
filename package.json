@@ -7,11 +7,13 @@
     "c2000-multicore-mcp": "./dist/src/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node scripts/build.mjs -p tsconfig.src.json",
+    "build:all": "node scripts/build.mjs -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
     "start:supervised": "node scripts/mcp-supervisor.mjs -- node dist/src/index.js",
     "test": "vitest run",
+    "postinstall": "node -e \"try{require('fs').accessSync('node_modules/typescript/lib/_tsc.js')}catch{console.warn('[c2000-multicore-mcp] typescript CLI missing; run npm install typescript --save-dev')}\"",
     "verify:debug-boundary": "tsx scripts/verify-debug-boundary.ts",
     "verify:host": "tsx scripts/verify-host-gate.ts",
     "smoke": "tsx scripts/smoke-test.ts",
@@ -28,10 +30,11 @@
   "devDependencies": {
     "@types/node": "^20.14.15",
     "tsx": "^4.20.3",
-    "typescript": "^5.5.4",
+    "typescript": "5.5.4",
     "vitest": "^2.1.1"
   },
   "engines": {
-    "node": ">=20.0.0"
-  }
+    "node": ">=20.0.0 <25"
+  },
+  "packageManager": "npm@10"
 }

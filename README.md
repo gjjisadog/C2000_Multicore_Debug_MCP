@@ -45,7 +45,7 @@ The same boundary report also states that the real adapter is `CcsScriptingAdapt
 
 `CcsScriptingAdapter` and `PersistentDssBridge` both fail closed when a successful CCS response omits or mismatches the requested `coreId` and `coreName`. The returned `coreId` must be a number equal to the requested core ID, and the returned `coreName` must be a string equal to the requested core name; malformed identity values are rejected rather than treated as active-target evidence. A response without explicit core identity is treated as `CoreIdentityMissing`, not as an acceptable active-target result.
 
-For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram` and `c2000_loadPrograms` prepare GS RAM ownership before loading CPU2. When a `.map` file is supplied through `mapUri`, or can be derived next to the `.out`, the manager parses the map and writes the required GS owner bits through CPU1. If no usable map is available, it keeps the previous RAMGS4 fallback for compatibility. The write uses an explicit CPU1 DebugSession memory write to `MEMCFG_GSXMSEL` at `0x0005F444` on the DATA page through `DebugAdapter.writeMemory`. This mirrors TI's dual-core RAM ownership requirement and still uses the self-managed `sessionId -> coreId -> DebugSession` path; it does not call TI official MCP debug controls and does not depend on CCS UI focus.
+For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram` and `c2000_loadPrograms` prepare GS RAM ownership before loading CPU2. When a `.map` file is supplied through `mapUri`, or can be derived next to the `.out`, the manager parses the map (only the `MEMORY CONFIGURATION` section) and computes the required GS owner bits for CPU1. **Multiple used `RAMGSx` regions are OR-combined into a single `MEMCFG_GSXMSEL` write** so later bits do not overwrite earlier ones (for example RAMGS4+RAMGS5 → value `0x30`). When `readMemory` is available, that write is applied as **RMW** (`current | requiredMask`) so unrelated GS owner bits already set on CPU1 are preserved. If no usable map is available, it keeps the previous RAMGS4-only fallback (`value: 0x10`) for compatibility, logs a warning, and appends the fallback reason to `LoadedProgramInfo.warning`. Program/map paths accept `file://` URLs, surrounding quotes, `~`, and relative paths via `normalizeProgramUri`. The write uses an explicit CPU1 DebugSession memory write to `MEMCFG_GSXMSEL` at `0x0005F444` on the DATA page through `DebugAdapter.writeMemory`. This mirrors TI's dual-core RAM ownership requirement and still uses the self-managed `sessionId -> coreId -> DebugSession` path; it does not call TI official MCP debug controls and does not depend on CCS UI focus.
 
 ## Install
 
@@ -53,6 +53,8 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 npm install
 npm run build
 ```
+
+`npm run build` runs `scripts/build.mjs`, which invokes the TypeScript package CLI (`lib/_tsc.js`) directly. This avoids broken `tsc` bin shims under some Node/package layouts. TypeScript is pinned to `5.5.4`. If build fails after a partial `node_modules`, reinstall with `npm ci` or `npm install typescript@5.5.4 --save-dev`.
 
 ## Start
 
@@ -200,6 +202,37 @@ Example:
 
 `target.coreMap` must use unique `coreId` values and unique target selectors. The target selector is `corePattern` when present, otherwise `coreName`. Duplicate IDs are rejected with `DuplicateCoreId`; duplicate target selectors are rejected with `DuplicateCoreTarget`. Both checks protect the internal `sessionId -> coreId -> DebugSession` mapping from becoming ambiguous.
 
+### Adapter selection (`adapter` / `ccs.scriptingMode`)
+
+| Value | Behavior |
+| --- | --- |
+| `mock` | Always use `MockDebugAdapter` (no CCS/DSS). |
+| `ccs` | Always use `CcsScriptingAdapter` + persistent DSS bridge. |
+| `auto` | Prefer `ccs.scriptingMode` when `adapter` is `auto`. If that is also `auto`, **probe** for `ccs_base/scripting/bin/dss.sh` (or `dss.bat` on Windows). Search order: explicit `ccs.installPath` → `C2000_MCP_CCS_INSTALL_PATH` → multi-version discovery under `/Applications/ti`, `~/ti` (and Windows `C:\\ti` / `D:\\ti`), preferring the highest `ccsNNNN` product tree → last-resort default `/Applications/ti/ccs2100/ccs`. DSS found → `ccs`; otherwise → `mock`. |
+
+On startup the server logs `debug adapter selected` with `mode`, `requested`, `reason`, and when available `ccsInstallPath` / `ccsInstallSource`. Prefer explicit `mock` or `ccs` in committed configs so environments do not silently change when CCS is installed or removed.
+
+Notes:
+
+- `ccs.installPath` pins DSS discovery and launch when set; otherwise multi-version CCS discovery runs.
+- `ccs.workspacePath` / `C2000_MCP_WORKSPACE_PATH` is used as: (1) base directory for relative `programUri` / `mapUri` resolution, (2) DSS process `cwd`, (3) env hints `C2000_MCP_WORKSPACE_PATH`, `WORKSPACE`, `CCS_WORKSPACE`. Exposed on `c2000_getSessionTopology.workspacePath`.
+- `ccs.ccxmlPath` / `C2000_MCP_CCXML_PATH` are auto-injected when a tool omits `ccxmlPath` on `c2000_createDebugSession` / launch workflows (explicit tool args still win).
+- `target.coreMap` from config is used as the default core map when create/launch omit `coreMap`.
+- Optional `diagnostics.cpu1BootExpressions` / `diagnostics.cpu2BootExpressions` override the default Hybrid30k boot symbol lists used by diagnosis tools.
+- Per-session operations are serialized with an internal queue so concurrent MCP tool calls on the same `sessionId` do not interleave connect/load/run sequences.
+- Persistent DSS sessions are disposed on `SIGINT` / `SIGTERM` / `beforeExit`, and base ports are probed before bind with retry on conflict.
+
+### Tool surface (prefer workflows / primary atomics)
+
+There are many tools by design (host gates, atomics, batches, workflows). Semantic overlap is intentional for TI MCP naming; **aliases are marked, not duplicated logic**:
+
+| Prefer | Avoid (alias) |
+| --- | --- |
+| `c2000_runCore` | `c2000_continue` |
+| `c2000_haltCore` | `c2000_pause` |
+
+Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` for `tools[]` plus `toolSurface` (`families`, `preferredWorkflows`, `preferredAtomics`, `aliases`, `guidance`).
+
 Environment overrides:
 
 - `C2000_MCP_CONFIG`
@@ -250,13 +283,13 @@ Phase 2:
 
 - `c2000_evaluateMany`
 - `c2000_getLoadedProgramInfo`
-- `c2000_resolvePc`
-- `c2000_resolveAddress`
+- `c2000_resolvePc` (PC read succeeds even when symbol mapping is partial)
+- `c2000_resolveAddress` (honest: no fake symbol/source map; often `success: false`, `partial: true`)
 - `c2000_waitUntilExpression`
 - `c2000_waitForExpressionSet`
 - `c2000_diagnoseCpu2Boot`
 - `c2000_verifyRunPauseIsolation`
-- `c2000_assignExpression`
+- `c2000_assignExpression` (default `verify: true`; fails on readback mismatch)
 - `c2000_assignExpressions`
 - `c2000_injectFaults`
 - `c2000_compareExpressions`
@@ -342,7 +375,7 @@ Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores
    - `g_ulHybrid30kIpcPass`
    - `g_ulHybrid30kMsgRamPass`
    - `g_ulHybrid30kParamPass`
-9. If stuck, `c2000_haltCores`, then `c2000_resolvePc` or `c2000_resolveAddress`.
+9. If stuck, `c2000_haltCores`, then `c2000_resolvePc` (for PC) or `c2000_resolveAddress` (address only; symbol mapping may be `partial` / not implemented).
 10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/pass flags, and CPU2 stage.
 11. `c2000_analyzeRamOwnership` for host-side `.map` RAMGS ownership evidence.
 12. `c2000_diagnoseBootHandoff` to combine CPU2 boot diagnosis with RAM ownership evidence.
@@ -393,6 +426,7 @@ Recommended one-approval call from an unconnected target through `c2000_launchAn
   "cpu2MapPath": "/path/to/cpu2.map",
   "resetType": "cpu",
   "runSequence": {
+    "runMode": "debugger_runs_both",
     "runCpu1First": true,
     "runCpu2": true,
     "settleMs": 0
@@ -406,7 +440,7 @@ Recommended one-approval call from an unconnected target through `c2000_launchAn
 }
 ```
 
-The result includes the created `sessionId`, `launch` connection evidence, `workflow`, `orchestration: "server-internal"`, `mcpToolCalls: []`, explicit CPU IDs, snapshot evidence, RAM ownership analysis, ELF freshness, IPC-ready conditions, boot handoff diagnosis, and optional bundle files. `autoCloseOnComplete` defaults to `false`. When set to `true`, it arms activity-aware idle cleanup rather than closing immediately: the response includes `autoClose.armed`, `idleTimeoutMs`, and `scheduledCloseAt`; every later MCP call carrying that `sessionId` cancels the pending timer while the call is in flight and restarts the full idle interval when the call finishes. The default `autoCloseIdleTimeoutMs` is 60000 ms. On launch failure the server still closes the newly created logical session before returning a structured error.
+`runMode` makes the startup contract explicit: `cpu1_boots_cpu2` runs only CPU1 and expects firmware boot handoff, `debugger_runs_both` runs CPU1 then CPU2, and `cpu2_pre_running` starts CPU2 before CPU1. The legacy `runCpu1First`/`runCpu2` fields remain supported when `runMode` is omitted. The result includes the resolved `runPlan`, created `sessionId`, launch connection evidence, `workflow`, `orchestration: "server-internal"`, `mcpToolCalls: []`, explicit CPU IDs, snapshot evidence, RAM ownership analysis, ELF freshness, IPC-ready conditions, boot handoff diagnosis, and optional bundle files. Bundles include both the detailed JSON files and a compact `evidence.json`. On launch failure the server closes the newly created logical session before returning a structured error.
 
 ## RAM Ownership Analysis
 
@@ -422,7 +456,7 @@ Example:
 }
 ```
 
-For CPU2 sections in `RAMGS4`, the result includes an ownership action with `ownerCoreId: 0`, `targetCoreId: 2`, `address: 0x0005F444`, `value: 0x10`, and `page: "DATA"`. `c2000_loadProgram` and `c2000_loadPrograms` use the same parser when `mapUri` is supplied, or when a sibling `.map` can be derived from the `.out`.
+For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `ownerCoreId: 0`, `targetCoreId: 2`, `address: 0x0005F444`, `value: 0x10`, and `page: "DATA"`. If the map shows multiple used GS blocks (for example RAMGS4 and RAMGS5), analysis still lists per-region actions; **before load**, `DebugSessionManager` merges same-register actions with bitwise OR into **one** write (for example `0x10 | 0x20 = 0x30`). `c2000_loadProgram` and `c2000_loadPrograms` use the same parser when `mapUri` is supplied, or when a sibling `.map` can be derived from the `.out`.
 
 ## CPU2 Boot Diagnosis
 
@@ -497,7 +531,15 @@ Example:
 
 ## Fault Injection
 
-`c2000_assignExpression` assigns one expression on one explicit core. It requires `sessionId`, `coreId`, `expression`, and `value`, and by default reads the expression back on the same core after assignment.
+`c2000_assignExpression` assigns one expression on one explicit core. It requires `sessionId`, `coreId`, `expression`, and `value`. By default `verify` is `true`: after the write, the same core re-reads the expression and **fails the tool** if the write reported failure or the readback does not match the assigned value (numeric strings such as `"0"` and `0` compare equal).
+
+| Outcome | Error code |
+| --- | --- |
+| Adapter write returned `success: false` | `ExpressionAssignFailed` |
+| Readback missing, failed, or mismatched (when `verify: true`) | `ExpressionVerifyFailed` |
+| Write + matching readback | success with `write` and `readback` fields |
+
+Set `"verify": false` only when you intentionally skip readback (for example a write-only register or a follow-up poll with `c2000_waitUntilExpression`).
 
 Example:
 
@@ -506,13 +548,14 @@ Example:
   "sessionId": "dbg-...",
   "coreId": 0,
   "expression": "g_ulHybrid30kIpcPass",
-  "value": 0
+  "value": 0,
+  "verify": true
 }
 ```
 
 String values are treated as CCS/C expression fragments, so values such as `"0x1"` or `"MY_ENUM_VALUE"` can be used for target-side assignments. Use `c2000_evaluateMany` on the peer core to confirm the injection did not change unrelated CPU1/CPU2 state.
 
-`c2000_assignExpressions` applies multiple explicit per-core assignments in one request. Every item carries its own `coreId`, `expression`, `value`, and optional `verify` flag; the response returns independent per-item results and a top-level failure if any item fails.
+`c2000_assignExpressions` applies multiple explicit per-core assignments in one request. Every item carries its own `coreId`, `expression`, `value`, and optional `verify` flag (default `true`); the response returns independent per-item results and a top-level failure if any item fails.
 
 Example:
 
@@ -526,7 +569,7 @@ Example:
 }
 ```
 
-`c2000_injectFaults` is a semantic wrapper for fault campaigns. It uses the same per-core assignment path as `c2000_assignExpression`, but each item is named as a fault with an optional `label`. The response includes `summary.total`, `summary.succeeded`, `summary.failed`, and independent per-fault results. This is useful when an acceptance log needs to say which fault case was injected, while still proving every write used an explicit `coreId`.
+`c2000_injectFaults` is a semantic wrapper for fault campaigns. It uses the same per-core assignment path as `c2000_assignExpression` (including default verify/readback), but each item is named as a fault with an optional `label`. The response includes `summary.total`, `summary.succeeded`, `summary.failed`, and independent per-fault results. This is useful when an acceptance log needs to say which fault case was injected, while still proving every write used an explicit `coreId`.
 
 Example:
 
@@ -714,7 +757,7 @@ Read-only preflight checks XDS110 enumeration and possible debug-process owners.
 
 Preflight keeps the legacy `debugProcesses` string array and also returns `debugProcessDetails`, with `pid`, optional `ppid`, optional `elapsed`, `kind`, `command`, and `rawLine` for each possible probe owner. Readiness and hardware acceptance use this structured detail to report blockers such as `93717 DSLite: ./DSLite` without terminating anything automatically.
 
-For one-shot host-side acceptance gating, call `c2000_getAcceptanceReadiness`. It combines `.ccxml` checks, CPU1/CPU2 `.out` discovery, XDS110 preflight, debug-process ownership, the debug boundary contract, UI-independence proof, and the acceptance evidence plan in one read-only report. The tool returns `readyForHardwareAcceptance`, `blockers`, `warnings`, `checks`, `programDiscovery`, `preflight`, `debugBoundary`, `uiIndependenceEvidence`, `acceptanceEvidence`, and `nextCommand`; it does not create a debug session or call any target-control method.
+For one-shot host-side acceptance gating, call `c2000_getAcceptanceReadiness`. It combines `.ccxml` checks, CPU1/CPU2 `.out` discovery, XDS110 preflight, debug-process ownership, the debug boundary contract, UI-independence proof, and the acceptance evidence plan in one read-only report. Set `waitForProbeMs` plus `probePollIntervalMs` to wait for an existing debug process to release the probe without killing it; the response reports `probeWait.requestedMs`, `elapsedMs`, `attempts`, and `released`. The tool returns `readyForHardwareAcceptance`, `blockers`, `warnings`, `checks`, `programDiscovery`, `preflight`, `probeWait`, `debugBoundary`, `uiIndependenceEvidence`, `acceptanceEvidence`, and `nextCommand`; it does not create a debug session or call any target-control method. Transient XDS110 launch failures such as Error -260 are retried with capped exponential backoff.
 
 The same check is also available from the CLI:
 
@@ -822,7 +865,7 @@ C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1
 
 ## Switching To Real CCS
 
-Set:
+Explicit CCS mode (recommended for hardware):
 
 ```json
 {
@@ -836,13 +879,16 @@ Set:
 }
 ```
 
-Current limitation: `CcsScriptingAdapter` uses an experimental persistent DSS bridge by default. It launches `dss.sh`, opens the configured `.ccxml`, resolves CPU1/CPU2 by `corePattern`, and keeps one socket endpoint per core DebugSession. Commands are routed by `adapterSessionId + coreId`, not by CCS UI focus. Each socket endpoint is also bound to its expected `coreId`; if an internal bridge bug sends a command whose `coreId` does not match that endpoint, the DSS server rejects it before resolving a DebugSession. Persistent DSS responses include the requested `coreId` and `coreName`, and the Node bridge rejects a successful DSS response if that identity does not match the requested core. The stateless compatibility bridge emits the same `coreId` and `coreName` response fields, but it is not the F28P65x automation path because it does not preserve per-core DebugSession objects across commands. Hardware acceptance logs can tie each `run`, `halt`, `reset`, `load`, GS4 ownership `writeData`, state, expression, and address response back to the logical core that handled it. This is the correct architectural direction because it does not call TI official MCP debug controls. Physical-board acceptance has passed with `C2000_RUN_LAUNCH=1` and `C2000_RUN_ISOLATION=1` on the attached F28P65x/XDS110 setup.
+Or use `"adapter": "auto"` / `"scriptingMode": "auto"` so the server selects `ccs` only when the DSS launcher exists under `installPath` (see [Adapter selection](#adapter-selection-adapter--ccsscriptingmode)). Check the startup log line `debug adapter selected` before assuming you are on hardware.
+
+Current limitation: `CcsScriptingAdapter` uses an experimental persistent DSS bridge by default. It launches `dss.sh`, opens the configured `.ccxml`, resolves CPU1/CPU2 by `corePattern`, and keeps one socket endpoint per core DebugSession. Commands are routed by `adapterSessionId + coreId`, not by CCS UI focus. Each socket endpoint is also bound to its expected `coreId`; if an internal bridge bug sends a command whose `coreId` does not match that endpoint, the DSS server rejects it before resolving a DebugSession. Persistent DSS responses include the requested `coreId` and `coreName`, and the Node bridge rejects a successful DSS response if that identity does not match the requested core. The stateless compatibility bridge emits the same `coreId` and `coreName` response fields, but it is not the F28P65x automation path because it does not preserve per-core DebugSession objects across commands. Hardware acceptance logs can tie each `run`, `halt`, `reset`, `load`, GS ownership `writeData`, state, expression, and address response back to the logical core that handled it. This is the correct architectural direction because it does not call TI official MCP debug controls. Physical-board acceptance has passed with `C2000_RUN_LAUNCH=1` and `C2000_RUN_ISOLATION=1` on the attached F28P65x/XDS110 setup.
 
 The adapter currently implements the integration boundary in:
 
 - `src/adapters/CcsScriptingAdapter.ts`
 - `src/adapters/CcsScriptingBridge.ts`
 - `src/adapters/PersistentDssBridge.ts`
+- `src/adapters/adapterResolution.ts` (`auto` / `mock` / `ccs` selection)
 
 The DSS script uses the CCS Scripting APIs shown in TI's installed examples:
 
@@ -854,22 +900,40 @@ The DSS script uses the CCS Scripting APIs shown in TI's installed examples:
 - `debugSession.target.disconnect()`
 - `debugSession.target.runAsynch()`
 - `debugSession.target.halt()`
-- `debugSession.target.reset()`
+- `debugSession.target.reset()` (default / `cpu`)
+- `debugSession.target.systemReset()` or `GEL_SystemReset()` when `resetType` is `system` (falls back to `reset()` if unsupported)
+- `debugSession.target.restart()` when `resetType` is `restart` (falls back to `reset()` if unsupported)
 - `debugSession.memory.loadProgram(programUri)`
 - `debugSession.memory.writeData(Memory.Page.DATA, address, value, typeSize)`
 - `debugSession.expression.evaluate(expression)`
 
+### Address resolution honesty
+
+`c2000_resolveAddress` does **not** invent symbol or source mapping. When the adapter has no function/source/line data, the result is `success: false`, `partial: true`, and an `AddressResolveFailed` (or equivalent) error payload. `c2000_resolvePc` still returns `success: true` when the PC value itself was read successfully; partial address-to-source mapping is reported with `partial: true` (and optional error details) without claiming a full symbol resolve.
+
+### Reset types
+
+Tool APIs accept `resetType`: `cpu` | `system` | `restart` | `default`. The DSS scripts map these as above. On the mock adapter, all four types are accepted; unsupported values throw `UnsupportedResetType`.
+
 The older `DssCliBridge` remains in `CcsScriptingBridge.ts` as a stateless diagnostic fallback. It must still return explicit `coreId` and `coreName` in successful responses so the adapter can fail closed on identity mismatches, but it is not the preferred path for F28P65x dual-core automation because it does not preserve `coreId -> DebugSession` across commands.
 
-The next adapter hardening work is:
+Implemented robustness notes:
 
-- Confirm target state semantics on a physical F28P65x board after XDS110 ownership is clear.
-- Complete physical-board acceptance for `c2000_continue` and `c2000_pause` on CPU1/CPU2 with a free XDS110 debug probe.
-- Add reset-type mapping for C2000-specific CPU/system/restart behavior after verifying CCS Debug Server support.
+- CPU2 GS ownership writes require CPU1 to already be connected (`OwnerCoreNotConnected` otherwise).
+- GS ownership multi-bit OR merge plus RMW when `readMemory` is available; missing-map fallback is logged and surfaced on `LoadedProgramInfo.warning`.
+- `c2000_launchMulticoreDebug` always processes CPU1 before other cores and accepts per-core `mapUri`.
+- `c2000_verifyRunPauseIsolation` halts both cores first; peer cores that are `Running` are not compared on `pc` (only `connected` / `state` / loaded program fields).
+- `listCores` refreshes each core through adapter `getState` instead of returning static disconnected flags.
+- `readMemory` is available on mock and CCS adapters; workflow `verifyRuntimeRamOwnership: true` reads `MEMCFG_GSXMSEL` and checks the expected GS bit mask.
+- Boot handoff verdict treats zero/false expression values as not ready, and requires non-empty ownership actions when CPU2 maps use GS RAM.
+- Program/map URIs normalize `file://`, quotes, `~`, and relative paths.
+- DSS failures use specific codes: `DssNotFound`, `DssLaunchFailed`, `DssCommandFailed`, `DssTimeout`, `DssTransportFailed` (adapter wiring still uses `AdapterNotAvailable`).
+- CCS install multi-version discovery under common TI roots; `ccs.workspacePath` drives relative loads and DSS cwd/env.
+- Tool contracts expose `role` / `family` / `aliasOf` and a `toolSurface` guide so clients prefer workflows and primary atomics.
 
 The real adapter must not call TI official MCP `continue`, `pause`, `reset`, `connectTarget`, `disconnectTarget`, or `getTargetState`. Doing so would reintroduce active-target behavior and fail the purpose of this project.
 
-Unsupported reset modes must throw `UnsupportedResetType`; unavailable symbols must throw `SymbolNotFound`; adapter wiring failures must throw `AdapterNotAvailable`.
+Unsupported reset modes must throw `UnsupportedResetType`; unavailable symbols must throw `SymbolNotFound`; failed assignment or verify readback must throw `ExpressionAssignFailed` / `ExpressionVerifyFailed`; missing owner core before GS handoff must throw `OwnerCoreNotConnected`; runtime GS verify failures throw `RamOwnershipVerifyFailed`; DSS transport/launch/command failures throw the `Dss*` codes above; remaining adapter wiring failures throw `AdapterNotAvailable`.
 
 ## Acceptance Checks
 
@@ -887,11 +951,14 @@ The real CCS adapter is accepted only when these checks pass without clicking th
 ```text
 c2000-multicore-mcp/
   src/
-    adapters/
+    adapters/          # Mock, CcsScripting, PersistentDss, adapterResolution
     config/
-    debug/
+    debug/             # DebugSessionManager, isolation, program registry
+    hardware/          # map ownership, preflight, program discovery
     mcp/
     utils/
+    workflows/
+  scripts/             # smoke, acceptance, optional p0-smoke.mjs
   examples/
   scripts/
   tests/

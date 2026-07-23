@@ -11,6 +11,10 @@ import { analyzeRamOwnership as analyzeRamOwnershipDefault } from "../hardware/m
 import { formatDebugProcessOwners, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { buildBootHandoffVerdict as buildBootHandoffVerdictCore } from "../debug/bootHandoffVerdict.js";
+import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
+import { sleep as sleepCore } from "../utils/async.js";
+import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
@@ -57,6 +61,7 @@ export interface ToolHandlerDeps {
   discoverAcceptancePrograms?: typeof discoverAcceptanceProgramsDefault;
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
+  getToolSurfaceGuide?: () => ToolResult;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -64,6 +69,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const discoverAcceptancePrograms = deps.discoverAcceptancePrograms ?? discoverAcceptanceProgramsDefault;
   const analyzeRamOwnership = deps.analyzeRamOwnership ?? analyzeRamOwnershipDefault;
   const getToolContracts = deps.getToolContracts ?? (() => []);
+  const getToolSurfaceGuide = deps.getToolSurfaceGuide ?? (() => ({}));
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
@@ -94,7 +100,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   return {
     async getToolContracts(_input: z.infer<typeof toolContractsSchema>) {
       try {
-        return ok({ tools: getToolContracts() });
+        return ok({
+          tools: getToolContracts(),
+          toolSurface: getToolSurfaceGuide()
+        });
       } catch (error) {
         return fail(error);
       }
@@ -137,8 +146,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       }
     },
 
-    async getAcceptanceReadiness(input: z.infer<typeof acceptanceReadinessSchema>) {
+    async getAcceptanceReadiness(input: z.input<typeof acceptanceReadinessSchema>) {
       try {
+        const waitForProbeMs = input.waitForProbeMs ?? 0;
+        const probePollIntervalMs = input.probePollIntervalMs ?? 250;
         const ccxmlPath = input.ccxmlPath ?? process.env.C2000_MCP_CCXML_PATH;
         const allowExistingDebugProcesses = input.allowExistingDebugProcesses ?? process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
         const programDiscovery = await discoverAcceptancePrograms({
@@ -147,7 +158,23 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           searchRoots: input.searchRoots ?? programSearchRoots(),
           maxDepth: input.maxDepth
         });
-        const preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath });
+        const probeWaitStartedAt = Date.now();
+        let preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath });
+        let probeWaitAttempts = 1;
+        while (waitForProbeMs > 0
+          && Date.now() - probeWaitStartedAt < waitForProbeMs
+          && !preflightReady(preflight, allowExistingDebugProcesses)) {
+          const remainingMs = waitForProbeMs - (Date.now() - probeWaitStartedAt);
+          await sleepCore(Math.min(probePollIntervalMs, Math.max(1, remainingMs)));
+          preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath });
+          probeWaitAttempts++;
+        }
+        const probeWait = {
+          requestedMs: waitForProbeMs,
+          elapsedMs: Date.now() - probeWaitStartedAt,
+          attempts: probeWaitAttempts,
+          released: preflightReady(preflight, allowExistingDebugProcesses)
+        };
         const debugBoundary = getDebugBoundary();
         const uiIndependenceEvidence = buildUiIndependenceEvidence(debugBoundary);
         const acceptanceEvidence = buildAcceptanceEvidencePlan();
@@ -200,6 +227,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           checks,
           programDiscovery,
           preflight,
+          probeWait,
           debugBoundary,
           uiIndependenceEvidence,
           acceptanceEvidence,
@@ -768,7 +796,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           coreMap: cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
         });
         createdSessionId = created.sessionId;
-        for (const core of cores) {
+        // CPU1 first so GS ownership writes for CPU2 always see a connected owner core.
+        const orderedCores = [...cores].sort((left, right) => {
+          if (left.coreId === 0) {
+            return -1;
+          }
+          if (right.coreId === 0) {
+            return 1;
+          }
+          return left.coreId - right.coreId;
+        });
+        for (const core of orderedCores) {
           if (core.connect) {
             await manager.connectTarget(created.sessionId, core.coreId);
           }
@@ -781,7 +819,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
                 programDiscovery
               });
             }
-            await manager.loadProgram(created.sessionId, core.coreId, programUri);
+            await manager.loadProgramWithMap(created.sessionId, core.coreId, programUri, core.mapUri);
           }
           if (core.haltAtEntry) {
             await manager.haltCore(created.sessionId, core.coreId);
@@ -995,26 +1033,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 }
 
 function defaultIpcReadyConditions(cpu1CoreId: number, cpu2CoreId: number) {
-  return [
-    { label: "cpu1-ipc-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kIpcPass", expected: 1 },
-    { label: "cpu1-msgram-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kMsgRamPass", expected: 1 },
-    { label: "cpu1-param-pass", coreId: cpu1CoreId, expression: "g_ulHybrid30kParamPass", expected: 1 },
-    { label: "cpu2-stage-ready", coreId: cpu2CoreId, expression: "g_emHybrid30kCpu2Stage", expected: 1 }
-  ];
+  return defaultIpcReadyConditionsCore(cpu1CoreId, cpu2CoreId);
 }
 
 function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: ToolResult) {
-  const cpu1Expressions = Array.isArray(boot.cpu1?.expressions) ? boot.cpu1.expressions as ToolResult[] : [];
-  const cpu2Expressions = Array.isArray(boot.cpu2?.expressions) ? boot.cpu2.expressions as ToolResult[] : [];
-  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
-  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(result => result.success === true && !["0", "false", "undefined"].includes(String(result.value)));
-  const ramOwnershipReady = !ramOwnership || Array.isArray(ramOwnership.ownershipActions);
-  return {
-    cpu1Ready,
-    cpu2Ready,
-    ramOwnershipReady,
-    ready: cpu1Ready && cpu2Ready && ramOwnershipReady
-  };
+  return buildBootHandoffVerdictCore(boot, ramOwnership as any);
 }
 
 function discoveredProgramForCore(coreId: number, programDiscovery: ToolResult): string | undefined {
@@ -1093,6 +1116,15 @@ function acceptanceBlockers(checks: ToolResult): string[] {
   return blockers;
 }
 
+function preflightReady(preflight: ToolResult, allowExistingDebugProcesses: boolean): boolean {
+  const xdsReady = preflight.xdsdfu?.ok === true
+    && Array.isArray(preflight.xdsdfu.devices)
+    && preflight.xdsdfu.devices.length > 0;
+  const hasOwners = (preflight.debugProcessDetails?.length ?? 0) > 0
+    || (preflight.debugProcesses?.length ?? 0) > 0;
+  return xdsReady && (!hasOwners || allowExistingDebugProcesses);
+}
+
 function acceptanceWarnings(checks: ToolResult): string[] {
   const warnings: string[] = [];
   if (checks.debugProcessOwnership?.overrideAccepted) {
@@ -1127,15 +1159,9 @@ function shellValue(value: string): string {
 }
 
 function valuesEqual(actual: unknown, expected: unknown): boolean {
-  if (typeof expected === "number") {
-    return Number(actual) === expected;
-  }
-  if (typeof expected === "boolean") {
-    return String(actual).toLowerCase() === String(expected);
-  }
-  return String(actual) === String(expected);
+  return valuesEqualCore(actual, expected);
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return sleepCore(ms);
 }

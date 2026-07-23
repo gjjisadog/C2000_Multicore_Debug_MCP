@@ -103,6 +103,15 @@ export class MockDebugAdapter implements DebugAdapter {
     state.memory.set(`${page}:${address}:${typeSize}`, String(value));
   }
 
+  async readMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
+    const state = this.requireConnected(session, coreId);
+    const raw = state.memory.get(`${page}:${address}:${typeSize}`);
+    if (raw === undefined) {
+      return 0;
+    }
+    return Number(raw);
+  }
+
   async getState(session: AdapterSession, coreId: CoreId): Promise<TargetState> {
     const state = this.getCoreState(session, coreId);
     const core = session.coreMap.find(item => item.coreId === coreId);
@@ -144,11 +153,19 @@ export class MockDebugAdapter implements DebugAdapter {
 
   async resolveAddress(_session: AdapterSession, _coreId: CoreId, address: string): Promise<ResolveResult> {
     return {
-      success: true,
+      success: false,
       address,
       pc: address,
-      partial: true
+      partial: true,
+      error: {
+        code: "AddressResolveFailed",
+        message: "Address-to-source mapping is not implemented by the mock adapter"
+      }
     };
+  }
+
+  async disposeSession(session: AdapterSession): Promise<void> {
+    this.sessions.delete(session.adapterSessionId);
   }
 
   private getStates(session: AdapterSession): Map<CoreId, MockCoreState> {
