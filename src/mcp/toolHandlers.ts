@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
@@ -27,6 +27,7 @@ import {
   hardwarePreflightSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
+  launchMultiBoardDebugSchema,
   launchMulticoreDebugSchema,
   loadProgramsSchema,
   loadProgramSchema,
@@ -596,6 +597,128 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await manager.verifyRunPauseIsolation(input));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
+      }
+    },
+
+    async launchMultiBoardDebug(input: z.input<typeof launchMultiBoardDebugSchema>) {
+      const createdSessionIds: string[] = [];
+      const results: ToolResult[] = [];
+      let rollbackOnFailure = true;
+      try {
+        const parsed = launchMultiBoardDebugSchema.parse(input);
+        rollbackOnFailure = parsed.rollbackOnFailure;
+        const preflight = await hardwarePreflight({ ccsInstallPath: parsed.ccsInstallPath });
+        const connectedProbeSerials = (preflight.xdsdfu.devices ?? [])
+          .map(device => device.serialNumber?.trim())
+          .filter((serial): serial is string => Boolean(serial));
+        const connectedProbeSet = new Set(connectedProbeSerials);
+        const requestedBoardIds = new Set<string>();
+        const requestedProbeSerials = new Set<string>();
+
+        for (const board of parsed.boards) {
+          const boardId = board.boardId ?? board.probeSerial;
+          if (requestedBoardIds.has(boardId)) {
+            throw new DebugMcpError("DuplicateBoardId", `Duplicate boardId ${boardId}`, { boardId });
+          }
+          if (requestedProbeSerials.has(board.probeSerial)) {
+            throw new DebugMcpError("DuplicateProbeAllocation", `Probe ${board.probeSerial} was assigned more than once`, {
+              probeSerial: board.probeSerial
+            });
+          }
+          if (!connectedProbeSet.has(board.probeSerial)) {
+            throw new DebugMcpError("ProbeNotConnected", `Requested XDS110 probe ${board.probeSerial} is not connected`, {
+              probeSerial: board.probeSerial,
+              connectedProbeSerials
+            });
+          }
+          const ccxml = await readFile(board.ccxmlPath, "utf8");
+          if (!ccxml.includes(board.probeSerial)) {
+            throw new DebugMcpError("ProbeBindingMissing", `Target configuration does not bind XDS110 serial ${board.probeSerial}`, {
+              boardId,
+              probeSerial: board.probeSerial,
+              ccxmlPath: board.ccxmlPath
+            });
+          }
+          requestedBoardIds.add(boardId);
+          requestedProbeSerials.add(board.probeSerial);
+        }
+
+        for (const board of parsed.boards) {
+          const boardId = board.boardId ?? board.probeSerial;
+          for (const core of board.cores) {
+            if (core.load && !core.programUri) {
+              throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for ${boardId} core ${core.coreId}`, {
+                boardId,
+                coreId: core.coreId,
+                coreName: core.coreName
+              });
+            }
+          }
+          const cpu1Core = board.cores.find(core => core.load && isCpuCore(core, "cpu1"));
+          const cpu2Core = board.cores.find(core => core.load && isCpuCore(core, "cpu2"));
+          if (cpu1Core && cpu2Core) {
+            const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri);
+            if (!pairing.compatible) {
+              throw new DebugMcpError("ArtifactPairInvalid", `CPU1/CPU2 launch artifacts are incompatible for ${boardId}`, {
+                boardId,
+                pairing
+              });
+            }
+          }
+
+          const created = await manager.createDebugSession({
+            sessionName: board.sessionName ?? board.targetConfigurationName ?? `multi-board-${boardId}`,
+            ccxmlPath: board.ccxmlPath,
+            coreMap: board.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
+          });
+          createdSessionIds.push(created.sessionId);
+          for (const core of board.cores) {
+            if (core.connect) {
+              await manager.connectTarget(created.sessionId, core.coreId);
+            }
+            if (core.load) {
+              await manager.loadProgram(created.sessionId, core.coreId, core.programUri!);
+            }
+            if (core.haltAtEntry) {
+              await manager.haltCore(created.sessionId, core.coreId);
+            }
+          }
+          const snapshot = await manager.getMulticoreSnapshot(created.sessionId);
+          results.push({
+            boardId,
+            probeSerial: board.probeSerial,
+            ccxmlPath: board.ccxmlPath,
+            sessionId: created.sessionId,
+            snapshot,
+            ...(board.autoCloseOnComplete
+              ? { autoClose: manager.armIdleAutoClose(created.sessionId, board.autoCloseIdleTimeoutMs) }
+              : {})
+          });
+        }
+        return ok({
+          workflow: "c2000_launchMultiBoardDebug",
+          orchestration: "server-internal",
+          allocationMode: "sequential-session-allocation",
+          connectedProbeSerials,
+          results
+        });
+      } catch (error) {
+        const rollback: ToolResult[] = [];
+        if (rollbackOnFailure) {
+          for (const sessionId of [...createdSessionIds].reverse()) {
+            try {
+              await manager.closeDebugSession(sessionId);
+              rollback.push({ sessionId, closed: true });
+            } catch (cleanupError) {
+              rollback.push({ sessionId, closed: false, error: toStructuredError(cleanupError) });
+            }
+          }
+        }
+        return fail(error, {
+          workflow: "c2000_launchMultiBoardDebug",
+          results,
+          ...(rollback.length > 0 ? { rollback } : {})
+        });
       }
     },
 

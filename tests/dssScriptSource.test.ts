@@ -1,8 +1,23 @@
 import { describe, expect, test } from "vitest";
-import { dssCommandScriptSource, resolveDssJson2Path } from "../src/adapters/CcsScriptingBridge.js";
+import { dssCommandScriptSource, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "../src/adapters/CcsScriptingBridge.js";
 import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridge.js";
 
 describe("DSS generated scripts", () => {
+  test("resolves Windows DSS paths and environment with native separators", () => {
+    const ccsRoot = "D:\\ccs21.0\\ccs";
+    const dssScriptPath = resolveDssScriptPath(ccsRoot, "win32");
+    const launch = resolveDssLaunch(dssScriptPath, ccsRoot, "win32");
+
+    expect(dssScriptPath).toBe("D:\\ccs21.0\\ccs\\ccs_base\\scripting\\bin\\dss.bat");
+    expect(resolveDssJson2Path(ccsRoot, "win32")).toBe(
+      "D:\\ccs21.0\\ccs\\ccs_base\\scripting\\examples\\TestServer\\json2.js"
+    );
+    expect(launch.command).toBe(dssScriptPath);
+    expect(launch.shell).toBe(true);
+    expect(launch.env?.PATH).toContain(";");
+    expect(launch.env?.DYLD_LIBRARY_PATH).toBeUndefined();
+  });
+
   test("load json2.js by absolute path before using JSON", () => {
     const json2Path = resolveDssJson2Path("/Applications/ti/ccs2100/ccs");
     const escapedJson2Path = json2Path.replace(/\\/g, "\\\\").replace(/"/g, '\\"');

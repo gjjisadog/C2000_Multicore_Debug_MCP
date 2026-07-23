@@ -1,5 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
+
+export { defaultCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
 
 export interface CommandOutput {
   stdout: string;
@@ -52,10 +55,10 @@ export async function runHardwarePreflight(options: {
   enumerationRetryDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<HardwarePreflightResult> {
-  const ccsRoot = options.ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-  const xdsdfuPath = `${ccsRoot}/ccs_base/common/uscif/xds110/xdsdfu`;
-  const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const platform = options.platform ?? process.platform;
+  const ccsRoot = resolveCcsInstallPath(options.ccsInstallPath, platform);
+  const xdsdfuPath = resolveXdsdfuPath(ccsRoot, platform);
+  const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const preflight: HardwarePreflightResult = {

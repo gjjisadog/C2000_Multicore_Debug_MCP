@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
+import { resolveCcsInstallPath } from "../ccs/paths.js";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
 
@@ -82,7 +83,8 @@ export class DssCliBridge implements CcsScriptingBridge {
       const { stdout, stderr } = await execFileAsync(launch.command, [...launch.args, scriptPath, commandPath], {
         timeout: command.timeoutMs ?? this.options.timeoutMs ?? 30000,
         maxBuffer: 1024 * 1024 * 8,
-        env: launch.env
+        env: launch.env,
+        shell: launch.shell
       });
       return parseDssResult(stdout, stderr);
     } catch (error) {
@@ -98,37 +100,54 @@ export class DssCliBridge implements CcsScriptingBridge {
   }
 }
 
-function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-  return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
+export function resolveDssScriptPath(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
+  const ccsRoot = resolveCcsInstallPath(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  return platformPath.join(ccsRoot, "ccs_base", "scripting", "bin", platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
-export function resolveDssJson2Path(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-  return path.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
+export function resolveDssJson2Path(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
+  const ccsRoot = resolveCcsInstallPath(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  return platformPath.join(ccsRoot, "ccs_base", "scripting", "examples", "TestServer", "json2.js");
 }
 
 export interface DssLaunch {
   command: string;
   args: string[];
   env: ExecFileOptions["env"];
+  shell?: boolean;
 }
 
-export function resolveDssLaunch(dssScriptPath: string, ccsInstallPath?: string): DssLaunch {
+export function resolveDssLaunch(
+  dssScriptPath: string,
+  ccsInstallPath?: string,
+  platform: NodeJS.Platform = process.platform,
+  architecture = process.arch
+): DssLaunch {
   const env = { ...process.env };
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-  const debugServerBin = path.join(ccsRoot, "ccs_base", "DebugServer", "bin");
-  const commonBin = path.join(ccsRoot, "ccs_base", "common", "bin");
-  env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(":");
+  const ccsRoot = resolveCcsInstallPath(ccsInstallPath, platform);
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  const debugServerBin = platformPath.join(ccsRoot, "ccs_base", "DebugServer", "bin");
+  const commonBin = platformPath.join(ccsRoot, "ccs_base", "common", "bin");
+  const pathDelimiter = platform === "win32" ? ";" : ":";
+  if (platform === "darwin") {
+    env.DYLD_LIBRARY_PATH = [debugServerBin, commonBin, env.DYLD_LIBRARY_PATH].filter(Boolean).join(pathDelimiter);
+    env.JAVA_HOME = env.C2000_MCP_JAVA_HOME ?? platformPath.join(ccsRoot, "ccs-server.app", "jre", "Contents", "Home");
+  } else if (env.C2000_MCP_JAVA_HOME) {
+    env.JAVA_HOME = env.C2000_MCP_JAVA_HOME;
+  }
+  env.PATH = [
+    debugServerBin,
+    commonBin,
+    ...(env.JAVA_HOME ? [platformPath.join(env.JAVA_HOME, "bin")] : []),
+    env.PATH ?? env.Path
+  ].filter(Boolean).join(pathDelimiter);
 
-  const bundledJavaHome = path.join(ccsRoot, "ccs-server.app", "jre", "Contents", "Home");
-  env.JAVA_HOME = env.C2000_MCP_JAVA_HOME ?? bundledJavaHome;
-  env.PATH = [path.join(env.JAVA_HOME, "bin"), env.PATH].filter(Boolean).join(":");
-
-  if (process.platform === "darwin" && process.arch === "arm64") {
+  if (platform === "darwin" && architecture === "arm64") {
     return { command: "arch", args: ["-x86_64", dssScriptPath], env };
   }
-  return { command: dssScriptPath, args: [], env };
+  return { command: dssScriptPath, args: [], env, ...(platform === "win32" ? { shell: true } : {}) };
 }
 
 async function assertExecutableExists(filePath: string) {

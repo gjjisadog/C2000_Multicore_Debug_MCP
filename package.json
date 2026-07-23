@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
+    "start:supervised": "node scripts/mcp-supervisor.mjs -- node dist/src/index.js",
     "test": "vitest run",
     "verify:debug-boundary": "tsx scripts/verify-debug-boundary.ts",
     "verify:host": "tsx scripts/verify-host-gate.ts",

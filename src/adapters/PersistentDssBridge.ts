@@ -5,7 +5,7 @@ import net from "node:net";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
-import { resolveDssJson2Path, resolveDssLaunch } from "./CcsScriptingBridge.js";
+import { resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -128,6 +128,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const child = spawn(launch.command, [...launch.args, scriptPath, configPath], {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
+      shell: launch.shell,
       windowsHide: true
     });
     const output = createProcessOutputBuffer();
@@ -207,11 +208,6 @@ function validateResponseCoreIdentity(command: CcsScriptingCommand, result: Reco
       responseCoreName: result.coreName
     });
   }
-}
-
-function resolveDssScriptPath(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH ?? "/Applications/ti/ccs2100/ccs";
-  return path.join(ccsRoot, "ccs_base", "scripting", "bin", process.platform === "win32" ? "dss.bat" : "dss.sh");
 }
 
 function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {

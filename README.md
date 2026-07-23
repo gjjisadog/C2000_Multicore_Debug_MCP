@@ -107,6 +107,45 @@ For local development:
 }
 ```
 
+### Automatic recovery for Codex
+
+For an installed build, point Codex at `scripts/mcp-supervisor.mjs` instead of
+starting `dist/src/index.js` directly. The supervisor is an MCP-aware stdio
+proxy: after an unexpected server exit it starts a fresh server, replays the
+MCP initialization handshake, then resumes forwarding new requests. Its own
+diagnostics go to stderr, so stdout remains a JSON-RPC-only MCP channel.
+
+Add the following to the Codex `config.toml`, replacing both absolute paths:
+
+```toml
+[mcp_servers.c2000-multicore]
+command = "node"
+args = [
+  "C:/absolute/path/to/c2000-multicore-mcp/scripts/mcp-supervisor.mjs",
+  "--initial-delay-ms", "1000",
+  "--max-delay-ms", "10000",
+  "--max-restarts", "5",
+  "--",
+  "node",
+  "C:/absolute/path/to/c2000-multicore-mcp/dist/src/index.js"
+]
+
+[mcp_servers.c2000-multicore.env]
+C2000_MCP_CONFIG = "C:/absolute/path/to/c2000-multicore-mcp/examples/f28p65x.config.json"
+```
+
+The restart limit applies within a 60-second window. Options `--restart-window-ms`,
+`--initial-delay-ms`, `--max-delay-ms`, and `--max-restarts` tune that policy.
+`npm run start:supervised` offers the same wrapper for a manually launched
+server when `C2000_MCP_CONFIG` is already set.
+
+An interrupted MCP call is intentionally **not replayed** after a restart:
+repeating a load, reset, run, or memory-write command could alter the board a
+second time. Once the channel has recovered, inspect the target and explicitly
+retry only the operation that is still appropriate. If recovery reaches its
+restart limit, the supervisor exits so Codex can surface the failure instead
+of hiding a crash loop.
+
 ## Codex Skill
 
 This repository includes a lightweight Codex Skill at:
@@ -228,6 +267,7 @@ Phase 2:
 
 Phase 3:
 
+- `c2000_launchMultiBoardDebug`
 - `c2000_launchMulticoreDebug`
 - `c2000_launchAndRunIpcAcceptance`
 - `c2000_runIpcAcceptance`
@@ -543,6 +583,38 @@ The result includes `matched`, `timedOut`, and the latest per-condition evaluati
 
 ## Advanced Launch Flow
 
+### Multi-board allocation
+
+`c2000_launchMultiBoardDebug` dispatches one MCP request across multiple physically connected boards. Each entry must provide a unique XDS110 `probeSerial` and a `.ccxml` that contains that serial-number binding. The tool performs one host preflight, rejects missing or duplicate probes, creates isolated sessions in sequence, and rolls back already-created sessions if a later board fails. Sessions remain simultaneously usable after allocation; sequential setup avoids overlapping operations in the current CCS adapter.
+
+```json
+{
+  "ccsInstallPath": "D:/ccs21.0/ccs",
+  "boards": [
+    {
+      "boardId": "board-a",
+      "probeSerial": "CL650001",
+      "ccxmlPath": "D:/workspace/targetConfigs/F28P650DK9_XDS110_CL650001.ccxml",
+      "cores": [
+        { "coreId": 0, "coreName": "C28xx_CPU1", "connect": true, "load": false, "haltAtEntry": false },
+        { "coreId": 2, "coreName": "C28xx_CPU2", "connect": true, "load": false, "haltAtEntry": false }
+      ]
+    },
+    {
+      "boardId": "board-b",
+      "probeSerial": "CL650002",
+      "ccxmlPath": "D:/workspace/targetConfigs/F28P650DK9_XDS110_CL650002.ccxml",
+      "cores": [
+        { "coreId": 0, "coreName": "C28xx_CPU1", "connect": true, "load": false, "haltAtEntry": false },
+        { "coreId": 2, "coreName": "C28xx_CPU2", "connect": true, "load": false, "haltAtEntry": false }
+      ]
+    }
+  ]
+}
+```
+
+The response returns `results[]` with `boardId`, `probeSerial`, `sessionId`, and the per-board multicore snapshot. Use the returned `sessionId` with the existing explicit `coreId` tools for subsequent per-board work.
+
 `c2000_launchMulticoreDebug` creates the logical session, connects/loads/halts the requested cores, captures an initial snapshot, and can optionally run post-launch checks.
 
 Example:
@@ -637,6 +709,8 @@ Read-only preflight checks XDS110 enumeration and possible debug-process owners.
   "ccsInstallPath": "/Applications/ti/ccs2100/ccs"
 }
 ```
+
+`ccsInstallPath` and `C2000_MCP_CCS_INSTALL_PATH` take precedence on every platform. Without either, macOS uses `/Applications/ti/ccs2100/ccs`; Windows searches mounted drives for common CCS layouts such as `D:\\ccs21.0\\ccs` and falls back to `C:\\ti\\ccs2100\\ccs`. It resolves `xdsdfu` on macOS and `xdsdfu.exe` on Windows. Windows acceptance scripts similarly discover the F28P650DK9 `.ccxml` under common C2000Ware layouts; set `C2000_MCP_CCXML_PATH` to override it.
 
 Preflight keeps the legacy `debugProcesses` string array and also returns `debugProcessDetails`, with `pid`, optional `ppid`, optional `elapsed`, `kind`, `command`, and `rawLine` for each possible probe owner. Readiness and hardware acceptance use this structured detail to report blockers such as `93717 DSLite: ./DSLite` without terminating anything automatically.
 

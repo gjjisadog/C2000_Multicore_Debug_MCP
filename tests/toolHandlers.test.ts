@@ -555,6 +555,62 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("launchMultiBoardDebug allocates each connected XDS110 to an isolated session", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-multiboard-"));
+    const boardAConfig = path.join(tempDir, "board-a.ccxml");
+    const boardBConfig = path.join(tempDir, "board-b.ccxml");
+    await writeFile(boardAConfig, "<ccxml>CL650001</ccxml>");
+    await writeFile(boardBConfig, "<ccxml>CL650002</ccxml>");
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager, {
+      runHardwarePreflight: async () => ({
+        xdsdfuPath: "xdsdfu",
+        xdsdfu: {
+          ok: true,
+          commandOk: true,
+          probeReady: true,
+          devices: [
+            { serialNumber: "CL650001", mode: "Runtime" },
+            { serialNumber: "CL650002", mode: "Runtime" }
+          ]
+        },
+        debugProcesses: [],
+        debugProcessDetails: [],
+        processInspection: { ok: true, platform: "win32" }
+      })
+    });
+
+    const result = await handlers.launchMultiBoardDebug({
+      boards: [
+        {
+          boardId: "board-a",
+          probeSerial: "CL650001",
+          ccxmlPath: boardAConfig,
+          cores: coreMap.map(core => ({ ...core, connect: true, load: false, haltAtEntry: false }))
+        },
+        {
+          boardId: "board-b",
+          probeSerial: "CL650002",
+          ccxmlPath: boardBConfig,
+          cores: coreMap.map(core => ({ ...core, connect: true, load: false, haltAtEntry: false }))
+        }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      allocationMode: "sequential-session-allocation",
+      connectedProbeSerials: ["CL650001", "CL650002"],
+      results: [
+        expect.objectContaining({ boardId: "board-a", probeSerial: "CL650001", sessionId: expect.any(String) }),
+        expect.objectContaining({ boardId: "board-b", probeSerial: "CL650002", sessionId: expect.any(String) })
+      ]
+    }));
+    const sessionIds = result.results.map((item: { sessionId: string }) => item.sessionId);
+    expect(sessionIds[0]).not.toBe(sessionIds[1]);
+    await Promise.all(sessionIds.map((sessionId: string) => manager.closeDebugSession(sessionId)));
+  });
+
   test("runIpcAcceptance fails closed before running either core when CPU2 program load fails", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-load-failure-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");

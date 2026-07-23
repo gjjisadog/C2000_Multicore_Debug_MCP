@@ -3,3 +3,10 @@ dist/
 logs/
 runtime/
 .env
+.planning/
+.worktrees/
+task_plan.md
+findings.md
+progress.md
+scripts/run_hybrid_ram_ipc_once.mjs
+scripts/run_t05_*.mjs
