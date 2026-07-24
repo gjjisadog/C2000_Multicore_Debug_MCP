@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
+import { toStructuredError } from "../utils/errors.js";
 import { createToolHandlers } from "./toolHandlers.js";
 import {
   acceptanceProgramDiscoverySchema,
@@ -233,9 +234,19 @@ export function registerC2000Tools(server: McpServer, manager: DebugSessionManag
       },
       async (input: any) => {
         const invoke = () => (handlers[definition.handlerName] as Handler)(input);
-        const result = typeof input?.sessionId === "string" && definition.name !== "c2000_closeDebugSession"
-          ? await manager.withSessionActivity(input.sessionId, invoke)
-          : await invoke();
+        let result: Record<string, unknown>;
+        try {
+          result = typeof input?.sessionId === "string" && definition.name !== "c2000_closeDebugSession"
+            ? await manager.withSessionActivity(input.sessionId, invoke)
+            : await invoke();
+        } catch (error) {
+          result = {
+            success: false,
+            timestamp: new Date().toISOString(),
+            ...(typeof input?.sessionId === "string" ? { sessionId: input.sessionId } : {}),
+            error: toStructuredError(error)
+          };
+        }
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
           structuredContent: result,

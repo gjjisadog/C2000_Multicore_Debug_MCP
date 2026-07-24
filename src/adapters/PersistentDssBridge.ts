@@ -2,10 +2,11 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { randomBytes } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
-import { resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
+import { dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
 
 const execFileAsync = promisify(execFile);
@@ -13,6 +14,8 @@ const execFileAsync = promisify(execFile);
 export interface DssServerHandle {
   host: string;
   portsByCoreId: Map<number, number>;
+  /** Random per-session credential shared only with the generated DSS server. */
+  authToken: string;
   diagnostics?(): Record<string, unknown>;
   dispose(): Promise<void>;
 }
@@ -93,7 +96,7 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     const response = await sendJsonLine(
       handle.host,
       port,
-      dssCommand,
+      { ...dssCommand, authToken: handle.authToken },
       this.options.timeoutMs ?? command.timeoutMs ?? 15000,
       () => ({
         adapterSessionId: command.adapterSessionId,
@@ -124,7 +127,7 @@ export class PersistentDssBridge implements CcsScriptingBridge {
       return;
     }
     try {
-      await requestDssServerShutdown(handle.host, firstPort, this.options.timeoutMs ?? 5000);
+      await requestDssServerShutdown(handle.host, firstPort, handle.authToken, this.options.timeoutMs ?? 5000);
     } catch {
       // Disposal still has a fallback kill path in the default launcher.
     }
@@ -172,13 +175,13 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const scriptPath = path.join(tempDir, "c2000-persistent-server.js");
     const dssScriptPath = this.options.dssScriptPath ?? resolveDssScriptPath(this.options.ccsInstallPath);
     const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath, this.options.workspacePath);
-    await writeFile(configPath, JSON.stringify({ ...options, host, basePort, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
+    const authToken = randomBytes(32).toString("base64url");
+    await writeFile(configPath, JSON.stringify({ ...options, host, basePort, authToken, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
     await writeFile(scriptPath, persistentServerScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
-    const child = spawn(launch.command, [...launch.args, scriptPath, configPath], {
+    const child = spawn(launch.command, dssLaunchArguments(launch, [scriptPath, configPath]), {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
       cwd: launch.cwd,
-      shell: launch.shell,
       windowsHide: true
     });
     const output = createProcessOutputBuffer();
@@ -194,6 +197,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     return {
       host,
       portsByCoreId: new Map(options.coreMap.map((core, index) => [core.coreId, basePort + index])),
+      authToken,
       diagnostics: () => ({
         pid: child.pid,
         exitCode: child.exitCode,
@@ -462,8 +466,8 @@ async function sendJsonLine(
   });
 }
 
-async function requestDssServerShutdown(host: string, port: number, timeoutMs: number): Promise<void> {
-  await sendJsonLine(host, port, { name: "shutdown" }, timeoutMs);
+async function requestDssServerShutdown(host: string, port: number, authToken: string, timeoutMs: number): Promise<void> {
+  await sendJsonLine(host, port, { name: "shutdown", authToken }, timeoutMs);
 }
 
 function hasExited(child: ChildProcess): boolean {
@@ -561,6 +565,7 @@ importPackage(Packages.java.net);
 importPackage(Packages.java.io);
 importClass(java.lang.Thread, java.lang.Runnable);
 importClass(java.lang.Runtime);
+importClass(java.net.InetSocketAddress);
 
 load("${escapeForDssString(json2Path)}");
 
@@ -599,6 +604,11 @@ var sessionsByCoreId = {};
 var coreNamesByCoreId = {};
 var sockets = [];
 var cleanupDone = false;
+
+function isAuthenticated(command) {
+  return command != null && typeof command.authToken === "string" &&
+    command.authToken === String(config.authToken);
+}
 
 function cleanupPersistentDebugServer() {
   if (cleanupDone) {
@@ -748,7 +758,10 @@ function resolveMemoryPage(page) {
 }
 
 function startCoreThread(port, boundCoreId) {
-  var socket = new ServerSocket(port);
+  // Constructing ServerSocket(port) binds all interfaces.  The persistent DSS
+  // control protocol is intentionally explicit about its configured endpoint.
+  var socket = new ServerSocket();
+  socket.bind(new InetSocketAddress(String(config.host || "127.0.0.1"), port));
   var boundCoreName = coreNamesByCoreId[String(boundCoreId)];
   sockets.push(socket);
   var thread = new Thread(new Runnable({
@@ -761,6 +774,17 @@ function startCoreThread(port, boundCoreId) {
         while (line != null) {
           try {
             var command = JSON.parse(String(line));
+            if (!isAuthenticated(command)) {
+              logDiagnostic("command:failure", {
+                boundCoreId: boundCoreId,
+                boundCoreName: boundCoreName,
+                commandName: command && command.name,
+                message: "Unauthorized DSS command"
+              });
+              writeResponse(output, { status: "FAIL", message: "Unauthorized DSS command" });
+              line = input.readLine();
+              continue;
+            }
             var shouldShutdown = command.name === "shutdown";
             logDiagnostic("command:start", {
               boundCoreId: boundCoreId,

@@ -1,6 +1,13 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
-import { dssCommandScriptSource, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "../src/adapters/CcsScriptingBridge.js";
+import { dssCommandScriptSource, dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "../src/adapters/CcsScriptingBridge.js";
 import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridge.js";
+
+const execFileAsync = promisify(execFile);
 
 describe("DSS generated scripts", () => {
   test("resolves Windows DSS paths and environment with native separators", () => {
@@ -12,10 +19,61 @@ describe("DSS generated scripts", () => {
     expect(resolveDssJson2Path(ccsRoot, "win32")).toBe(
       "D:\\ccs21.0\\ccs\\ccs_base\\scripting\\examples\\TestServer\\json2.js"
     );
-    expect(launch.command).toBe(dssScriptPath);
-    expect(launch.shell).toBe(true);
+    expect(launch.command.toLowerCase()).toContain("cmd.exe");
+    expect(launch.args).toEqual(["/d", "/s", "/c"]);
+    expect(launch.windowsBatch).toBe(true);
+    expect(launch.windowsBatchScript).toBe(dssScriptPath);
+    expect(dssLaunchArguments(launch, ["D:\\Temp\\command.js", "D:\\Temp\\command.json"])).toEqual([
+      "/d", "/s", "/c", "call", dssScriptPath, "D:\\Temp\\command.js", "D:\\Temp\\command.json"
+    ]);
     expect(launch.env?.PATH).toContain(";");
     expect(launch.env?.DYLD_LIBRARY_PATH).toBeUndefined();
+  });
+
+  test("quotes safe Windows paths with spaces as one cmd.exe command argument", () => {
+    const dssScriptPath = "C:\\Program Files\\TI\\dss.bat";
+    const launch = resolveDssLaunch(dssScriptPath, "C:\\Program Files\\TI", "win32");
+
+    expect(dssLaunchArguments(launch, ["C:\\Temp Files\\command.js"])).toEqual([
+      "/d", "/s", "/c", "call", dssScriptPath, "C:\\Temp Files\\command.js"
+    ]);
+  });
+
+  test("starts a Windows batch launcher with spaced script and config paths", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-dss-windows-launch-"));
+    const dssScriptPath = path.join(tempDir, "fake dss.bat");
+    const commandScriptPath = path.join(tempDir, "server script.js");
+    const commandConfigPath = path.join(tempDir, "server config.json");
+    try {
+      await writeFile(
+        dssScriptPath,
+        ["@echo off", "echo __C2000_DSS_ARGS__%~1^|%~2", "exit /b 0"].join("\r\n"),
+        "utf8"
+      );
+      const launch = resolveDssLaunch(dssScriptPath, tempDir, "win32");
+      const { stdout, stderr } = await execFileAsync(
+        launch.command,
+        dssLaunchArguments(launch, [commandScriptPath, commandConfigPath]),
+        { env: launch.env, windowsHide: true }
+      );
+
+      expect(stderr).toBe("");
+      expect(stdout).toContain(`__C2000_DSS_ARGS__${commandScriptPath}|${commandConfigPath}`);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects Windows DSS paths that could alter cmd.exe parsing", () => {
+    try {
+      resolveDssLaunch("D:\\ccs & whoami\\dss.bat", "D:\\ccs", "win32");
+      throw new Error("unsafe path should have been rejected");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "UnsafeDssLaunchPath" });
+    }
   });
 
   test("load json2.js by absolute path before using JSON", () => {
@@ -148,6 +206,18 @@ describe("DSS generated scripts", () => {
     expect(source).toContain("var shouldShutdown = command.name === \"shutdown\"");
     expect(source).toContain("cleanupPersistentDebugServer()");
     expect(source).toContain("java.lang.System.exit(0)");
+  });
+
+  test("persistent DSS server binds its configured host and authenticates every command", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+
+    expect(source).toContain("importClass(java.net.InetSocketAddress);");
+    expect(source).toContain("var socket = new ServerSocket();");
+    expect(source).toContain('socket.bind(new InetSocketAddress(String(config.host || "127.0.0.1"), port));');
+    expect(source).toContain("function isAuthenticated(command)");
+    expect(source).toContain("command.authToken === String(config.authToken)");
+    expect(source).toContain('message: "Unauthorized DSS command"');
+    expect(source).toContain("if (!isAuthenticated(command))");
   });
 
   test("persistent DSS server logs command lifecycle events to stderr", () => {

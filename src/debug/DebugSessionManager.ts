@@ -34,7 +34,7 @@ import { noopLogger } from "../utils/logger.js";
 import { normalizeProgramUri, normalizeWorkspacePath } from "../utils/pathUtils.js";
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
-import { mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import { flashOwnershipActionsForMap, mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
 import { resolveDiagnosticsDefaults, type DiagnosticsDefaults } from "./defaultDiagnostics.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
@@ -182,6 +182,7 @@ export class DebugSessionManager {
       } finally {
         this.sessions.delete(sessionId);
         this.loadedPrograms.deleteSession(sessionId);
+        this.queue.clearWhenIdle(sessionId);
         this.logger.info("debug session closed", { sessionId });
       }
       const finishedAtMs = Date.now();
@@ -393,7 +394,11 @@ export class DebugSessionManager {
       ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri);
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
-      if (error instanceof DebugMcpError && (error.code === "OwnerCoreNotConnected" || error.code === "CoreNotConnected")) {
+      if (error instanceof DebugMcpError && (
+        error.code === "OwnerCoreNotConnected" ||
+        error.code === "CoreNotConnected" ||
+        error.code === "FlashLoadPreparationUnsupported"
+      )) {
         throw error;
       }
       throw new DebugMcpError("ProgramLoadFailed", `Program load failed for core ${coreId}`, {
@@ -437,7 +442,8 @@ export class DebugSessionManager {
     }
     const ownership = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
     const actions = mergeOwnershipActions(ownership.actions);
-    if (actions.length === 0) {
+    const flashBanks = ownership.flashBanks;
+    if (actions.length === 0 && flashBanks.length === 0) {
       return ownership.fallbackWarning;
     }
     if (ownership.fallbackWarning) {
@@ -460,6 +466,29 @@ export class DebugSessionManager {
           programUri
         }
       );
+    }
+    if (flashBanks.length > 0) {
+      if (!this.adapter.prepareFlashLoad) {
+        throw new DebugMcpError(
+          "FlashLoadPreparationUnsupported",
+          "CPU2 Flash image requires Flash bank preparation, but the debug adapter does not implement prepareFlashLoad",
+          {
+            sessionId,
+            targetCoreId: coreId,
+            ownerCoreId: F28P65X_CPU1_CORE_ID,
+            flashBanks,
+            programUri,
+            mapUri
+          }
+        );
+      }
+      await this.adapter.prepareFlashLoad(session.adapterSession, coreId, flashBanks);
+      this.logger.info("cpu2 flash banks prepared", {
+        sessionId,
+        ownerCoreId: F28P65X_CPU1_CORE_ID,
+        targetCoreId: coreId,
+        flashBanks
+      });
     }
     const writes: Array<{ address: number; requestedValue: number; writtenValue: number; rmw: boolean; memoryRegion: string }> = [];
     for (const action of actions) {
@@ -586,21 +615,27 @@ export class DebugSessionManager {
     coreId: CoreId,
     programUri: string,
     mapUri?: string
-  ): Promise<{ actions: RamOwnershipAction[]; fallbackWarning?: string }> {
+  ): Promise<{ actions: RamOwnershipAction[]; flashBanks: number[]; fallbackWarning?: string }> {
     const candidateMap = mapUri ?? mapPathForProgram(programUri);
     if (candidateMap) {
+      let mapText: string;
       try {
         await access(candidateMap);
-        const parsed = parseLinkerMap(await readFile(candidateMap, "utf8"), { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
-        const actions = ownershipActionsForMap(parsed);
-        if (actions.length > 0) {
-          return { actions };
-        }
-        return { actions: [] };
+        mapText = await readFile(candidateMap, "utf8");
       } catch {
         // Fall through to the RAMGS4 default when the map is missing or unreadable.
+        return this.cpu2RamOwnershipFallback();
       }
+      const parsed = parseLinkerMap(mapText, { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
+      const flashBanks = [...new Set(
+        flashOwnershipActionsForMap(parsed).flatMap(action => action.flashBanks)
+      )].sort((left, right) => left - right);
+      return { actions: ownershipActionsForMap(parsed), flashBanks };
     }
+    return this.cpu2RamOwnershipFallback();
+  }
+
+  private cpu2RamOwnershipFallback(): { actions: RamOwnershipAction[]; flashBanks: number[]; fallbackWarning: string } {
     const reason =
       "No CPU2 map was available; using F28P65x RAMGS4-only handoff default (0x10). Supply mapUri or a sibling .map to avoid silent multi-GS misconfiguration.";
     return {
@@ -616,6 +651,7 @@ export class DebugSessionManager {
         typeSize: 32,
         reason
       }],
+      flashBanks: [],
       fallbackWarning: reason
     };
   }

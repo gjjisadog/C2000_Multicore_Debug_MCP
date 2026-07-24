@@ -703,12 +703,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             coreMap: board.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
           });
           createdSessionIds.push(created.sessionId);
-          for (const core of board.cores) {
+          for (const core of orderCoresCpu1First(board.cores)) {
             if (core.connect) {
               await manager.connectTarget(created.sessionId, core.coreId);
             }
             if (core.load) {
-              await manager.loadProgram(created.sessionId, core.coreId, core.programUri!);
+              await manager.loadProgramWithMap(created.sessionId, core.coreId, core.programUri!, core.mapUri);
             }
             if (core.haltAtEntry) {
               await manager.haltCore(created.sessionId, core.coreId);
@@ -800,15 +800,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         });
         createdSessionId = created.sessionId;
         // CPU1 first so GS ownership writes for CPU2 always see a connected owner core.
-        const orderedCores = [...cores].sort((left, right) => {
-          if (left.coreId === 0) {
-            return -1;
-          }
-          if (right.coreId === 0) {
-            return 1;
-          }
-          return left.coreId - right.coreId;
-        });
+        const orderedCores = orderCoresCpu1First(cores);
         for (const core of orderedCores) {
           if (core.connect) {
             await manager.connectTarget(created.sessionId, core.coreId);
@@ -1058,6 +1050,18 @@ function isCpuCore(core: { coreId: number; coreName: string }, expected: "cpu1" 
   return expected === "cpu1"
     ? core.coreId === 0 || normalized.includes("cpu1") || normalized.includes("c28x1")
     : core.coreId === 2 || normalized.includes("cpu2") || normalized.includes("c28x2");
+}
+
+function orderCoresCpu1First<T extends { coreId: number }>(cores: T[]): T[] {
+  return [...cores].sort((left, right) => {
+    if (left.coreId === 0) {
+      return -1;
+    }
+    if (right.coreId === 0) {
+      return 1;
+    }
+    return left.coreId - right.coreId;
+  });
 }
 
 function inspectXds110SerialBinding(ccxml: string, expectedSerial: string): {

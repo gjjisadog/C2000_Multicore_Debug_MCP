@@ -5,6 +5,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
+import { assertPartialAddressResolution } from "./mcpSmokeAssertions.js";
 
 const requiredTools = [
   "c2000_getToolContracts",
@@ -699,8 +700,11 @@ async function main() {
       name: "c2000_resolveAddress",
       arguments: { sessionId, coreId: 0, address: "0x00C4E1" }
     }));
-    assertCoreReadIdentity(cpu1ResolvedAddress, 0);
-    assert.equal(cpu1ResolvedAddress.address, "0x00C4E1");
+    assertPartialAddressResolution(cpu1ResolvedAddress, {
+      coreId: 0,
+      coreName: expectedCoreName(0),
+      address: "0x00C4E1"
+    });
 
     const cpu2WaitUntilExpression = structured(await client.callTool({
       name: "c2000_waitUntilExpression",

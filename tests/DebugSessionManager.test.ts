@@ -7,6 +7,7 @@ import type { AdapterSession } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId } from "../src/debug/types.js";
+import { SessionQueue } from "../src/utils/sessionQueue.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -245,6 +246,71 @@ MEMORY CONFIGURATION
     ]);
   });
 
+  test("prepares CPU2 Flash banks from its linker map before loading the image", async () => {
+    type AdapterEvent =
+      | { type: "prepareFlashLoad"; coreId: CoreId; flashBanks: number[] }
+      | { type: "loadProgram"; coreId: CoreId; programUri: string };
+    class RecordingFlashAdapter extends MockDebugAdapter {
+      readonly events: AdapterEvent[] = [];
+
+      async prepareFlashLoad(_session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void> {
+        this.events.push({ type: "prepareFlashLoad", coreId, flashBanks });
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.events.push({ type: "loadProgram", coreId, programUri });
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-cpu2-flash-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, `
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX
+  FLASH_BANK4           00100000   00020000  00000001  0001ffff  RWIX
+`);
+    const adapter = new RecordingFlashAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "cpu2-flash-prepare", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
+
+    expect(adapter.events).toEqual([
+      { type: "prepareFlashLoad", coreId: 2, flashBanks: [3, 4] },
+      { type: "loadProgram", coreId: 2, programUri: cpu2Out }
+    ]);
+  });
+
+  test("fails closed when a CPU2 Flash map requires unsupported preparation", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-cpu2-flash-unsupported-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, `
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX
+`);
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "cpu2-flash-unsupported", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
+      code: "FlashLoadPreparationUnsupported",
+      details: expect.objectContaining({ flashBanks: [3] })
+    });
+    await expect(manager.getLoadedProgramInfo(session.sessionId, 2)).resolves.toBeUndefined();
+  });
+
   test("resolves relative program paths against configured workspacePath", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-workspace-"));
     const programRel = "cpu1/Debug/cpu1.out";
@@ -430,6 +496,17 @@ MEMORY CONFIGURATION
     }));
     expect(result.cleanup.durationMs).toBeGreaterThanOrEqual(0);
     await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
+  test("releases the serialized queue tail after closing a debug session", async () => {
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "close-queue-tail", coreMap });
+    const queue = (manager as unknown as { queue: SessionQueue }).queue;
+
+    await manager.closeDebugSession(session.sessionId);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(queue.has(session.sessionId)).toBe(false);
   });
 
   test("falls back to the loaded linker map when CCS cannot resolve an address", async () => {

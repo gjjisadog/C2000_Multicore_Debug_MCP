@@ -1,7 +1,41 @@
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "vitest";
-import { c2000ToolDefinitions, getToolContracts, getToolSurfaceGuide } from "../src/mcp/tools.js";
+import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
+import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
+import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
+import { c2000ToolDefinitions, getToolContracts, getToolSurfaceGuide, registerC2000Tools } from "../src/mcp/tools.js";
 
 describe("MCP tool registration contract", () => {
+  test("returns structured failures instead of rejecting tools for unknown or closed sessions", async () => {
+    const handlers = new Map<string, (input: any) => Promise<any>>();
+    const server = {
+      registerTool(name: string, _config: unknown, handler: (input: any) => Promise<any>) {
+        handlers.set(name, handler);
+      }
+    } as unknown as McpServer;
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    registerC2000Tools(server, manager);
+    const listCores = handlers.get("c2000_listCores");
+    expect(listCores).toBeDefined();
+
+    const missing = await listCores!({ sessionId: "missing-session" });
+    const created = await manager.createDebugSession({ sessionName: "closed-session" });
+    await manager.closeDebugSession(created.sessionId);
+    const closed = await listCores!({ sessionId: created.sessionId });
+
+    for (const response of [missing, closed]) {
+      expect(response).toEqual(expect.objectContaining({
+        isError: true,
+        structuredContent: expect.objectContaining({
+          success: false,
+          sessionId: expect.any(String),
+          error: expect.objectContaining({ code: "SessionNotFound" })
+        }),
+        content: [expect.objectContaining({ type: "text", text: expect.stringContaining('"success": false') })]
+      }));
+    }
+  });
+
   test("registers only c2000-prefixed tool names to avoid TI official MCP collisions", () => {
     const names = c2000ToolDefinitions.map(tool => tool.name);
 
