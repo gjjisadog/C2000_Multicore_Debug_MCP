@@ -4,7 +4,7 @@ export class TestScheduler {
   private running = 0;
   private stopped = false;
 
-  constructor(private readonly maxParallelBoards: number) {}
+  constructor(private readonly maxActiveJobs: number) {}
 
   schedule(work: () => Promise<void>): Promise<void> {
     if (this.stopped) return Promise.reject(new Error("Test scheduler is stopped"));
@@ -21,7 +21,7 @@ export class TestScheduler {
   }
 
   private drain(): void {
-    while (this.running < this.maxParallelBoards && this.pending.length > 0) {
+    while (this.running < this.maxActiveJobs && this.pending.length > 0) {
       const scheduled = this.pending.shift()!;
       this.running += 1;
       void scheduled.work().then(scheduled.resolve, scheduled.reject).finally(() => {

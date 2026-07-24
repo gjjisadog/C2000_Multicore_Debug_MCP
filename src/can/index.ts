@@ -7,6 +7,8 @@ export * from "./CanGroupReconciler.js";
 export * from "./CanReportService.js";
 export * from "./CanArtifactRetentionService.js";
 export * from "./CanBusAdapter.js";
+export * from "./CanEvidenceModel.js";
+export * from "./CanChannelLeaseManager.js";
 export * from "./CanProfileSchema.js";
 export * from "./MockCanBusAdapter.js";
 export * from "./NoopCanBusAdapter.js";

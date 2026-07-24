@@ -1,5 +1,5 @@
 import { DebugMcpError } from "../utils/errors.js";
-import type { CanAdapterInfo, CanAdapterSession, CanAdapterState, CanBusAdapter, CanCapture, CanFrame } from "./CanBusAdapter.js";
+import type { CanAdapterInfo, CanAdapterSession, CanAdapterState, CanAdapterStatistics, CanBusAdapter, CanCapture, CanCaptureFilter, CanFrame } from "./CanBusAdapter.js";
 import type { CanFaultScenario } from "./CanProfileSchema.js";
 
 /** Fails closed until an integration supplies a real USB/CAN, PCAN, Vector, or firmware-backed adapter. */
@@ -18,6 +18,11 @@ export class UnavailableCanBusAdapter implements CanBusAdapter {
   }
   async send(_input: { sourceBoardId: string; targetBoardId: string; frame: CanFrame }): Promise<CanCapture> { throw unavailable(); }
   async receive(_input: { sourceBoardId: string; targetBoardId: string; timeoutMs: number }): Promise<CanFrame | undefined> { throw unavailable(); }
+  async startCapture(_input?: { filter?: CanCaptureFilter; signal?: AbortSignal }): Promise<{ captureId: string; startedAt: string }> { throw unavailable(); }
+  async stopCapture(): Promise<{ stoppedAt: string; captures: CanCapture[] }> { throw unavailable(); }
+  async receiveFrames(_filter?: CanCaptureFilter): Promise<CanCapture[]> { throw unavailable(); }
+  async waitForFrame(_input: { filter: CanCaptureFilter; timeoutMs: number; signal?: AbortSignal }): Promise<CanCapture | undefined> { throw unavailable(); }
+  async getStatistics(): Promise<CanAdapterStatistics> { throw unavailable(); }
   captures(): CanCapture[] { return []; }
   capture(): CanCapture[] { return []; }
   async close(): Promise<void> {}

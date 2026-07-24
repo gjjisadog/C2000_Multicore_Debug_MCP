@@ -9,8 +9,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    timeout-minutes: 30
+  fast-ci:
+    name: Fast CI (${{ matrix.os }}, Node ${{ matrix.node }})
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -20,31 +21,55 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: npm
+        with: { node-version: "${{ matrix.node }}", cache: npm }
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test -- --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml
+      - run: npm test -- --reporter=default
       - run: npm run build
       - run: npm run doctor
+
+  deep-ci:
+    name: Deep CI
+    timeout-minutes: 30
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run build
       - run: npm run doctor:isolated
       - run: npm run verify:runtime-cwd
       - run: npm run verify:daemon-proxy
       - run: npm run verify:daemon-restart
       - run: npm run verify:can:mock
+      - run: npx vitest run tests/leaseFencing.test.ts tests/boardLeaseGroup.test.ts tests/boardExecutionSemaphore.test.ts tests/canChannelLease.test.ts tests/pcanBasicAdapter.test.ts tests/canWorkerBoundary.test.ts
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diagnostics-${{ matrix.os }}-node-${{ matrix.node }}
+          name: deep-ci-diagnostics
           if-no-files-found: ignore
           path: |
-            test-results/**
-            runtime/**/*.log
-            runtime/**/*doctor*.json
+            runtime/**
             dist/src/runtime-manifest.json
-      - if: always()
-        uses: test-summary/action@v2
-        with:
-          paths: test-results/junit.xml
 
+  packaging-ci:
+    name: Packaging CI
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack
+      - run: node scripts/verify-package-install.mjs
+      - run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-linux-x64
+          path: |
+            c2000-multicore-mcp-*.tgz
+            dist/src/runtime-manifest.json
+            sbom.cdx.json

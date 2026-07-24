@@ -1,0 +1,37 @@
+name: Release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: win32-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-14
+            target: darwin-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      - run: npm run build
+      - run: npm pack
+      - run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
+      - run: node scripts/write-release-metadata.mjs ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: c2000-multicore-mcp-${{ matrix.target }}
+          path: |
+            c2000-multicore-mcp-*.tgz
+            dist/src/runtime-manifest.json
+            sbom.cdx.json
+            SHA256SUMS.json

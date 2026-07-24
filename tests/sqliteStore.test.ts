@@ -21,7 +21,7 @@ describe("SQLite durable store", () => {
     directories.push(directory);
     const databasePath = path.join(directory, "c2000-debugd.sqlite");
     const first = await SqliteStore.open(databasePath, { wal: true });
-    expect(first.schemaVersion).toBe(4);
+    expect(first.schemaVersion).toBe(5);
     expect(first.journalMode()).toBe("wal");
 
     const registry = new BoardRegistry(
@@ -38,7 +38,7 @@ describe("SQLite durable store", () => {
     first.close();
 
     const second = await SqliteStore.open(databasePath, { wal: true });
-    expect(second.schemaVersion).toBe(4);
+    expect(second.schemaVersion).toBe(5);
     const reopenedRegistry = new BoardRegistry(
       new BoardRepository(second),
       new EventRepository(second),

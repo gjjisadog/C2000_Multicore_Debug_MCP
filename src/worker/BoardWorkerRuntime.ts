@@ -32,7 +32,12 @@ export class BoardWorkerRuntime {
       ...this.config,
       ccs: { ...this.config.ccs, ccxmlPath: this.options.ccxmlPath }
     };
-    this.runtime = await createC2000McpRuntime(workerConfig);
+    this.runtime = await createC2000McpRuntime(workerConfig, {}, {
+      boardId: this.options.boardId,
+      probeSerial: this.options.probeSerial,
+      workerInstanceId: this.options.workerInstanceId,
+      daemonInstanceId: this.options.daemonInstanceId
+    });
     this.status = "READY";
   }
 
@@ -86,7 +91,7 @@ export class BoardWorkerRuntime {
       timestamp: new Date().toISOString(),
       status: this.status,
       ...(this.currentCommandId ? { currentCommandId: this.currentCommandId } : {}),
-      dssProcesses: [],
+      dssProcesses: this.runtime?.ownedProcesses() ?? [],
       ...(this.lastSuccessfulCommandAt ? { lastSuccessfulCommandAt: this.lastSuccessfulCommandAt } : {})
     };
   }

@@ -30,7 +30,7 @@ import { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecker.js";
 import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
 import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
-import { PcanBasicCanBusAdapter } from "../can/pcan/PcanBasicCanBusAdapter.js";
+import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -157,7 +157,10 @@ export class DebugDaemon {
       events,
       artifacts,
       tools: toolRouter,
+      maxActiveJobs: this.config.scheduler?.maxActiveJobs ?? 16,
       maxParallelBoards: this.config.scheduler?.maxParallelBoards ?? 4,
+      agingThresholdMs: this.config.scheduler?.agingThresholdMs ?? 30000,
+      starvationTimeoutMs: this.config.scheduler?.starvationTimeoutMs ?? 300000,
       canAcceptance: new CanAcceptanceService({
         groups,
         barriers: groupBarriers,
@@ -171,7 +174,7 @@ export class DebugDaemon {
           if (kind === "mock") return new MockCanBusAdapter();
           const configured = this.config.canAdapters?.[0];
           return configured?.type === "pcan-basic"
-            ? new PcanBasicCanBusAdapter(configured)
+            ? new CanWorkerProcess(this.config, this.instanceId)
             : new NoopCanBusAdapter();
         }
       }),
@@ -199,7 +202,7 @@ export class DebugDaemon {
         port: endpoint.port,
         authTokenFile: newAuthTokenFile(this.paths, this.instanceId),
         databasePath,
-        version: "0.1.0"
+        version: "0.5.0"
       };
       // Do not publish discovery metadata before every configured worker has
       // completed its own runtime handshake. Otherwise a fresh proxy can

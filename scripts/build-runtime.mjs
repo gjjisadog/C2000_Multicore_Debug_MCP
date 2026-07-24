@@ -16,7 +16,8 @@ await build({
   entryPoints: {
     index: "src/index.ts",
     "daemon/index": "src/daemon/index.ts",
-    "worker/index": "src/worker/index.ts"
+    "worker/index": "src/worker/index.ts",
+    "can-worker/index": "src/can-worker/index.ts"
   },
   outdir,
   bundle: true,
@@ -40,7 +41,8 @@ await writeRuntimeManifest(projectRoot, outdir);
 await Promise.all([
   chmod(path.join(outdir, "index.js"), 0o755),
   chmod(path.join(outdir, "daemon", "index.js"), 0o755),
-  chmod(path.join(outdir, "worker", "index.js"), 0o755)
+  chmod(path.join(outdir, "worker", "index.js"), 0o755),
+  chmod(path.join(outdir, "can-worker", "index.js"), 0o755)
 ]);
 
 async function copyNativeSqliteBinding(root, runtimeDirectory) {
@@ -71,7 +73,8 @@ async function writeRuntimeManifest(root, runtimeDirectory) {
     entrypoints: {
       proxy: "index.js",
       daemon: "daemon/index.js",
-      worker: "worker/index.js"
+      worker: "worker/index.js",
+      canWorker: "can-worker/index.js"
     },
     nativeBindings: [{
       name: "better_sqlite3.node",

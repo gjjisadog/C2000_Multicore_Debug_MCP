@@ -326,6 +326,50 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_board_lease_fencing ON board_leases(board_id, fencing_token DESC);
       `);
     }
+  },
+  {
+    version: 5,
+    apply(store) {
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS test_step_attempts (
+          attempt_id TEXT PRIMARY KEY,
+          step_run_id TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          board_id TEXT NOT NULL,
+          attempt_index INTEGER NOT NULL,
+          started_at TEXT NOT NULL,
+          finished_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          error_json TEXT,
+          retry_decision_json TEXT NOT NULL,
+          backoff_ms INTEGER NOT NULL,
+          reconcile_evidence_json TEXT,
+          UNIQUE(step_run_id, attempt_index),
+          FOREIGN KEY(step_run_id) REFERENCES test_steps(step_run_id),
+          FOREIGN KEY(job_id) REFERENCES test_runs(job_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_step_attempts_job ON test_step_attempts(job_id, board_id, step_run_id, attempt_index);
+        CREATE TABLE IF NOT EXISTS can_adapter_leases (
+          lease_id TEXT PRIMARY KEY,
+          adapter_id TEXT NOT NULL,
+          channel TEXT NOT NULL,
+          owner_job_id TEXT NOT NULL,
+          daemon_instance_id TEXT NOT NULL,
+          can_worker_instance_id TEXT NOT NULL,
+          pid INTEGER NOT NULL,
+          process_start_time TEXT NOT NULL,
+          acquired_at TEXT NOT NULL,
+          renewed_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          released_at TEXT,
+          fencing_token INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_can_adapter_active_channel
+          ON can_adapter_leases(adapter_id, channel)
+          WHERE released_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_can_adapter_fencing ON can_adapter_leases(adapter_id, channel, fencing_token DESC);
+      `);
+    }
   }
 ];
 

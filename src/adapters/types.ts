@@ -25,6 +25,7 @@ export interface AdapterCreateSessionOptions {
 export interface DebugAdapter {
   readonly name: string;
   readonly supportsSimultaneousOperations?: boolean;
+  ownedProcesses?(): Record<string, unknown>[];
   createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession>;
   disposeSession?(session: AdapterSession): Promise<void>;
   listCores(session: AdapterSession): Promise<CoreInfo[]>;

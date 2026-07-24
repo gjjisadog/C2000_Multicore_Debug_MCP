@@ -1,12 +1,13 @@
 {
   "name": "c2000-multicore-mcp",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
   "type": "module",
   "bin": {
     "c2000-multicore-mcp": "./dist/src/index.js",
     "c2000-debugd": "./dist/src/daemon/index.js",
-    "c2000-board-worker": "./dist/src/worker/index.js"
+    "c2000-board-worker": "./dist/src/worker/index.js",
+    "c2000-can-worker": "./dist/src/can-worker/index.js"
   },
   "scripts": {
     "build": "node scripts/build.mjs -p tsconfig.src.json",
@@ -22,6 +23,7 @@
     "proxy:dev": "tsx src/index.ts",
     "proxy:start": "node dist/src/index.js",
     "worker:dev": "tsx src/worker/index.ts",
+    "can-worker:dev": "tsx src/can-worker/index.ts",
     "start:supervised": "node scripts/mcp-supervisor.mjs -- node dist/src/index.js",
     "test": "vitest run",
     "postinstall": "node -e \"try{require('fs').accessSync('node_modules/typescript/lib/_tsc.js')}catch{console.warn('[c2000-multicore-mcp] typescript CLI missing; run npm install typescript --save-dev')}\"",

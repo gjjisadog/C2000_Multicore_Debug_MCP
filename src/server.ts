@@ -35,17 +35,19 @@ export interface C2000McpRuntime {
   server: McpServer;
   manager: DebugSessionManager;
   toolInvoker: C2000ToolInvoker;
+  ownedProcesses(): Record<string, unknown>[];
   dispose(): Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>>;
 }
 
 export async function createC2000McpRuntime(
   config: C2000McpConfig,
-  toolHandlerDeps: ToolHandlerDeps = {}
+  toolHandlerDeps: ToolHandlerDeps = {},
+  runtimeIdentity?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string }
 ): Promise<C2000McpRuntime> {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const adapterResolution = await resolveAdapterMode(config);
   logger.info("debug adapter selected", adapterResolution);
-  return buildRuntime(config, adapterResolution, logger, toolHandlerDeps);
+  return buildRuntime(config, adapterResolution, logger, toolHandlerDeps, runtimeIdentity);
 }
 
 /** Synchronous construction for tests/scripts that already know the adapter mode. */
@@ -72,7 +74,8 @@ function buildRuntime(
   config: C2000McpConfig,
   adapterResolution: AdapterResolution,
   logger: Logger,
-  toolHandlerDeps: ToolHandlerDeps
+  toolHandlerDeps: ToolHandlerDeps,
+  runtimeIdentity?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string }
 ): C2000McpRuntime {
   const startedAt = new Date().toISOString();
   const registeredToolNames = definitionsForProfile(config.toolProfile).map(tool => tool.name);
@@ -103,8 +106,9 @@ function buildRuntime(
     ccxmlPath: config.ccs.ccxmlPath
   };
   const getServerHealth = () => buildServerHealth(config, startedAt, registeredToolNames);
+  const adapter = createAdapterFromMode(adapterResolution.mode, config, effectiveInstallPath, workspacePath, runtimeIdentity);
   const manager = new DebugSessionManager(
-    createAdapterFromMode(adapterResolution.mode, config, effectiveInstallPath, workspacePath),
+    adapter,
     new LoadedProgramRegistry(),
     logger,
     {
@@ -138,6 +142,7 @@ function buildRuntime(
     server,
     manager,
     toolInvoker,
+    ownedProcesses: () => adapter.ownedProcesses?.() ?? [],
     dispose: () => (disposal ??= manager.disposeAllSessions())
   };
 }
@@ -184,14 +189,16 @@ function createAdapterFromMode(
   mode: ResolvedAdapterMode,
   config: C2000McpConfig,
   ccsInstallPath?: string,
-  workspacePath?: string
+  workspacePath?: string,
+  runtimeIdentity?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string }
 ): DebugAdapter {
   if (mode === "ccs") {
     return new CcsScriptingAdapter({
       ccsInstallPath: ccsInstallPath ?? config.ccs.installPath,
       workspacePath: workspacePath ?? normalizeWorkspacePath(config.ccs.workspacePath),
       dssTimeoutMs: config.ccs.dssTimeoutMs,
-      timeouts: config.ccs.timeouts
+      timeouts: config.ccs.timeouts,
+      ownership: runtimeIdentity
     });
   }
   return new MockDebugAdapter();

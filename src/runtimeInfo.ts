@@ -4,7 +4,7 @@ import type { C2000McpConfig } from "./config/config.schema.js";
 declare const __C2000_RUNTIME_BUNDLED__: boolean;
 
 export const SERVER_NAME = "c2000-multicore-mcp";
-export const SERVER_VERSION = "0.1.0";
+export const SERVER_VERSION = "0.5.0";
 
 export function isBundledRuntime(): boolean {
   return typeof __C2000_RUNTIME_BUNDLED__ !== "undefined" && __C2000_RUNTIME_BUNDLED__;

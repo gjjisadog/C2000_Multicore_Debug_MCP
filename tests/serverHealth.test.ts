@@ -16,7 +16,7 @@ describe("server runtime health", () => {
 
     expect(health).toEqual(expect.objectContaining({
       status: "ready",
-      server: { name: "c2000-multicore-mcp", version: "0.1.0" },
+      server: { name: "c2000-multicore-mcp", version: "0.5.0" },
       tools: { registeredCount: 1, registeredNames: ["c2000_getServerHealth"] }
     }));
     expect(health.runtime.bundled).toBe(isBundledRuntime());

@@ -85,7 +85,10 @@ export const c2000McpConfigSchema = z.object({
     restartWindowMs: z.number().int().positive().default(60000)
   }).optional(),
   scheduler: z.object({
+    maxActiveJobs: z.number().int().positive().default(16),
     maxParallelBoards: z.number().int().positive().default(4),
+    agingThresholdMs: z.number().int().nonnegative().default(30000),
+    starvationTimeoutMs: z.number().int().positive().default(300000),
     pollIntervalMs: z.number().int().positive().default(250)
   }).optional(),
   canAdapters: z.array(z.object({
