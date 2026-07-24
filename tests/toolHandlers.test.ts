@@ -77,6 +77,36 @@ class Cpu2LoadFailureAdapter extends WorkflowRecordingAdapter {
   }
 }
 
+type CriticalBatchStage = "initialHalt" | "reset" | "postLoadHalt";
+
+class CriticalBatchFailureAdapter extends WorkflowRecordingAdapter {
+  private haltCount = 0;
+
+  constructor(private readonly stage: CriticalBatchStage) {
+    super();
+  }
+
+  override async halt(session: AdapterSession, coreId: CoreId): Promise<void> {
+    this.haltCount += 1;
+    this.events.push(`halt:${coreId}`);
+    const isFailingHalt = coreId === 2
+      && ((this.stage === "initialHalt" && this.haltCount === 2)
+        || (this.stage === "postLoadHalt" && this.haltCount === 4));
+    if (isFailingHalt) {
+      throw new Error(`simulated ${this.stage} failure`);
+    }
+    await MockDebugAdapter.prototype.halt.call(this, session, coreId);
+  }
+
+  override async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<void> {
+    this.events.push(`reset:${coreId}:${resetType}`);
+    if (this.stage === "reset" && coreId === 2) {
+      throw new Error("simulated reset failure");
+    }
+    await MockDebugAdapter.prototype.reset.call(this, session, coreId, resetType);
+  }
+}
+
 class OwnershipMismatchAdapter extends MockDebugAdapter {
   override async readMemory(
     session: AdapterSession,
@@ -665,6 +695,56 @@ describe("tool handlers", () => {
     await Promise.all(sessionIds.map((sessionId: string) => manager.closeDebugSession(sessionId)));
   });
 
+  test("launchMultiBoardDebug connects and loads CPU1 first while preserving the CPU2 map", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-multiboard-cpu-order-"));
+    const ccxmlPath = path.join(tempDir, "board.ccxml");
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(ccxmlPath, serialBoundCcxml("CL650001"));
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS5                0001A000   00002000  00000871  0000178f  RWIX\n");
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager, {
+      runHardwarePreflight: async () => ({
+        xdsdfuPath: "xdsdfu",
+        xdsdfu: { ok: true, commandOk: true, probeReady: true, devices: [{ serialNumber: "CL650001", mode: "Runtime" }] },
+        debugProcesses: [],
+        debugProcessDetails: [],
+        processInspection: { ok: true, platform: "win32" }
+      })
+    });
+
+    const result = await handlers.launchMultiBoardDebug({
+      boards: [{
+        boardId: "board-a",
+        probeSerial: "CL650001",
+        ccxmlPath,
+        cores: [...coreMap].reverse().map(core => ({
+          ...core,
+          connect: true,
+          load: true,
+          haltAtEntry: false,
+          programUri: core.coreId === 0 ? cpu1OutPath : cpu2OutPath,
+          ...(core.coreId === 2 ? { mapUri: cpu2MapPath } : {})
+        }))
+      }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(adapter.events).toEqual([
+      "connect:0",
+      "load:0:cpu1.out",
+      "connect:2",
+      "load:2:cpu2.out"
+    ]);
+    const sessionId = result.results[0].sessionId;
+    await expect(manager.getLoadedProgramInfo(sessionId, 2)).resolves.toEqual(expect.objectContaining({ mapUri: cpu2MapPath }));
+    await manager.closeDebugSession(sessionId);
+  });
+
   test("launchMultiBoardDebug rejects a ccxml that contains a serial but does not select by serial number", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-invalid-binding-"));
     const ccxmlPath = path.join(tempDir, "invalid-binding.ccxml");
@@ -751,6 +831,89 @@ describe("tool handlers", () => {
     ]);
     expect(adapter.events).not.toContain("run:0");
     expect(adapter.events).not.toContain("run:2");
+  });
+
+  test.each(["initialHalt", "reset", "postLoadHalt"] as const)("runIpcAcceptance fails closed when %s has a per-core failure", async stage => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), `c2000-mcp-ipc-${stage}-failure-`));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+    const adapter = new CriticalBatchFailureAdapter(stage);
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: `ipc-${stage}-failure`, coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      resetType: "cpu",
+      runSequence: { runCpu1First: true, runCpu2: true },
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "BatchOperationFailed",
+        details: expect.objectContaining({
+          failed: [expect.objectContaining({ coreId: 2, success: false })]
+        })
+      })
+    }));
+    expect(adapter.events).not.toContain("run:0");
+    expect(adapter.events).not.toContain("run:2");
+  });
+
+  test("runReloadAndDiagnose fails closed when reset has a per-core failure", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-reload-reset-failure-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    const adapter = new CriticalBatchFailureAdapter("reset");
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "reload-reset-failure", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runReloadAndDiagnose({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      resetType: "cpu",
+      runCpu1: true,
+      runCpu2: false
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "BatchOperationFailed",
+        details: expect.objectContaining({
+          failed: [expect.objectContaining({ coreId: 2, success: false })]
+        })
+      })
+    }));
+    expect(adapter.events).not.toContain("load:0:cpu1.out");
+    expect(adapter.events).not.toContain("load:2:cpu2.out");
   });
 
   test("runIpcAcceptance rejects output/map configuration mismatch before touching either core", async () => {

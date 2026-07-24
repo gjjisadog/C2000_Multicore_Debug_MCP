@@ -29,10 +29,12 @@ export type DebugErrorCode =
   | "AddressResolveFailed"
   | "AdapterNotAvailable"
   | "DssNotFound"
+  | "UnsafeDssLaunchPath"
   | "DssLaunchFailed"
   | "DssCommandFailed"
   | "DssTimeout"
   | "DssTransportFailed"
+  | "FlashLoadPreparationUnsupported"
   | "UnsupportedResetType"
   | "PostLaunchActionFailed"
   | "PostLaunchCheckFailed";

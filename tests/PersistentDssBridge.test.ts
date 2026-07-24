@@ -15,6 +15,7 @@ const coreMap = [
   { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
 ];
 
+const TEST_AUTH_TOKEN = "persistent-dss-unit-test-token";
 const startedServers: net.Server[] = [];
 
 describe("XDS launch retry policy", () => {
@@ -43,6 +44,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[0, cpu1.port], [2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -68,7 +70,7 @@ describe("PersistentDssBridge", () => {
     expect(result).toEqual(expect.objectContaining({ core: "cpu2" }));
     expect(receivedByPort.get(cpu1.port) ?? []).toHaveLength(0);
     expect(receivedByPort.get(cpu2.port)).toEqual([
-      expect.objectContaining({ name: "runAsynch", coreId: 2, coreName: "C28xx_CPU2" })
+      expect.objectContaining({ name: "runAsynch", coreId: 2, coreName: "C28xx_CPU2", authToken: TEST_AUTH_TOKEN })
     ]);
   });
 
@@ -80,6 +82,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[0, cpu1.port], [2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -125,6 +128,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[0, cpu1.port], [2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -176,6 +180,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -215,6 +220,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -254,6 +260,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -293,6 +300,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -325,7 +333,7 @@ describe("PersistentDssBridge", () => {
   test("throws CoreNotFound when a command targets a core without a persistent session port", async () => {
     const launcher: DssServerLauncher = {
       async launch(): Promise<DssServerHandle> {
-        return { host: "127.0.0.1", portsByCoreId: new Map([[0, 12345]]), dispose: async () => {} };
+        return { host: "127.0.0.1", authToken: TEST_AUTH_TOKEN, portsByCoreId: new Map([[0, 12345]]), dispose: async () => {} };
       }
     };
     const bridge = new PersistentDssBridge({ launcher });
@@ -351,6 +359,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -387,6 +396,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, closedPort]]),
           dispose: async () => {}
         };
@@ -422,6 +432,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -459,6 +470,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -495,6 +507,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           dispose: async () => {}
         };
@@ -536,6 +549,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[2, cpu2.port]]),
           diagnostics: () => ({
             pid: 4321,
@@ -585,6 +599,7 @@ describe("PersistentDssBridge", () => {
       async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
         return {
           host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
           portsByCoreId: new Map([[0, cpu1.port], [2, cpu2.port]]),
           dispose: async () => {
             disposed = true;
@@ -603,7 +618,7 @@ describe("PersistentDssBridge", () => {
     await bridge.disposeSession("ccs-session-shutdown");
 
     expect(receivedByPort.get(cpu1.port)).toEqual([
-      expect.objectContaining({ name: "shutdown" })
+      expect.objectContaining({ name: "shutdown", authToken: TEST_AUTH_TOKEN })
     ]);
     expect(receivedByPort.get(cpu2.port) ?? []).toHaveLength(0);
     expect(disposed).toBe(true);

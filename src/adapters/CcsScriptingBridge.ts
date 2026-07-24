@@ -82,12 +82,11 @@ export class DssCliBridge implements CcsScriptingBridge {
     try {
       await writeFile(commandPath, JSON.stringify({ ...command, timeoutMs: command.timeoutMs ?? this.options.timeoutMs ?? 15000 }), "utf8");
       await writeFile(scriptPath, dssCommandScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
-      const { stdout, stderr } = await execFileAsync(launch.command, [...launch.args, scriptPath, commandPath], {
+      const { stdout, stderr } = await execFileAsync(launch.command, dssLaunchArguments(launch, [scriptPath, commandPath]), {
         timeout: command.timeoutMs ?? this.options.timeoutMs ?? 30000,
         maxBuffer: 1024 * 1024 * 8,
         env: launch.env,
-        cwd: launch.cwd,
-        shell: launch.shell
+        cwd: launch.cwd
       });
       return parseDssResult(stdout, stderr);
     } catch (error) {
@@ -136,7 +135,10 @@ export interface DssLaunch {
   args: string[];
   env: ExecFileOptions["env"];
   cwd?: string;
-  shell?: boolean;
+  /** True when the launcher is a Windows batch file invoked through cmd.exe. */
+  windowsBatch?: boolean;
+  /** Validated path to the batch launcher when `windowsBatch` is true. */
+  windowsBatchScript?: string;
 }
 
 export function resolveDssLaunch(
@@ -181,13 +183,61 @@ export function resolveDssLaunch(
     env.CCS_WORKSPACE = workspacePath;
   }
 
-  const launch: DssLaunch = platform === "darwin" && resolvedArchitecture === "arm64"
-    ? { command: "arch", args: ["-x86_64", dssScriptPath], env }
-    : { command: dssScriptPath, args: [], env, ...(platform === "win32" ? { shell: true } : {}) };
+  const launch: DssLaunch = platform === "win32"
+    ? {
+        // Node cannot execute .bat files directly without shell:true.  Invoke a
+        // fixed cmd.exe explicitly and reject cmd metacharacters in all dynamic
+        // paths before they are passed to its command parser.
+        command: process.env.ComSpec ?? "cmd.exe",
+        args: ["/d", "/s", "/c"],
+        env,
+        windowsBatch: true,
+        windowsBatchScript: assertSafeWindowsCmdPath(dssScriptPath)
+      }
+    : platform === "darwin" && resolvedArchitecture === "arm64"
+      ? { command: "arch", args: ["-x86_64", dssScriptPath], env }
+      : { command: dssScriptPath, args: [], env };
   if (workspacePath && workspacePath.length > 0) {
     launch.cwd = workspacePath;
   }
   return launch;
+}
+
+/**
+ * Appends generated DSS script/config paths to a launch command without ever
+ * enabling Node's implicit shell.  Windows batch launchers still need cmd.exe,
+ * so inputs that could alter cmd parsing are rejected rather than quoted
+ * optimistically.
+ */
+export function dssLaunchArguments(launch: DssLaunch, dssArguments: string[]): string[] {
+  if (!launch.windowsBatch) {
+    return [...launch.args, ...dssArguments];
+  }
+  if (!launch.windowsBatchScript) {
+    throw new DebugMcpError("UnsafeDssLaunchPath", "Windows batch launch is missing its DSS launcher path");
+  }
+  // Do not assemble `call "…" "…"` into one argument. Node correctly
+  // escapes embedded quotes while constructing the process command line, but
+  // cmd.exe then receives the backslashes as part of the batch-file path.
+  // Separate arguments let Node quote paths containing spaces once, at the
+  // Windows process boundary.
+  return [
+    ...launch.args,
+    "call",
+    assertSafeWindowsCmdPath(launch.windowsBatchScript),
+    ...dssArguments.map(assertSafeWindowsCmdPath)
+  ];
+}
+
+function assertSafeWindowsCmdPath(filePath: string): string {
+  if (/["&|<>^()%!]/.test(filePath)) {
+    throw new DebugMcpError(
+      "UnsafeDssLaunchPath",
+      "DSS launcher paths containing cmd.exe metacharacters are not supported",
+      { filePath }
+    );
+  }
+  return filePath;
 }
 
 function isPlatform(value: string | undefined): value is NodeJS.Platform {

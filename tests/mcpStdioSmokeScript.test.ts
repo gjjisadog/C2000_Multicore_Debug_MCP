@@ -158,7 +158,7 @@ describe("MCP stdio smoke script contract", () => {
     expect(source).toContain("assertCoreReadIdentity(cpu2LoadedProgramInfo, 2)");
     expect(source).toContain("assertCoreReadIdentity(cpu1ResolvedPc, 0)");
     expect(source).toContain("assertCoreReadIdentity(cpu2ResolvedPc, 2)");
-    expect(source).toContain("assertCoreReadIdentity(cpu1ResolvedAddress, 0)");
+    expect(source).toContain("assertPartialAddressResolution(cpu1ResolvedAddress");
     expect(source).toContain("assertCoreReadIdentity(cpu2WaitUntilExpression, 2)");
     expect(source).toContain("function assertCoreReadIdentity");
     expect(source).toContain("assertAcceptanceSummary(runPauseIsolation.acceptanceSummary)");

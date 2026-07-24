@@ -106,8 +106,10 @@ export class DebugWorkflowService {
 
     const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
+    assertBatchSucceeded("haltCores", initialHalt);
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
+    assertBatchSucceeded("resetCores", reset);
     const load = await this.manager.loadPrograms(input.sessionId, [
       { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
       { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
@@ -116,6 +118,7 @@ export class DebugWorkflowService {
     assertBatchSucceeded("loadPrograms", load);
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
+    assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
     const ramOwnership = await this.analyzeRamOwnership({ maps });
@@ -220,8 +223,10 @@ export class DebugWorkflowService {
     const maps = this.normalizeMaps(mapsFromPaths(input));
     const halt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
+    assertBatchSucceeded("haltCores", halt);
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
+    assertBatchSucceeded("resetCores", reset);
     const load = await this.manager.loadPrograms(input.sessionId, [
       { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
       { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
@@ -230,6 +235,7 @@ export class DebugWorkflowService {
     assertBatchSucceeded("loadPrograms", load);
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
+    assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
     const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;

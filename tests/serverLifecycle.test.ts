@@ -12,6 +12,7 @@ const config: C2000McpConfig = {
       { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
     ]
   },
+  diagnostics: {},
   logging: { level: "error" }
 };
 
