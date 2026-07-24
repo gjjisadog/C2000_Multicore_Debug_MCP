@@ -41,4 +41,20 @@ export interface BoardLease {
   expiresAt: string;
   renewedAt: string;
   releasedAt?: string;
+  fencingToken: number;
+  leaseGeneration: number;
+  lastValidatedAt?: string;
+  invalidatedAt?: string;
+  invalidationReason?: string;
+}
+
+export interface BoardLeaseContext {
+  leaseId: string;
+  leaseToken: string;
+  fencingToken: number;
+  leaseGeneration: number;
+  ownerJobId: string;
+  boardId: string;
+  probeSerial: string;
+  workerInstanceId: string;
 }

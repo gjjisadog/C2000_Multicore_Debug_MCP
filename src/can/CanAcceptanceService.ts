@@ -14,12 +14,14 @@ import type { CanBusAdapter, CanFrame } from "./CanBusAdapter.js";
 import { MockCanBusAdapter } from "./MockCanBusAdapter.js";
 import type { CanAcceptanceProfile } from "./CanProfileSchema.js";
 import { NoopCanBusAdapter } from "./NoopCanBusAdapter.js";
+import type { BoardLeaseContext } from "../boards/types.js";
 
 export interface CanStepContext {
   jobId: string;
   boardId: string;
   sessionId?: string;
   leaseId?: string;
+  leaseContext?: BoardLeaseContext;
   workerInstanceId?: string;
   probeSerial?: string;
   heartbeatSnapshot?: Record<string, unknown>;
@@ -281,7 +283,7 @@ export class CanAcceptanceService {
 
   private async runCores(entry: PendingCanRun, coreIds: number[]): Promise<void> {
     await Promise.all([...entry.contexts.values()].map(async context => {
-      const result = await this.options.tools.invokeTool("c2000_runCores", { sessionId: context.sessionId, coreIds });
+      const result = await this.options.tools.invokeTool("c2000_runCores", { sessionId: context.sessionId, coreIds, ...(context.leaseContext ? { __leaseContext: context.leaseContext } : {}) });
       assertSuccess(result, "Could not start CAN participant cores", { boardId: context.boardId, sessionId: context.sessionId });
     }));
   }
@@ -291,7 +293,7 @@ export class CanAcceptanceService {
     for (const observation of observations) {
       const context = entry.contexts.get(observation.boardId);
       if (!context?.sessionId) throw new DebugMcpError("CanProfileInvalid", "CAN observation has no launched board session", { boardId: observation.boardId });
-      const result = await this.options.tools.invokeTool("c2000_evaluateMany", { sessionId: context.sessionId, coreId: observation.coreId, expressions: observation.expressions.map(expression => expression.expression) });
+      const result = await this.options.tools.invokeTool("c2000_evaluateMany", { sessionId: context.sessionId, coreId: observation.coreId, expressions: observation.expressions.map(expression => expression.expression), ...(context.leaseContext ? { __leaseContext: context.leaseContext } : {}) });
       assertSuccess(result, "CAN debug observation failed", { boardId: observation.boardId, coreId: observation.coreId });
       assertExpectedObservation(result, observation.expressions, observation.boardId, observation.coreId);
       collected.push({ boardId: observation.boardId, coreId: observation.coreId, result });

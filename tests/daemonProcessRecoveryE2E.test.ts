@@ -1,6 +1,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, test } from "vitest";
 import { loadConfig } from "../src/config/config.loader.js";
 import { launchDetachedDaemon } from "../src/daemon/DaemonBootstrap.js";
@@ -13,8 +15,10 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(directory => removeWhenUnlocked(directory)));
 });
 
-describe("detached daemon process recovery", () => {
-  test("a fresh daemon process reconciles a job after the original daemon exits", async () => {
+const execFileAsync = promisify(execFile);
+
+describe("abrupt daemon process recovery", () => {
+  test("a fresh daemon reconciles metadata after the original daemon is forcibly terminated", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-daemon-process-recovery-"));
     directories.push(directory);
     const configPath = path.join(directory, "config.json");
@@ -51,7 +55,7 @@ describe("detached daemon process recovery", () => {
         return run.status === "RUNNING" ? run : undefined;
       });
 
-      await stopProcess(first.instance.pid);
+      await forceStopProcess(first.instance.pid);
       activePid = undefined;
       await launchDetachedDaemon({ cwd: directory, env: daemonEnvironment, preferSource: true });
       const second = await waitForDaemon(config);
@@ -109,6 +113,29 @@ async function stopProcess(pid: number): Promise<void> {
     }
   }
   throw new Error(`daemon process ${pid} did not stop`);
+}
+
+async function forceStopProcess(pid: number): Promise<void> {
+  try {
+    if (process.platform === "win32") {
+      await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+    } else {
+      process.kill(pid, "SIGKILL");
+    }
+  } catch {
+    try { process.kill(pid, 0); } catch { return; }
+    throw new Error(`failed to force-stop daemon process ${pid}`);
+  }
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch {
+      return;
+    }
+  }
+  throw new Error(`force-stopped daemon process ${pid} is still alive`);
 }
 
 async function removeWhenUnlocked(directory: string): Promise<void> {

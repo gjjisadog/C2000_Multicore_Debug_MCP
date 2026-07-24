@@ -313,6 +313,19 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_can_matrix_cases_campaign_status ON can_matrix_cases(campaign_id, status, case_index);
       `);
     }
+  },
+  {
+    version: 4,
+    apply(store) {
+      store.exec(`
+        ALTER TABLE board_leases ADD COLUMN fencing_token INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE board_leases ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE board_leases ADD COLUMN last_validated_at TEXT;
+        ALTER TABLE board_leases ADD COLUMN invalidated_at TEXT;
+        ALTER TABLE board_leases ADD COLUMN invalidation_reason TEXT;
+        CREATE INDEX IF NOT EXISTS idx_board_lease_fencing ON board_leases(board_id, fencing_token DESC);
+      `);
+    }
   }
 ];
 

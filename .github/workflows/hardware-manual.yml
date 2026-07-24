@@ -1,0 +1,45 @@
+name: Hardware manual acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_xds_acceptance:
+        description: Run XDS110 acceptance
+        type: boolean
+        default: false
+      run_pcan_preflight:
+        description: Run PCAN-Basic preflight
+        type: boolean
+        default: false
+      run_two_board_can:
+        description: Run two-board CAN acceptance
+        type: boolean
+        default: false
+
+jobs:
+  hardware:
+    timeout-minutes: 60
+    environment: c2000-hardware-rig
+    runs-on: [self-hosted, windows, c2000-rig]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - if: inputs.run_xds_acceptance
+        run: npm run acceptance:ccs
+      - if: inputs.run_pcan_preflight
+        env:
+          C2000_PCAN_HARDWARE_TEST: "1"
+        run: npm run verify:pcan:hardware
+      - if: inputs.run_two_board_can
+        run: npm run acceptance:can:hardware
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-evidence
+          if-no-files-found: ignore
+          path: runtime/**

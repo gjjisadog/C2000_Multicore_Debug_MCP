@@ -47,10 +47,12 @@ describe("board worker supervisor", () => {
     });
     try {
       await supervisor.startAll();
-      await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", {}, 5)).rejects.toMatchObject({ code: "WorkerCommandTimeout" });
+      const leaseA = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", ttlMs: 1000 });
+      const leaseB = registry.leases.acquire({ boardId: "board-b", ownerJobId: "job-b", ttlMs: 1000 });
+      await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", { __leaseContext: leaseA.context }, 5)).rejects.toMatchObject({ code: "WorkerCommandTimeout" });
       expect(starts.get("board-a")).toBe(2);
       expect(starts.get("board-b")).toBe(1);
-      await expect(supervisor.invokeBoard("board-b", "c2000_getTargetState", {}, 5)).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
+      await expect(supervisor.invokeBoard("board-b", "c2000_getTargetState", { __leaseContext: leaseB.context }, 5)).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
       expect(clients.filter(client => client.boardId === "board-b" && client.stopped).length).toBe(0);
       expect(events.list({ boardId: "board-a" })).toEqual(expect.arrayContaining([
         expect.objectContaining({ eventType: "WORKER_RESTARTING" })

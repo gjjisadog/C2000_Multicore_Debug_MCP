@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import type { BoardLease } from "./types.js";
+import type { BoardLease, BoardLeaseContext } from "./types.js";
 import { BoardRepository } from "../storage/repositories/BoardRepository.js";
 import { LeaseRepository } from "../storage/repositories/LeaseRepository.js";
 import { SqliteStore } from "../storage/SqliteStore.js";
@@ -8,6 +8,7 @@ import { DebugMcpError } from "../utils/errors.js";
 export interface LeasedBoard {
   lease: BoardLease;
   leaseToken: string;
+  context: BoardLeaseContext;
 }
 
 /** One active lease per physical board; tokens are stored only as hashes. */
@@ -33,19 +34,25 @@ export class BoardLeaseManager {
       }
       if (existing) this.leases.release(existing.leaseId, now.toISOString());
       const leaseToken = randomBytes(32).toString("base64url");
+      const workerInstanceId = options.workerInstanceId ?? board.currentWorkerInstanceId;
+      if (!options.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "A board lease requires an explicit owner", { boardId: board.boardId });
+      if (!workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "A board lease requires an active worker identity", { boardId: board.boardId });
+      const fencingToken = this.leases.latestFencingToken(board.boardId) + 1;
       const lease: BoardLease = {
         leaseId: `lease-${randomUUID()}`,
         boardId: board.boardId,
         probeSerial: board.probeSerial,
-        ...(options.ownerJobId ? { ownerJobId: options.ownerJobId } : {}),
-        ...(options.workerInstanceId ? { workerInstanceId: options.workerInstanceId } : {}),
+        ownerJobId: options.ownerJobId,
+        workerInstanceId,
         acquiredAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + options.ttlMs).toISOString(),
-        renewedAt: now.toISOString()
+        renewedAt: now.toISOString(),
+        fencingToken,
+        leaseGeneration: fencingToken
       };
       this.leases.insert(lease, hashToken(leaseToken));
       this.boards.setLease(board.boardId, lease.leaseId);
-      return { lease, leaseToken };
+      return { lease, leaseToken, context: toContext(lease, leaseToken) };
     });
   }
 
@@ -95,6 +102,38 @@ export class BoardLeaseManager {
     return publicLease;
   }
 
+  invalidate(leaseId: string, leaseToken: string, reason: string): void {
+    this.store.transaction(() => {
+      const existing = this.find(leaseId);
+      if (!tokensMatch(existing.leaseTokenHash, hashToken(leaseToken))) {
+        throw new DebugMcpError("LeaseFencingRejected", "Board lease token does not match", { leaseId });
+      }
+      const now = new Date().toISOString();
+      this.leases.invalidate(leaseId, now, reason);
+      this.boards.setLease(existing.boardId, undefined);
+    });
+  }
+
+  validate(context: BoardLeaseContext): BoardLease {
+    return this.store.transaction(() => {
+      const existing = this.leases.activeForBoardByLeaseId(context.leaseId);
+      if (!existing) throw new DebugMcpError("LeaseInvalidated", "Board lease is missing, released, or invalidated", { leaseId: context.leaseId });
+      if (existing.invalidatedAt) throw new DebugMcpError("LeaseInvalidated", "Board lease has been invalidated", { leaseId: context.leaseId, reason: existing.invalidationReason });
+      if (Date.parse(existing.expiresAt) <= Date.now()) throw new DebugMcpError("LeaseExpired", "Board lease has expired", { leaseId: context.leaseId, expiresAt: existing.expiresAt });
+      if (!tokensMatch(existing.leaseTokenHash, hashToken(context.leaseToken))) throw new DebugMcpError("LeaseFencingRejected", "Board lease token does not match", { leaseId: context.leaseId });
+      if (existing.fencingToken !== context.fencingToken || this.leases.latestFencingToken(existing.boardId) !== context.fencingToken) {
+        throw new DebugMcpError("LeaseFencingRejected", "Board lease fencing token is stale", { leaseId: context.leaseId, expected: this.leases.latestFencingToken(existing.boardId), received: context.fencingToken });
+      }
+      if (existing.leaseGeneration !== context.leaseGeneration) throw new DebugMcpError("LeaseFencingRejected", "Board lease generation is stale", { leaseId: context.leaseId });
+      if (existing.ownerJobId !== context.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "Board lease owner does not match", { leaseId: context.leaseId });
+      if (existing.boardId !== context.boardId || existing.probeSerial !== context.probeSerial) throw new DebugMcpError("LeaseBoardMismatch", "Board lease identity does not match", { leaseId: context.leaseId });
+      if (existing.workerInstanceId !== context.workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "Board lease worker does not match", { leaseId: context.leaseId });
+      this.leases.validate(existing.leaseId, new Date().toISOString());
+      const { leaseTokenHash: _token, ...lease } = existing;
+      return lease;
+    });
+  }
+
   private find(leaseId: string): BoardLease & { leaseTokenHash: string } {
     const candidate = this.leases.activeForBoardByLeaseId(leaseId);
     if (!candidate) {
@@ -102,6 +141,19 @@ export class BoardLeaseManager {
     }
     return candidate;
   }
+}
+
+function toContext(lease: BoardLease, leaseToken: string): BoardLeaseContext {
+  return {
+    leaseId: lease.leaseId,
+    leaseToken,
+    fencingToken: lease.fencingToken,
+    leaseGeneration: lease.leaseGeneration,
+    ownerJobId: lease.ownerJobId!,
+    boardId: lease.boardId,
+    probeSerial: lease.probeSerial,
+    workerInstanceId: lease.workerInstanceId!
+  };
 }
 
 function hashToken(token: string): string { return createHash("sha256").update(token).digest("hex"); }

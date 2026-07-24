@@ -16,12 +16,14 @@ import { CanCampaignRepository } from "../storage/repositories/CanCampaignReposi
 import { BoardGroupBarrierRepository } from "../storage/repositories/BoardGroupBarrierRepository.js";
 import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/BoardGroupReconcileDecisionRepository.js";
 import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
+import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecutionSnapshot } from "./BoardExecutionSemaphore.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
   private readonly steps: StepRegistry;
   private readonly reconciler = new TestReconciler();
   private readonly canGroupReconciler = new CanGroupReconciler();
+  private readonly boardPermits: BoardExecutionSemaphore;
   private readonly executing = new Set<string>();
   private readonly scheduledTasks = new Set<Promise<void>>();
   private stopping = false;
@@ -41,6 +43,7 @@ export class TestJobEngine {
     groupReconcileDecisions?: BoardGroupReconcileDecisionRepository;
   }) {
     this.scheduler = new TestScheduler(Math.max(1, options.maxParallelBoards));
+    this.boardPermits = new BoardExecutionSemaphore(Math.max(1, options.maxParallelBoards));
     this.steps = new StepRegistry(options.tools, options.canAcceptance);
   }
 
@@ -83,6 +86,7 @@ export class TestJobEngine {
   async stop(): Promise<void> {
     this.beginStop();
     await Promise.allSettled([...this.scheduledTasks]);
+    await this.boardPermits.stop();
   }
 
   /** Stop new checkpoint transitions immediately; used before daemon state is marked RECOVERING. */
@@ -110,6 +114,13 @@ export class TestJobEngine {
       : submittedPlan, selectedBoardIds);
     if (plan.can) {
       if (boards.length !== 2) throw new DebugMcpError("CanProfileInvalid", "CAN acceptance requires exactly two selected boards", { selectedBoardIds: boards.map(board => board.boardId) });
+      if (boards.length > this.boardPermits.limit) {
+        throw new DebugMcpError("InsufficientBoardConcurrency", "CAN pair cannot fit within the configured global board concurrency", {
+          requiredBoards: boards.length,
+          configuredMaxParallelBoards: this.boardPermits.limit,
+          boardIds: selectedBoardIds.slice().sort()
+        });
+      }
       if (!this.options.canAcceptance) throw new DebugMcpError("CanAdapterUnavailable", "CAN acceptance service is not configured");
     }
     const submittedAt = new Date().toISOString();
@@ -174,6 +185,10 @@ export class TestJobEngine {
     return { success: true, jobId, status: "CANCEL_REQUESTED" };
   }
 
+  boardConcurrencySnapshot(): BoardExecutionSnapshot {
+    return this.boardPermits.snapshot();
+  }
+
   private schedule(jobId: string): void {
     if (this.stopping || this.executing.has(jobId)) return;
     this.executing.add(jobId);
@@ -191,11 +206,19 @@ export class TestJobEngine {
     const plan = testPlanSchema.parse(run.plan);
     this.options.runs.updateStatus(jobId, "RUNNING", { startedAt: run.startedAt ?? new Date().toISOString() });
     const boards = this.options.runs.boards(jobId);
-    const outcomes = await mapWithConcurrency(
-      boards,
-      Math.min(this.options.maxParallelBoards, plan.parallelism ?? this.options.maxParallelBoards),
-      board => this.executeBoard(jobId, plan, board)
-    );
+    let groupPermits: BoardExecutionPermit[] | undefined;
+    let outcomes: Array<{ success: boolean; cancelled: boolean }>;
+    try {
+      if (plan.can) groupPermits = await this.boardPermits.acquireGroup(boards.map(board => board.boardId), jobId);
+      const permitsByBoard = new Map(groupPermits?.map(permit => [permit.boardId, permit]));
+      outcomes = await mapWithConcurrency(
+        boards,
+        Math.min(this.options.maxParallelBoards, plan.parallelism ?? this.options.maxParallelBoards),
+        board => this.executeBoard(jobId, plan, board, permitsByBoard.get(board.boardId))
+      );
+    } finally {
+      for (const permit of groupPermits ?? []) permit.release();
+    }
     // Graceful daemon shutdown leaves the durable run in RUNNING; DebugDaemon
     // converts it to RECOVERING only after all in-flight DB users have settled.
     if (this.stopping) return;
@@ -209,7 +232,8 @@ export class TestJobEngine {
     this.options.events.append({ level: status === "PASSED" ? "info" : "warn", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_FINISHED", payload: { status } });
   }
 
-  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord): Promise<{ success: boolean; cancelled: boolean }> {
+  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit): Promise<{ success: boolean; cancelled: boolean }> {
+    const permit = groupPermit ?? await this.boardPermits.acquire(board.boardId, jobId);
     const boardStart = new Date().toISOString();
     let current = { ...board, status: "RUNNING", startedAt: boardStart };
     this.options.runs.updateBoard(current);
@@ -220,18 +244,52 @@ export class TestJobEngine {
       const leaseError = { ...toStructuredError(error) };
       this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError });
       this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_BOARD_LEASE_FAILED", payload: { error: leaseError } });
+      if (!groupPermit) permit.release();
       return { success: false, cancelled: false };
     }
-    const renew = setInterval(() => { try { this.options.registry.leases.renew(lease.lease.leaseId, lease.leaseToken, 30000); } catch { /* a later step will fail safely */ } }, 10000);
-    renew.unref();
     let sessionId = current.sessionId;
     let failed = false;
     let cancelled = false;
+    let renewalFailures = 0;
+    let leaseLost = false;
     let lastError: Record<string, unknown> | undefined;
+    const renew = setInterval(() => {
+      try {
+        this.options.registry.leases.renew(lease.lease.leaseId, lease.leaseToken, 30000);
+        renewalFailures = 0;
+      } catch (error) {
+        renewalFailures += 1;
+        const structured = toStructuredError(error);
+        this.options.events.append({
+          level: renewalFailures >= 3 ? "error" : "warn",
+          sourceType: "lease",
+          sourceId: lease.lease.leaseId,
+          jobId,
+          boardId: board.boardId,
+          eventType: renewalFailures === 1 ? "LEASE_RENEWAL_FAILED" : "LEASE_RENEWAL_RETRY_FAILED",
+          payload: { consecutiveFailures: renewalFailures, error: structured }
+        });
+        if (renewalFailures >= 3 && !leaseLost) {
+          leaseLost = true;
+          failed = true;
+          lastError = {
+            code: "LeaseRenewalFailed",
+            message: "Lease renewal failed repeatedly; no further target commands will be submitted",
+            details: { leaseId: lease.lease.leaseId, consecutiveFailures: renewalFailures }
+          };
+          try { this.options.registry.leases.invalidate(lease.lease.leaseId, lease.leaseToken, "renewal-failure-threshold"); } catch { /* original renewal evidence is authoritative */ }
+        }
+      }
+    }, 10000);
+    renew.unref();
     try {
       const steps = this.options.runs.steps(jobId, board.boardId);
       for (const step of steps) {
         if (this.stopping) break;
+        if (leaseLost) {
+          this.options.runs.updateStep({ ...step, status: "SKIPPED", finishedAt: new Date().toISOString(), error: lastError });
+          continue;
+        }
         const freshRun = this.options.runs.get(jobId);
         if (freshRun?.cancelRequested) {
           cancelled = true;
@@ -252,6 +310,7 @@ export class TestJobEngine {
             boardId: board.boardId,
             sessionId,
             leaseId: lease.lease.leaseId,
+            leaseContext: lease.context,
             probeSerial: board.probeSerial,
             plan,
             step: plan.steps[step.stepIndex]!
@@ -279,6 +338,7 @@ export class TestJobEngine {
       const status = cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED";
       current = { ...current, status, sessionId, finishedAt: new Date().toISOString(), ...(lastError ? { error: lastError } : {}) };
       this.options.runs.updateBoard(current);
+      if (!groupPermit) permit.release();
     }
     return { success: !failed && !cancelled, cancelled };
   }

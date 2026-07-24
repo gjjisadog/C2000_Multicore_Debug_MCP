@@ -28,7 +28,7 @@ describe("probe recovery safety", () => {
     expect(terminated).toEqual([42]);
 
     const reused = new ProbeRecoveryManager({ registry, events, owned: async () => [owned], inspect: async () => [{ ...observed, processStartTime: "2026-01-01T01:00:00.000Z" }], terminate: async process => { terminated.push(process.pid); } });
-    await reused.recoverOwnedProbeProcesses("CL650001", false);
+    await expect(reused.recoverOwnedProbeProcesses("CL650001", false)).resolves.toEqual(expect.objectContaining({ kind: "PID_REUSED", recoveredPids: [] }));
     expect(terminated).toEqual([42]);
     expect(registry.get("board-a").status).toBe("QUARANTINED");
     store.close();

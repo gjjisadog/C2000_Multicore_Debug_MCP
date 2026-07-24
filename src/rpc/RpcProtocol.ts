@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const daemonRpcMethodSchema = z.enum(["health", "invokeTool"]);
+export const daemonRpcMethodSchema = z.enum(["health", "invokeTool", "shutdown"]);
 export type DaemonRpcMethod = z.infer<typeof daemonRpcMethodSchema>;
 
 export const rpcRequestSchema = z.object({

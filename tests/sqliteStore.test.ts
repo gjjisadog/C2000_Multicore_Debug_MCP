@@ -21,7 +21,7 @@ describe("SQLite durable store", () => {
     directories.push(directory);
     const databasePath = path.join(directory, "c2000-debugd.sqlite");
     const first = await SqliteStore.open(databasePath, { wal: true });
-    expect(first.schemaVersion).toBe(3);
+    expect(first.schemaVersion).toBe(4);
     expect(first.journalMode()).toBe("wal");
 
     const registry = new BoardRegistry(
@@ -31,14 +31,14 @@ describe("SQLite durable store", () => {
       new LeaseRepository(first)
     );
     registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: ["Hybrid30K", "F28P65x"] });
-    const lease = registry.leases.acquire({ boardId: "board-a", ownerJobId: "run-1", ttlMs: 1000 });
+    const lease = registry.leases.acquire({ boardId: "board-a", ownerJobId: "run-1", workerInstanceId: "worker-1", ttlMs: 1000 });
     expect(registry.list({ tags: ["Hybrid30K"] })).toEqual([
       expect.objectContaining({ boardId: "board-a", status: "AVAILABLE", leaseOwner: "run-1" })
     ]);
     first.close();
 
     const second = await SqliteStore.open(databasePath, { wal: true });
-    expect(second.schemaVersion).toBe(3);
+    expect(second.schemaVersion).toBe(4);
     const reopenedRegistry = new BoardRegistry(
       new BoardRepository(second),
       new EventRepository(second),

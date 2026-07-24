@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test -- --reporter=default --reporter=junit --outputFile.junit=test-results/junit.xml
+      - run: npm run build
+      - run: npm run doctor
+      - run: npm run doctor:isolated
+      - run: npm run verify:runtime-cwd
+      - run: npm run verify:daemon-proxy
+      - run: npm run verify:daemon-restart
+      - run: npm run verify:can:mock
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-${{ matrix.os }}-node-${{ matrix.node }}
+          if-no-files-found: ignore
+          path: |
+            test-results/**
+            runtime/**/*.log
+            runtime/**/*doctor*.json
+            dist/src/runtime-manifest.json
+      - if: always()
+        uses: test-summary/action@v2
+        with:
+          paths: test-results/junit.xml
+
