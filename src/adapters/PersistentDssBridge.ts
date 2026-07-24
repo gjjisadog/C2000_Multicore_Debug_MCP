@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
@@ -38,6 +38,7 @@ export interface PersistentDssBridgeOptions {
   shutdownRequestMs?: number;
   startupMs?: number;
   processExitMs?: number;
+  ownership?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string };
 }
 
 interface PersistentBridgeSession {
@@ -125,6 +126,27 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     return result;
   }
 
+  ownedProcesses(): Record<string, unknown>[] {
+    return [...this.sessions.entries()].map(([adapterSessionId, session]) => {
+      const diagnostics = session.handle.diagnostics?.() ?? {};
+      return {
+        pid: diagnostics.pid,
+        ppid: diagnostics.ppid,
+        processStartTime: diagnostics.processStartTime,
+        executable: diagnostics.executable,
+        commandLineHash: diagnostics.commandLineHash,
+        adapterSessionId,
+        sessionId: diagnostics.sessionId ?? adapterSessionId,
+        boardId: this.options.ownership?.boardId,
+        probeSerial: this.options.ownership?.probeSerial,
+        workerInstanceId: this.options.ownership?.workerInstanceId,
+        daemonInstanceId: this.options.ownership?.daemonInstanceId,
+        createdAt: diagnostics.createdAt ?? diagnostics.processStartTime,
+        status: diagnostics.exitCode === null || diagnostics.exitCode === undefined ? "RUNNING" : "EXITED"
+      };
+    });
+  }
+
   private async shutdownSession(session: PersistentBridgeSession): Promise<void> {
     const firstChannel = session.channels.values().next().value as PersistentCoreChannel | undefined;
     try {
@@ -178,10 +200,13 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const scriptPath = path.join(tempDir, "c2000-persistent-server.js");
     const dssScriptPath = this.options.dssScriptPath ?? resolveDssScriptPath(this.options.ccsInstallPath);
     const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath, this.options.workspacePath);
+    const launchArgs = dssLaunchArguments(launch, [scriptPath, configPath]);
+    const processStartTime = new Date().toISOString();
+    const commandLineHash = createHash("sha256").update(JSON.stringify([launch.command, ...launchArgs])).digest("hex");
     const authToken = randomBytes(32).toString("base64url");
     await writeFile(configPath, JSON.stringify({ ...options, host, basePort, authToken, timeoutMs: this.options.timeoutMs ?? 15000 }), "utf8");
     await writeFile(scriptPath, persistentServerScriptSource(resolveDssJson2Path(this.options.ccsInstallPath)), "utf8");
-    const child = spawn(launch.command, dssLaunchArguments(launch, [scriptPath, configPath]), {
+    const child = spawn(launch.command, launchArgs, {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
       cwd: launch.cwd,
@@ -208,6 +233,12 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       authToken,
       diagnostics: () => ({
         pid: child.pid,
+        ppid: process.pid,
+        processStartTime,
+        createdAt: processStartTime,
+        executable: launch.command,
+        commandLineHash,
+        sessionId: options.sessionName,
         exitCode: child.exitCode,
         signalCode: child.signalCode,
         basePort,

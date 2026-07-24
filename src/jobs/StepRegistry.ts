@@ -13,6 +13,7 @@ export interface StepExecutionContext {
   probeSerial?: string;
   plan: TestPlan;
   step: TestPlanStep;
+  signal?: AbortSignal;
 }
 
 export class StepRegistry {
@@ -20,10 +21,11 @@ export class StepRegistry {
 
   async execute(context: StepExecutionContext): Promise<Record<string, unknown>> {
     const { plan, step, boardId, sessionId } = context;
+    context.signal?.throwIfAborted();
     const artifacts = resolveArtifactsForBoard(plan, boardId);
     switch (step.type) {
       case "delay":
-        await new Promise(resolve => setTimeout(resolve, step.delayMs ?? 0));
+        await abortableDelay(step.delayMs ?? 0, context.signal);
         return { delayedMs: step.delayMs ?? 0 };
       case "canAcceptance":
         if (!this.canAcceptance) throw new Error("CAN acceptance is unavailable in this runtime");
@@ -60,6 +62,25 @@ export class StepRegistry {
         return sessionId ? this.tools.invokeTool("c2000_closeDebugSession", fenced(context, { sessionId })) : { success: true, skipped: true };
     }
   }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  const activeSignal = signal;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      activeSignal.removeEventListener("abort", abort);
+      reject(activeSignal.reason ?? new DOMException("Operation aborted", "AbortError"));
+    };
+    function done() {
+      activeSignal.removeEventListener("abort", abort);
+      resolve();
+    }
+    activeSignal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function fenced<T extends Record<string, unknown>>(context: StepExecutionContext, input: T): T & { __leaseContext?: BoardLeaseContext } {

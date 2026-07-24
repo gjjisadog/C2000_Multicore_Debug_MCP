@@ -83,4 +83,38 @@ describe("BoardExecutionSemaphore", () => {
     await stopped;
     expect(finished).toBe(true);
   });
+
+  test("reserves future capacity for an aged group instead of starving it with singles", async () => {
+    const semaphore = new BoardExecutionSemaphore(2, { agingThresholdMs: 0, starvationTimeoutMs: 1000 });
+    const blocker = await semaphore.acquire("board-a", "blocker");
+    const groupWaiting = semaphore.acquireGroup(["board-b", "board-c"], "pair");
+    let singleGranted = false;
+    const singleWaiting = semaphore.acquire("board-d", "single").then(permit => {
+      singleGranted = true;
+      return permit;
+    });
+    await Promise.resolve();
+    expect(singleGranted).toBe(false);
+    expect(semaphore.snapshot().queue[0]).toEqual(expect.objectContaining({ jobId: "pair", priority: "ACCEPTANCE" }));
+    blocker.release();
+    const group = await groupWaiting;
+    expect(group.map(item => item.boardId)).toEqual(["board-b", "board-c"]);
+    expect(singleGranted).toBe(false);
+    group.forEach(item => item.release());
+    (await singleWaiting).release();
+  });
+
+  test("selects higher priority work while requests are not aged", async () => {
+    const semaphore = new BoardExecutionSemaphore(1, { agingThresholdMs: 60_000 });
+    const blocker = await semaphore.acquire("board-x", "blocker");
+    const order: string[] = [];
+    const regression = semaphore.acquire("board-a", "regression", "REGRESSION").then(permit => { order.push("regression"); return permit; });
+    const safety = semaphore.acquire("board-b", "safety", "SAFETY_RECOVERY").then(permit => { order.push("safety"); return permit; });
+    blocker.release();
+    const safetyPermit = await safety;
+    expect(order).toEqual(["safety"]);
+    safetyPermit.release();
+    (await regression).release();
+    expect(order).toEqual(["safety", "regression"]);
+  });
 });

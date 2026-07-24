@@ -11,6 +11,7 @@ export interface CcsScriptingAdapterOptions {
   workspacePath?: string;
   dssTimeoutMs?: number;
   timeouts?: Partial<DssTimeouts>;
+  ownership?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string };
 }
 
 export interface DssTimeouts {
@@ -34,12 +35,17 @@ export class CcsScriptingAdapter implements DebugAdapter {
       startupMs: options.timeouts?.startupMs,
       shutdownRequestMs: options.timeouts?.shutdownRequestMs,
       processExitMs: options.timeouts?.processExitMs
+      , ownership: options.ownership
     })
   ) {}
 
   /** CCS workspace used for relative program/map resolution and DSS process cwd/env. */
   get workspacePath(): string | undefined {
     return this.options.workspacePath;
+  }
+
+  ownedProcesses(): Record<string, unknown>[] {
+    return this.bridge.ownedProcesses?.() ?? [];
   }
 
   async createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession> {

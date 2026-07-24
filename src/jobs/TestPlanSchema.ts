@@ -49,6 +49,14 @@ export const testPlanStepSchema = z.object({
   on: z.enum(["always", "failure", "success"]).optional()
 }).passthrough();
 
+export const stepRetryPolicySchema = z.object({
+  maxAttempts: z.number().int().positive().default(1),
+  backoffMs: z.number().int().nonnegative().default(0),
+  maxBackoffMs: z.number().int().nonnegative().default(30000),
+  jitter: z.boolean().default(false),
+  retryableErrors: z.array(z.string().min(1)).default([])
+});
+
 export const testPlanSchema = z.object({
   planVersion: z.literal(1),
   name: z.string().min(1),
@@ -59,6 +67,7 @@ export const testPlanSchema = z.object({
   }).optional(),
   boardIds: z.array(z.string().min(1)).min(1).optional(),
   parallelism: z.number().int().positive().optional(),
+  priority: z.enum(["SAFETY_RECOVERY", "INTERACTIVE_DEBUG", "ACCEPTANCE", "REGRESSION", "SOAK"]).default("REGRESSION"),
   /** Legacy/default firmware used when no more-specific board or role artifact is supplied. */
   artifacts: testArtifactsSchema.optional(),
   /** Highest-priority firmware assignment for a physical board id. */
@@ -72,7 +81,7 @@ export const testPlanSchema = z.object({
     execution: canExecutionSchema.default({ mode: "acceptance", iterations: 1, matrixCases: [], failFast: false, health: {}, resetOrRejoinRequested: false })
   }).optional(),
   steps: z.array(testPlanStepSchema).min(1),
-  retryPolicy: z.record(z.number().int().nonnegative()).optional(),
+  retryPolicy: z.record(z.union([z.number().int().nonnegative(), stepRetryPolicySchema])).default({}),
   failurePolicy: z.object({
     continueHealthyBoards: z.boolean().default(true),
     quarantineFailedBoard: z.boolean().default(true),

@@ -35,7 +35,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
       restartLimit: 5,
       restartWindowMs: 60000
     },
-    scheduler: { maxParallelBoards: 4, pollIntervalMs: 250 },
+    scheduler: { maxActiveJobs: 16, maxParallelBoards: 4, agingThresholdMs: 30000, starvationTimeoutMs: 300000, pollIntervalMs: 250 },
     boards: [],
     ...fileConfig
   });

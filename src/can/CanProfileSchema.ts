@@ -88,12 +88,44 @@ const profileRoleSchema = z.object({
   channel: z.string().min(1).optional()
 });
 
+const firmwareEvidenceSchema = z.object({
+  coreId: z.number().int().nonnegative(),
+  canReady: z.string().min(1).optional(),
+  controllerState: z.string().min(1).optional(),
+  txCount: z.string().min(1).optional(),
+  rxCount: z.string().min(1).optional(),
+  txSequence: z.string().min(1).optional(),
+  rxSequence: z.string().min(1).optional(),
+  lastTxId: z.string().min(1).optional(),
+  lastRxId: z.string().min(1).optional(),
+  lastTxPayload: z.array(z.string().min(1)).max(8).optional(),
+  lastRxPayload: z.array(z.string().min(1)).max(8).optional(),
+  crcErrorCount: z.string().min(1).optional(),
+  sequenceErrorCount: z.string().min(1).optional(),
+  busOffCount: z.string().min(1).optional(),
+  peerOnline: z.string().min(1).optional(),
+  heartbeat: z.string().min(1).optional(),
+  testArm: z.string().min(1).optional(),
+  testTrigger: z.string().min(1).optional(),
+  testResult: z.string().min(1).optional()
+});
+
+const applicationAssertionSchema = z.object({
+  label: z.string().min(1),
+  boardRole: z.enum(["PRIMARY", "SECONDARY"]),
+  coreId: z.number().int().nonnegative(),
+  expression: z.string().min(1),
+  comparison: z.enum(["EQUAL", "NOT_EQUAL", "GREATER_THAN", "GREATER_THAN_OR_EQUAL", "LESS_THAN", "LESS_THAN_OR_EQUAL", "BOOLEAN"]),
+  expected: observationValueSchema
+});
+
 export const canAcceptanceProfileSchema = z.object({
   /** Stable logical profile identity; inline legacy input is still registered and hashed. */
   profileId: z.string().min(1).default("inline-can-acceptance"),
   version: z.number().int().positive().default(1),
   /** Hardware is the safe default: it fails closed until a physical adapter is configured. */
   adapter: z.enum(["hardware", "mock"]).default("hardware"),
+  trafficMode: z.enum(["firmware-driven", "adapter-injected", "passive-capture"]).default("firmware-driven"),
   bus: z.object({ name: z.string().min(1).default("can0"), channel: z.string().min(1).optional(), nominalBitrate: z.number().int().positive().optional() }).default({ name: "can0" }),
   roles: z.array(profileRoleSchema).max(2).default([]),
   directions: z.array(canDirectionSchema).min(2),
@@ -102,6 +134,11 @@ export const canAcceptanceProfileSchema = z.object({
   comparisons: z.array(crossBoardComparisonSchema).default([]),
   safety: z.object({ required: z.boolean().default(false), gates: z.array(safetyGateSchema).default([]) }).default({ required: false, gates: [] }),
   testHooks: z.array(canTestHookSchema).default([]),
+  firmwareEvidence: z.object({
+    PRIMARY: firmwareEvidenceSchema.optional(),
+    SECONDARY: firmwareEvidenceSchema.optional()
+  }).default({}),
+  applicationAssertions: z.array(applicationAssertionSchema).default([]),
   evidence: z.object({
     sequence: evidenceFeatureSchema.default({ enabled: false, required: false }),
     crc: evidenceFeatureSchema.default({ enabled: false, required: false }),
@@ -122,6 +159,10 @@ export const canAcceptanceProfileSchema = z.object({
   }
   if (profile.version >= 2 && profile.safety.gates.length === 0) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "CAN profile version 2+ must declare safety gates; variable names remain profile-defined" });
+  }
+  if (profile.adapter === "hardware" && profile.trafficMode === "firmware-driven" &&
+      (!profile.firmwareEvidence.PRIMARY || !profile.firmwareEvidence.SECONDARY)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "Hardware firmware-driven acceptance requires PRIMARY and SECONDARY firmwareEvidence mappings" });
   }
 });
 

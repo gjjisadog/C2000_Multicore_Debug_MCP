@@ -2,6 +2,29 @@
 
 Independent MCP server for explicit TI C2000 multicore debug control. The first implementation targets F28P65x CPU1/CPU2 workflows and keeps all debug APIs scoped by `sessionId` and `coreId`.
 
+## 0.5 CAN evidence and job semantics
+
+Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.
+The board firmware transmits, PCAN passively observes the physical bus with
+hardware and host timestamps, and the peer firmware counters/last-frame
+variables plus optional application assertions close the evidence chain.
+`FULL_HARDWARE_EVIDENCE` requires matching firmware TX, bus, and firmware RX
+evidence; Mock always reports `SIMULATION_EVIDENCE`. A successful PCAN write is
+only `QUEUED_TO_ADAPTER`, not delivered.
+
+PCAN native access now runs in `c2000-can-worker`; daemon and board-worker
+processes do not load Koffi or `PCANBasic.dll`. SQLite channel leases fence old
+worker generations. Two-board permits and leases are acquired atomically.
+Scheduler job capacity (`maxActiveJobs`) is independent of physical-board
+capacity (`maxParallelBoards`) and includes priority, aging, and starvation
+evidence. Retry policies, `step.on`, attempt persistence, and abort-aware
+cancellation are enforced by the job engine.
+
+Required branch protection checks are `Fast CI`, `Deep CI`, and `Packaging CI`.
+Release artifacts contain a runtime manifest, SHA-256 metadata, and CycloneDX
+SBOM. Automated CI does not claim real XDS110/PCAN/two-board hardware success;
+that remains an explicit manual hardware workflow.
+
 ## Round 4 execution safety
 
 `scheduler.maxParallelBoards` is now a daemon-wide physical-board limit.

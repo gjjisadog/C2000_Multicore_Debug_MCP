@@ -1,4 +1,5 @@
 import { SqliteStore } from "../SqliteStore.js";
+import { randomUUID } from "node:crypto";
 
 export interface TestRunRecord {
   jobId: string;
@@ -100,6 +101,33 @@ export class TestRunRepository {
       this.store.run("UPDATE test_steps SET status = ?, attempt = ?, started_at = ?, finished_at = ?, output_json = ?, error_json = ? WHERE step_run_id = ?", [step.status, step.attempt, step.startedAt ?? null, step.finishedAt ?? null, step.output ? JSON.stringify(step.output) : null, step.error ? JSON.stringify(step.error) : null, step.stepRunId]);
       this.recalculateProgress(step.jobId);
     });
+  }
+
+  addStepAttempt(input: {
+    step: TestStepRecord;
+    attemptIndex: number;
+    startedAt: string;
+    finishedAt: string;
+    status: "PASSED" | "FAILED";
+    error?: Record<string, unknown>;
+    retryDecision: Record<string, unknown>;
+    backoffMs: number;
+    reconcileEvidence?: Record<string, unknown>;
+  }): void {
+    this.store.run(
+      "INSERT INTO test_step_attempts(attempt_id, step_run_id, job_id, board_id, attempt_index, started_at, finished_at, status, error_json, retry_decision_json, backoff_ms, reconcile_evidence_json) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      [`attempt-${randomUUID()}`, input.step.stepRunId, input.step.jobId, input.step.boardId, input.attemptIndex, input.startedAt, input.finishedAt, input.status, input.error ? JSON.stringify(input.error) : null, JSON.stringify(input.retryDecision), input.backoffMs, input.reconcileEvidence ? JSON.stringify(input.reconcileEvidence) : null]
+    );
+  }
+
+  stepAttempts(jobId: string): Record<string, unknown>[] {
+    return this.store.all<Record<string, unknown>>("SELECT * FROM test_step_attempts WHERE job_id = ? ORDER BY board_id, step_run_id, attempt_index", [jobId]).map(row => ({
+      attemptId: row.attempt_id, stepRunId: row.step_run_id, jobId: row.job_id, boardId: row.board_id, attemptIndex: row.attempt_index,
+      startedAt: row.started_at, finishedAt: row.finished_at, status: row.status, backoffMs: row.backoff_ms,
+      ...(row.error_json ? { error: parseJson(String(row.error_json), {}) } : {}),
+      retryDecision: parseJson(String(row.retry_decision_json), {}),
+      ...(row.reconcile_evidence_json ? { reconcileEvidence: parseJson(String(row.reconcile_evidence_json), {}) } : {})
+    }));
   }
 
   recalculateProgress(jobId: string): number {

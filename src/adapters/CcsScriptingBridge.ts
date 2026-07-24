@@ -57,6 +57,7 @@ export interface CcsScriptingBridge {
   createSession?(options: CcsBridgeCreateSessionOptions): Promise<void>;
   disposeSession?(adapterSessionId: string): Promise<void>;
   execute(command: CcsScriptingCommand): Promise<Record<string, unknown>>;
+  ownedProcesses?(): Record<string, unknown>[];
 }
 
 export interface DssCliBridgeOptions {

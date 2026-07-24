@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export type RuntimeEntrypointName = "daemon" | "worker";
+export type RuntimeEntrypointName = "daemon" | "worker" | "can-worker";
 
 export interface RuntimeEntrypointCandidates {
   compiled: string[];

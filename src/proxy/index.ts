@@ -13,7 +13,7 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
   const daemon = await ensureDaemon(config);
   const client = new McpDaemonClient(daemon.client);
   const server = new McpServer(
-    { name: "c2000-multicore-mcp", version: "0.1.0" },
+    { name: "c2000-multicore-mcp", version: "0.5.0" },
     { capabilities: { logging: {} } }
   );
   registerC2000Tools(server, client);

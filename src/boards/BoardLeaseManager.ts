@@ -21,38 +21,35 @@ export class BoardLeaseManager {
 
   acquire(options: { boardId: string; ownerJobId?: string; workerInstanceId?: string; ttlMs: number }): LeasedBoard {
     return this.store.transaction(() => {
-      const board = this.boards.require(options.boardId);
       const now = new Date();
-      const existing = this.leases.activeForBoard(board.boardId);
-      if (existing && Date.parse(existing.expiresAt) > now.getTime()) {
-        throw new DebugMcpError("BoardLeased", `Board ${board.boardId} already has an active lease`, {
-          boardId: board.boardId,
-          probeSerial: board.probeSerial,
-          leaseId: existing.leaseId,
-          ownerJobId: existing.ownerJobId
-        });
-      }
-      if (existing) this.leases.release(existing.leaseId, now.toISOString());
-      const leaseToken = randomBytes(32).toString("base64url");
-      const workerInstanceId = options.workerInstanceId ?? board.currentWorkerInstanceId;
-      if (!options.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "A board lease requires an explicit owner", { boardId: board.boardId });
-      if (!workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "A board lease requires an active worker identity", { boardId: board.boardId });
-      const fencingToken = this.leases.latestFencingToken(board.boardId) + 1;
-      const lease: BoardLease = {
-        leaseId: `lease-${randomUUID()}`,
-        boardId: board.boardId,
-        probeSerial: board.probeSerial,
+      const prepared = this.prepare(options, now);
+      return this.insertPrepared(prepared, options.ttlMs, now);
+    });
+  }
+
+  /** Atomically validates and acquires every board or leaves the group completely untouched. */
+  acquireGroup(options: {
+    boardIds: string[];
+    ownerJobId: string;
+    workerInstanceIds?: Record<string, string>;
+    ttlMs: number;
+  }): LeasedBoard[] {
+    if (options.boardIds.length === 0 || new Set(options.boardIds).size !== options.boardIds.length) {
+      throw new DebugMcpError("CanProfileInvalid", "A board lease group requires unique board IDs", { boardIds: options.boardIds });
+    }
+    return this.store.transaction(() => {
+      const now = new Date();
+      // Complete every read/check before releasing expired rows or inserting a single lease.
+      const prepared = [...options.boardIds].sort().map(boardId => this.prepare({
+        boardId,
         ownerJobId: options.ownerJobId,
-        workerInstanceId,
-        acquiredAt: now.toISOString(),
-        expiresAt: new Date(now.getTime() + options.ttlMs).toISOString(),
-        renewedAt: now.toISOString(),
-        fencingToken,
-        leaseGeneration: fencingToken
-      };
-      this.leases.insert(lease, hashToken(leaseToken));
-      this.boards.setLease(board.boardId, lease.leaseId);
-      return { lease, leaseToken, context: toContext(lease, leaseToken) };
+        workerInstanceId: options.workerInstanceIds?.[boardId],
+        ttlMs: options.ttlMs
+      }, now, false));
+      for (const item of prepared) {
+        if (item.expiredLeaseId) this.leases.release(item.expiredLeaseId, now.toISOString());
+      }
+      return prepared.map(item => this.insertPrepared(item, options.ttlMs, now));
     });
   }
 
@@ -140,6 +137,52 @@ export class BoardLeaseManager {
       throw new DebugMcpError("BoardLeased", "Board lease is missing or released", { leaseId });
     }
     return candidate;
+  }
+
+  private prepare(
+    options: { boardId: string; ownerJobId?: string; workerInstanceId?: string; ttlMs: number },
+    now: Date,
+    releaseExpired = true
+  ): { board: ReturnType<BoardRepository["require"]>; ownerJobId: string; workerInstanceId: string; expiredLeaseId?: string } {
+    const board = this.boards.require(options.boardId);
+    if (!["AVAILABLE", "READY"].includes(board.status)) {
+      throw new DebugMcpError("ProbeNotConnected", `Board ${board.boardId} is not available for leasing`, { boardId: board.boardId, status: board.status });
+    }
+    const existing = this.leases.activeForBoard(board.boardId);
+    if (existing && Date.parse(existing.expiresAt) > now.getTime()) {
+      throw new DebugMcpError("BoardLeased", `Board ${board.boardId} already has an active lease`, {
+        boardId: board.boardId, probeSerial: board.probeSerial, leaseId: existing.leaseId, ownerJobId: existing.ownerJobId
+      });
+    }
+    if (!options.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "A board lease requires an explicit owner", { boardId: board.boardId });
+    const workerInstanceId = options.workerInstanceId ?? board.currentWorkerInstanceId;
+    if (!workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "A board lease requires an active worker identity", { boardId: board.boardId });
+    if (existing && releaseExpired) this.leases.release(existing.leaseId, now.toISOString());
+    return { board, ownerJobId: options.ownerJobId, workerInstanceId, ...(existing ? { expiredLeaseId: existing.leaseId } : {}) };
+  }
+
+  private insertPrepared(
+    prepared: { board: ReturnType<BoardRepository["require"]>; ownerJobId: string; workerInstanceId: string },
+    ttlMs: number,
+    now: Date
+  ): LeasedBoard {
+    const leaseToken = randomBytes(32).toString("base64url");
+    const fencingToken = this.leases.latestFencingToken(prepared.board.boardId) + 1;
+    const lease: BoardLease = {
+      leaseId: `lease-${randomUUID()}`,
+      boardId: prepared.board.boardId,
+      probeSerial: prepared.board.probeSerial,
+      ownerJobId: prepared.ownerJobId,
+      workerInstanceId: prepared.workerInstanceId,
+      acquiredAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + ttlMs).toISOString(),
+      renewedAt: now.toISOString(),
+      fencingToken,
+      leaseGeneration: fencingToken
+    };
+    this.leases.insert(lease, hashToken(leaseToken));
+    this.boards.setLease(prepared.board.boardId, lease.leaseId);
+    return { lease, leaseToken, context: toContext(lease, leaseToken) };
   }
 }
 

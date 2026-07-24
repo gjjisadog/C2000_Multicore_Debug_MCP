@@ -11,9 +11,55 @@ export interface CanFrame {
 export interface CanCapture {
   direction: { sourceBoardId: string; targetBoardId: string };
   frame: CanFrame;
+  /** Backward-compatible host timestamp. Prefer hardwareTimestamp + hostReceivedAt. */
   timestamp: string;
-  delivery: "DELIVERED" | "DROPPED" | "DUPLICATED" | "NODE_OFFLINE";
+  hardwareTimestamp?: number;
+  hostReceivedAt?: string;
+  delivery: CanDeliveryStatus;
   fault?: string;
+}
+
+export type CanDeliveryStatus =
+  | "REQUESTED"
+  | "QUEUED_TO_ADAPTER"
+  | "OBSERVED_ON_BUS"
+  | "RECEIVED_BY_PEER"
+  | "PROCESSED_BY_PEER"
+  | "DROPPED"
+  | "TIMED_OUT"
+  | "BUS_ERROR"
+  | "UNKNOWN";
+
+export type CanTrafficMode = "firmware-driven" | "adapter-injected" | "passive-capture";
+export type CanEvidenceLevel =
+  | "FULL_HARDWARE_EVIDENCE"
+  | "BUS_AND_DEBUG_EVIDENCE"
+  | "DEBUG_ONLY_EVIDENCE"
+  | "BUS_ONLY_EVIDENCE"
+  | "INSUFFICIENT_EVIDENCE"
+  | "SIMULATION_EVIDENCE";
+
+export interface CanCaptureFilter {
+  id?: number;
+  extended?: boolean;
+  payloadMask?: number[];
+  payload?: number[];
+  startedAt?: string;
+  finishedAt?: string;
+  minimumCount?: number;
+  sourceBoardId?: string;
+  targetBoardId?: string;
+}
+
+export interface CanAdapterStatistics {
+  captureStartedAt?: string;
+  captureFinishedAt?: string;
+  frameCount: number;
+  busWarning: boolean;
+  busPassive: boolean;
+  busOff: boolean;
+  framePeriodMs?: number;
+  jitterMs?: number;
 }
 
 export interface CanAdapterInfo {
@@ -59,6 +105,11 @@ export interface CanBusAdapter {
   open(input: { jobId: string; boardIds: string[]; faults: CanFaultScenario[] }): Promise<void>;
   send(input: { sourceBoardId: string; targetBoardId: string; frame: CanFrame }): Promise<CanCapture>;
   receive(input: { sourceBoardId: string; targetBoardId: string; timeoutMs: number }): Promise<CanFrame | undefined>;
+  startCapture(input?: { filter?: CanCaptureFilter; signal?: AbortSignal }): Promise<{ captureId: string; startedAt: string }>;
+  stopCapture(): Promise<{ stoppedAt: string; captures: CanCapture[] }>;
+  receiveFrames(filter?: CanCaptureFilter): Promise<CanCapture[]>;
+  waitForFrame(input: { filter: CanCaptureFilter; timeoutMs: number; signal?: AbortSignal }): Promise<CanCapture | undefined>;
+  getStatistics(): Promise<CanAdapterStatistics>;
   captures(): CanCapture[];
   capture(): CanCapture[];
   close(): Promise<void>;

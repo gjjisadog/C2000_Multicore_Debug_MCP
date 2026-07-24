@@ -17,6 +17,8 @@ import { BoardGroupBarrierRepository } from "../storage/repositories/BoardGroupB
 import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/BoardGroupReconcileDecisionRepository.js";
 import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
 import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecutionSnapshot } from "./BoardExecutionSemaphore.js";
+import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
+import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
@@ -26,6 +28,7 @@ export class TestJobEngine {
   private readonly boardPermits: BoardExecutionSemaphore;
   private readonly executing = new Set<string>();
   private readonly scheduledTasks = new Set<Promise<void>>();
+  private readonly abortControllers = new Map<string, AbortController>();
   private stopping = false;
 
   constructor(private readonly options: {
@@ -34,7 +37,10 @@ export class TestJobEngine {
     events: EventRepository;
     artifacts: ArtifactRepository;
     tools: C2000ToolInvoker;
+    maxActiveJobs?: number;
     maxParallelBoards: number;
+    agingThresholdMs?: number;
+    starvationTimeoutMs?: number;
     canAcceptance?: CanAcceptanceService;
     canResults?: CanTestResultRepository;
     boardGroups?: BoardGroupRepository;
@@ -42,8 +48,12 @@ export class TestJobEngine {
     groupBarriers?: BoardGroupBarrierRepository;
     groupReconcileDecisions?: BoardGroupReconcileDecisionRepository;
   }) {
-    this.scheduler = new TestScheduler(Math.max(1, options.maxParallelBoards));
-    this.boardPermits = new BoardExecutionSemaphore(Math.max(1, options.maxParallelBoards));
+    this.scheduler = new TestScheduler(Math.max(1, options.maxActiveJobs ?? 16));
+    this.boardPermits = new BoardExecutionSemaphore(Math.max(1, options.maxParallelBoards), {
+      agingThresholdMs: options.agingThresholdMs,
+      starvationTimeoutMs: options.starvationTimeoutMs,
+      onStarvation: waiter => options.events.append({ level: "warn", sourceType: "scheduler", sourceId: waiter.jobId, jobId: waiter.jobId, eventType: "BOARD_PERMIT_STARVATION", payload: waiter })
+    });
     this.steps = new StepRegistry(options.tools, options.canAcceptance);
   }
 
@@ -181,6 +191,7 @@ export class TestJobEngine {
   cancel(jobId: string): Record<string, unknown> {
     if (!this.options.runs.get(jobId)) throw new DebugMcpError("SessionNotFound", `Test run not found: ${jobId}`, { jobId });
     this.options.runs.requestCancel(jobId);
+    this.abortControllers.get(jobId)?.abort(new DOMException(`Test run ${jobId} cancelled`, "AbortError"));
     this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_CANCEL_REQUESTED", payload: {} });
     return { success: true, jobId, status: "CANCEL_REQUESTED" };
   }
@@ -204,20 +215,43 @@ export class TestJobEngine {
     const run = this.options.runs.get(jobId);
     if (!run) return;
     const plan = testPlanSchema.parse(run.plan);
+    const abortController = new AbortController();
+    this.abortControllers.set(jobId, abortController);
+    if (run.cancelRequested) abortController.abort(new DOMException(`Test run ${jobId} cancelled`, "AbortError"));
     this.options.runs.updateStatus(jobId, "RUNNING", { startedAt: run.startedAt ?? new Date().toISOString() });
     const boards = this.options.runs.boards(jobId);
     let groupPermits: BoardExecutionPermit[] | undefined;
+    let groupLeases: LeasedBoard[] | undefined;
     let outcomes: Array<{ success: boolean; cancelled: boolean }>;
     try {
-      if (plan.can) groupPermits = await this.boardPermits.acquireGroup(boards.map(board => board.boardId), jobId);
+      if (plan.can) {
+        groupPermits = await this.boardPermits.acquireGroup(boards.map(board => board.boardId), jobId, plan.priority === "REGRESSION" ? "ACCEPTANCE" : plan.priority);
+        groupLeases = this.options.registry.leases.acquireGroup({
+          boardIds: boards.map(board => board.boardId),
+          ownerJobId: jobId,
+          ttlMs: 30000
+        });
+      }
       const permitsByBoard = new Map(groupPermits?.map(permit => [permit.boardId, permit]));
+      const leasesByBoard = new Map(groupLeases?.map(lease => [lease.lease.boardId, lease]));
       outcomes = await mapWithConcurrency(
         boards,
         Math.min(this.options.maxParallelBoards, plan.parallelism ?? this.options.maxParallelBoards),
-        board => this.executeBoard(jobId, plan, board, permitsByBoard.get(board.boardId))
+        board => this.executeBoard(jobId, plan, board, permitsByBoard.get(board.boardId), leasesByBoard.get(board.boardId))
       );
+    } catch (error) {
+      const structured = { ...toStructuredError(error) };
+      outcomes = boards.map(board => {
+        this.options.runs.updateBoard({ ...board, status: "FAILED", finishedAt: new Date().toISOString(), error: structured });
+        return { success: false, cancelled: false };
+      });
+      this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_GROUP_RESOURCE_FAILED", payload: { error: structured } });
     } finally {
+      for (const lease of [...(groupLeases ?? [])].reverse()) {
+        try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* durable expiry/reconcile remains authoritative */ }
+      }
       for (const permit of groupPermits ?? []) permit.release();
+      this.abortControllers.delete(jobId);
     }
     // Graceful daemon shutdown leaves the durable run in RUNNING; DebugDaemon
     // converts it to RECOVERING only after all in-flight DB users have settled.
@@ -232,14 +266,14 @@ export class TestJobEngine {
     this.options.events.append({ level: status === "PASSED" ? "info" : "warn", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_FINISHED", payload: { status } });
   }
 
-  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit): Promise<{ success: boolean; cancelled: boolean }> {
+  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit, groupLease?: LeasedBoard): Promise<{ success: boolean; cancelled: boolean }> {
     const permit = groupPermit ?? await this.boardPermits.acquire(board.boardId, jobId);
     const boardStart = new Date().toISOString();
     let current = { ...board, status: "RUNNING", startedAt: boardStart };
     this.options.runs.updateBoard(current);
-    let lease;
+    let lease = groupLease;
     try {
-      lease = this.options.registry.leases.acquire({ boardId: board.boardId, ownerJobId: jobId, ttlMs: 30000 });
+      lease ??= this.options.registry.leases.acquire({ boardId: board.boardId, ownerJobId: jobId, ttlMs: 30000 });
     } catch (error) {
       const leaseError = { ...toStructuredError(error) };
       this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError });
@@ -291,42 +325,74 @@ export class TestJobEngine {
           continue;
         }
         const freshRun = this.options.runs.get(jobId);
-        if (freshRun?.cancelRequested) {
-          cancelled = true;
-          this.options.runs.updateStep({ ...step, status: "SKIPPED", finishedAt: new Date().toISOString() });
+        if (freshRun?.cancelRequested || this.abortControllers.get(jobId)?.signal.aborted) cancelled = true;
+        const plannedStep = plan.steps[step.stepIndex]!;
+        const condition = conditionForStep(plannedStep);
+        const previousOutcome = failed || cancelled ? "failure" : "success";
+        if (!conditionMatches(condition, previousOutcome)) {
+          this.options.runs.updateStep({
+            ...step,
+            status: "SKIPPED",
+            finishedAt: new Date().toISOString(),
+            output: { reason: "CONDITION_NOT_MATCHED", condition, previousOutcome }
+          });
           continue;
         }
-        if (failed && step.stepType !== "cleanup" && step.stepType !== "runFullDebugBundle") {
-          this.options.runs.updateStep({ ...step, status: "SKIPPED", finishedAt: new Date().toISOString() });
-          continue;
-        }
-        const running = { ...step, status: "RUNNING", attempt: step.attempt + 1, startedAt: new Date().toISOString() } as TestStepRecord;
-        this.options.runs.updateStep(running);
         current = { ...current, currentStepIndex: step.stepIndex };
         this.options.runs.updateBoard(current);
-        try {
-          const output = await this.steps.execute({
-            jobId,
-            boardId: board.boardId,
-            sessionId,
-            leaseId: lease.lease.leaseId,
-            leaseContext: lease.context,
-            probeSerial: board.probeSerial,
-            plan,
-            step: plan.steps[step.stepIndex]!
-          });
-          if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
-          if (typeof output.sessionId === "string") {
-            sessionId = output.sessionId;
-            current = { ...current, sessionId };
-            this.options.runs.updateBoard(current);
+        const policy = retryPolicyFor(plan, step.stepType);
+        for (let attempt = step.attempt + 1; attempt <= policy.maxAttempts; attempt += 1) {
+          const attemptStartedAt = new Date().toISOString();
+          const running = { ...step, status: "RUNNING", attempt, startedAt: attemptStartedAt } as TestStepRecord;
+          this.options.runs.updateStep(running);
+          try {
+            const activeSignal = condition === "always" || (cancelled && condition === "failure") ? undefined : this.abortControllers.get(jobId)?.signal;
+            const output = await this.steps.execute({
+              jobId,
+              boardId: board.boardId,
+              sessionId,
+              leaseId: lease.lease.leaseId,
+              leaseContext: lease.context,
+              probeSerial: board.probeSerial,
+              plan,
+              step: plannedStep,
+              signal: activeSignal
+            });
+            if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
+            if (typeof output.sessionId === "string") {
+              sessionId = output.sessionId;
+              current = { ...current, sessionId };
+              this.options.runs.updateBoard(current);
+            }
+            const finishedAt = new Date().toISOString();
+            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0 });
+            this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt, output });
+            break;
+          } catch (error) {
+            const structured = { ...toStructuredError(error) };
+            if (isAbortError(error)) cancelled = true;
+            const retryDecision = decideRetry({ step, attempt, policy, errorCode: structured.code });
+            let reconcileEvidence: Record<string, unknown> | undefined;
+            if (retryDecision.retry && retryDecision.requiresReconcile) {
+              reconcileEvidence = await this.reconcileBeforeRetry(sessionId, lease.context);
+              if (reconcileEvidence.safeToRetry !== true) {
+                retryDecision.retry = false;
+                retryDecision.reason = "RECONCILE_REJECTED";
+              }
+            }
+            const finishedAt = new Date().toISOString();
+            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "FAILED", error: structured, retryDecision, backoffMs: retryDecision.backoffMs, reconcileEvidence });
+            if (retryDecision.retry && !cancelled) {
+              this.options.events.append({ level: "warn", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_STEP_RETRY", payload: { stepType: step.stepType, attempt, error: structured, retryDecision, reconcileEvidence } });
+              await abortableBackoff(retryDecision.backoffMs, this.abortControllers.get(jobId)?.signal);
+              continue;
+            }
+            failed = !cancelled;
+            lastError = structured;
+            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: { retryDecision, reconcileEvidence } });
+            this.options.events.append({ level: cancelled ? "warn" : "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED", payload: { stepType: step.stepType, error: lastError } });
+            break;
           }
-          this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt: new Date().toISOString(), output });
-        } catch (error) {
-          failed = true;
-          lastError = { ...toStructuredError(error) };
-          this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt: new Date().toISOString(), error: lastError });
-          this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_STEP_FAILED", payload: { stepType: step.stepType, error: lastError } });
         }
       }
     } catch (error) {
@@ -334,13 +400,25 @@ export class TestJobEngine {
       lastError = { ...toStructuredError(error) };
     } finally {
       clearInterval(renew);
-      try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* lease expiry will be reconciled */ }
+      if (!groupLease) {
+        try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* lease expiry will be reconciled */ }
+      }
       const status = cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED";
       current = { ...current, status, sessionId, finishedAt: new Date().toISOString(), ...(lastError ? { error: lastError } : {}) };
       this.options.runs.updateBoard(current);
       if (!groupPermit) permit.release();
     }
     return { success: !failed && !cancelled, cancelled };
+  }
+
+  private async reconcileBeforeRetry(sessionId: string | undefined, leaseContext: LeasedBoard["context"]): Promise<Record<string, unknown>> {
+    if (!sessionId) return { mode: "READ_ONLY", safeToRetry: true, reason: "No debug session exists yet" };
+    try {
+      const snapshot = await this.options.tools.invokeTool("c2000_getMulticoreSnapshot", { sessionId, __leaseContext: leaseContext });
+      return { mode: "READ_ONLY", safeToRetry: snapshot.success === true, snapshot };
+    } catch (error) {
+      return { mode: "READ_ONLY", safeToRetry: false, error: toStructuredError(error) };
+    }
   }
 
   private selectBoards(plan: TestPlan) {
@@ -386,4 +464,32 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, work: (item: 
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, () => worker()));
   return results;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (error instanceof DOMException && error.name === "AbortError")
+    || (error instanceof Error && error.name === "AbortError");
+}
+
+function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    signal?.throwIfAborted();
+    return Promise.resolve();
+  }
+  if (!signal) return new Promise(resolve => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  const activeSignal = signal;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      activeSignal.removeEventListener("abort", abort);
+      reject(activeSignal.reason ?? new DOMException("Operation aborted", "AbortError"));
+    };
+    function done() {
+      activeSignal.removeEventListener("abort", abort);
+      resolve();
+    }
+    activeSignal.addEventListener("abort", abort, { once: true });
+  });
 }
