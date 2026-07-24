@@ -374,13 +374,20 @@ export class DebugWorkflowService {
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
       cpu2CoreId: options.cpu2CoreId,
-      ...(cpu1Expressions?.length ? { cpu1Expressions } : {}),
-      ...(cpu2Expressions?.length ? { cpu2Expressions } : {})
+      // A caller-supplied IPC condition set is the diagnostic contract for this
+      // acceptance run. Pass empty per-core lists deliberately so the manager
+      // does not fall back to symbols from an unrelated default application.
+      ...(options.extraExpressions ? {
+        cpu1Expressions: cpu1Expressions ?? [],
+        cpu2Expressions: cpu2Expressions ?? []
+      } : {})
     });
     const extraExpressions = options.extraExpressions
       ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
       : undefined;
-    const bootVerdict = buildBootHandoffVerdict(boot, options.ramOwnership);
+    const bootVerdict = options.ipcAcceptance
+      ? buildIpcAcceptanceVerdict(options.ipcReady, options.ramOwnership)
+      : buildBootHandoffVerdict(boot, options.ramOwnership);
     const runtimeOwnershipReady = runtimeRamOwnershipAccepted(options.runtimeRamOwnership);
     const verdict = {
       ...bootVerdict,
@@ -395,10 +402,10 @@ export class DebugWorkflowService {
       ? "IPC_READY_TIMEOUT"
       : verdict.ready
         ? (options.ipcAcceptance ? "IPC_ACCEPTANCE_READY" : "BOOT_HANDOFF_READY")
-        : "BOOT_HANDOFF_NOT_READY";
+        : (options.ipcAcceptance ? "IPC_ACCEPTANCE_NOT_READY" : "BOOT_HANDOFF_NOT_READY");
     const severity = diagnosisCode === "IPC_READY_TIMEOUT"
       ? "error"
-      : diagnosisCode === "BOOT_HANDOFF_NOT_READY"
+      : diagnosisCode === "BOOT_HANDOFF_NOT_READY" || diagnosisCode === "IPC_ACCEPTANCE_NOT_READY"
         ? "warning"
         : "info";
     return {
@@ -602,6 +609,13 @@ function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwner
       "Verify CPU1 runs first and releases CPU2 boot handoff before CPU2 is expected to report IPC ready."
     ];
   }
+  if (diagnosisCode === "IPC_ACCEPTANCE_NOT_READY") {
+    const actions = ["Check each supplied IPC acceptance condition and the CPU1/CPU2 run sequence before rerunning acceptance."];
+    if (!verdict.ramOwnershipReady || (ramOwnership?.ownershipActions.length ?? 0) === 0) {
+      actions.push("Review CPU2 .map RAMGS usage and CPU1 MEMCFG_GSXMSEL ownership setup.");
+    }
+    return actions;
+  }
   if (diagnosisCode === "BOOT_HANDOFF_NOT_READY") {
     const actions = ["Check CPU1 IPC/pass expressions and CPU2 boot stage before rerunning acceptance."];
     if (!verdict.ramOwnershipReady || (ramOwnership?.ownershipActions.length ?? 0) === 0) {
@@ -610,6 +624,33 @@ function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwner
     return actions;
   }
   return ["Evidence indicates CPU1/CPU2 boot handoff and IPC-ready state are consistent."];
+}
+
+function buildIpcAcceptanceVerdict(ipcReady: ToolResult | undefined, ramOwnership?: RamOwnershipAnalysis): ToolResult {
+  const ipcReadyMatched = ipcReady?.matched === true;
+  const reasons: string[] = [];
+  if (!ipcReadyMatched) {
+    reasons.push("The supplied IPC acceptance conditions did not all match.");
+  }
+
+  let ramOwnershipReady = true;
+  if (ramOwnership) {
+    const cpu2NeedsGs = ramOwnership.maps.some(map => map.coreId === 2 && map.usedGsRam.length > 0);
+    if (cpu2NeedsGs && ramOwnership.ownershipActions.length === 0) {
+      ramOwnershipReady = false;
+      reasons.push("CPU2 map uses GS RAM but no ownership actions were generated.");
+    }
+  }
+
+  return {
+    cpu1Ready: ipcReadyMatched,
+    cpu2Ready: ipcReadyMatched,
+    ipcReady: ipcReadyMatched,
+    readinessBasis: "matched-ipc-conditions",
+    ramOwnershipReady,
+    ready: ipcReadyMatched && ramOwnershipReady,
+    reasons
+  };
 }
 
 function summaryMarkdown(result: ToolResult): string {
