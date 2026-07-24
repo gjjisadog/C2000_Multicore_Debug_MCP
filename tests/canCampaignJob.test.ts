@@ -82,6 +82,56 @@ describe("durable finite CAN campaigns", () => {
       await client.close();
     } finally { await daemon.stop(); }
   });
+
+  test("does not turn an omitted health budget into implicit fail-fast and retains a failure streak", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-can-campaign-health-"));
+    directories.push(directory);
+    const config = configFor(directory);
+    const daemon = new DebugDaemon(config);
+    try {
+      await daemon.start();
+      const client = new McpDaemonClient((await discoverDaemon(config)).client);
+      const profile = {
+        adapter: "mock" as const,
+        faults: [{ name: "unexpected-drop", kind: "drop" as const, sourceBoardId: "board-a", targetBoardId: "board-b" }],
+        directions: [
+          { sourceBoardId: "board-a", targetBoardId: "board-b", frames: [{ id: 0x451, data: [1] }] },
+          { sourceBoardId: "board-b", targetBoardId: "board-a", frames: [{ id: 0x452, data: [2] }] }
+        ], timeoutMs: 20, barrierTimeoutMs: 1000
+      };
+      const unconstrained = await client.invokeTool("c2000_submitCanFaultCampaign", {
+        boardIds: ["board-a", "board-b"], iterations: 3, failFast: false, profile
+      });
+      const unconstrainedCompleted = await waitFor(async () => {
+        const run = await client.invokeTool("c2000_getTestRun", { jobId: String(unconstrained.jobId) });
+        return run.status === "PASSED" ? run : undefined;
+      });
+      expect(unconstrainedCompleted).toEqual(expect.objectContaining({
+        can: expect.objectContaining({ campaign: expect.objectContaining({ status: "PARTIAL", definition: expect.objectContaining({ health: {} }) }), cases: expect.arrayContaining([
+          expect.objectContaining({ caseIndex: 0, status: "FAILED" }),
+          expect.objectContaining({ caseIndex: 1, status: "FAILED" }),
+          expect.objectContaining({ caseIndex: 2, status: "FAILED" })
+        ]) })
+      }));
+
+      const bounded = await client.invokeTool("c2000_submitCanFaultCampaign", {
+        boardIds: ["board-a", "board-b"], iterations: 3, failFast: false,
+        health: { maxConsecutiveFailures: 1 }, profile
+      });
+      const boundedCompleted = await waitFor(async () => {
+        const run = await client.invokeTool("c2000_getTestRun", { jobId: String(bounded.jobId) });
+        return run.status === "FAILED" ? run : undefined;
+      });
+      expect(boundedCompleted).toEqual(expect.objectContaining({
+        can: expect.objectContaining({ campaign: expect.objectContaining({ status: "FAILED" }), cases: expect.arrayContaining([
+          expect.objectContaining({ caseIndex: 0, status: "FAILED" }),
+          expect.objectContaining({ caseIndex: 1, status: "FAILED" }),
+          expect.objectContaining({ caseIndex: 2, status: "PENDING" })
+        ]) })
+      }));
+      await client.close();
+    } finally { await daemon.stop(); }
+  });
 });
 
 async function waitFor<T>(read: () => Promise<T | undefined>): Promise<T> {

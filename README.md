@@ -55,7 +55,7 @@ npm run build
 npm run doctor
 ```
 
-`npm run build` runs `scripts/build.mjs`, which invokes the TypeScript package CLI (`lib/_tsc.js`) directly. It type-checks production sources and produces a self-contained `dist/src/index.js` bundle, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. TypeScript is pinned to `5.5.4`; `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci` or `npm install typescript@5.5.4 --save-dev`.
+`npm run build` first type-checks production sources with the pinned TypeScript CLI (`lib/_tsc.js`), then invokes esbuild for the proxy, daemon, and board-worker entrypoints. It emits CommonJS self-contained bundles under `dist/src/` plus the required `better_sqlite3.node` binding, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci`.
 
 ## Start
 
@@ -90,9 +90,14 @@ Use the daemon/job surface for multi-board work:
 - `c2000_submitTestPlan` returns a stable `jobId` immediately; use
   `c2000_getTestRun`, `c2000_listTestRuns`, `c2000_cancelTestRun`, and
   `c2000_getTestArtifacts` afterwards.
-- A daemon stop marks in-flight runs `RECOVERING`. Startup only restarts a plan
-  from its declared whole-board safe boundary; a non-idempotent interruption
-  becomes `NEEDS_MANUAL_INTERVENTION` instead of being replayed.
+- A daemon stop marks in-flight runs `RECOVERING`. Startup makes a
+  **persisted-metadata-only** decision: it creates fresh worker/session state
+  and may restart an authorized RAM plan from its declared whole-board safe
+  boundary. It does not restore a former DSS `DebugSession`, nor read/reconcile
+  XDS110 ownership, CPU state/PC, loaded ELF hashes, fault-hook readback, or a
+  CAN adapter session. Non-idempotent interruptions become
+  `NEEDS_MANUAL_INTERVENTION` instead of being replayed. Reconcile events carry
+  these explicit capability flags as evidence.
 
 To use real multiple boards, add unique `boardId`, `probeSerial`, `ccxmlPath`,
 and tags in `boards[]`; do not leave probe allocation to CCS UI focus.
@@ -122,6 +127,12 @@ state, firmware ISR behavior, or physical frame delivery. The safe default is
 supplies a real `CanBusAdapter` (USB/CAN, PCAN, Vector, or firmware-backed).
 Never report a Mock result as hardware CAN acceptance.
 
+The repository includes no operational SocketCAN, PCAN, Kvaser, or Vector
+backend, and the default hardware adapter intentionally fails closed. Firmware
+expression observations are debug-side evidence, not independent bus-frame
+capture. `acceptance:can:hardware` is configuration preflight only; it sends no
+CAN traffic and controls no target.
+
 ### Persistent P1 CAN orchestration
 
 Board groups now persist member lease/worker/session evidence, named barriers,
@@ -138,6 +149,18 @@ matrix. Interrupted fault/reset/rejoin work is never blindly replayed. Each
 successful job registers JSON, Markdown, and JUnit report artifacts. When the
 adapter lacks independent bus verification, reports omit a fake CAN trace and
 say so explicitly.
+
+Campaign health limits are opt-in. With `failFast: false` and no `health`
+limits, every finite case executes and failures are recorded as a `PARTIAL`
+campaign. An explicit `maxConsecutiveFailures: 0` or `maxFailureRate: 0`
+means the first failure stops the campaign; a successful case is the only event
+that resets the consecutive-failure counter.
+
+CAN jobs can use a shared `artifacts` object for compatibility, or choose
+distinct firmware with `artifactsByBoard` and/or `artifactsByRole`. Resolution
+is `artifactsByBoard[boardId]` → `artifactsByRole[role]` → shared `artifacts`.
+The scheduler materializes role assignments to board IDs before persistence, so
+restart behavior remains deterministic.
 
 Useful local verification commands:
 
@@ -158,7 +181,7 @@ npm run doctor
 
 The doctor uses only Node built-ins. It starts the built MCP without touching the target, completes the MCP initialize handshake, lists tools, and calls `c2000_getServerHealth`. On failure it prints structured JSON with a failure code, remediation, and captured server stderr.
 
-Use `npm run doctor:isolated` to copy the runtime artifact into a temporary directory with no adjacent `node_modules` and perform the same handshake. This is the strongest check that the configured artifact is genuinely self-contained.
+Use `npm run doctor:isolated` to copy the full proxy/daemon/worker runtime into a temporary directory with no adjacent `node_modules` and perform the same handshake. `npm run verify:runtime-cwd` goes further: it starts the stdio proxy from an unrelated temporary working directory, auto-starts a detached daemon, and verifies a Mock worker reaches `READY`. These are the release checks that the configured artifact is genuinely self-contained and independent of the MCP host's cwd.
 
 ## Startup Resilience
 

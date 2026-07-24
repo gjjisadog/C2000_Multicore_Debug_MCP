@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { testPlanSchema } from "../jobs/TestPlanSchema.js";
+import { canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 
 export const coreConfigSchema = z.object({
@@ -91,13 +91,17 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true })
 });
 
+const canArtifactSelectionShape = {
+  artifacts: testArtifactsSchema.optional(),
+  artifactsByBoard: z.record(testArtifactsSchema).optional(),
+  artifactsByRole: z.record(testArtifactsSchema).optional()
+};
+
 /** Submit a durable two-board CAN acceptance job. Hardware mode fails closed until an adapter is installed. */
 export const submitMultiBoardCanAcceptanceSchema = z.object({
   name: z.string().min(1).default("two-board-can-acceptance"),
   boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
-  artifacts: z.object({
-    cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional()
-  }).optional(),
+  ...canArtifactSelectionShape,
   profile: canAcceptanceProfileSchema,
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(false), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: false, quarantineFailedBoard: true, collectDebugBundle: true })
 });
@@ -116,10 +120,11 @@ export const getBoardGroupSnapshotSchema = z.object({
 export const submitCanFaultCampaignSchema = z.object({
   name: z.string().min(1).default("two-board-can-fault-campaign"),
   boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
-  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }).optional(),
+  ...canArtifactSelectionShape,
   profile: canAcceptanceProfileSchema,
   iterations: z.number().int().positive().max(10_000).default(1),
   failFast: z.boolean().default(false),
+  health: canHealthPolicySchema,
   resetOrRejoinRequested: z.boolean().default(false),
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: true })
 });
@@ -127,11 +132,11 @@ export const submitCanFaultCampaignSchema = z.object({
 export const submitCanSoakTestSchema = z.object({
   name: z.string().min(1).default("two-board-can-soak"),
   boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
-  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }).optional(),
+  ...canArtifactSelectionShape,
   profile: canAcceptanceProfileSchema,
   iterations: z.number().int().positive().max(10_000).default(1),
   durationMs: z.number().int().positive().max(86_400_000).optional(),
-  health: z.object({ maxConsecutiveFailures: z.number().int().nonnegative().default(0), maxFailureRate: z.number().min(0).max(1).default(0) }).default({ maxConsecutiveFailures: 0, maxFailureRate: 0 }),
+  health: canHealthPolicySchema,
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: true })
 });
 

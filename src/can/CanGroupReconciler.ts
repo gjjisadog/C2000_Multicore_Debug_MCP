@@ -15,6 +15,10 @@ export class CanGroupReconciler {
     const evidence = {
       groupStatus: group.status,
       currentBarrier: group.currentBarrier,
+      reconciliationMode: "PERSISTED_METADATA_ONLY",
+      hardwareStateReconciled: false,
+      debugSessionsRestored: false,
+      unverifiedHardwareState: ["xds110-owner", "cpu1-cpu2-state", "program-counter", "loaded-elf-hash", "fault-hook-readback", "can-adapter-session"],
       members: group.members.map(member => ({ boardId: member.boardId, status: member.status, sessionId: member.sessionId, leaseId: member.leaseId, error: member.error })),
       barriers: barriers.map(barrier => ({ name: barrier.name, status: barrier.status, arrivedMembers: Object.keys(barrier.arrivedMembers) }))
     };
