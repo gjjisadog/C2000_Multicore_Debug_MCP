@@ -1,5 +1,4 @@
 import type { RamOwnershipAnalysis } from "../hardware/mapOwnership.js";
-import { expressionLooksReady } from "../utils/expressionMatch.js";
 
 export interface BootHandoffVerdict {
   cpu1Ready: boolean;
@@ -22,8 +21,8 @@ export function buildBootHandoffVerdict(
   const cpu2Expressions = Array.isArray(boot.cpu2?.expressions) ? boot.cpu2.expressions as Array<Record<string, any>> : [];
   const reasons: string[] = [];
 
-  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(result => expressionLooksReady(result));
-  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(result => expressionLooksReady(result));
+  const cpu1Ready = cpu1Expressions.length > 0 && cpu1Expressions.every(bootExpressionReady);
+  const cpu2Ready = cpu2Expressions.length > 0 && cpu2Expressions.every(bootExpressionReady);
   if (cpu1Expressions.length === 0) {
     reasons.push("No CPU1 expressions were evaluated.");
   } else if (!cpu1Ready) {
@@ -51,4 +50,18 @@ export function buildBootHandoffVerdict(
     ready: cpu1Ready && cpu2Ready && ramOwnershipReady,
     reasons
   };
+}
+
+function bootExpressionReady(result: Record<string, any>): boolean {
+  if (result.success !== true) {
+    return false;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.ulCpu2BootLastError") {
+    return Number(result.value) === 0;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.emStage" ||
+      result.expression === "g_stCoreCommCpu2Watch.emStage") {
+    return Number(result.value) === 5;
+  }
+  return !["0", "false", "undefined"].includes(String(result.value).toLowerCase());
 }

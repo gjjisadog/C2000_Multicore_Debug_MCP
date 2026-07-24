@@ -451,10 +451,13 @@ Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores
 6. `c2000_continue({ "sessionId": "dbg-...", "coreId": 0 })`
 7. Run CPU2 only when CPU1 boot/release and IPC/MSGRAM initialization make that valid.
 8. `c2000_evaluateMany` for IPC variables:
-   - `g_emHybrid30kCpu1Stage`
-   - `g_ulHybrid30kIpcPass`
-   - `g_ulHybrid30kMsgRamPass`
-   - `g_ulHybrid30kParamPass`
+   - `g_stCoreCommCpu1Watch.emStage`
+   - `g_stCoreCommCpu1Watch.ulIpcPass`
+   - `g_stCoreCommCpu1Watch.ulCpu2Ready`
+   - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
+   - `g_stCoreCommCpu2Watch.emStage`
+   - `g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq`
+   - `g_stCoreCommCpu2Watch.ulInitialParameterApplied`
 9. If stuck, `c2000_haltCores`, then `c2000_resolvePc` (for PC) or `c2000_resolveAddress` (address only; symbol mapping may be `partial` / not implemented).
 10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/pass flags, and CPU2 stage.
 11. `c2000_analyzeRamOwnership` for host-side `.map` RAMGS ownership evidence.
@@ -546,12 +549,14 @@ For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `owne
 - CPU1 PC via `c2000_resolvePc`
 - CPU2 PC via `c2000_resolvePc`
 - CPU1 expressions:
-  - `g_emHybrid30kCpu1Stage`
-  - `g_ulHybrid30kIpcPass`
-  - `g_ulHybrid30kMsgRamPass`
-  - `g_ulHybrid30kParamPass`
+  - `g_stCoreCommCpu1Watch.emStage`
+  - `g_stCoreCommCpu1Watch.ulIpcPass`
+  - `g_stCoreCommCpu1Watch.ulCpu2Ready`
+  - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
 - CPU2 expressions:
-  - `g_emHybrid30kCpu2Stage`
+  - `g_stCoreCommCpu2Watch.emStage`
+  - `g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq`
+  - `g_stCoreCommCpu2Watch.ulInitialParameterApplied`
 
 Example:
 
@@ -580,7 +585,13 @@ Example:
 }
 ```
 
-`c2000_waitForIpcReady` waits for CPU1/CPU2 IPC-ready conditions. If no custom `conditions` array is supplied, it polls the default symbols `g_ulHybrid30kIpcPass`, `g_ulHybrid30kMsgRamPass`, `g_ulHybrid30kParamPass` on CPU1 and `g_emHybrid30kCpu2Stage` on CPU2. Every condition is still evaluated through the requested `sessionId` and explicit `coreId`.
+`c2000_waitForIpcReady` waits for CPU1/CPU2 IPC-ready conditions. If no custom
+`conditions` array is supplied, it polls the current seven-condition Hybrid30K
+product gate: both stages are running, CPU1 IPC and CPU2-ready flags are set,
+CPU1 boot error is clear, and CPU2 has published and applied the initial
+parameter snapshot. Historical `ulMsgRamPass` and `ulParamPass` self-test flags
+are intentionally excluded from the default gate. Every condition is evaluated
+through the requested `sessionId` and explicit `coreId`.
 
 Example:
 
@@ -627,7 +638,7 @@ Example:
 {
   "sessionId": "dbg-...",
   "coreId": 0,
-  "expression": "g_ulHybrid30kIpcPass",
+  "expression": "g_stCoreCommCpu1Watch.ulIpcPass",
   "value": 0,
   "verify": true
 }
@@ -694,8 +705,8 @@ Example:
 {
   "sessionId": "dbg-...",
   "conditions": [
-    { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_ulHybrid30kIpcPass", "expected": 1 },
-    { "label": "cpu2-stage", "coreId": 2, "expression": "g_emHybrid30kCpu2Stage", "expected": "3" }
+    { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.ulIpcPass", "expected": 1 },
+    { "label": "cpu2-stage", "coreId": 2, "expression": "g_stCoreCommCpu2Watch.emStage", "expected": 5 }
   ],
   "timeoutMs": 5000,
   "intervalMs": 100
@@ -766,8 +777,8 @@ Example:
   "postLaunchChecks": {
     "waitForExpressionSet": {
       "conditions": [
-        { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_ulHybrid30kIpcPass", "expected": 1 },
-        { "label": "cpu2-stage", "coreId": 2, "expression": "g_emHybrid30kCpu2Stage", "expected": "0" }
+        { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.ulIpcPass", "expected": 1 },
+        { "label": "cpu2-stage", "coreId": 2, "expression": "g_stCoreCommCpu2Watch.emStage", "expected": 5 }
       ],
       "timeoutMs": 5000,
       "intervalMs": 100

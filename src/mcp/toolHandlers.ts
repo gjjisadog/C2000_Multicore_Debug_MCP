@@ -1113,6 +1113,20 @@ function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: ToolResult) {
   return buildBootHandoffVerdictCore(boot, ramOwnership as any);
 }
 
+function bootExpressionReady(result: ToolResult): boolean {
+  if (result.success !== true) {
+    return false;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.ulCpu2BootLastError") {
+    return Number(result.value) === 0;
+  }
+  if (result.expression === "g_stCoreCommCpu1Watch.emStage" ||
+      result.expression === "g_stCoreCommCpu2Watch.emStage") {
+    return Number(result.value) === 5;
+  }
+  return !["0", "false", "undefined"].includes(String(result.value).toLowerCase());
+}
+
 function discoveredProgramForCore(coreId: number, programDiscovery: ToolResult): string | undefined {
   if (coreId === 0) {
     return typeof programDiscovery.cpu1?.selected === "string" ? programDiscovery.cpu1.selected : undefined;
