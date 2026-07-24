@@ -5,7 +5,7 @@ import { EventRepository } from "../storage/repositories/EventRepository.js";
 import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import { TestRunRepository, type TestRunBoardRecord, type TestRunRecord, type TestStepRecord } from "../storage/repositories/TestRunRepository.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
-import { idempotencyForStep, testPlanSchema, type TestPlan } from "./TestPlanSchema.js";
+import { idempotencyForStep, materializeArtifactsByBoard, testPlanSchema, type TestPlan } from "./TestPlanSchema.js";
 import { StepRegistry } from "./StepRegistry.js";
 import { TestScheduler } from "./TestScheduler.js";
 import { TestReconciler } from "./TestReconciler.js";
@@ -71,8 +71,9 @@ export class TestJobEngine {
           this.options.events.append({ level: "error", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_RECONCILE_MANUAL_REQUIRED", payload: { ...decision } });
           continue;
         }
+        const releasedLeases = this.releaseRecoveredJobLeases(run.jobId);
         this.options.runs.resetForBoardFlowRestart(run.jobId);
-        this.options.events.append({ level: "info", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_RESTARTED_FROM_SAFE_BOUNDARY", payload: { nextStepIndex: decision.nextStepIndex } });
+        this.options.events.append({ level: "info", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_RESTARTED_FROM_SAFE_BOUNDARY", payload: { nextStepIndex: decision.nextStepIndex, releasedRecoveredLeases: releasedLeases, recoveryEvidence: decision.evidence } });
       }
       this.schedule(run.jobId);
     }
@@ -95,7 +96,8 @@ export class TestJobEngine {
     const submittedPlan = testPlanSchema.parse(planInput);
     const boards = this.selectBoards(submittedPlan);
     const jobId = `run-${randomUUID()}`;
-    const plan: TestPlan = submittedPlan.can
+    const selectedBoardIds = boards.map(board => board.boardId);
+    const plan: TestPlan = materializeArtifactsByBoard(submittedPlan.can
       ? {
         ...submittedPlan,
         parallelism: Math.max(2, submittedPlan.parallelism ?? 2),
@@ -105,7 +107,7 @@ export class TestJobEngine {
           execution: { ...submittedPlan.can.execution, campaignId: `can-campaign-${jobId}` }
         }
       }
-      : submittedPlan;
+      : submittedPlan, selectedBoardIds);
     if (plan.can) {
       if (boards.length !== 2) throw new DebugMcpError("CanProfileInvalid", "CAN acceptance requires exactly two selected boards", { selectedBoardIds: boards.map(board => board.boardId) });
       if (!this.options.canAcceptance) throw new DebugMcpError("CanAdapterUnavailable", "CAN acceptance service is not configured");
@@ -211,7 +213,15 @@ export class TestJobEngine {
     const boardStart = new Date().toISOString();
     let current = { ...board, status: "RUNNING", startedAt: boardStart };
     this.options.runs.updateBoard(current);
-    const lease = this.options.registry.leases.acquire({ boardId: board.boardId, ownerJobId: jobId, ttlMs: 30000 });
+    let lease;
+    try {
+      lease = this.options.registry.leases.acquire({ boardId: board.boardId, ownerJobId: jobId, ttlMs: 30000 });
+    } catch (error) {
+      const leaseError = { ...toStructuredError(error) };
+      this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError });
+      this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_BOARD_LEASE_FAILED", payload: { error: leaseError } });
+      return { success: false, cancelled: false };
+    }
     const renew = setInterval(() => { try { this.options.registry.leases.renew(lease.lease.leaseId, lease.leaseToken, 30000); } catch { /* a later step will fail safely */ } }, 10000);
     renew.unref();
     let sessionId = current.sessionId;
@@ -282,6 +292,12 @@ export class TestJobEngine {
     const selected = selector?.count ? boards.slice(0, selector.count) : boards;
     if (selected.length === 0) throw new DebugMcpError("ProbeNotConnected", "No registered board matches the submitted test plan", { boardIds, tags: selector?.tags });
     return selected;
+  }
+
+  private releaseRecoveredJobLeases(jobId: string): string[] {
+    return this.options.runs.boards(jobId)
+      .filter(board => this.options.registry.leases.releaseForRecoveredJob(board.boardId, jobId))
+      .map(board => board.boardId);
   }
 
   private reconcileCanGroup(jobId: string, plan: TestPlan) {

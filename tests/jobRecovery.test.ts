@@ -49,7 +49,14 @@ describe("daemon job recovery", () => {
       });
       expect(completed).toEqual(expect.objectContaining({
         status: "PASSED",
-        events: expect.arrayContaining([expect.objectContaining({ eventType: "JOB_RESTARTED_FROM_SAFE_BOUNDARY" })])
+        events: expect.arrayContaining([expect.objectContaining({
+          eventType: "JOB_RESTARTED_FROM_SAFE_BOUNDARY",
+          payload: expect.objectContaining({ recoveryEvidence: expect.objectContaining({
+            reconciliationMode: "PERSISTED_METADATA_ONLY",
+            hardwareStateReconciled: false,
+            debugSessionRestored: false
+          }) })
+        })])
       }));
       await second.close();
     } finally {

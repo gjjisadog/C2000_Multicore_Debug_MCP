@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
-import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
 import type { BoardWorkerLaunchOptions } from "../worker/BoardWorkerRuntime.js";
 import type { WorkerHeartbeat } from "../worker/WorkerHeartbeat.js";
 import { DebugMcpError } from "../utils/errors.js";
 import type { BoardWorkerClient } from "./BoardWorkerClient.js";
+import { runtimeEntrypointCandidates } from "../runtimePaths.js";
 
 interface PendingRequest {
   resolve(value: Record<string, unknown>): void;
@@ -38,6 +40,8 @@ export class BoardWorkerProcess implements BoardWorkerClient {
     if (this.child) return;
     const { command, args } = await resolveWorkerCommand();
     const child = spawn(command, args, {
+      // Preserve caller-relative configuration while locating the worker from
+      // the installed runtime, not from this working directory.
       cwd: process.cwd(),
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
@@ -136,16 +140,53 @@ export class BoardWorkerProcess implements BoardWorkerClient {
 }
 
 async function resolveWorkerCommand(): Promise<{ command: string; args: string[] }> {
-  const compiled = path.join(process.cwd(), "dist", "src", "worker", "index.js");
-  try {
-    await access(compiled);
-    return { command: process.execPath, args: [compiled] };
-  } catch {
-    return {
-      command: process.execPath,
-      args: [path.join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs"), path.join(process.cwd(), "src", "worker", "index.ts")]
-    };
+  const entries = runtimeEntrypointCandidates("worker", import.meta.url);
+  for (const compiled of entries.compiled) {
+    if (await exists(compiled)) return { command: process.execPath, args: [compiled] };
   }
+  for (const source of entries.source) {
+    if (await exists(source)) {
+      try {
+        return { command: process.execPath, args: [resolveTsxCli(), source] };
+      } catch (error) {
+        throw new DebugMcpError("WorkerEntrypointNotFound", "The source board worker entrypoint requires the tsx development dependency", {
+          cause: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+  throw new DebugMcpError("WorkerEntrypointNotFound", "Unable to locate the c2000 board worker runtime entrypoint", {
+    compiledCandidates: entries.compiled,
+    sourceCandidates: entries.source,
+    packageRoots: entries.packageRoots
+  });
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTsxCli(): string {
+  let lastError: unknown;
+  const requireCandidates = [
+    ...(typeof import.meta.url === "string" ? [createRequire(import.meta.url)] : []),
+    createRequire(path.resolve(process.argv[1] ?? process.execPath))
+  ];
+  for (const requireFromRuntime of requireCandidates) {
+    try {
+      return requireFromRuntime.resolve("tsx/cli");
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new DebugMcpError("WorkerEntrypointNotFound", "The source board worker entrypoint requires the tsx development dependency", {
+    cause: lastError instanceof Error ? lastError.message : String(lastError)
+  });
 }
 
 function isMessage(value: unknown): value is Record<string, unknown> { return isRecord(value); }

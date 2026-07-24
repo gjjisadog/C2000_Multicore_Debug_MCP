@@ -242,6 +242,10 @@ export class CanAcceptanceService {
       return summary;
     } catch (error) {
       const structured = toStructuredError(error);
+      const campaign = this.options.campaigns.getByJob(jobId);
+      if (campaign && !["PASSED", "PARTIAL", "FAILED"].includes(campaign.status)) {
+        this.options.campaigns.update(campaign.campaignId, "FAILED", { error: errorRecord(structured) });
+      }
       const group = this.options.groups.require(groupId);
       if (!this.options.groups.isTerminal(group.status)) this.options.groups.transition(groupId, "FAILED", { reason: "CAN acceptance error", error: errorRecord(structured) });
       this.setMembers(groupId, entry, "FAILED", errorRecord(structured));
@@ -326,13 +330,17 @@ export class CanAcceptanceService {
     const directions: Record<string, unknown>[] = [];
     let failures = 0;
     let consecutiveFailures = 0;
+    let completedCases = 0;
     if (campaign) this.options.campaigns.update(campaign.campaignId, "RUNNING", { checkpoint: { nextCaseIndex: 0 } });
     for (const item of cases) {
       if (execution.mode === "soak" && execution.durationMs && Date.now() - startedAt >= execution.durationMs) break;
       if (campaign) this.options.campaigns.updateCase(item.caseId, "RUNNING");
+      completedCases += 1;
       try {
         const result = await this.verifyTraffic(jobId, groupId, profile, adapter);
         directions.push({ caseId: item.caseId, caseIndex: item.caseIndex, input: item.input, directions: result });
+        // Only a successful case breaks a consecutive-failure streak.
+        consecutiveFailures = 0;
         if (campaign) {
           this.options.campaigns.updateCase(item.caseId, "PASSED", { result: { directions: result } });
           this.options.campaigns.checkpointSoak(campaign.campaignId, item.caseIndex + 1, Date.now() - startedAt, "PASSED", { failures, consecutiveFailures });
@@ -345,13 +353,13 @@ export class CanAcceptanceService {
         if (campaign) {
           this.options.campaigns.updateCase(item.caseId, "FAILED", { error: errorRecord });
           this.options.campaigns.checkpointSoak(campaign.campaignId, item.caseIndex + 1, Date.now() - startedAt, "FAILED", { failures, consecutiveFailures });
+          this.options.campaigns.update(campaign.campaignId, "RUNNING", { checkpoint: { nextCaseIndex: item.caseIndex + 1, failures, consecutiveFailures } });
         }
-        const failureRate = failures / (item.caseIndex + 1);
-        if (execution.failFast || consecutiveFailures > execution.health.maxConsecutiveFailures || failureRate > execution.health.maxFailureRate) throw error;
+        const failureRate = failures / completedCases;
+        if (execution.failFast || exceedsHealthBudget(execution.health, consecutiveFailures, failureRate)) throw error;
       }
-      consecutiveFailures = 0;
     }
-    if (campaign) this.options.campaigns.update(campaign.campaignId, failures === 0 ? "PASSED" : "PARTIAL", { summary: { totalCases: cases.length, failures, elapsedMs: Date.now() - startedAt } });
+    if (campaign) this.options.campaigns.update(campaign.campaignId, failures === 0 ? "PASSED" : "PARTIAL", { summary: { totalCases: completedCases, failures, elapsedMs: Date.now() - startedAt } });
     return directions;
   }
 
@@ -374,6 +382,11 @@ export class CanAcceptanceService {
     }
     return directionResults;
   }
+}
+
+function exceedsHealthBudget(health: { maxConsecutiveFailures?: number; maxFailureRate?: number }, consecutiveFailures: number, failureRate: number): boolean {
+  return (health.maxConsecutiveFailures !== undefined && consecutiveFailures > health.maxConsecutiveFailures)
+    || (health.maxFailureRate !== undefined && failureRate > health.maxFailureRate);
 }
 
 function requireContext(entry: PendingCanRun, boardId: string): CanStepContext {

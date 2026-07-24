@@ -73,6 +73,21 @@ export class BoardLeaseManager {
     });
   }
 
+  /**
+   * A fresh daemon may release only a lease owned by the exact recovered job.
+   * This does not inspect or terminate any external CCS/DSS owner, and never
+   * steals a lease belonging to another job.
+   */
+  releaseForRecoveredJob(boardId: string, ownerJobId: string): boolean {
+    return this.store.transaction(() => {
+      const existing = this.leases.activeForBoard(boardId);
+      if (!existing || existing.ownerJobId !== ownerJobId) return false;
+      this.leases.release(existing.leaseId, new Date().toISOString());
+      this.boards.setLease(boardId, undefined);
+      return true;
+    });
+  }
+
   active(boardId: string): BoardLease | undefined {
     const lease = this.leases.activeForBoard(boardId);
     if (!lease || Date.parse(lease.expiresAt) <= Date.now()) return undefined;

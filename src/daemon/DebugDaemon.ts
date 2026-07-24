@@ -109,18 +109,20 @@ export class DebugDaemon {
         name: input.name,
         boardIds: input.boardIds,
         ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+        ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}),
+        ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
         can: { profile: input.profile },
         steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }],
         failurePolicy: input.failurePolicy,
         recoveryPolicy: "safe_restart_board"
       }),
       submitCanFaultCampaign: input => this.requireJobEngine().submit({
-        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}),
-        can: { profile: input.profile, execution: { mode: "fault_campaign", iterations: input.iterations, matrixCases: [], failFast: input.failFast, health: { maxConsecutiveFailures: 0, maxFailureRate: 0 }, resetOrRejoinRequested: input.resetOrRejoinRequested } },
+        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}), ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}), ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
+        can: { profile: input.profile, execution: { mode: "fault_campaign", iterations: input.iterations, matrixCases: [], failFast: input.failFast, health: input.health, resetOrRejoinRequested: input.resetOrRejoinRequested } },
         steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: input.resetOrRejoinRequested ? "manual_intervention_required" : "safe_restart_board"
       }),
       submitCanSoakTest: input => this.requireJobEngine().submit({
-        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}), ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}), ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
         can: { profile: input.profile, execution: { mode: "soak", iterations: input.iterations, ...(input.durationMs ? { durationMs: input.durationMs } : {}), matrixCases: [], failFast: false, health: input.health, resetOrRejoinRequested: false } },
         steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: "safe_restart_board"
       }),
@@ -179,9 +181,12 @@ export class DebugDaemon {
         databasePath,
         version: "0.1.0"
       };
+      // Do not publish discovery metadata before every configured worker has
+      // completed its own runtime handshake. Otherwise a fresh proxy can
+      // connect while boards are still only STARTING.
+      await workerSupervisor.startAll();
       await writeDaemonInstance(this.paths, instance, this.authToken);
       this.instance = instance;
-      await workerSupervisor.startAll();
       const recovering = this.testRuns.markRecovering();
       for (const jobId of recovering) {
         events.append({ level: "warn", sourceType: "daemon", sourceId: instance.instanceId, jobId, eventType: "JOB_MARKED_RECOVERING", payload: {} });

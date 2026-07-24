@@ -46,5 +46,16 @@ if (result.error) {
 const code = typeof result.status === "number" ? result.status : 1;
 if (code !== 0) {
   console.error(`[build] tsc exited with code ${code} (entry: ${tscEntry})`);
+  process.exit(code);
 }
-process.exit(code);
+
+const bundle = spawnSync(process.execPath, [path.join(projectRoot, "scripts", "build-runtime.mjs")], {
+  cwd: projectRoot,
+  stdio: "inherit",
+  env: process.env
+});
+if (bundle.error) {
+  console.error(bundle.error);
+  process.exit(1);
+}
+process.exit(typeof bundle.status === "number" ? bundle.status : 1);

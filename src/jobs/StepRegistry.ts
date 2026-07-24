@@ -1,5 +1,5 @@
 import type { C2000ToolInvoker } from "../mcp/tools.js";
-import type { TestPlan, TestPlanStep } from "./TestPlanSchema.js";
+import { resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import type { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 
 export interface StepExecutionContext {
@@ -18,7 +18,7 @@ export class StepRegistry {
 
   async execute(context: StepExecutionContext): Promise<Record<string, unknown>> {
     const { plan, step, boardId, sessionId } = context;
-    const artifacts = plan.artifacts;
+    const artifacts = resolveArtifactsForBoard(plan, boardId);
     switch (step.type) {
       case "delay":
         await new Promise(resolve => setTimeout(resolve, step.delayMs ?? 0));
