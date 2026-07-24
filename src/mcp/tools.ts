@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
-import { toStructuredError } from "../utils/errors.js";
-import { createToolHandlers } from "./toolHandlers.js";
+import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
 import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
@@ -12,13 +12,20 @@ import {
   batchCoresSchema,
   compareExpressionsSchema,
   createDebugSessionSchema,
+  cancelTestRunSchema,
+  daemonHealthSchema,
   debugBoundarySchema,
   diagnoseCpu2BootSchema,
   evaluateManySchema,
   hardwarePreflightSchema,
+  getTestArtifactsSchema,
+  getTestRunSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
   launchMultiBoardDebugSchema,
+  listBoardsSchema,
+  recoverBoardSchema,
+  listTestRunsSchema,
   launchMulticoreDebugSchema,
   loadProgramsSchema,
   loadProgramSchema,
@@ -36,6 +43,9 @@ import {
   sessionCoreSchema,
   sessionSchema,
   toolContractsSchema,
+  submitMultiBoardIpcAcceptanceSchema,
+  submitMultiBoardCanAcceptanceSchema,
+  submitTestPlanSchema,
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
   waitForExpressionSetSchema,
@@ -55,7 +65,8 @@ type ToolTargetEffect =
   | "reset-control"
   | "program-load"
   | "memory-write"
-  | "launch-workflow";
+  | "launch-workflow"
+  | "job-control";
 
 type ToolRole = "primary" | "alias" | "workflow" | "host" | "diagnostic";
 type ToolFamily =
@@ -71,7 +82,7 @@ type ToolFamily =
   | "diagnosis"
   | "workflow";
 
-interface ToolDefinition {
+export interface ToolDefinition {
   name: string;
   title: string;
   description: string;
@@ -160,6 +171,16 @@ const multiBoardLaunchResponseIdentity = [
 ] as const;
 
 export const c2000ToolDefinitions: ToolDefinition[] = [
+  { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence without touching a target.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_recoverBoard", title: "Recover C2000 Board Worker", description: "Dry-run or restart only the daemon-owned worker for one registered board. It never kills external CCS/DSS processes.", schema: recoverBoardSchema, handlerName: "recoverBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_submitTestPlan", title: "Submit C2000 Test Plan", description: "Persist and schedule a structured background test plan; returns immediately with a stable jobId.", schema: submitTestPlanSchema, handlerName: "submitTestPlan", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_submitMultiBoardIpcAcceptance", title: "Submit Multi-Board IPC Acceptance", description: "Create and submit a structured multi-board IPC job without waiting for test completion.", schema: submitMultiBoardIpcAcceptanceSchema, handlerName: "submitMultiBoardIpcAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_submitMultiBoardCanAcceptance", title: "Submit Two-Board CAN Acceptance", description: "Persist a CAN pair and schedule a background two-board CAN test. Hardware mode fails closed until a physical CAN adapter is configured; mock mode is simulation only.", schema: submitMultiBoardCanAcceptanceSchema, handlerName: "submitMultiBoardCanAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return tool taxonomy: families, preferred atomic tools vs aliases, and input scope metadata.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getDebugBoundary", title: "Get C2000 Debug Boundary", description: "Return read-only guarantees that F28P65x debug control uses explicit per-core c2000 tools, not TI official MCP active-target controls.", schema: debugBoundarySchema, handlerName: "getDebugBoundary", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getAcceptanceEvidence", title: "Get C2000 Acceptance Evidence", description: "Return a read-only map from final F28P65x acceptance requirements to the c2000 tools and evidence fields that prove them.", schema: acceptanceEvidenceSchema, handlerName: "getAcceptanceEvidence", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
@@ -221,8 +242,45 @@ export const c2000ToolDefinitions: ToolDefinition[] = [
   ], responseCoreIdentityFields: [...launchResponseIdentity] }
 ];
 
-export function registerC2000Tools(server: McpServer, manager: DebugSessionManager) {
-  const handlers = createToolHandlers(manager, { getToolContracts, getToolSurfaceGuide });
+export interface C2000ToolInvoker {
+  invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>>;
+}
+
+export function createC2000ToolInvoker(
+  manager: DebugSessionManager,
+  deps: ToolHandlerDeps = {}
+): C2000ToolInvoker {
+  const handlers = createToolHandlers(manager, { getToolContracts, getToolSurfaceGuide, ...deps });
+  const definitions = new Map(c2000ToolDefinitions.map(definition => [definition.name, definition]));
+
+  return {
+    async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
+      const definition = definitions.get(toolName);
+      const sessionId = getInputSessionId(input);
+      if (!definition) {
+        return failedInvocation(new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${toolName}`, { toolName }), sessionId);
+      }
+      try {
+        // The daemon validates again even when a proxy has already checked this input.
+        const parsedInput = definition.schema.parse(input);
+        const handler = handlers[definition.handlerName] as Handler;
+        const invoke = () => handler(parsedInput);
+        return typeof sessionId === "string" && definition.name !== "c2000_closeDebugSession"
+          ? await manager.withSessionActivity(sessionId, invoke)
+          : await invoke();
+      } catch (error) {
+        return failedInvocation(error, sessionId);
+      }
+    }
+  };
+}
+
+export function registerC2000Tools(
+  server: McpServer,
+  source: DebugSessionManager | C2000ToolInvoker,
+  deps: ToolHandlerDeps = {}
+) {
+  const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, deps);
 
   for (const definition of c2000ToolDefinitions) {
     server.registerTool(
@@ -233,19 +291,11 @@ export function registerC2000Tools(server: McpServer, manager: DebugSessionManag
         inputSchema: definition.schema.shape
       },
       async (input: any) => {
-        const invoke = () => (handlers[definition.handlerName] as Handler)(input);
         let result: Record<string, unknown>;
         try {
-          result = typeof input?.sessionId === "string" && definition.name !== "c2000_closeDebugSession"
-            ? await manager.withSessionActivity(input.sessionId, invoke)
-            : await invoke();
+          result = await invoker.invokeTool(definition.name, input);
         } catch (error) {
-          result = {
-            success: false,
-            timestamp: new Date().toISOString(),
-            ...(typeof input?.sessionId === "string" ? { sessionId: input.sessionId } : {}),
-            error: toStructuredError(error)
-          };
+          result = failedInvocation(error, getInputSessionId(input));
         }
         return {
           content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -255,6 +305,25 @@ export function registerC2000Tools(server: McpServer, manager: DebugSessionManag
       }
     );
   }
+}
+
+function isToolInvoker(value: DebugSessionManager | C2000ToolInvoker): value is C2000ToolInvoker {
+  return typeof (value as C2000ToolInvoker).invokeTool === "function";
+}
+
+function getInputSessionId(input: unknown): string | undefined {
+  return input && typeof input === "object" && typeof (input as { sessionId?: unknown }).sessionId === "string"
+    ? (input as { sessionId: string }).sessionId
+    : undefined;
+}
+
+function failedInvocation(error: unknown, sessionId?: string): Record<string, unknown> {
+  return {
+    success: false,
+    timestamp: new Date().toISOString(),
+    ...(sessionId ? { sessionId } : {}),
+    error: toStructuredError(error)
+  };
 }
 
 export function getToolContracts() {

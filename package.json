@@ -4,18 +4,28 @@
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
   "type": "module",
   "bin": {
-    "c2000-multicore-mcp": "./dist/src/index.js"
+    "c2000-multicore-mcp": "./dist/src/index.js",
+    "c2000-debugd": "./dist/src/daemon/index.js",
+    "c2000-board-worker": "./dist/src/worker/index.js"
   },
   "scripts": {
     "build": "node scripts/build.mjs -p tsconfig.src.json",
     "build:all": "node scripts/build.mjs -p tsconfig.json",
     "dev": "tsx src/index.ts",
     "start": "node dist/src/index.js",
+    "daemon:dev": "tsx src/daemon/index.ts",
+    "daemon:start": "node dist/src/daemon/index.js",
+    "daemon:detached": "node dist/src/daemon/index.js --detached",
+    "proxy:dev": "tsx src/index.ts",
+    "proxy:start": "node dist/src/index.js",
+    "worker:dev": "tsx src/worker/index.ts",
     "start:supervised": "node scripts/mcp-supervisor.mjs -- node dist/src/index.js",
     "test": "vitest run",
     "postinstall": "node -e \"try{require('fs').accessSync('node_modules/typescript/lib/_tsc.js')}catch{console.warn('[c2000-multicore-mcp] typescript CLI missing; run npm install typescript --save-dev')}\"",
     "verify:debug-boundary": "tsx scripts/verify-debug-boundary.ts",
     "verify:host": "tsx scripts/verify-host-gate.ts",
+    "verify:daemon-proxy": "vitest run tests/daemonProxyLifecycle.test.ts tests/jobPersistence.test.ts",
+    "verify:can:mock": "vitest run tests/canAcceptanceService.test.ts tests/canJobPersistence.test.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "smoke:mcp": "npm run build --silent && tsx scripts/mcp-stdio-smoke.ts",
     "acceptance:preflight": "tsx scripts/ccs-preflight.ts",
@@ -25,6 +35,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "better-sqlite3": "^11.8.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {

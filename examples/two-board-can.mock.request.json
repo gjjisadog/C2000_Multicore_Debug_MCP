@@ -1,0 +1,25 @@
+{
+  "name": "two-board-can-mock",
+  "boardIds": ["board-a", "board-b"],
+  "profile": {
+    "adapter": "mock",
+    "directions": [
+      {
+        "sourceBoardId": "board-a",
+        "targetBoardId": "board-b",
+        "frames": [{ "id": 289, "data": [1, 2, 3, 4] }]
+      },
+      {
+        "sourceBoardId": "board-b",
+        "targetBoardId": "board-a",
+        "frames": [{ "id": 290, "data": [5, 6, 7, 8] }]
+      }
+    ],
+    "observations": [
+      { "boardId": "board-a", "coreId": 0, "expressions": [{ "expression": "g_canTxCount" }] },
+      { "boardId": "board-b", "coreId": 0, "expressions": [{ "expression": "g_canRxCount" }] }
+    ],
+    "timeoutMs": 5000,
+    "barrierTimeoutMs": 15000
+  }
+}

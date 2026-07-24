@@ -32,6 +32,30 @@ Prefer one workflow tool call:
 - `c2000_runReloadAndDiagnose`: halt/reset/load/halt, optional run/wait, then diagnosis.
 - `c2000_runFullDebugBundle`: snapshot, loaded programs, expressions, PC, map/RAM evidence, ELF freshness, diagnosis, and `summary.md`.
 
+For durable multi-board work, submit one background job instead of keeping a
+stdio request open:
+
+- `c2000_submitTestPlan`: generic persisted plan; query with `c2000_getTestRun`.
+- `c2000_submitMultiBoardIpcAcceptance`: multi-board IPC job.
+- `c2000_submitMultiBoardCanAcceptance`: exactly two registered boards, a
+  durable CAN pair, barrier synchronization, bidirectional frames, optional
+  cross-board expressions, and persisted results.
+
+Before a multi-board run, call `c2000_getDaemonHealth` and
+`c2000_listBoards`; require distinct `boardId` and `probeSerial` values and do
+not select a board that is leased or quarantined. A returned `jobId` is the
+durable handle; reconnecting the MCP client must not change it.
+
+If a board worker is unhealthy, call `c2000_recoverBoard` with its default
+`dryRun: true` first. A non-dry run can restart only the daemon-owned worker;
+never use it as authority to kill an external CCS or DebugServer process.
+
+For CAN, `profile.adapter: "mock"` is simulation only. It may prove the job
+engine, pairing, barriers, matching, fault injection, and evidence persistence,
+but never physical wiring or firmware CAN operation. Hardware mode fails closed
+with `CanAdapterUnavailable` until a real `CanBusAdapter` is installed. State
+that limitation plainly; do not call a Mock pass a bench acceptance pass.
+
 When atomics are required, prefer **primary** names over aliases: `c2000_runCore` (not `c2000_continue`), `c2000_haltCore` (not `c2000_pause`). Call `c2000_getToolContracts` for `toolSurface` guidance.
 
 Use these only if `c2000_getToolContracts` shows they exist:

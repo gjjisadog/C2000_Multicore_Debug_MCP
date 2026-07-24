@@ -1,0 +1,32 @@
+{
+  "adapter": "mock",
+  "ccs": { "scriptingMode": "mock" },
+  "target": {
+    "name": "F28P65x",
+    "coreMap": [
+      { "coreId": 0, "coreName": "C28xx_CPU1", "corePattern": "C28xx_CPU1" },
+      { "coreId": 2, "coreName": "C28xx_CPU2", "corePattern": "C28xx_CPU2" }
+    ]
+  },
+  "diagnostics": {},
+  "logging": { "level": "info" },
+  "daemon": { "enabled": true, "host": "127.0.0.1", "port": 0, "runtimeDir": "./runtime", "autoStart": true, "startupTimeoutMs": 15000 },
+  "storage": { "sqlitePath": "./runtime/c2000-debugd.sqlite", "wal": true },
+  "scheduler": { "maxParallelBoards": 2, "pollIntervalMs": 250 },
+  "boards": [
+    {
+      "boardId": "board-a",
+      "probeSerial": "CL650001",
+      "device": "F28P65x",
+      "ccxmlPath": "./examples/targetConfigs/F28P650DK9_XDS110_CL650001.ccxml",
+      "tags": ["F28P65x", "can"]
+    },
+    {
+      "boardId": "board-b",
+      "probeSerial": "CL650002",
+      "device": "F28P65x",
+      "ccxmlPath": "./examples/targetConfigs/F28P650DK9_XDS110_CL650002.ccxml",
+      "tags": ["F28P65x", "can"]
+    }
+  ]
+}

@@ -1,21 +1,18 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config/config.loader.js";
-import { createC2000McpRuntime } from "./server.js";
+import { createC2000McpProxyRuntime } from "./proxy/index.js";
 
 async function main() {
   const config = await loadConfig();
-  const runtime = await createC2000McpRuntime(config);
+  const runtime = await createC2000McpProxyRuntime(config);
   const transport = new StdioServerTransport();
   let shutdownPromise: Promise<void> | undefined;
   const shutdown = (reason: string, exitCode?: number) =>
     (shutdownPromise ??= (async () => {
-      const cleanup = await runtime.dispose();
-      if (cleanup.failures.length > 0) {
-        process.stderr.write(
-          `${JSON.stringify({ level: "error", message: "DSS cleanup incomplete", reason, cleanup })}\n`
-        );
-      }
+      // The stdio process owns only its RPC client. The daemon owns sessions,
+      // workers, DSS children, and submitted jobs across proxy reconnects.
+      await runtime.dispose();
       await runtime.server.close();
       if (exitCode !== undefined) {
         process.exitCode = exitCode;

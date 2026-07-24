@@ -34,10 +34,30 @@ export type DebugErrorCode =
   | "DssCommandFailed"
   | "DssTimeout"
   | "DssTransportFailed"
+  | "DaemonUnavailable"
+  | "DaemonStarting"
+  | "DaemonAuthenticationFailed"
+  | "DaemonProtocolError"
+  | "DaemonInstanceInvalid"
+  | "ToolNotFound"
+  | "WorkerHeartbeatTimeout"
+  | "WorkerCommandTimeout"
+  | "WorkerUnavailable"
+  | "WorkerIdentityMismatch"
+  | "WorkerRestartLimitReached"
+  | "DssUnresponsive"
+  | "BoardQuarantined"
+  | "BoardLeased"
   | "FlashLoadPreparationUnsupported"
   | "UnsupportedResetType"
   | "PostLaunchActionFailed"
-  | "PostLaunchCheckFailed";
+  | "PostLaunchCheckFailed"
+  | "CanProfileInvalid"
+  | "CanAdapterUnavailable"
+  | "CanBarrierTimeout"
+  | "CanFrameMismatch"
+  | "CanBusFaultInjected"
+  | "CanDebugObservationFailed";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

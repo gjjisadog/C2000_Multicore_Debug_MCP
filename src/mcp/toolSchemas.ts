@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { testPlanSchema } from "../jobs/TestPlanSchema.js";
+import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 
 export const coreConfigSchema = z.object({
   coreId: z.number().int(),
@@ -9,7 +11,9 @@ export const coreConfigSchema = z.object({
 export const createDebugSessionSchema = z.object({
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
-  coreMap: z.array(coreConfigSchema).min(1).optional()
+  coreMap: z.array(coreConfigSchema).min(1).optional(),
+  /** Optional routing hint for c2000-debugd; existing interactive calls remain unchanged. */
+  boardId: z.string().min(1).optional()
 });
 
 export const hardwarePreflightSchema = z.object({
@@ -50,6 +54,46 @@ export const toolContractsSchema = z.object({});
 export const debugBoundarySchema = z.object({});
 
 export const acceptanceEvidenceSchema = z.object({});
+
+/** Read-only daemon liveness and scheduler state. */
+export const daemonHealthSchema = z.object({});
+
+export const listBoardsSchema = z.object({
+  status: z.array(z.enum(["OFFLINE", "AVAILABLE", "RESERVED", "STARTING", "READY", "RUNNING", "RECOVERING", "QUARANTINED", "FAILED"])).min(1).optional(),
+  tags: z.array(z.string().min(1)).min(1).optional()
+});
+
+/** Restart only the daemon-owned worker for a registered board. This never terminates external CCS/DSS processes. */
+export const recoverBoardSchema = z.object({
+  boardId: z.string().min(1),
+  dryRun: z.boolean().default(true)
+});
+
+export const submitTestPlanSchema = z.object({ plan: testPlanSchema });
+export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeSteps: z.boolean().default(true), includeEvents: z.boolean().default(false) });
+export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
+export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
+export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });
+export const submitMultiBoardIpcAcceptanceSchema = z.object({
+  boardIds: z.array(z.string().min(1)).min(1),
+  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
+  parallelism: z.number().int().positive().optional(),
+  timeoutMs: z.number().int().positive().default(10000),
+  verifyRuntimeRamOwnership: z.boolean().default(false),
+  collectDebugBundle: z.boolean().default(true),
+  failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true })
+});
+
+/** Submit a durable two-board CAN acceptance job. Hardware mode fails closed until an adapter is installed. */
+export const submitMultiBoardCanAcceptanceSchema = z.object({
+  name: z.string().min(1).default("two-board-can-acceptance"),
+  boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
+  artifacts: z.object({
+    cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional()
+  }).optional(),
+  profile: canAcceptanceProfileSchema,
+  failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(false), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: false, quarantineFailedBoard: true, collectDebugBundle: true })
+});
 
 export const sessionCoreSchema = z.object({
   sessionId: z.string().min(1),
@@ -221,6 +265,7 @@ export const runIpcAcceptanceSchema = z.object({
 });
 
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ sessionId: true }).extend({
+  boardId: z.string().min(1).optional(),
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
   autoCloseOnComplete: z.boolean().default(false),
@@ -301,6 +346,7 @@ export const launchCoreSchema = z.object({
 });
 
 export const launchMulticoreDebugSchema = z.object({
+  boardId: z.string().min(1).optional(),
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
