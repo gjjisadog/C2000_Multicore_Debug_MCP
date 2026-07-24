@@ -188,6 +188,131 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_can_test_results_group ON can_test_results(group_id, created_at);
       `);
     }
+  },
+  {
+    version: 3,
+    apply(store) {
+      // v2 deliberately kept board groups minimal. Round 3 makes a group an
+      // execution record as well as a physical topology declaration. All
+      // additions are nullable/defaulted so existing v2 databases migrate
+      // without rewriting or discarding historical CAN results.
+      store.exec(`
+        ALTER TABLE board_groups ADD COLUMN job_id TEXT;
+        ALTER TABLE board_groups ADD COLUMN profile_id TEXT;
+        ALTER TABLE board_groups ADD COLUMN profile_version INTEGER;
+        ALTER TABLE board_groups ADD COLUMN profile_hash TEXT;
+        ALTER TABLE board_groups ADD COLUMN bus_id TEXT;
+        ALTER TABLE board_groups ADD COLUMN topology_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE board_groups ADD COLUMN current_barrier TEXT;
+        ALTER TABLE board_groups ADD COLUMN failure_policy_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE board_groups ADD COLUMN started_at TEXT;
+        ALTER TABLE board_groups ADD COLUMN finished_at TEXT;
+        ALTER TABLE board_groups ADD COLUMN error_json TEXT;
+        ALTER TABLE board_groups ADD COLUMN status_reason TEXT;
+
+        ALTER TABLE board_group_members ADD COLUMN probe_serial TEXT;
+        ALTER TABLE board_group_members ADD COLUMN node_id INTEGER;
+        ALTER TABLE board_group_members ADD COLUMN channel TEXT;
+        ALTER TABLE board_group_members ADD COLUMN worker_instance_id TEXT;
+        ALTER TABLE board_group_members ADD COLUMN session_id TEXT;
+        ALTER TABLE board_group_members ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING';
+        ALTER TABLE board_group_members ADD COLUMN lease_id TEXT;
+        ALTER TABLE board_group_members ADD COLUMN heartbeat_snapshot_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE board_group_members ADD COLUMN last_heartbeat_at TEXT;
+        ALTER TABLE board_group_members ADD COLUMN error_json TEXT;
+        ALTER TABLE board_group_members ADD COLUMN created_at TEXT;
+        ALTER TABLE board_group_members ADD COLUMN updated_at TEXT;
+
+        CREATE TABLE IF NOT EXISTS board_group_barriers (
+          barrier_id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          barrier_name TEXT NOT NULL,
+          barrier_index INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL,
+          expected_members_json TEXT NOT NULL,
+          arrived_members_json TEXT NOT NULL,
+          details_json TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          deadline_at TEXT,
+          satisfied_at TEXT,
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(group_id, barrier_name, barrier_index),
+          FOREIGN KEY(group_id) REFERENCES board_groups(group_id) ON DELETE CASCADE,
+          FOREIGN KEY(job_id) REFERENCES test_runs(job_id)
+        );
+        CREATE TABLE IF NOT EXISTS can_profiles (
+          profile_id TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          profile_hash TEXT NOT NULL UNIQUE,
+          profile_json TEXT NOT NULL,
+          capabilities_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(profile_id, version)
+        );
+        CREATE TABLE IF NOT EXISTS can_campaigns (
+          campaign_id TEXT PRIMARY KEY,
+          job_id TEXT NOT NULL,
+          group_id TEXT,
+          campaign_type TEXT NOT NULL,
+          status TEXT NOT NULL,
+          definition_json TEXT NOT NULL,
+          checkpoint_json TEXT NOT NULL,
+          summary_json TEXT,
+          error_json TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(job_id) REFERENCES test_runs(job_id),
+          FOREIGN KEY(group_id) REFERENCES board_groups(group_id)
+        );
+        CREATE TABLE IF NOT EXISTS can_matrix_cases (
+          case_id TEXT PRIMARY KEY,
+          campaign_id TEXT NOT NULL,
+          case_index INTEGER NOT NULL,
+          case_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          input_json TEXT NOT NULL,
+          result_json TEXT,
+          started_at TEXT,
+          finished_at TEXT,
+          error_json TEXT,
+          UNIQUE(campaign_id, case_index),
+          UNIQUE(campaign_id, case_hash),
+          FOREIGN KEY(campaign_id) REFERENCES can_campaigns(campaign_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS can_soak_checkpoints (
+          checkpoint_id TEXT PRIMARY KEY,
+          campaign_id TEXT NOT NULL,
+          iteration INTEGER NOT NULL,
+          elapsed_ms INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          summary_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          UNIQUE(campaign_id, iteration),
+          FOREIGN KEY(campaign_id) REFERENCES can_campaigns(campaign_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS board_group_reconcile_decisions (
+          decision_id TEXT PRIMARY KEY,
+          group_id TEXT NOT NULL,
+          job_id TEXT NOT NULL,
+          decision TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(group_id) REFERENCES board_groups(group_id),
+          FOREIGN KEY(job_id) REFERENCES test_runs(job_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_board_groups_job_status ON board_groups(job_id, status);
+        CREATE INDEX IF NOT EXISTS idx_board_group_members_runtime ON board_group_members(board_id, status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_group_barriers_group_status ON board_group_barriers(group_id, status, barrier_index);
+        CREATE INDEX IF NOT EXISTS idx_can_campaigns_job_status ON can_campaigns(job_id, status);
+        CREATE INDEX IF NOT EXISTS idx_can_matrix_cases_campaign_status ON can_matrix_cases(campaign_id, status, case_index);
+      `);
+    }
   }
 ];
 

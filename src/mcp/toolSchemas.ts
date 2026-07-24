@@ -95,6 +95,39 @@ export const submitMultiBoardCanAcceptanceSchema = z.object({
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(false), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: false, quarantineFailedBoard: true, collectDebugBundle: true })
 });
 
+export const listCanProfilesSchema = z.object({
+  profileId: z.string().min(1).optional(),
+  includeRetired: z.boolean().default(false)
+});
+
+export const getBoardGroupSnapshotSchema = z.object({
+  groupId: z.string().min(1),
+  includeBarriers: z.boolean().default(true),
+  includeResults: z.boolean().default(true)
+});
+
+export const submitCanFaultCampaignSchema = z.object({
+  name: z.string().min(1).default("two-board-can-fault-campaign"),
+  boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
+  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }).optional(),
+  profile: canAcceptanceProfileSchema,
+  iterations: z.number().int().positive().max(10_000).default(1),
+  failFast: z.boolean().default(false),
+  resetOrRejoinRequested: z.boolean().default(false),
+  failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: true })
+});
+
+export const submitCanSoakTestSchema = z.object({
+  name: z.string().min(1).default("two-board-can-soak"),
+  boardIds: z.array(z.string().min(1)).length(2).refine(ids => ids[0] !== ids[1], "boardIds must identify two distinct boards"),
+  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }).optional(),
+  profile: canAcceptanceProfileSchema,
+  iterations: z.number().int().positive().max(10_000).default(1),
+  durationMs: z.number().int().positive().max(86_400_000).optional(),
+  health: z.object({ maxConsecutiveFailures: z.number().int().nonnegative().default(0), maxFailureRate: z.number().min(0).max(1).default(0) }).default({ maxConsecutiveFailures: 0, maxFailureRate: 0 }),
+  failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true), collectDebugBundle: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: true })
+});
+
 export const sessionCoreSchema = z.object({
   sessionId: z.string().min(1),
   coreId: z.number().int()

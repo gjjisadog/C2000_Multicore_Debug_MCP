@@ -31,6 +31,15 @@ export class CanTestResultRepository {
       status: String(row.status) as CanTestResult["status"], details: parseJson(String(row.details_json), {}), createdAt: String(row.created_at)
     }));
   }
+
+  listByGroup(groupId: string): Array<Required<CanTestResult>> {
+    return this.store.all<Record<string, unknown>>(
+      "SELECT * FROM can_test_results WHERE group_id = ? ORDER BY created_at, result_id", [groupId]
+    ).map(row => ({
+      resultId: String(row.result_id), jobId: String(row.job_id), groupId: String(row.group_id), phase: String(row.phase),
+      status: String(row.status) as CanTestResult["status"], details: parseJson(String(row.details_json), {}), createdAt: String(row.created_at)
+    }));
+  }
 }
 
 function parseJson<T>(value: string, fallback: T): T {

@@ -57,6 +57,10 @@ import {
   toolContractsSchema,
   submitMultiBoardIpcAcceptanceSchema,
   submitMultiBoardCanAcceptanceSchema,
+  listCanProfilesSchema,
+  getBoardGroupSnapshotSchema,
+  submitCanFaultCampaignSchema,
+  submitCanSoakTestSchema,
   submitTestPlanSchema,
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
@@ -82,6 +86,10 @@ export interface ToolHandlerDeps {
   getTestArtifacts?: (input: z.infer<typeof getTestArtifactsSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardIpcAcceptance?: (input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardCanAcceptance?: (input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
+  listCanProfiles?: (input: z.infer<typeof listCanProfilesSchema>) => Promise<ToolResult> | ToolResult;
+  getBoardGroupSnapshot?: (input: z.infer<typeof getBoardGroupSnapshotSchema>) => Promise<ToolResult> | ToolResult;
+  submitCanFaultCampaign?: (input: z.infer<typeof submitCanFaultCampaignSchema>) => Promise<ToolResult> | ToolResult;
+  submitCanSoakTest?: (input: z.infer<typeof submitCanSoakTestSchema>) => Promise<ToolResult> | ToolResult;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -106,6 +114,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getTestArtifacts = deps.getTestArtifacts ?? unavailableJobEngine;
   const submitMultiBoardIpcAcceptance = deps.submitMultiBoardIpcAcceptance ?? unavailableJobEngine;
   const submitMultiBoardCanAcceptance = deps.submitMultiBoardCanAcceptance ?? unavailableJobEngine;
+  const listCanProfiles = deps.listCanProfiles ?? unavailableJobEngine;
+  const getBoardGroupSnapshot = deps.getBoardGroupSnapshot ?? unavailableJobEngine;
+  const submitCanFaultCampaign = deps.submitCanFaultCampaign ?? unavailableJobEngine;
+  const submitCanSoakTest = deps.submitCanSoakTest ?? unavailableJobEngine;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
@@ -159,6 +171,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async getTestArtifacts(input: z.infer<typeof getTestArtifactsSchema>) { try { return ok(await getTestArtifacts(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async submitMultiBoardIpcAcceptance(input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) { try { return ok(await submitMultiBoardIpcAcceptance(input)); } catch (error) { return fail(error); } },
     async submitMultiBoardCanAcceptance(input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) { try { return ok(await submitMultiBoardCanAcceptance(input)); } catch (error) { return fail(error); } },
+    async listCanProfiles(input: z.infer<typeof listCanProfilesSchema>) { try { return ok(await listCanProfiles(input)); } catch (error) { return fail(error); } },
+    async getBoardGroupSnapshot(input: z.infer<typeof getBoardGroupSnapshotSchema>) { try { return ok(await getBoardGroupSnapshot(input)); } catch (error) { return fail(error, { groupId: input.groupId }); } },
+    async submitCanFaultCampaign(input: z.infer<typeof submitCanFaultCampaignSchema>) { try { return ok(await submitCanFaultCampaign(input)); } catch (error) { return fail(error); } },
+    async submitCanSoakTest(input: z.infer<typeof submitCanSoakTestSchema>) { try { return ok(await submitCanSoakTest(input)); } catch (error) { return fail(error); } },
 
     async getToolContracts(_input: z.infer<typeof toolContractsSchema>) {
       try {

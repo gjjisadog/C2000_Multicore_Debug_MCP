@@ -6,6 +6,9 @@ export interface StepExecutionContext {
   jobId: string;
   boardId: string;
   sessionId?: string;
+  /** Durable lease held by the job engine; group work never invents ownership. */
+  leaseId?: string;
+  probeSerial?: string;
   plan: TestPlan;
   step: TestPlanStep;
 }

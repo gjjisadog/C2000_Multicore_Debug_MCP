@@ -121,12 +121,34 @@ state, firmware ISR behavior, or physical frame delivery. The safe default is
 supplies a real `CanBusAdapter` (USB/CAN, PCAN, Vector, or firmware-backed).
 Never report a Mock result as hardware CAN acceptance.
 
+### Persistent P1 CAN orchestration
+
+Board groups now persist member lease/worker/session evidence, named barriers,
+profile hash/version, and conservative reconciliation decisions. Use
+`c2000_getBoardGroupSnapshot` for this durable evidence and
+`c2000_listCanProfiles` for registered profiles. Profile version 2+ declares
+role mappings, read-only safety expressions, and cross-board comparisons; the
+daemon evaluates those internally as `group → board → worker/session → core`
+and exposes no atomic cross-board CAN I/O MCP tools.
+
+`c2000_submitCanFaultCampaign` and `c2000_submitCanSoakTest` submit finite,
+checkpointed jobs. A generic test plan can declare a bounded deterministic
+matrix. Interrupted fault/reset/rejoin work is never blindly replayed. Each
+successful job registers JSON, Markdown, and JUnit report artifacts. When the
+adapter lacks independent bus verification, reports omit a fake CAN trace and
+say so explicitly.
+
 Useful local verification commands:
 
 ```bash
 npm run verify:daemon-proxy
 npm run verify:can:mock
+npm run acceptance:can:hardware
 ```
+
+`acceptance:can:hardware` is a configuration-only preflight: it checks two
+distinct F28P65x board/probe bindings and performs no target control, CAN
+traffic, power enable, PWM-trip modification, or contactor action.
 
 ## Client Config
 

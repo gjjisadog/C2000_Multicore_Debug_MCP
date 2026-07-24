@@ -6,6 +6,10 @@ import { CanAcceptanceService } from "../src/can/CanAcceptanceService.js";
 import { testPlanSchema } from "../src/jobs/TestPlanSchema.js";
 import { BoardRepository } from "../src/storage/repositories/BoardRepository.js";
 import { BoardGroupRepository } from "../src/storage/repositories/BoardGroupRepository.js";
+import { BoardGroupBarrierRepository } from "../src/storage/repositories/BoardGroupBarrierRepository.js";
+import { CanProfileRepository } from "../src/storage/repositories/CanProfileRepository.js";
+import { CanProfileRegistry } from "../src/can/CanProfileRegistry.js";
+import { CanCampaignRepository } from "../src/storage/repositories/CanCampaignRepository.js";
 import { CanTestResultRepository } from "../src/storage/repositories/CanTestResultRepository.js";
 import { EventRepository } from "../src/storage/repositories/EventRepository.js";
 import { TestRunRepository } from "../src/storage/repositories/TestRunRepository.js";
@@ -60,7 +64,7 @@ describe("two-board CAN acceptance service", () => {
     );
     const invoked: string[] = [];
     const service = new CanAcceptanceService({
-      groups: new BoardGroupRepository(store), results: new CanTestResultRepository(store), events: new EventRepository(store),
+      groups: new BoardGroupRepository(store), barriers: new BoardGroupBarrierRepository(store), profiles: new CanProfileRegistry(new CanProfileRepository(store)), campaigns: new CanCampaignRepository(store), results: new CanTestResultRepository(store), events: new EventRepository(store),
       tools: {
         async invokeTool(name, input) {
           invoked.push(name);
@@ -75,7 +79,7 @@ describe("two-board CAN acceptance service", () => {
     service.prepare(jobId, plan, ["board-a", "board-b"]);
 
     const [left, right] = await Promise.all(["board-a", "board-b"].map(boardId => service.execute({
-      jobId, boardId, sessionId: `${boardId}-session`, plan, step: plan.steps[0]!
+      jobId, boardId, sessionId: `${boardId}-session`, leaseId: `${boardId}-lease`, plan, step: plan.steps[0]!
     })));
 
     expect(left).toEqual(expect.objectContaining({ success: true, simulation: true, groupId: "can-group-unit" }));
@@ -90,7 +94,7 @@ describe("two-board CAN acceptance service", () => {
       expect.objectContaining({ phase: "DIRECTION", status: "PASSED" }),
       expect.objectContaining({ phase: "OBSERVABILITY", status: "PASSED" })
     ]));
-    expect(new BoardGroupRepository(store).require("can-group-unit").status).toBe("READY");
+    expect(new BoardGroupRepository(store).require("can-group-unit").status).toBe("PASSED");
     store.close();
   });
 
@@ -121,10 +125,10 @@ describe("two-board CAN acceptance service", () => {
       ], []
     );
     const service = new CanAcceptanceService({
-      groups: new BoardGroupRepository(store), results: new CanTestResultRepository(store), events: new EventRepository(store), tools: { async invokeTool() { return { success: true }; } }
+      groups: new BoardGroupRepository(store), barriers: new BoardGroupBarrierRepository(store), profiles: new CanProfileRegistry(new CanProfileRepository(store)), campaigns: new CanCampaignRepository(store), results: new CanTestResultRepository(store), events: new EventRepository(store), tools: { async invokeTool() { return { success: true }; } }
     });
     service.prepare(jobId, plan, ["board-a", "board-b"]);
-    const results = await Promise.all(["board-a", "board-b"].map(boardId => service.execute({ jobId, boardId, sessionId: boardId, plan, step: plan.steps[0]! })));
+    const results = await Promise.all(["board-a", "board-b"].map(boardId => service.execute({ jobId, boardId, sessionId: boardId, leaseId: `${boardId}-lease`, plan, step: plan.steps[0]! })));
     expect(results[0]).toEqual(expect.objectContaining({ success: true, captures: expect.arrayContaining([expect.objectContaining({ delivery: "DROPPED", fault: "drop-a-to-b" })]) }));
     store.close();
   });

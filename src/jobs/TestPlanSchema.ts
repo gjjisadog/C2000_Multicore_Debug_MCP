@@ -1,6 +1,20 @@
 import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 
+const canExecutionSchema = z.object({
+  mode: z.enum(["acceptance", "fault_campaign", "matrix", "soak"]).default("acceptance"),
+  campaignId: z.string().min(1).optional(),
+  iterations: z.number().int().positive().max(10_000).default(1),
+  durationMs: z.number().int().positive().max(86_400_000).optional(),
+  matrixCases: z.array(z.object({ name: z.string().min(1), faults: z.array(z.unknown()).optional(), metadata: z.record(z.unknown()).default({}) })).max(1_000).default([]),
+  failFast: z.boolean().default(false),
+  health: z.object({ maxConsecutiveFailures: z.number().int().nonnegative().default(0), maxFailureRate: z.number().min(0).max(1).default(0) }).default({ maxConsecutiveFailures: 0, maxFailureRate: 0 }),
+  resetOrRejoinRequested: z.boolean().default(false)
+}).superRefine((execution, context) => {
+  if (execution.mode === "matrix" && execution.matrixCases.length === 0) context.addIssue({ code: z.ZodIssueCode.custom, message: "matrix execution requires deterministic matrixCases" });
+  if (execution.mode === "soak" && !execution.durationMs && execution.iterations <= 0) context.addIssue({ code: z.ZodIssueCode.custom, message: "soak execution must be finite by durationMs or iterations" });
+});
+
 export const jobStepTypeSchema = z.enum([
   "preflight",
   "launchMulticore",
@@ -41,7 +55,8 @@ export const testPlanSchema = z.object({
   can: z.object({
     /** Assigned by the job engine before persistence; callers do not choose durable identifiers. */
     groupId: z.string().min(1).optional(),
-    profile: canAcceptanceProfileSchema
+    profile: canAcceptanceProfileSchema,
+    execution: canExecutionSchema.default({ mode: "acceptance", iterations: 1, matrixCases: [], failFast: false, health: { maxConsecutiveFailures: 0, maxFailureRate: 0 }, resetOrRejoinRequested: false })
   }).optional(),
   steps: z.array(testPlanStepSchema).min(1),
   retryPolicy: z.record(z.number().int().nonnegative()).optional(),

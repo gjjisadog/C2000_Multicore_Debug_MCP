@@ -56,6 +56,14 @@ but never physical wiring or firmware CAN operation. Hardware mode fails closed
 with `CanAdapterUnavailable` until a real `CanBusAdapter` is installed. State
 that limitation plainly; do not call a Mock pass a bench acceptance pass.
 
+For persistent P1 CAN work, prefer `c2000_submitMultiBoardCanAcceptance`,
+`c2000_submitCanFaultCampaign`, or `c2000_submitCanSoakTest`, then inspect
+`c2000_getBoardGroupSnapshot` and `c2000_getTestArtifacts`. Do not fan out
+client-side atomic CAN/debug calls. Require profile-declared read-only safety
+gates before claiming safety evidence; never assign PWM, contactor, power-stage,
+or HV variables. Missing hooks or independent capture are `UNSUPPORTED`, not
+simulated hardware proof.
+
 When atomics are required, prefer **primary** names over aliases: `c2000_runCore` (not `c2000_continue`), `c2000_haltCore` (not `c2000_pause`). Call `c2000_getToolContracts` for `toolSurface` guidance.
 
 Use these only if `c2000_getToolContracts` shows they exist:

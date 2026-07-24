@@ -20,6 +20,12 @@ import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.j
 import { TestJobEngine } from "../jobs/TestJobEngine.js";
 import { BoardGroupRepository } from "../storage/repositories/BoardGroupRepository.js";
 import { CanTestResultRepository } from "../storage/repositories/CanTestResultRepository.js";
+import { BoardGroupBarrierRepository } from "../storage/repositories/BoardGroupBarrierRepository.js";
+import { CanProfileRepository } from "../storage/repositories/CanProfileRepository.js";
+import { CanProfileRegistry } from "../can/CanProfileRegistry.js";
+import { CanCampaignRepository } from "../storage/repositories/CanCampaignRepository.js";
+import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/BoardGroupReconcileDecisionRepository.js";
+import { CanReportService } from "../can/CanReportService.js";
 import { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecker.js";
 
@@ -57,7 +63,12 @@ export class DebugDaemon {
     const boards = new BoardRepository(store);
     const events = new EventRepository(store);
     const artifacts = new ArtifactRepository(store);
+    const canReports = new CanReportService(artifacts, path.join(path.dirname(databasePath), "can-artifacts"));
     const groups = new BoardGroupRepository(store);
+    const groupBarriers = new BoardGroupBarrierRepository(store);
+    const canProfiles = new CanProfileRegistry(new CanProfileRepository(store));
+    const canCampaigns = new CanCampaignRepository(store);
+    const groupReconcileDecisions = new BoardGroupReconcileDecisionRepository(store);
     const canResults = new CanTestResultRepository(store);
     this.workers = new WorkerRepository(store);
     this.testRuns = new TestRunRepository(store);
@@ -102,7 +113,28 @@ export class DebugDaemon {
         steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }],
         failurePolicy: input.failurePolicy,
         recoveryPolicy: "safe_restart_board"
-      })
+      }),
+      submitCanFaultCampaign: input => this.requireJobEngine().submit({
+        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+        can: { profile: input.profile, execution: { mode: "fault_campaign", iterations: input.iterations, matrixCases: [], failFast: input.failFast, health: { maxConsecutiveFailures: 0, maxFailureRate: 0 }, resetOrRejoinRequested: input.resetOrRejoinRequested } },
+        steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: input.resetOrRejoinRequested ? "manual_intervention_required" : "safe_restart_board"
+      }),
+      submitCanSoakTest: input => this.requireJobEngine().submit({
+        planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}),
+        can: { profile: input.profile, execution: { mode: "soak", iterations: input.iterations, ...(input.durationMs ? { durationMs: input.durationMs } : {}), matrixCases: [], failFast: false, health: input.health, resetOrRejoinRequested: false } },
+        steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: "safe_restart_board"
+      }),
+      listCanProfiles: input => ({ profiles: canProfiles.list(input) }),
+      getBoardGroupSnapshot: input => {
+        const group = groups.require(input.groupId);
+        return {
+          group,
+          ...(input.includeBarriers ? { barriers: groupBarriers.list(input.groupId) } : {}),
+          ...(input.includeResults ? { results: canResults.listByGroup(input.groupId) } : {}),
+          reconcileDecisions: groupReconcileDecisions.list(input.groupId),
+          ...(canCampaigns.getByJob(group.jobId ?? "") ? { campaign: canCampaigns.getByJob(group.jobId ?? ""), cases: canCampaigns.getByJob(group.jobId ?? "") ? canCampaigns.cases(canCampaigns.getByJob(group.jobId ?? "")!.campaignId) : [] } : {})
+        };
+      }
     });
     this.runtime = runtime;
     const workerSupervisor = new BoardWorkerSupervisor({
@@ -121,9 +153,12 @@ export class DebugDaemon {
       artifacts,
       tools: toolRouter,
       maxParallelBoards: this.config.scheduler?.maxParallelBoards ?? 4,
-      canAcceptance: new CanAcceptanceService({ groups, results: canResults, events, tools: toolRouter }),
+      canAcceptance: new CanAcceptanceService({ groups, barriers: groupBarriers, profiles: canProfiles, campaigns: canCampaigns, reports: canReports, results: canResults, events, tools: toolRouter }),
+      canCampaigns,
       canResults,
-      boardGroups: groups
+      boardGroups: groups,
+      groupBarriers,
+      groupReconcileDecisions
     });
     const rpcServer = new DaemonRpcServer({
       authToken: this.authToken,

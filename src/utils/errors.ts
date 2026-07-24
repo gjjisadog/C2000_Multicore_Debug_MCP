@@ -57,7 +57,17 @@ export type DebugErrorCode =
   | "CanBarrierTimeout"
   | "CanFrameMismatch"
   | "CanBusFaultInjected"
-  | "CanDebugObservationFailed";
+  | "CanDebugObservationFailed"
+  | "BoardLeaseRequired"
+  | "BoardGroupBusy"
+  | "BoardGroupInvalidTransition"
+  | "BoardGroupBarrierInvalid"
+  | "BoardGroupBarrierTimeout"
+  | "BoardGroupBarrierFailed"
+  | "CanSafetyGateFailed"
+  | "CanIndependentBusVerificationRequired"
+  | "CanCrossBoardComparisonFailed"
+  | "CanTestHookUnsupported";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

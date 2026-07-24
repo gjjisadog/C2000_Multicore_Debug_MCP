@@ -44,10 +44,26 @@ describe("durable two-board CAN job", () => {
       expect(completed).toEqual(expect.objectContaining({
         success: true, jobId, status: "PASSED",
         can: expect.objectContaining({
-          group: expect.objectContaining({ groupType: "CAN_PAIR", status: "READY", members: expect.arrayContaining([expect.objectContaining({ boardId: "board-a" }), expect.objectContaining({ boardId: "board-b" })]) }),
+          group: expect.objectContaining({ groupType: "CAN_PAIR", status: "PASSED", members: expect.arrayContaining([expect.objectContaining({ boardId: "board-a" }), expect.objectContaining({ boardId: "board-b" })]) }),
           results: expect.arrayContaining([expect.objectContaining({ phase: "DIRECTION", status: "PASSED" })])
         })
       }));
+      expect(completed.artifacts).toEqual(expect.arrayContaining([
+        expect.objectContaining({ artifactType: "can-report-json", path: expect.stringMatching(/can-report\.json$/) }),
+        expect.objectContaining({ artifactType: "can-report-markdown", path: expect.stringMatching(/can-report\.md$/) }),
+        expect.objectContaining({ artifactType: "can-report-junit", path: expect.stringMatching(/can-report\.junit\.xml$/) })
+      ]));
+      const groupId = String((completed.can as { group: { groupId: string } }).group.groupId);
+      const snapshot = await second.invokeTool("c2000_getBoardGroupSnapshot", { groupId });
+      expect(snapshot).toEqual(expect.objectContaining({
+        success: true,
+        group: expect.objectContaining({ groupId, status: "PASSED" }),
+        barriers: expect.arrayContaining([expect.objectContaining({ name: "ALL_RESERVED", status: "SATISFIED" })])
+      }));
+      const profiles = await second.invokeTool("c2000_listCanProfiles", {});
+      expect(profiles).toEqual(expect.objectContaining({ success: true, profiles: expect.arrayContaining([
+        expect.objectContaining({ hash: expect.stringMatching(/^[a-f0-9]{64}$/) })
+      ]) }));
       await second.close();
     } finally {
       await daemon.stop();

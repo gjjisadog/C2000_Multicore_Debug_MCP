@@ -12,11 +12,16 @@ import { TestReconciler } from "./TestReconciler.js";
 import { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import { CanTestResultRepository } from "../storage/repositories/CanTestResultRepository.js";
 import { BoardGroupRepository } from "../storage/repositories/BoardGroupRepository.js";
+import { CanCampaignRepository } from "../storage/repositories/CanCampaignRepository.js";
+import { BoardGroupBarrierRepository } from "../storage/repositories/BoardGroupBarrierRepository.js";
+import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/BoardGroupReconcileDecisionRepository.js";
+import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
   private readonly steps: StepRegistry;
   private readonly reconciler = new TestReconciler();
+  private readonly canGroupReconciler = new CanGroupReconciler();
   private readonly executing = new Set<string>();
   private readonly scheduledTasks = new Set<Promise<void>>();
   private stopping = false;
@@ -31,6 +36,9 @@ export class TestJobEngine {
     canAcceptance?: CanAcceptanceService;
     canResults?: CanTestResultRepository;
     boardGroups?: BoardGroupRepository;
+    canCampaigns?: CanCampaignRepository;
+    groupBarriers?: BoardGroupBarrierRepository;
+    groupReconcileDecisions?: BoardGroupReconcileDecisionRepository;
   }) {
     this.scheduler = new TestScheduler(Math.max(1, options.maxParallelBoards));
     this.steps = new StepRegistry(options.tools, options.canAcceptance);
@@ -40,6 +48,17 @@ export class TestJobEngine {
     for (const run of this.options.runs.listUnfinished()) {
       if (run.status === "RECOVERING") {
         const plan = testPlanSchema.parse(run.plan);
+        const groupDecision = plan.can && this.options.boardGroups && this.options.groupBarriers
+          ? this.reconcileCanGroup(run.jobId, plan)
+          : undefined;
+        if (groupDecision?.decision === "MARK_PASSED") {
+          this.options.runs.updateStatus(run.jobId, "PASSED", { finishedAt: new Date().toISOString(), resultSummary: { recoveredFromGroupEvidence: true } });
+          continue;
+        }
+        if (groupDecision && groupDecision.decision !== "RESTART_GROUP_FROM_SAFE_BOUNDARY") {
+          this.options.runs.updateStatus(run.jobId, "NEEDS_MANUAL_INTERVENTION", { finishedAt: new Date().toISOString(), error: { code: "CanGroupManualRecoveryRequired", reason: groupDecision.reason, evidence: groupDecision.evidence } });
+          continue;
+        }
         const interrupted = this.options.runs.steps(run.jobId).find(step => step.status === "INTERRUPTED" || step.status === "RUNNING");
         const decision = this.reconciler.reconcile(plan, {
           boardId: "all",
@@ -77,7 +96,15 @@ export class TestJobEngine {
     const boards = this.selectBoards(submittedPlan);
     const jobId = `run-${randomUUID()}`;
     const plan: TestPlan = submittedPlan.can
-      ? { ...submittedPlan, parallelism: Math.max(2, submittedPlan.parallelism ?? 2), can: { ...submittedPlan.can, groupId: `can-group-${jobId}` } }
+      ? {
+        ...submittedPlan,
+        parallelism: Math.max(2, submittedPlan.parallelism ?? 2),
+        can: {
+          ...submittedPlan.can,
+          groupId: `can-group-${jobId}`,
+          execution: { ...submittedPlan.can.execution, campaignId: `can-campaign-${jobId}` }
+        }
+      }
       : submittedPlan;
     if (plan.can) {
       if (boards.length !== 2) throw new DebugMcpError("CanProfileInvalid", "CAN acceptance requires exactly two selected boards", { selectedBoardIds: boards.map(board => board.boardId) });
@@ -95,6 +122,7 @@ export class TestJobEngine {
     // start without its durable physical topology declaration.
     if (plan.can) this.options.canAcceptance!.prepare(jobId, plan, boards.map(board => board.boardId));
     this.options.runs.create(run, boardRuns, steps);
+    if (plan.can) this.options.canAcceptance!.initializeCampaign(jobId, plan);
     this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_SUBMITTED", payload: { planName: plan.name, selectedBoards: boardRuns.map(board => board.boardId) } });
     this.schedule(jobId);
     return { success: true, jobId, status: "QUEUED", submittedAt, selectedBoards: boardRuns.map(board => ({ boardId: board.boardId, probeSerial: board.probeSerial })) };
@@ -121,7 +149,11 @@ export class TestJobEngine {
       ...(run.plan.can && typeof (run.plan.can as Record<string, unknown>).groupId === "string" ? {
         can: {
           group: this.options.boardGroups?.require(String((run.plan.can as Record<string, unknown>).groupId)),
-          results: this.options.canResults?.list(jobId) ?? []
+          results: this.options.canResults?.list(jobId) ?? [],
+          ...(this.options.canCampaigns?.getByJob(jobId) ? {
+            campaign: this.options.canCampaigns.getByJob(jobId),
+            cases: this.options.canCampaigns.cases(this.options.canCampaigns.getByJob(jobId)!.campaignId)
+          } : {})
         }
       } : {}),
       ...(options.includeSteps ? { steps: this.options.runs.steps(jobId) } : {}),
@@ -205,7 +237,15 @@ export class TestJobEngine {
         current = { ...current, currentStepIndex: step.stepIndex };
         this.options.runs.updateBoard(current);
         try {
-          const output = await this.steps.execute({ jobId, boardId: board.boardId, sessionId, plan, step: plan.steps[step.stepIndex]! });
+          const output = await this.steps.execute({
+            jobId,
+            boardId: board.boardId,
+            sessionId,
+            leaseId: lease.lease.leaseId,
+            probeSerial: board.probeSerial,
+            plan,
+            step: plan.steps[step.stepIndex]!
+          });
           if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
           if (typeof output.sessionId === "string") {
             sessionId = output.sessionId;
@@ -242,6 +282,18 @@ export class TestJobEngine {
     const selected = selector?.count ? boards.slice(0, selector.count) : boards;
     if (selected.length === 0) throw new DebugMcpError("ProbeNotConnected", "No registered board matches the submitted test plan", { boardIds, tags: selector?.tags });
     return selected;
+  }
+
+  private reconcileCanGroup(jobId: string, plan: TestPlan) {
+    const group = this.options.boardGroups?.getByJob(jobId);
+    if (!group || !this.options.groupBarriers) return undefined;
+    const decision = this.canGroupReconciler.reconcile(plan, group, this.options.groupBarriers.list(group.groupId));
+    this.options.groupReconcileDecisions?.add({ groupId: group.groupId, jobId, decision: decision.decision, reason: decision.reason, evidence: decision.evidence });
+    this.options.events.append({ level: decision.decision === "RESTART_GROUP_FROM_SAFE_BOUNDARY" ? "warn" : "error", sourceType: "can-group", sourceId: group.groupId, jobId, eventType: "CAN_GROUP_RECONCILE_DECISION", payload: { ...decision } });
+    if (decision.decision === "RESTART_GROUP_FROM_SAFE_BOUNDARY" && !this.options.boardGroups!.isTerminal(group.status)) {
+      this.options.boardGroups!.transition(group.groupId, "RECOVERING", { reason: decision.reason });
+    }
+    return decision;
   }
 }
 
