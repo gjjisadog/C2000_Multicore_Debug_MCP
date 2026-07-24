@@ -617,7 +617,7 @@ describe("tool handlers", () => {
         ])
       }),
       diagnosis: expect.objectContaining({
-        diagnosisCode: "BOOT_HANDOFF_NOT_READY",
+        diagnosisCode: "IPC_ACCEPTANCE_NOT_READY",
         severity: "warning",
         cpu1: expect.objectContaining({ coreId: 0 }),
         cpu2: expect.objectContaining({ coreId: 2 }),
@@ -635,6 +635,63 @@ describe("tool handlers", () => {
           expect.stringContaining("snapshot.json"),
           expect.stringContaining("evidence.json")
         ])
+      })
+    }));
+  });
+
+  test("runIpcAcceptance uses supplied IPC conditions without evaluating default Hybrid symbols", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-custom-condition-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0                00008000   00000800  00000010  000007f0  RWIX\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4                00018000   00002000  00000871  0000178f  RWIX\n");
+    const adapter = new WorkflowRecordingAdapter({
+      expressionValues: { "ipc.responsePass": { value: "1" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, {
+      defaultWorkspacePath: tempDir
+    });
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-custom-condition", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [
+        { label: "cpu1-response", coreId: 0, expression: "ipc.responsePass", expected: 1 }
+      ],
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      diagnosis: expect.objectContaining({
+        diagnosisCode: "IPC_ACCEPTANCE_READY",
+        severity: "info",
+        cpu1: expect.objectContaining({
+          expressions: [expect.objectContaining({ expression: "ipc.responsePass", success: true, value: "1" })]
+        }),
+        cpu2: expect.objectContaining({ expressions: [] }),
+        verdict: expect.objectContaining({
+          ipcReady: true,
+          readinessBasis: "matched-ipc-conditions",
+          ramOwnershipReady: true,
+          ready: true
+        })
       })
     }));
   });
