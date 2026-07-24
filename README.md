@@ -50,11 +50,12 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 ## Install
 
 ```bash
-npm install
+npm ci
 npm run build
+npm run doctor
 ```
 
-`npm run build` runs `scripts/build.mjs`, which invokes the TypeScript package CLI (`lib/_tsc.js`) directly. This avoids broken `tsc` bin shims under some Node/package layouts. TypeScript is pinned to `5.5.4`. If build fails after a partial `node_modules`, reinstall with `npm ci` or `npm install typescript@5.5.4 --save-dev`.
+`npm run build` runs `scripts/build.mjs`, which invokes the TypeScript package CLI (`lib/_tsc.js`) directly. It type-checks production sources and produces a self-contained `dist/src/index.js` bundle, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. TypeScript is pinned to `5.5.4`; `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci` or `npm install typescript@5.5.4 --save-dev`.
 
 ## Start
 
@@ -149,6 +150,44 @@ npm run acceptance:can:hardware
 `acceptance:can:hardware` is a configuration-only preflight: it checks two
 distinct F28P65x board/probe bindings and performs no target control, CAN
 traffic, power enable, PWM-trip modification, or contactor action.
+Read-only startup diagnosis:
+
+```bash
+npm run doctor
+```
+
+The doctor uses only Node built-ins. It starts the built MCP without touching the target, completes the MCP initialize handshake, lists tools, and calls `c2000_getServerHealth`. On failure it prints structured JSON with a failure code, remediation, and captured server stderr.
+
+Use `npm run doctor:isolated` to copy the runtime artifact into a temporary directory with no adjacent `node_modules` and perform the same handshake. This is the strongest check that the configured artifact is genuinely self-contained.
+
+## Startup Resilience
+
+The configured entrypoint remains `dist/src/index.js`, but it is now a self-contained bundle rather than a thin file that imports runtime packages from `node_modules`. This prevents a damaged transitive package from silently removing every `c2000_*` tool on the next Codex session startup.
+
+Startup events are written as one-line JSON to stderr, never stdout. A successful process emits `c2000_mcp_ready`; failures identify `load-config`, `create-server`, or `connect-transport` and include a repair action. Set `C2000_MCP_STARTUP_DIAGNOSTICS=quiet` to suppress only the ready event; errors remain visible.
+
+If a client reports an empty tool list:
+
+1. Run `npm run doctor`.
+2. If the runtime artifact is missing, run `npm ci && npm run build`.
+3. Re-run `npm run doctor` and confirm `runtime.bundled === true`.
+4. Restart or reload the MCP client so it performs a fresh `initialize` and `tools/list` handshake.
+
+These checks do not connect XDS110, create a debug session, load programs, reset cores, or run the target.
+
+## Debug Workflow Performance
+
+High-level one-shot workflows use `sessionMode: "ephemeral"` by default and close the logical DebugSession, Persistent DSS process, and probe lease in a unified `finally` cleanup. Use `interactive` only for consecutive read/run/halt operations, then explicitly close the session.
+
+The CCS adapter uses operation-specific timeouts under `ccs.timeouts`: short state/expression/address/shutdown deadlines remain independent from the long program-load deadline. `C2000_MCP_DSS_TIMEOUT_MS` remains a compatibility fallback.
+
+Persistent DSS now keeps one request-correlated TCP channel per explicit core. Commands on one core are serialized, responses are matched by `requestId`, and one reconnect is attempted without changing the bound `coreId`/`coreName`. Expression reads use one `evaluateMany` DSS command per core. Adaptive IPC polling groups and deduplicates conditions, using 50 ms through 500 ms, 100 ms through 2 seconds, then 250 ms unless a schedule is supplied.
+
+Program loading supports `always`, `if-changed`, and `verify-only`. The `if-changed` policy compares canonical path, size, mtime, SHA-256, and the session registry independently for CPU1 and CPU2. A bounded host cache shares hashes between loading and ELF freshness checks.
+
+Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
+
+Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run benchmark:hardware` is explicitly opt-in and reports a skip unless the CCS/XDS110 environment is supplied; it never fabricates board timings.
 
 ## Client Config
 
@@ -318,20 +357,30 @@ Environment overrides:
 - `C2000_MCP_CONFIG`
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
+- `C2000_MCP_C2000WARE_PATH`
 - `C2000_MCP_WORKSPACE_PATH`
 - `C2000_MCP_CCXML_PATH`
 - `C2000_MCP_DSS_TIMEOUT_MS` (default hardware acceptance value: `300000`)
 - `C2000_MCP_REQUEST_TIMEOUT_MS` (MCP hardware acceptance client request timeout; default: `600000`)
+- `C2000_MCP_PROBE_QUEUE_DIR` (shared FIFO lease directory; every MCP instance must use the same absolute path)
+- `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `600000`)
+- `C2000_MCP_PROBE_RECOVERY_POLICY=block|owned-and-stale|terminate-external` (default: `owned-and-stale`)
+- `C2000_MCP_PROBES_JSON` (optional JSON array defining the multi-board pool)
+- `C2000_MCP_MULTI_BOARD_ENABLED=true` (explicit multi-board opt-in; default is false)
 - `C2000_PROGRAM_SEARCH_ROOTS`
 - `C2000_MCP_LOG_LEVEL=debug|info|warn|error`
 - `C2000_MCP_LOG_FILE`
 
 Windows paths are plain JSON strings. Escape backslashes or use forward slashes.
 
+TI paths use this priority: environment/config values, validated automatic discovery, then an unresolved result with all attempted paths. On macOS the resolver checks `$HOME/ti/ccs*/ccs`, `$HOME/ti/c2000/C2000Ware_*`, and `/Applications/ti`; it validates CCS with the `DSLite` executable and C2000Ware with `.metadata/sdk.json`. The F28P65x `.ccxml` path is derived only from a validated C2000Ware installation. Call `c2000_getEnvironment` to see the selected canonical paths, versions, sources, and rejected candidates. Do not copy an example installation path without validating it first.
+
 ## Tools
 
 Phase 0 read-only host checks:
 
+- `c2000_getServerHealth`
+- `c2000_getEnvironment`
 - `c2000_getToolContracts`
 - `c2000_getDebugBoundary`
 - `c2000_getAcceptanceEvidence`
@@ -389,6 +438,8 @@ Phase 3:
 - `c2000_runFullDebugBundle`
 
 All tool responses include `success`, `timestamp`, and scoped fields such as `sessionId`, `coreId`, `coreName`.
+
+`c2000_getServerHealth` is available in `readonly`, `safe`, and `full` profiles. It reports server/runtime version, whether the active artifact is bundled, process uptime, selected adapter and tool profile, configured TI path presence, and the exact registered tool names. It is host-read only and never enumerates or controls the target.
 
 Each registered tool definition also declares `inputScope` and `targetEffect` contracts. Core-scoped debug tools use `inputScope: "core"` and must expose both `sessionId` and `coreId`; host-only tools such as `c2000_getDebugBoundary`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, `c2000_getAcceptanceReadiness`, and `c2000_analyzeRamOwnership` use `inputScope: "host"` and do not connect to the target. MCP clients can call `c2000_getToolContracts` to inspect each tool's `inputScope`, `targetEffect`, `inputFields`, `requiredInputFields`, `coreIdentityFields`, and `responseCoreIdentityFields`. Single-core debug controls declare response identity fields `["coreId", "coreName"]`; batch tools declare per-result identity fields; multicore snapshots declare `["cores[].coreId", "cores[].coreName"]`; and `c2000_verifyRunPauseIsolation` declares `["acceptanceSummary.steps[].commandCoreId", "acceptanceSummary.steps[].commandCoreName"]`. Advanced IPC, MSGRAM, parameter-sync, CPU2 bring-up, and fault-injection tools also declare response identity paths, for example `c2000_assignExpressions` and `c2000_injectFaults` use `["results[].coreId", "results[].coreName"]`, `c2000_compareExpressions` uses `["comparisons[].left.coreId", "comparisons[].right.coreId"]`, `c2000_waitForExpressionSet` and `c2000_waitForIpcReady` use `["conditions[].coreId"]`, `c2000_analyzeRamOwnership` uses `["maps[].coreId", "ownershipActions[].targetCoreId"]`, `c2000_diagnoseCpu2Boot` uses `["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"]`, and `c2000_diagnoseBootHandoff` also includes `["ramOwnership.maps[].coreId"]` when map evidence is supplied. `c2000_reloadResetRunToMain` declares `["coreId", "coreName"]` and reports the current adapter limitation for true breakpoint/run-to-symbol behavior. Workflow tools such as `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, and `c2000_runFullDebugBundle` declare `targetEffect: "launch-workflow"` because they perform multi-step orchestration inside the MCP server. `c2000_launchMulticoreDebug` declares response identity paths for its snapshot, post-launch actions, post-launch checks, and nested run/pause isolation summary. The readiness and hardware acceptance scripts assert these response identity contracts before any target connection or launch step, so weak contracts fail fast before touching the board.
 
@@ -1054,3 +1105,64 @@ c2000-multicore-mcp/
   scripts/
   tests/
 ```
+
+## Security Model
+
+Every registered tool publishes standard MCP annotations plus precise `effects`. Read-only annotations are derived from effects and never hide connect, run, halt, reset, load, memory-write, RAM-ownership, fault-injection, or host-write behavior. The explicit route remains `sessionId -> adapterSessionId -> coreId -> DebugSession`.
+
+The MCP Server can reduce approval frequency by using accurate annotations and server-internal workflows, but the MCP client remains the final approval authority.
+
+Recommended approval policy:
+
+- read-only tools: auto approve
+- safe high-level workflow: approve once
+- target mutation tools: always prompt
+
+## Tool Profiles
+
+Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exposes only tools whose annotations are read-only. `safe` adds session lifecycle, target control, loading, and safe workflows but hides arbitrary expression writes and fault injection. `full` exposes every tool. `c2000_getToolContracts` reports only the active set together with `activeToolProfile`, `hiddenTools`, and `profileReason`.
+
+## Filesystem Policy
+
+`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output.
+
+## RAM Ownership Policy
+
+CPU2 loads no longer assume RAMGS4. Use `ramOwnershipPolicy: "require-map"` (default) with a readable linker map, `"explicit-fallback"` with explicit `fallbackGsRegions`, or `"skip"`. CPU1 loading is unchanged. Results record policy, fallback use, ownership writes, and whether ownership was prepared or skipped.
+
+Migration: callers that previously omitted a CPU2 map must now provide map evidence, explicitly authorize fallback regions, or explicitly skip ownership changes.
+
+## Safe Workflow vs Mutation Workflow
+
+`c2000_launchMulticoreDebugSafe` permits session creation, connect/load/halt, snapshot, polling, comparisons, and diagnosis. It excludes assignments, fault injection, reset, automatic run, and run/pause isolation. `c2000_launchMulticoreDebugWithActions` is the explicit destructive alternative. The old `c2000_launchMulticoreDebug` remains a deprecated compatibility alias and identifies its replacement in the response.
+
+High-level workflows execute their steps inside the server; they do not recursively issue MCP tool calls. This keeps one client-visible `tools/call` while preserving truthful annotations and evidence.
+
+CCS project cleanup is workflow-scoped. Projects needed by build/debug remain available for the full workflow and are cleaned together only after success or failure. Because CCS 21 has no `Close Project` command, automation should use a dedicated temporary CCS workspace for each workflow instead of importing workflow-only projects into the user's main workspace. Final cleanup closes the logical DebugSession and the temporary workflow workspace together while preserving source projects, generated `.out`/`.map` evidence, and every project that existed in the main workspace before the workflow.
+
+Persistent DSS children also register a parent-process exit fallback. Normal cleanup still uses the structured shutdown command and `c2000_closeDebugSession`; if the MCP process is terminated unexpectedly, its own DSS child is killed to avoid an orphan process.
+
+All CCS-backed MCP instances coordinate through a filesystem FIFO lease. The lease is acquired before probe recovery/session creation and held until the logical debug session closes, so multiple Agents or conversations cannot interleave operations on one XDS110. Dead active owners and dead waiting tickets are reclaimed automatically. Configure every instance with the same absolute `C2000_MCP_PROBE_QUEUE_DIR`.
+
+For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique XDS110 `serialNumber`, and a separate `.ccxml` already bound to that serial number:
+
+```json
+{
+  "debugProbe": {
+    "multiBoardEnabled": true,
+    "queueDir": "/shared/c2000-probe-queue",
+    "queueTimeoutMs": 600000,
+    "recoveryPolicy": "terminate-external",
+    "probes": [
+      { "probeId": "board-01", "serialNumber": "XDS110-A", "ccxmlPath": "/targets/board-01.ccxml", "enabled": true },
+      { "probeId": "board-02", "serialNumber": "XDS110-B", "ccxmlPath": "/targets/board-02.ccxml", "enabled": true }
+    ]
+  }
+}
+```
+
+Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true` and at least two enabled, uniquely identified probes are configured. At Session creation the MCP verifies that the selected XDS110 serial is currently enumerated and that its dedicated `.ccxml` contains that serial binding. A mismatch aborts before DSS creation or target access.
+
+Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, and wait time. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
+
+The default `owned-and-stale` recovery policy blocks on a live external DSLite owner. For a dedicated unattended test machine, set `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external`; only the FIFO lease holder may then send TERM/KILL to detected DSLite, DebugServer, or dss.sh processes before starting the test. The CCS application itself is not terminated. `c2000_createDebugSession` returns `probeQueue` and `probeRecovery` evidence so callers can see queue position, wait time, and recovered PIDs.

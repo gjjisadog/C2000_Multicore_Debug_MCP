@@ -67,7 +67,32 @@ export type DebugErrorCode =
   | "CanSafetyGateFailed"
   | "CanIndependentBusVerificationRequired"
   | "CanCrossBoardComparisonFailed"
-  | "CanTestHookUnsupported";
+  | "CanTestHookUnsupported"
+  | "RamOwnershipEvidenceRequired"
+  | "RamOwnershipMapUnavailable"
+  | "RamOwnershipMapParseFailed"
+  | "PathOutsideAllowedReadRoots"
+  | "PathOutsideAllowedWriteRoots"
+  | "PathResolutionFailed"
+  | "ProbeNotFound"
+  | "ProbeSelectionRequired"
+  | "ProbeIdentityMismatch"
+  | "ProbeRecoveryBlocked"
+  | "DuplicateProbeId"
+  | "ProbeQueueTimeout"
+  | "SessionClosing"
+  | "SessionClosed"
+  | "SessionIdleTimeout"
+  | "PersistentChannelDisconnected"
+  | "PersistentChannelReconnectFailed"
+  | "DssCommandTimeout"
+  | "DssCommandRejected"
+  | "DssSchedulerConflict"
+  | "BatchExpressionFailed"
+  | "EvidenceCaptureFailed"
+  | "LoadVerificationFailed"
+  | "ProgramUnchanged"
+  | "WorkflowCleanupFailed";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

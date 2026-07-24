@@ -4,10 +4,16 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { assertAcceptanceEvidence } from "../src/debug/boundary.js";
-import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
+import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 
-const ccsInstallPath = resolveCcsInstallPath();
-const ccxmlPath = resolveCcxmlPath();
+const environment = await resolveTiEnvironment({
+  ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
+  c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,
+  ccxmlPath: process.env.C2000_MCP_CCXML_PATH
+});
+const ccsInstallPath = environment.ccs.path ?? "";
+const c2000WarePath = environment.c2000Ware.path ?? "";
+const ccxmlPath = environment.ccxml.path ?? "";
 const allowExistingDebugProcesses = process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
 
 const transport = new StdioClientTransport({
@@ -19,8 +25,11 @@ const transport = new StdioClientTransport({
     ...getDefaultEnvironment(),
     C2000_MCP_ADAPTER: "ccs",
     C2000_MCP_CCS_INSTALL_PATH: ccsInstallPath,
+    C2000_MCP_C2000WARE_PATH: c2000WarePath,
     C2000_MCP_CCXML_PATH: ccxmlPath,
-    C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error"
+    C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
+    C2000_MCP_TOOL_PROFILE: "full",
+    C2000_MCP_ALLOWED_READ_ROOTS: [ccsInstallPath, ccxmlPath ? path.dirname(ccxmlPath) : "", os.homedir()].filter(Boolean).join(path.delimiter)
   }
 });
 const stderrChunks: Buffer[] = [];
@@ -37,6 +46,7 @@ try {
     arguments: {}
   }));
   assert.equal(contracts.success, true);
+  assertToolContract(contracts, "c2000_getEnvironment", "host", "host-read", []);
   assertToolContract(contracts, "c2000_getDebugBoundary", "host", "host-read", []);
   assertToolContract(contracts, "c2000_getAcceptanceEvidence", "host", "host-read", []);
   assertToolContract(contracts, "c2000_getHardwarePreflight", "host", "host-read", []);

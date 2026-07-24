@@ -21,6 +21,7 @@ import { defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/d
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
+import type { DebugEvidence } from "../debug/DebugEvidence.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -37,11 +38,16 @@ export class DebugWorkflowService {
     const sessionName = input.sessionName ?? "launch-and-run-ipc-acceptance";
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     let sessionId: string | undefined;
+    const workflowStartedAt = performance.now();
+    const cleanup: ToolResult = { sessionClosed: false, probeLeaseReleased: false, cleanupErrors: [], cleanupDurationMs: 0 };
 
     try {
       const created = await this.manager.createDebugSession({
         sessionName,
         ccxmlPath: input.ccxmlPath,
+        probeId: input.probeId,
+        preferredProbeIds: input.preferredProbeIds,
+        allowAutoProbeAllocation: input.allowAutoProbeAllocation,
         coreMap: [
           { coreId: input.cpu1CoreId, coreName: input.cpu1CoreName, corePattern: input.cpu1CorePattern },
           { coreId: input.cpu2CoreId, coreName: input.cpu2CoreName, corePattern: input.cpu2CorePattern }
@@ -58,6 +64,12 @@ export class DebugWorkflowService {
         ...acceptance,
         workflow: "c2000_launchAndRunIpcAcceptance",
         autoCloseOnComplete: input.autoCloseOnComplete,
+        orchestration: "server-internal",
+        mcpToolCalls: [],
+        approvalClass: "workflow-confirmation",
+        sessionMode: input.sessionMode,
+        cleanup,
+        performance: { ...acceptance.performance, totalMs: performance.now() - workflowStartedAt },
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -80,7 +92,7 @@ export class DebugWorkflowService {
       };
     } catch (error) {
       const launch: ToolResult = { sessionName, coreIds };
-      if (sessionId) {
+      if (sessionId && input.sessionMode === "interactive") {
         launch.sessionId = sessionId;
         try {
           await this.manager.closeDebugSession(sessionId);
@@ -95,11 +107,25 @@ export class DebugWorkflowService {
         "Launch and IPC acceptance workflow failed",
         { launch, cause: toStructuredError(error) }
       );
+    } finally {
+      if (sessionId && input.sessionMode === "ephemeral") {
+        const cleanupStartedAt = performance.now();
+        try {
+          await this.manager.closeDebugSession(sessionId);
+          cleanup.sessionClosed = true;
+          cleanup.probeLeaseReleased = true;
+        } catch (cleanupError) {
+          cleanup.cleanupErrors.push(toStructuredError(cleanupError));
+        } finally {
+          cleanup.cleanupDurationMs = performance.now() - cleanupStartedAt;
+        }
+      }
     }
   }
 
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
     assertIpcArtifactSet(input);
+    const workflowStartedAt = performance.now();
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
@@ -111,8 +137,8 @@ export class DebugWorkflowService {
     performedSteps.push("resetCores");
     assertBatchSucceeded("resetCores", reset);
     const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
+      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
+      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy }
     ]);
     performedSteps.push("loadPrograms");
     assertBatchSucceeded("loadPrograms", load);
@@ -140,7 +166,7 @@ export class DebugWorkflowService {
       await sleep(input.runSequence.settleMs);
     }
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
-    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs);
+    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule);
     performedSteps.push("waitForIpcReady");
     const timeoutRecovery = ipcReady.timedOut
       ? await this.haltAndResolvePc(input.sessionId, coreIds)
@@ -158,13 +184,17 @@ export class DebugWorkflowService {
       runtimeRamOwnership,
       ipcReady,
       extraExpressions: conditions,
-      ipcAcceptance: true
+      ipcAcceptance: true,
+      cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
+      cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
     });
     performedSteps.push("diagnoseBootHandoff");
     const result: ToolResult = {
       workflow: "c2000_runIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -185,7 +215,14 @@ export class DebugWorkflowService {
       runPlan,
       ipcReady,
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
-      diagnosis
+      diagnosis,
+      performance: {
+        totalMs: performance.now() - workflowStartedAt,
+        ipcPollMs: ipcReady.pollDurationMs,
+        ipcPollIterations: ipcReady.pollIterations,
+        expressionBatchCount: ipcReady.expressionBatchCalls,
+        expressionCount: ipcReady.expressionCount
+      }
     };
     if (input.collectDebugBundle) {
       result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("ipc-acceptance"), result);
@@ -228,8 +265,8 @@ export class DebugWorkflowService {
     performedSteps.push("resetCores");
     assertBatchSucceeded("resetCores", reset);
     const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath }
+      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
+      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, ramOwnershipPolicy: input.ramOwnershipPolicy, fallbackGsRegions: input.fallbackGsRegions, loadPolicy: input.loadPolicy }
     ]);
     performedSteps.push("loadPrograms");
     assertBatchSucceeded("loadPrograms", load);
@@ -252,7 +289,7 @@ export class DebugWorkflowService {
       performedSteps.push("runCpu2");
     }
     const wait = input.waitExpressions && input.timeoutMs
-      ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs)
+      ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule)
       : undefined;
     if (wait) {
       performedSteps.push("waitExpressions");
@@ -276,6 +313,8 @@ export class DebugWorkflowService {
       workflow: "c2000_runReloadAndDiagnose",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -321,6 +360,26 @@ export class DebugWorkflowService {
       input.verifyRuntimeRamOwnership,
       ramOwnership?.ownershipActions
     );
+    const evidence: DebugEvidence = {
+      sessionId: input.sessionId,
+      capturedAt: new Date().toISOString(),
+      cores: coreIds.map(coreId => {
+        const snapshotCore = snapshot.cores.find((core: ToolResult) => core.coreId === coreId);
+        return {
+          coreId,
+          coreName: snapshotCore?.coreName,
+          connected: snapshotCore?.connected,
+          state: snapshotCore?.state,
+          pc: pc.find(item => item.coreId === coreId),
+          loadedProgramInfo: loadedPrograms.find(item => item.coreId === coreId)?.loadedProgramInfo,
+          expressions: expressions.find(item => item.coreId === coreId)?.results
+        };
+      }),
+      ramOwnership,
+      runtimeRamOwnership,
+      elfFreshness,
+      commandStats: { total: 0, byOperation: {} }
+    };
     const bootHandoff = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,
@@ -328,12 +387,15 @@ export class DebugWorkflowService {
       cpu2CoreId: input.cpu2CoreId,
       ramOwnership,
       elfFreshness,
-      runtimeRamOwnership
+      runtimeRamOwnership,
+      evidence
     });
     const result: ToolResult = {
       workflow: "c2000_runFullDebugBundle",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "workflow-confirmation",
+      effectsApplied: ["target-read", "bundle-write"],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -346,7 +408,8 @@ export class DebugWorkflowService {
       ...(ramOwnership ? { ramOwnership } : {}),
       elfFreshness,
       runtimeRamOwnership,
-      bootHandoff
+      bootHandoff,
+      evidence
     };
     result.bundle = await this.writeDebugBundle(input.outputDir, result);
     return result;
@@ -363,6 +426,9 @@ export class DebugWorkflowService {
     ipcReady?: ToolResult;
     extraExpressions?: ExpressionCondition[];
     ipcAcceptance?: boolean;
+    evidence?: DebugEvidence;
+    cpu1Expressions?: string[];
+    cpu2Expressions?: string[];
   }): Promise<ToolResult> {
     const cpu1Expressions = options.extraExpressions
       ?.filter(condition => condition.coreId === options.cpu1CoreId)
@@ -370,7 +436,7 @@ export class DebugWorkflowService {
     const cpu2Expressions = options.extraExpressions
       ?.filter(condition => condition.coreId === options.cpu2CoreId)
       .map(condition => condition.expression);
-    const boot = await this.manager.diagnoseCpu2Boot({
+    const boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
       cpu2CoreId: options.cpu2CoreId,
@@ -380,7 +446,10 @@ export class DebugWorkflowService {
       ...(options.extraExpressions ? {
         cpu1Expressions: cpu1Expressions ?? [],
         cpu2Expressions: cpu2Expressions ?? []
-      } : {})
+      } : {
+        cpu1Expressions: options.cpu1Expressions,
+        cpu2Expressions: options.cpu2Expressions
+      })
     });
     const extraExpressions = options.extraExpressions
       ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
@@ -412,6 +481,9 @@ export class DebugWorkflowService {
       workflow: "c2000_runBootHandoffDiagnosis",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      approvalClass: "read-only",
+      performedSteps: ["snapshot", "loadedPrograms", "expressions", "pc", "ramOwnership", "elfFreshness", "diagnosis"],
+      effectsApplied: ["target-read"],
       device: options.device,
       diagnosisCode,
       severity,
@@ -446,17 +518,40 @@ export class DebugWorkflowService {
     }));
   }
 
-  private async waitForExpressionSet(sessionId: string, conditions: ExpressionCondition[], timeoutMs: number, intervalMs: number) {
-    const deadline = Date.now() + timeoutMs;
+  private async waitForExpressionSet(
+    sessionId: string,
+    conditions: ExpressionCondition[],
+    timeoutMs: number,
+    intervalMs: number,
+    strategy: "fixed" | "adaptive" = "adaptive",
+    schedule?: Array<{ untilMs?: number; intervalMs: number }>
+  ) {
+    const startedAt = performance.now();
+    const deadline = startedAt + timeoutMs;
     let lastConditions: ToolResult[] = [];
-    while (Date.now() <= deadline) {
-      lastConditions = await this.evaluateConditions(sessionId, conditions);
+    let pollIterations = 0;
+    let expressionBatchCalls = 0;
+    const grouped = groupConditionsByCore(conditions);
+    while (performance.now() <= deadline) {
+      pollIterations++;
+      const batches = await Promise.all(grouped.map(async group => ({
+        group,
+        results: await this.manager.evaluateMany(sessionId, group.coreId, group.expressions)
+      })));
+      expressionBatchCalls += batches.length;
+      lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
+        conditionResult(condition, results.find(result => result.expression === condition.expression))
+      ));
       if (lastConditions.every(condition => condition.matched)) {
-        return { sessionId, matched: true, timedOut: false, conditions: lastConditions };
+        const pollDurationMs = performance.now() - startedAt;
+        return { sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs, matchedAtMs: pollDurationMs };
       }
-      await sleep(intervalMs);
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) break;
+      const elapsedMs = performance.now() - startedAt;
+      await sleep(Math.min(strategy === "fixed" ? intervalMs : adaptiveInterval(elapsedMs, schedule), remainingMs));
     }
-    return { sessionId, matched: false, timedOut: true, conditions: lastConditions };
+    return { sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs: performance.now() - startedAt };
   }
 
   private async haltAndResolvePc(sessionId: string, coreIds: CoreId[]) {
@@ -602,6 +697,19 @@ function conditionResult(condition: ExpressionCondition, result?: EvaluateResult
   };
 }
 
+function bootEvidence(evidence: DebugEvidence, cpu1CoreId: CoreId, cpu2CoreId: CoreId): ToolResult {
+  const cpu1 = evidence.cores.find(core => core.coreId === cpu1CoreId);
+  const cpu2 = evidence.cores.find(core => core.coreId === cpu2CoreId);
+  return {
+    sessionId: evidence.sessionId,
+    snapshot: {
+      sessionId: evidence.sessionId,
+      cores: evidence.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, connected: core.connected, state: core.state, pc: core.pc?.pc }))
+    },
+    cpu1: { coreId: cpu1CoreId, pc: cpu1?.pc, expressions: cpu1?.expressions ?? [] },
+    cpu2: { coreId: cpu2CoreId, pc: cpu2?.pc, expressions: cpu2?.expressions ?? [] }
+  };
+}
 function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwnership?: RamOwnershipAnalysis): string[] {
   if (diagnosisCode === "IPC_READY_TIMEOUT") {
     return [
@@ -765,4 +873,19 @@ function resolveRunPlan(
       ? ["CPU2 remains debugger-halted unless CPU1 firmware explicitly releases it."]
       : []
   };
+}
+
+function groupConditionsByCore(conditions: ExpressionCondition[]) {
+  const groups = new Map<CoreId, ExpressionCondition[]>();
+  for (const condition of conditions) groups.set(condition.coreId, [...(groups.get(condition.coreId) ?? []), condition]);
+  return [...groups.entries()].map(([coreId, coreConditions]) => ({
+    coreId,
+    conditions: coreConditions,
+    expressions: [...new Set(coreConditions.map(condition => condition.expression))]
+  }));
+}
+
+function adaptiveInterval(elapsedMs: number, schedule?: Array<{ untilMs?: number; intervalMs: number }>) {
+  const selected = schedule ?? [{ untilMs: 500, intervalMs: 50 }, { untilMs: 2000, intervalMs: 100 }, { intervalMs: 250 }];
+  return selected.find(item => item.untilMs === undefined || elapsedMs < item.untilMs)?.intervalMs ?? selected[selected.length - 1]!.intervalMs;
 }

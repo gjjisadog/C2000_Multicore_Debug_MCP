@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
+import { resolveTiEnvironment } from "../config/tiPaths.js";
 
 export { defaultCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
 
@@ -45,6 +46,16 @@ export interface DebugProcessInfo {
   rawLine: string;
 }
 
+export type ProbeRecoveryPolicy = "block" | "owned-and-stale" | "terminate-external";
+
+export interface ProbeRecoveryResult {
+  policy: ProbeRecoveryPolicy;
+  attempted: boolean;
+  recovered: boolean;
+  terminatedPids: number[];
+  remainingOwners: DebugProcessInfo[];
+}
+
 const execFileAsync = promisify(execFile);
 
 export async function runHardwarePreflight(options: {
@@ -56,7 +67,9 @@ export async function runHardwarePreflight(options: {
   sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<HardwarePreflightResult> {
   const platform = options.platform ?? process.platform;
-  const ccsRoot = resolveCcsInstallPath(options.ccsInstallPath, platform);
+  const detectedCcsPath = options.ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH
+    ?? (await resolveTiEnvironment()).ccs.path;
+  const ccsRoot = resolveCcsInstallPath(detectedCcsPath, platform);
   const xdsdfuPath = resolveXdsdfuPath(ccsRoot, platform);
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
@@ -115,6 +128,66 @@ export async function runHardwarePreflight(options: {
   }
 
   return preflight;
+}
+
+export async function recoverDebugProbe(options: {
+  ccsInstallPath?: string;
+  policy: ProbeRecoveryPolicy;
+  execFile?: ExecFileLike;
+  /** Allows deterministic platform-specific preflight in tests and remote runners. */
+  platform?: NodeJS.Platform;
+  killProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
+  settleMs?: number;
+  targetCcxmlPath?: string;
+}): Promise<ProbeRecoveryResult> {
+  const killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const before = await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile, platform: options.platform });
+  const allOwners = before.debugProcessDetails.filter(isProbeOwnerProcess);
+  const owners = options.targetCcxmlPath
+    ? allOwners.filter(owner => owner.command.includes(options.targetCcxmlPath!))
+    : allOwners;
+  if (owners.length === 0) {
+    return { policy: options.policy, attempted: false, recovered: true, terminatedPids: [], remainingOwners: [] };
+  }
+  if (options.policy !== "terminate-external") {
+    return { policy: options.policy, attempted: false, recovered: false, terminatedPids: [], remainingOwners: owners };
+  }
+  const terminatedPids: number[] = [];
+  for (const owner of owners) {
+    try {
+      killProcess(owner.pid, "SIGTERM");
+      terminatedPids.push(owner.pid);
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  await delay(options.settleMs ?? 1500);
+  for (const owner of owners) {
+    try {
+      killProcess(owner.pid, 0);
+      killProcess(owner.pid, "SIGKILL");
+    } catch (error) {
+      if (!isMissingProcess(error)) throw error;
+    }
+  }
+  await delay(250);
+  const after = await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile, platform: options.platform });
+  const remainingOwners = after.debugProcessDetails
+    .filter(isProbeOwnerProcess)
+    .filter(owner => !options.targetCcxmlPath || owner.command.includes(options.targetCcxmlPath));
+  return { policy: options.policy, attempted: true, recovered: remainingOwners.length === 0, terminatedPids, remainingOwners };
+}
+
+export function isProbeOwnerProcess(processInfo: DebugProcessInfo): boolean {
+  return processInfo.kind === "DSLite" || processInfo.kind === "DebugServer" || processInfo.kind === "dss.sh";
+}
+
+function isMissingProcess(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ESRCH";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 export function findDebugProcesses(processList: string): string[] {

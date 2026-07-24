@@ -8,6 +8,7 @@ import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../s
 import { assertPartialAddressResolution } from "./mcpSmokeAssertions.js";
 
 const requiredTools = [
+  "c2000_getServerHealth",
   "c2000_getToolContracts",
   "c2000_getDebugBoundary",
   "c2000_getAcceptanceEvidence",
@@ -57,7 +58,10 @@ async function main() {
     env: {
       ...getDefaultEnvironment(),
       C2000_MCP_ADAPTER: "mock",
-      C2000_MCP_LOG_LEVEL: "error"
+      C2000_MCP_LOG_LEVEL: "error",
+      C2000_MCP_TOOL_PROFILE: "full",
+      C2000_MCP_ALLOWED_READ_ROOTS: tmpdir(),
+      C2000_MCP_ALLOWED_WRITE_ROOTS: tmpdir()
     }
   });
   const stderrChunks: Buffer[] = [];

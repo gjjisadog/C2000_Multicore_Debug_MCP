@@ -1,14 +1,13 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { sharedFileMetadataCache } from "./FileMetadataCache.js";
 
 export async function fileMetadata(programUri: string) {
-  const stats = await stat(programUri);
-  const sha256 = await sha256File(programUri);
+  const cached = await sharedFileMetadataCache.getOrCreate(programUri, () => sha256File(programUri));
   return {
-    fileMTime: stats.mtime.toISOString(),
-    fileSize: stats.size,
-    sha256
+    fileMTime: cached.fileMTime,
+    fileSize: cached.fileSize,
+    sha256: cached.value
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { defaultCcsInstallPath, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+import { defaultCcsInstallPath, recoverDebugProbe, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
 
 const xdsdfuOutput = `
 USB Device Firmware Upgrade Utility
@@ -31,6 +31,50 @@ describe("hardware preflight", () => {
     );
   });
 
+  test("automatically terminates only probe-owner processes after obtaining the queue lease", async () => {
+    let occupied = true;
+    const signals: Array<[number, NodeJS.Signals | 0]> = [];
+    const execFile = async (command: string) => {
+      if (command === "ps") return {
+        stdout: occupied
+          ? " 58893 1 00:10:00 /Applications/ti/ccs/DebugServer/bin/DSLite --config /targets/a.ccxml\n 58894 1 00:10:00 /Applications/ti/ccs/DebugServer/bin/DSLite --config /targets/b.ccxml\n 60000 1 00:20:00 /Applications/ti/ccs/ccs.app/Contents/MacOS/ccstudio\n"
+          : " 58894 1 00:10:00 /Applications/ti/ccs/DebugServer/bin/DSLite --config /targets/b.ccxml\n 60000 1 00:20:00 /Applications/ti/ccs/ccs.app/Contents/MacOS/ccstudio\n",
+        stderr: ""
+      };
+      return { stdout: "", stderr: "" };
+    };
+    const recovery = await recoverDebugProbe({
+      policy: "terminate-external",
+      targetCcxmlPath: "/targets/a.ccxml",
+      execFile,
+      platform: "darwin",
+      settleMs: 0,
+      killProcess: (pid, signal) => {
+        signals.push([pid, signal]);
+        if (signal === "SIGTERM") occupied = false;
+        if (signal === 0 && !occupied) Object.assign(new Error("gone"), { code: "ESRCH" });
+      }
+    });
+
+    expect(recovery).toMatchObject({ attempted: true, recovered: true, terminatedPids: [58893], remainingOwners: [] });
+    expect(signals.some(([pid]) => pid === 58894)).toBe(false);
+    expect(signals.some(([pid]) => pid === 60000)).toBe(false);
+  });
+
+  test("safe recovery policies report an owner without terminating it", async () => {
+    const signals: Array<[number, NodeJS.Signals | 0]> = [];
+    const recovery = await recoverDebugProbe({
+      policy: "owned-and-stale",
+      platform: "darwin",
+      execFile: async command => command === "ps"
+        ? { stdout: " 58893 1 00:10:00 /Applications/ti/ccs/DebugServer/bin/DSLite --config target.ccxml\n", stderr: "" }
+        : { stdout: "", stderr: "" },
+      killProcess: (pid, signal) => { signals.push([pid, signal]); }
+    });
+
+    expect(recovery).toMatchObject({ attempted: false, recovered: false, terminatedPids: [] });
+    expect(signals).toEqual([]);
+  });
   test("enumerates XDS110 devices and filters possible debug owners", async () => {
     const result = await runHardwarePreflight({
       ccsInstallPath: "/Applications/ti/ccs2100/ccs",

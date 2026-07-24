@@ -12,9 +12,15 @@ import { discoverAcceptancePrograms } from "../src/hardware/programDiscovery.js"
 import { formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/preflight.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { getToolContracts } from "../src/mcp/tools.js";
+import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 
-const ccsInstallPath = resolveCcsInstallPath();
-const ccxmlPath = resolveCcxmlPath();
+const environment = await resolveTiEnvironment({
+  ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
+  c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,
+  ccxmlPath: process.env.C2000_MCP_CCXML_PATH
+});
+const ccsInstallPath = environment.ccs.path;
+const ccxmlPath = environment.ccxml.path ?? "";
 const programDiscovery = await discoverAcceptancePrograms({
   cpu1Program: process.env.C2000_CPU1_OUT,
   cpu2Program: process.env.C2000_CPU2_OUT,

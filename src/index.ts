@@ -2,9 +2,13 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig } from "./config/config.loader.js";
 import { createC2000McpProxyRuntime } from "./proxy/index.js";
+import { startupFailure, startupReady, writeStartupDiagnostic, type StartupPhase } from "./startupDiagnostics.js";
+import { isBundledRuntime } from "./runtimeInfo.js";
 
+let startupPhase: StartupPhase = "load-config";
 async function main() {
   const config = await loadConfig();
+  startupPhase = "create-server";
   const runtime = await createC2000McpProxyRuntime(config);
   const transport = new StdioServerTransport();
   let shutdownPromise: Promise<void> | undefined;
@@ -41,10 +45,17 @@ async function main() {
     void shutdown("beforeExit");
   });
 
+  startupPhase = "connect-transport";
   await runtime.server.connect(transport);
+  writeStartupDiagnostic(startupReady({
+    bundled: isBundledRuntime(),
+    adapterMode: config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter,
+    toolProfile: config.toolProfile,
+    pid: process.pid
+  }));
 }
 
 main().catch(error => {
-  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  writeStartupDiagnostic(startupFailure(startupPhase, error));
   process.exit(1);
 });

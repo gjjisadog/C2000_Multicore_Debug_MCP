@@ -118,7 +118,7 @@ describe("DebugSessionManager", () => {
 
     const result = await manager.loadPrograms(session.sessionId, [
       { coreId: 0, programUri: cpu1Out },
-      { coreId: 2, programUri: cpu2Out }
+      { coreId: 2, programUri: cpu2Out, ramOwnershipPolicy: "skip" }
     ]);
 
     expect(result.results).toEqual([
@@ -145,7 +145,7 @@ describe("DebugSessionManager", () => {
     // Connect only CPU2 so ownership write on CPU1 must fail closed.
     await manager.connectTarget(session.sessionId, 2);
 
-    await expect(manager.loadProgram(session.sessionId, 2, cpu2Out)).rejects.toMatchObject({
+    await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, undefined, "explicit-fallback", [4])).rejects.toMatchObject({
       code: "OwnerCoreNotConnected",
       details: expect.objectContaining({ ownerCoreId: 0, targetCoreId: 2 })
     });
@@ -187,7 +187,7 @@ describe("DebugSessionManager", () => {
     await manager.connectCores(session.sessionId, [0, 2]);
 
     await manager.loadProgram(session.sessionId, 0, cpu1Out);
-    await manager.loadProgram(session.sessionId, 2, cpu2Out);
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, undefined, "explicit-fallback", [4]);
 
     expect(adapter.events).toEqual([
       { type: "loadProgram", coreId: 0, programUri: cpu1Out },
@@ -382,9 +382,9 @@ MEMORY CONFIGURATION
     );
     adapter.events.length = 0;
 
-    const loaded = await manager.loadProgram(session.sessionId, 2, cpu2Out);
+    const loaded = await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, undefined, "explicit-fallback", [4]);
 
-    expect(loaded.warning).toContain("RAMGS4-only handoff default");
+    expect(loaded.warning).toContain("caller-authorized fallback GS regions");
     expect(adapter.events).toEqual([
       { type: "writeMemory", coreId: 0, page: "DATA", address: 0x0005F444, value: 0x08 | 0x10, typeSize: 32 },
       { type: "loadProgram", coreId: 2, programUri: cpu2Out }
@@ -435,7 +435,7 @@ MEMORY CONFIGURATION
     await manager.connectCores(session.sessionId, [0, 2]);
     await manager.loadPrograms(session.sessionId, [
       { coreId: 0, programUri: cpu1Out },
-      { coreId: 2, programUri: cpu2Out }
+      { coreId: 2, programUri: cpu2Out, ramOwnershipPolicy: "skip" }
     ]);
 
     const snapshot = await manager.getMulticoreSnapshot(session.sessionId);

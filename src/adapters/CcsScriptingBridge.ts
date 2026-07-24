@@ -22,6 +22,7 @@ export type CcsScriptingOperation =
   | "getState"
   | "readPc"
   | "evaluateExpression"
+  | "evaluateExpressions"
   | "assignExpression"
   | "resolveAddress";
 
@@ -35,6 +36,7 @@ export interface CcsScriptingCommand {
   resetType?: ResetType;
   programUri?: string;
   expression?: string;
+  expressions?: string[];
   valueExpression?: string;
   page?: string;
   address?: string | number;
@@ -242,6 +244,12 @@ function assertSafeWindowsCmdPath(filePath: string): string {
 
 function isPlatform(value: string | undefined): value is NodeJS.Platform {
   return value === "darwin" || value === "win32" || value === "linux" || value === "aix" || value === "android" || value === "freebsd" || value === "haiku" || value === "openbsd" || value === "sunos" || value === "cygwin" || value === "netbsd";
+}
+
+function requireCcsRoot(ccsInstallPath?: string): string {
+  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH;
+  if (!ccsRoot) throw new DebugMcpError("AdapterNotAvailable", "CCS install path is unresolved; run c2000_getEnvironment or set C2000_MCP_CCS_INSTALL_PATH");
+  return ccsRoot;
 }
 
 async function assertExecutableExists(filePath: string) {

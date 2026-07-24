@@ -19,6 +19,8 @@ import type {
   FaultInjectionRequest,
   LoadedProgramInfo,
   LoadProgramRequest,
+  RamOwnershipPolicy,
+  RamOwnershipPreparation,
   ResetType,
   ResolveResult,
   SessionTopology,
@@ -40,6 +42,7 @@ import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import { SessionQueue } from "../utils/sessionQueue.js";
 import { resolveAddressFromMap } from "../hardware/mapSymbols.js";
+import type { DebugProbeCoordinator, DebugProbeLease } from "../hardware/debugProbeCoordinator.js";
 
 interface LogicalDebugSession {
   sessionId: string;
@@ -56,6 +59,7 @@ interface LogicalDebugSession {
       timer?: ReturnType<typeof setTimeout>;
     };
   };
+  probeLease?: DebugProbeLease;
 }
 
 export interface DebugSessionManagerOptions {
@@ -64,12 +68,13 @@ export interface DebugSessionManagerOptions {
   /** Base directory for relative program/map paths (usually ccs.workspacePath). */
   defaultWorkspacePath?: string;
   diagnostics?: Partial<DiagnosticsDefaults>;
+  probeCoordinator?: DebugProbeCoordinator;
+  prepareProbe?: (lease?: DebugProbeLease) => Promise<unknown>;
 }
 
 const F28P65X_CPU1_CORE_ID = 0;
 const F28P65X_CPU2_CORE_ID = 2;
 const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
-const F28P65X_GS4_CPU2_OWNER_BIT = 0x10;
 
 export class DebugSessionManager {
   private readonly sessions = new Map<string, LogicalDebugSession>();
@@ -78,6 +83,8 @@ export class DebugSessionManager {
   private readonly defaultCcxmlPath?: string;
   private readonly defaultCoreMap: CoreConfig[];
   private readonly defaultWorkspacePath?: string;
+  private readonly probeCoordinator?: DebugProbeCoordinator;
+  private readonly prepareProbe?: (lease?: DebugProbeLease) => Promise<unknown>;
 
   constructor(
     private readonly adapter: DebugAdapter,
@@ -89,6 +96,8 @@ export class DebugSessionManager {
     this.defaultCoreMap = options.defaultCoreMap ?? defaultF28P65xCoreMap;
     this.defaultWorkspacePath = normalizeWorkspacePath(options.defaultWorkspacePath);
     this.diagnostics = resolveDiagnosticsDefaults(options.diagnostics);
+    this.probeCoordinator = options.probeCoordinator;
+    this.prepareProbe = options.prepareProbe;
   }
 
   /** Normalize program/map input consistently for manager and workflow checks. */
@@ -100,11 +109,20 @@ export class DebugSessionManager {
     return this.queue.run(sessionId, work);
   }
 
-  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[] }> {
+  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[]; probeQueue?: Record<string, unknown>; probeRecovery?: unknown }> {
     const sessionName = options.sessionName ?? "c2000-debug-session";
     const coreMap = validateCoreMap(options.coreMap ?? this.defaultCoreMap);
     const ccxmlPath = options.ccxmlPath ?? this.defaultCcxmlPath;
-    const adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath, coreMap });
+    const probeLease = await this.probeCoordinator?.acquire(sessionName, { probeId: options.probeId, preferredProbeIds: options.preferredProbeIds, allowAutoProbeAllocation: options.allowAutoProbeAllocation });
+    let probeRecovery: unknown;
+    let adapterSession: AdapterSession;
+    try {
+      probeRecovery = await this.prepareProbe?.(probeLease);
+      adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath: probeLease?.probe?.ccxmlPath ?? ccxmlPath, coreMap });
+    } catch (error) {
+      await probeLease?.release();
+      throw error;
+    }
     const sessionId = `dbg-${randomUUID()}`;
     const cores = new Map(coreMap.map(core => [core.coreId, new CoreSession(core)]));
     this.sessions.set(sessionId, {
@@ -113,10 +131,21 @@ export class DebugSessionManager {
       ccxmlPath,
       adapterSession,
       cores,
-      activity: { inFlightCalls: 0, lastActivityAt: Date.now(), closing: false }
+      activity: { inFlightCalls: 0, lastActivityAt: Date.now(), closing: false },
+      probeLease
     });
     this.logger.info("debug session created", { sessionId, sessionName, ccxmlPath, coreMap });
-    return { sessionId, cores: await this.listCores(sessionId) };
+    try {
+      return {
+        sessionId,
+        cores: await this.listCores(sessionId),
+        ...(probeLease ? { probeQueue: { leaseId: probeLease.leaseId, queuePositionAtEntry: probeLease.queuePositionAtEntry, waitedMs: probeLease.waitedMs, ...(probeLease.probe ?? {}) } } : {}),
+        ...(probeRecovery !== undefined ? { probeRecovery } : {})
+      };
+    } catch (error) {
+      try { await this.closeDebugSession(sessionId); } catch { /* Preserve the original creation error. */ }
+      throw error;
+    }
   }
 
   async listCores(sessionId: string): Promise<CoreInfo[]> {
@@ -180,6 +209,7 @@ export class DebugSessionManager {
       try {
         await this.adapter.disposeSession?.(session.adapterSession);
       } finally {
+        await session.probeLease?.release();
         this.sessions.delete(sessionId);
         this.loadedPrograms.deleteSession(sessionId);
         this.queue.clearWhenIdle(sessionId);
@@ -376,11 +406,11 @@ export class DebugSessionManager {
     return this.loadProgramWithMap(sessionId, coreId, programUri);
   }
 
-  async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string): Promise<LoadedProgramInfo> {
-    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, coreId, programUri, mapUri));
+  async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
+    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, coreId, programUri, mapUri, ramOwnershipPolicy, fallbackGsRegions));
   }
 
-  private async loadProgramWithMapUnlocked(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string): Promise<LoadedProgramInfo> {
+  private async loadProgramWithMapUnlocked(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
     const normalizedUri = this.normalizeArtifactUri(programUri);
     const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
     const { session, core } = this.requireCore(sessionId, coreId);
@@ -391,7 +421,7 @@ export class DebugSessionManager {
     }
     let ownershipNote: string | undefined;
     try {
-      ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri);
+      ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions);
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
       if (error instanceof DebugMcpError && (
@@ -435,12 +465,17 @@ export class DebugSessionManager {
     session: LogicalDebugSession,
     coreId: CoreId,
     programUri: string,
-    mapUri?: string
+    mapUri: string | undefined,
+    policy: RamOwnershipPolicy,
+    fallbackGsRegions?: number[]
   ): Promise<string | undefined> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
       return undefined;
     }
-    const ownership = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri);
+    if (policy === "skip") {
+      return "CPU2 RAM ownership preparation was explicitly skipped.";
+    }
+    const ownership = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri, policy, fallbackGsRegions);
     const actions = mergeOwnershipActions(ownership.actions);
     const flashBanks = ownership.flashBanks;
     if (actions.length === 0 && flashBanks.length === 0) {
@@ -614,44 +649,46 @@ export class DebugSessionManager {
   private async cpu2RamOwnershipActions(
     coreId: CoreId,
     programUri: string,
-    mapUri?: string
-  ): Promise<{ actions: RamOwnershipAction[]; flashBanks: number[]; fallbackWarning?: string }> {
+    mapUri: string | undefined,
+    policy: RamOwnershipPolicy,
+    fallbackGsRegions?: number[]
+  ): Promise<{ actions: RamOwnershipAction[]; flashBanks: number[]; fallbackUsed: boolean; fallbackWarning?: string }> {
     const candidateMap = mapUri ?? mapPathForProgram(programUri);
     if (candidateMap) {
-      let mapText: string;
       try {
         await access(candidateMap);
-        mapText = await readFile(candidateMap, "utf8");
-      } catch {
-        // Fall through to the RAMGS4 default when the map is missing or unreadable.
-        return this.cpu2RamOwnershipFallback();
+        const parsed = parseLinkerMap(await readFile(candidateMap, "utf8"), { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
+        const actions = ownershipActionsForMap(parsed);
+        const flashBanks = [...new Set(
+          flashOwnershipActionsForMap(parsed).flatMap(action => action.flashBanks)
+        )].sort((left, right) => left - right);
+        return { actions, flashBanks, fallbackUsed: false };
+      } catch (error) {
+        if (policy === "require-map") {
+          throw new DebugMcpError(mapUri ? "RamOwnershipMapParseFailed" : "RamOwnershipMapUnavailable", `CPU2 RAM ownership requires a readable linker map: ${candidateMap}`, { mapUri: candidateMap, cause: toStructuredError(error) });
+        }
       }
-      const parsed = parseLinkerMap(mapText, { coreId, coreName: "C28xx_CPU2", mapPath: candidateMap });
-      const flashBanks = [...new Set(
-        flashOwnershipActionsForMap(parsed).flatMap(action => action.flashBanks)
-      )].sort((left, right) => left - right);
-      return { actions: ownershipActionsForMap(parsed), flashBanks };
     }
-    return this.cpu2RamOwnershipFallback();
-  }
-
-  private cpu2RamOwnershipFallback(): { actions: RamOwnershipAction[]; flashBanks: number[]; fallbackWarning: string } {
+    if (policy !== "explicit-fallback" || !fallbackGsRegions?.length) {
+      throw new DebugMcpError("RamOwnershipEvidenceRequired", "CPU2 program load requires linker-map evidence or an explicit fallback GS RAM policy", { programUri, mapUri: candidateMap });
+    }
     const reason =
-      "No CPU2 map was available; using F28P65x RAMGS4-only handoff default (0x10). Supply mapUri or a sibling .map to avoid silent multi-GS misconfiguration.";
+      "CPU2 RAM ownership used caller-authorized fallback GS regions because linker-map evidence was unavailable.";
     return {
-      actions: [{
+      actions: fallbackGsRegions.map(gsIndex => ({
         ownerCoreId: F28P65X_CPU1_CORE_ID,
         targetCoreId: F28P65X_CPU2_CORE_ID,
         targetCoreName: "C28xx_CPU2",
-        memoryRegion: "RAMGS4",
-        gsIndex: 4,
+        memoryRegion: `RAMGS${gsIndex}`,
+        gsIndex,
         page: "DATA",
         address: F28P65X_MEMCFG_GSXMSEL_ADDRESS,
-        value: F28P65X_GS4_CPU2_OWNER_BIT,
+        value: 1 << gsIndex,
         typeSize: 32,
         reason
-      }],
+      })),
       flashBanks: [],
+      fallbackUsed: true,
       fallbackWarning: reason
     };
   }
@@ -661,8 +698,16 @@ export class DebugSessionManager {
       const results: BatchItemResult[] = [];
       for (const program of programs) {
         try {
-          const info = await this.loadProgramWithMapUnlocked(sessionId, program.coreId, program.programUri, program.mapUri);
-          results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri });
+          const normalizedUri = this.normalizeArtifactUri(program.programUri);
+          const existing = this.loadedPrograms.get(sessionId, program.coreId);
+          const metadata = await fileMetadata(normalizedUri);
+          const unchanged = Boolean(existing && existing.programUri === normalizedUri && existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256);
+          if (program.loadPolicy === "verify-only" || (program.loadPolicy === "if-changed" && unchanged)) {
+            results.push({ coreId: program.coreId, coreName: this.requireCore(sessionId, program.coreId).core.coreName, success: program.loadPolicy !== "verify-only" || unchanged, programUri: normalizedUri, loaded: false, skipped: true, skipReason: unchanged ? "program-unchanged" : "load-verification-failed" });
+            continue;
+          }
+          const info = await this.loadProgramWithMapUnlocked(sessionId, program.coreId, program.programUri, program.mapUri, program.ramOwnershipPolicy, program.fallbackGsRegions);
+        results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri, loaded: true, skipped: false });
         } catch (error) {
           results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
           this.logger.error("program load failed", error);
@@ -721,6 +766,13 @@ export class DebugSessionManager {
 
   private async evaluateManyUnlocked(sessionId: string, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
+    if (this.adapter.evaluateExpressions) {
+      try {
+        return await this.adapter.evaluateExpressions(session.adapterSession, coreId, [...new Set(expressions)]);
+      } catch (error) {
+        this.logger.warn("batch expression evaluation failed", { sessionId, coreId, error: toStructuredError(error) });
+      }
+    }
     const results: EvaluateResult[] = [];
     for (const expression of expressions) {
       try {

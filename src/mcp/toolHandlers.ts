@@ -15,6 +15,7 @@ import { buildBootHandoffVerdict as buildBootHandoffVerdictCore } from "../debug
 import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
 import { sleep as sleepCore } from "../utils/async.js";
 import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
+import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
@@ -30,6 +31,7 @@ import {
   diagnoseCpu2BootSchema,
   diagnoseBootHandoffSchema,
   evaluateManySchema,
+  environmentSchema,
   hardwarePreflightSchema,
   getTestArtifactsSchema,
   getTestRunSchema,
@@ -40,6 +42,8 @@ import {
   recoverBoardSchema,
   listTestRunsSchema,
   launchMulticoreDebugSchema,
+  launchMulticoreDebugSafeSchema,
+  launchMulticoreDebugWithActionsSchema,
   loadProgramsSchema,
   loadProgramSchema,
   multicoreSnapshotSchema,
@@ -54,6 +58,7 @@ import {
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
   sessionSchema,
+  serverHealthSchema,
   toolContractsSchema,
   submitMultiBoardIpcAcceptanceSchema,
   submitMultiBoardCanAcceptanceSchema,
@@ -90,6 +95,10 @@ export interface ToolHandlerDeps {
   getBoardGroupSnapshot?: (input: z.infer<typeof getBoardGroupSnapshotSchema>) => Promise<ToolResult> | ToolResult;
   submitCanFaultCampaign?: (input: z.infer<typeof submitCanFaultCampaignSchema>) => Promise<ToolResult> | ToolResult;
   submitCanSoakTest?: (input: z.infer<typeof submitCanSoakTestSchema>) => Promise<ToolResult> | ToolResult;
+  getToolProfile?: () => { activeToolProfile: string; hiddenTools: string[]; profileReason: string };
+  getServerHealth?: () => ToolResult;
+  resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
+  tiEnvironment?: ResolveTiEnvironmentOptions;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -118,6 +127,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getBoardGroupSnapshot = deps.getBoardGroupSnapshot ?? unavailableJobEngine;
   const submitCanFaultCampaign = deps.submitCanFaultCampaign ?? unavailableJobEngine;
   const submitCanSoakTest = deps.submitCanSoakTest ?? unavailableJobEngine;
+  const getToolProfile = deps.getToolProfile ?? (() => ({ activeToolProfile: "full", hiddenTools: [], profileReason: "All tools are available." }));
+  const getServerHealth = deps.getServerHealth ?? (() => ({ status: "ready" }));
+  const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
@@ -175,12 +187,28 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async getBoardGroupSnapshot(input: z.infer<typeof getBoardGroupSnapshotSchema>) { try { return ok(await getBoardGroupSnapshot(input)); } catch (error) { return fail(error, { groupId: input.groupId }); } },
     async submitCanFaultCampaign(input: z.infer<typeof submitCanFaultCampaignSchema>) { try { return ok(await submitCanFaultCampaign(input)); } catch (error) { return fail(error); } },
     async submitCanSoakTest(input: z.infer<typeof submitCanSoakTestSchema>) { try { return ok(await submitCanSoakTest(input)); } catch (error) { return fail(error); } },
+    async getServerHealth(_input: z.infer<typeof serverHealthSchema>) {
+      try {
+        return ok(getServerHealth());
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getEnvironment(_input: z.infer<typeof environmentSchema>) {
+      try {
+        return ok(await resolveTiEnvironment(deps.tiEnvironment));
+      } catch (error) {
+        return fail(error);
+      }
+    },
 
     async getToolContracts(_input: z.infer<typeof toolContractsSchema>) {
       try {
         return ok({
           tools: getToolContracts(),
-          toolSurface: getToolSurfaceGuide()
+          toolSurface: getToolSurfaceGuide(),
+          ...getToolProfile()
         });
       } catch (error) {
         return fail(error);
@@ -205,7 +233,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async getHardwarePreflight(input: z.infer<typeof hardwarePreflightSchema>) {
       try {
-        return ok(await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath }));
+        return ok(await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath ?? deps.tiEnvironment?.ccsInstallPath }));
       } catch (error) {
         return fail(error);
       }
@@ -237,14 +265,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           maxDepth: input.maxDepth
         });
         const probeWaitStartedAt = Date.now();
-        let preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath });
+        let preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath ?? deps.tiEnvironment?.ccsInstallPath });
         let probeWaitAttempts = 1;
         while (waitForProbeMs > 0
           && Date.now() - probeWaitStartedAt < waitForProbeMs
           && !preflightReady(preflight, allowExistingDebugProcesses)) {
           const remainingMs = waitForProbeMs - (Date.now() - probeWaitStartedAt);
           await sleepCore(Math.min(probePollIntervalMs, Math.max(1, remainingMs)));
-          preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath });
+          preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath ?? deps.tiEnvironment?.ccsInstallPath });
           probeWaitAttempts++;
         }
         const probeWait = {
@@ -330,14 +358,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       }
     },
 
-    async createDebugSession(input: z.infer<typeof createDebugSessionSchema>) {
+    async createDebugSession(input: z.input<typeof createDebugSessionSchema>) {
       try {
         const result = await manager.createDebugSession({
           sessionName: input.sessionName,
           ccxmlPath: input.ccxmlPath,
-          coreMap: input.coreMap
+          coreMap: input.coreMap,
+          probeId: input.probeId,
+          preferredProbeIds: input.preferredProbeIds,
+          allowAutoProbeAllocation: input.allowAutoProbeAllocation
         });
-        return ok({ sessionId: result.sessionId, cores: result.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName })) });
+        return ok({ ...result, cores: result.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName })) });
       } catch (error) {
         return fail(error);
       }
@@ -401,7 +432,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async loadProgram(input: z.infer<typeof loadProgramSchema>) {
       try {
-        const info = await manager.loadProgramWithMap(input.sessionId, input.coreId, input.programUri, input.mapUri);
+        const info = await manager.loadProgramWithMap(input.sessionId, input.coreId, input.programUri, input.mapUri, input.ramOwnershipPolicy, input.fallbackGsRegions);
         return ok(info as unknown as ToolResult);
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId });
@@ -628,7 +659,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async reloadResetRunToMain(input: z.input<typeof reloadResetRunToMainSchema>) {
       try {
         const parsed = reloadResetRunToMainSchema.parse(input);
-        const loadedProgram = await manager.loadProgramWithMap(parsed.sessionId, parsed.coreId, parsed.programUri, parsed.mapUri);
+        const loadedProgram = await manager.loadProgramWithMap(parsed.sessionId, parsed.coreId, parsed.programUri, parsed.mapUri, parsed.ramOwnershipPolicy, parsed.fallbackGsRegions);
         const reset = await manager.resetCore(parsed.sessionId, parsed.coreId, parsed.resetType as ResetType);
         if (parsed.settleMs > 0) {
           await sleep(parsed.settleMs);
@@ -874,6 +905,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const created = await manager.createDebugSession({
           sessionName: parsed.sessionName ?? parsed.targetConfigurationName ?? "launch-multicore-debug",
           ccxmlPath: parsed.ccxmlPath,
+          boardId: parsed.boardId,
+          probeId: parsed.probeId,
+          preferredProbeIds: parsed.preferredProbeIds,
+          allowAutoProbeAllocation: parsed.allowAutoProbeAllocation,
           coreMap: cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
         });
         createdSessionId = created.sessionId;
@@ -892,7 +927,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
                 programDiscovery
               });
             }
-            await manager.loadProgramWithMap(created.sessionId, core.coreId, programUri, core.mapUri);
+            await manager.loadProgramWithMap(created.sessionId, core.coreId, programUri, core.mapUri, core.ramOwnershipPolicy ?? "skip", core.fallbackGsRegions);
           }
           if (core.haltAtEntry) {
             await manager.haltCore(created.sessionId, core.coreId);
@@ -957,6 +992,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         }
         const result = {
           sessionId: created.sessionId,
+          deprecated: true,
+          replacementTool: "c2000_launchMulticoreDebugWithActions",
           snapshot,
           autoCloseOnComplete: parsed.autoCloseOnComplete,
           ...(programDiscovery ? { programDiscovery } : {}),
@@ -984,6 +1021,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         }
         return fail(error, body);
       }
+    },
+
+    async launchMulticoreDebugSafe(input: z.input<typeof launchMulticoreDebugSafeSchema>) {
+      const parsed = launchMulticoreDebugSafeSchema.parse(input);
+      return this.launchMulticoreDebug({ ...parsed, cores: parsed.cores.map(core => ({ ...core, ramOwnershipPolicy: core.ramOwnershipPolicy ?? "require-map" })) });
+    },
+
+    async launchMulticoreDebugWithActions(input: z.input<typeof launchMulticoreDebugWithActionsSchema>) {
+      const parsed = launchMulticoreDebugWithActionsSchema.parse(input);
+      const result = await this.launchMulticoreDebug({ ...parsed, cores: parsed.cores.map(core => ({ ...core, ramOwnershipPolicy: core.ramOwnershipPolicy ?? "require-map" })) });
+      return { ...result, deprecated: false, replacementTool: undefined };
     }
   };
 

@@ -34,7 +34,12 @@ export interface SessionTopology {
 export interface CreateDebugSessionOptions {
   sessionName: string;
   ccxmlPath?: string;
+  /** Optional board identity retained in launch diagnostics and multi-board callers. */
+  boardId?: string;
   coreMap: CoreConfig[];
+  probeId?: string;
+  preferredProbeIds?: string[];
+  allowAutoProbeAllocation?: boolean;
 }
 
 export interface TargetState {
@@ -49,6 +54,21 @@ export interface LoadProgramRequest {
   coreId: CoreId;
   programUri: string;
   mapUri?: string;
+  ramOwnershipPolicy?: RamOwnershipPolicy;
+  fallbackGsRegions?: number[];
+  loadPolicy?: LoadPolicy;
+}
+
+export type LoadPolicy = "always" | "if-changed" | "verify-only";
+
+export type RamOwnershipPolicy = "require-map" | "explicit-fallback" | "skip";
+
+export interface RamOwnershipPreparation {
+  ramOwnershipPolicy: RamOwnershipPolicy;
+  ramOwnershipPrepared: boolean;
+  ramOwnershipSkipped: boolean;
+  fallbackUsed: boolean;
+  ownershipWrites: Array<unknown>;
 }
 
 export interface LoadedProgramInfo {
@@ -63,6 +83,7 @@ export interface LoadedProgramInfo {
   sha256: string;
   symbolsLoaded: boolean;
   warning: string;
+  ramOwnership?: RamOwnershipPreparation;
 }
 
 export interface EvaluateResult {
@@ -187,6 +208,9 @@ export interface BatchItemResult {
   coreName?: string;
   success: boolean;
   programUri?: string;
+  loaded?: boolean;
+  skipped?: boolean;
+  skipReason?: string;
   error?: {
     code: string;
     message: string;

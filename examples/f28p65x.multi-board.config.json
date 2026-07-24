@@ -1,0 +1,35 @@
+{
+  "adapter": "ccs",
+  "ccs": {
+    "installPath": "/absolute/path/to/ccs",
+    "workspacePath": "/absolute/path/to/workspace",
+    "scriptingMode": "ccs"
+  },
+  "target": {
+    "name": "F28P65x",
+    "coreMap": [
+      { "coreId": 0, "coreName": "C28xx_CPU1", "corePattern": "C28xx_CPU1" },
+      { "coreId": 2, "coreName": "C28xx_CPU2", "corePattern": "C28xx_CPU2" }
+    ]
+  },
+  "debugProbe": {
+    "multiBoardEnabled": true,
+    "queueDir": "/absolute/shared/path/c2000-probe-queue",
+    "queueTimeoutMs": 600000,
+    "recoveryPolicy": "terminate-external",
+    "probes": [
+      {
+        "probeId": "board-01",
+        "serialNumber": "REPLACE_WITH_XDS110_SERIAL_1",
+        "ccxmlPath": "/absolute/path/to/board-01-serial-bound.ccxml",
+        "enabled": true
+      },
+      {
+        "probeId": "board-02",
+        "serialNumber": "REPLACE_WITH_XDS110_SERIAL_2",
+        "ccxmlPath": "/absolute/path/to/board-02-serial-bound.ccxml",
+        "enabled": true
+      }
+    ]
+  }
+}

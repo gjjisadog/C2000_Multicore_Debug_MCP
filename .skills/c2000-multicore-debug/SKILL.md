@@ -22,7 +22,17 @@ Default core IDs:
 - `coreId = 0`: `C28xx_CPU1`
 - `coreId = 2`: `C28xx_CPU2`
 
+## Environment Discovery
+
+Before using any CCS, C2000Ware, or `.ccxml` path, call `c2000_getEnvironment`. Use only paths returned with `valid: true`; never guess, hardcode, or adapt a path from an example. The resolver prioritizes explicit environment/config values, then searches standard TI installation roots and validates product anchors. If a path is unresolved, report the attempted paths and reasons from `attempts` and ask for an explicit override instead of inventing a location.
+
+Supported overrides are `C2000_MCP_CCS_INSTALL_PATH`, `C2000_MCP_C2000WARE_PATH`, and `C2000_MCP_CCXML_PATH`.
+
 ## Tool Priority
+
+One-shot requests default to `sessionMode: "ephemeral"`; use `interactive` only for continuous debugging and do not create consecutive sessions unnecessarily. Interactive loads should prefer `loadPolicy: "if-changed"`.
+
+Prefer batched expression evaluation. Acceptance uses `verificationLevel: "readback"`; ordinary interactive actions use `verificationLevel: "action-response"`. Full Bundle evidence is final for that workflow: do not follow it with snapshot, expression, or PC reads. For latency issues, inspect the workflow `performance` field before increasing a timeout.
 
 Prefer one workflow tool call:
 
@@ -247,3 +257,55 @@ Minimize approval popups:
 - Do not repeat atomic reads for data already returned by a workflow.
 - Before multiple atomic calls, tell the user that each call may trigger MCP approval.
 - Recommend auto-approving high-level workflow tools, not every low-level atomic debug tool.
+
+## Safety And Mutation Rules
+
+- "只看状态" uses read-only tools; CPU2 startup uses `c2000_runBootHandoffDiagnosis`; full IPC uses `c2000_launchAndRunIpcAcceptance`; reload uses `c2000_runReloadAndDiagnose`; bundles use `c2000_runFullDebugBundle`.
+- Use `c2000_launchMulticoreDebugSafe` for launch/read diagnosis. Fault injection or expression assignment must use `c2000_launchMulticoreDebugWithActions` or `c2000_injectFaults`.
+- Never split a complete workflow into atomic MCP calls and never re-read evidence already returned by the workflow.
+- Every CPU2 program load must explicitly choose `ramOwnershipPolicy`: `require-map` (preferred), `explicit-fallback` with `fallbackGsRegions`, or `skip`. Never assume RAMGS4.
+- Before a mutation tool call, state the affected core IDs and whether the workflow will reset, run, load, write target memory, or change RAM ownership.
+- If expected symbols are absent, ask for the actual names instead of repeatedly trying atomic expression reads.
+
+## Workflow Project Lifecycle
+
+Treat one user-requested debug/acceptance operation as a single workflow lifecycle. Project cleanup belongs to the workflow boundary, never to individual atomic debug steps.
+
+### Shared XDS110 queue
+
+- Every MCP server process uses the same filesystem-backed FIFO queue. This covers multiple Agents, Codex conversations, and MCP server processes.
+- The lease starts before probe recovery or DSS session creation and remains held for the complete workflow. Release it only when `c2000_closeDebugSession` runs in final cleanup.
+- Never release and reacquire between connect, load, reset, run, wait, diagnosis, or evidence collection steps.
+- Only the queue-head lease holder may apply probe recovery. Waiting callers must not terminate DSLite or touch the target.
+- Dead owners and dead waiting tickets are reclaimed automatically. A live owner is never stolen merely because another caller has waited a long time.
+- `ProbeQueueTimeout` means the caller did not reach the head before its configured deadline; report queue evidence and do not bypass the queue.
+- For unattended hardware rigs, `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external` lets the lease holder terminate existing DSLite/DebugServer/dss.sh owners before testing. This is an explicit machine-level policy and may close a manually started debug session; it does not terminate the CCS application itself.
+- Enter multi-board mode only when configuration explicitly has `multiBoardEnabled: true`, at least two enabled unique probes, live enumeration of the selected serial number, and a `.ccxml` containing that serial binding. Fail closed on any mismatch.
+- With a configured multi-board pool, pass `probeId` when the user names a board. Automatic least-loaded allocation additionally requires `allowAutoProbeAllocation: true`; never infer that permission from an omitted `probeId` or from `preferredProbeIds`.
+- Treat the returned `probeQueue.probeId`, `serialNumber`, and `ccxmlPath` as the authoritative board identity for the entire Session. Never switch boards after Session creation.
+- Different `probeId` leases may run concurrently. The same `probeId` remains FIFO-serialized.
+- Every board must have a unique XDS110 serial number and its own `.ccxml` already bound to that serial. Never reuse a generic unbound `.ccxml` in a multi-board pool.
+
+Before the workflow:
+
+- Prefer a dedicated temporary CCS workspace for the whole workflow. Import/open CPU1, CPU2, system, dependency, generated demo, and helper projects only in that workspace.
+- Do not import workflow-only projects into the user's main CCS workspace.
+- If the workflow must reuse the main workspace, record the projects that were already present and track every project added by the workflow.
+
+During the workflow:
+
+- Keep all required projects open across build, connect, load, run, wait, diagnosis, evidence collection, and bundle generation.
+- Do not close a project after an atomic tool call or intermediate phase.
+
+In one final `finally` cleanup after success or failure:
+
+1. Halt targets when required by the workflow's safety contract.
+2. Close the MCP logical DebugSession so persistent DSS resources are disposed.
+3. Terminate this workflow's DSLite process and verify it exited. An external pre-existing probe owner may be terminated only when the queue lease is held and the explicitly configured recovery policy is `terminate-external`.
+4. Close the temporary CCS workflow window/session after build/debug output is complete.
+5. Dispose the temporary workspace registration/cache when it is safe to do so; preserve source projects and generated `.out`/`.map` evidence.
+6. If the main workspace was reused, remove only projects added by this workflow and never delete their project directories or source files.
+7. Leave projects that existed before the workflow unchanged.
+8. Return cleanup evidence with `debugSessionClosed`, `ownedDsliteExited`, `workflowWorkspaceClosed`, `removedWorkflowProjects`, `preservedProjects`, and `cleanupErrors`.
+
+CCS 21 does not provide a `Close Project` command. Do not describe its `Delete` command as closing. Prefer the isolated temporary-workspace design so cleanup closes one workflow workspace instead of deleting projects from the user's main workspace. Any UI removal from the main workspace must preserve project files and follow Computer Use confirmation requirements.

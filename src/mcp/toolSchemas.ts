@@ -13,7 +13,10 @@ export const createDebugSessionSchema = z.object({
   ccxmlPath: z.string().min(1).optional(),
   coreMap: z.array(coreConfigSchema).min(1).optional(),
   /** Optional routing hint for c2000-debugd; existing interactive calls remain unchanged. */
-  boardId: z.string().min(1).optional()
+  boardId: z.string().min(1).optional(),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false)
 });
 
 export const hardwarePreflightSchema = z.object({
@@ -50,6 +53,10 @@ export const ramOwnershipAnalysisSchema = z.object({
 });
 
 export const toolContractsSchema = z.object({});
+
+export const serverHealthSchema = z.object({});
+
+export const environmentSchema = z.object({});
 
 export const debugBoundarySchema = z.object({});
 
@@ -148,12 +155,15 @@ export const resetCoreSchema = sessionCoreSchema.extend({
 
 export const loadProgramSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
-  mapUri: z.string().min(1).optional()
+  mapUri: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
+  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always")
 });
 
 export const loadProgramsSchema = z.object({
   sessionId: z.string().min(1),
-  programs: z.array(z.object({ coreId: z.number().int(), programUri: z.string().min(1), mapUri: z.string().min(1).optional() })).min(1)
+  programs: z.array(loadProgramSchema.omit({ sessionId: true })).min(1)
 });
 
 export const batchCoresSchema = z.object({
@@ -198,6 +208,11 @@ export const expressionReadSetSchema = z.object({
   label: z.string().min(1).optional(),
   coreId: z.number().int(),
   expressions: z.array(z.string().min(1)).min(1)
+});
+
+export const pollingScheduleItemSchema = z.object({
+  untilMs: z.number().int().positive().optional(),
+  intervalMs: z.number().int().positive()
 });
 
 const expressionComparisonSchema = z.object({
@@ -267,7 +282,10 @@ export const waitForIpcReadySchema = z.object({
 export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
   mapUri: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
   settleMs: z.number().int().nonnegative().default(250)
 });
 
@@ -288,10 +306,13 @@ export const runIpcAcceptanceSchema = z.object({
   cpu1MapPath: z.string().min(1),
   cpu2MapPath: z.string().min(1),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
   runSequence: workflowRunSequenceSchema,
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive(),
   intervalMs: z.number().int().positive().default(100),
+  pollingStrategy: z.enum(["fixed", "adaptive"]).default("adaptive"),
+  pollingSchedule: z.array(pollingScheduleItemSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
@@ -299,6 +320,8 @@ export const runIpcAcceptanceSchema = z.object({
 
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ sessionId: true }).extend({
   boardId: z.string().min(1).optional(),
+  sessionMode: z.enum(["ephemeral", "interactive"]).default("ephemeral"),
+  idleTimeoutMs: z.number().int().positive().optional(),
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
   autoCloseOnComplete: z.boolean().default(false),
@@ -306,7 +329,10 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ ses
   cpu1CoreName: z.string().min(1).default("C28xx_CPU1"),
   cpu1CorePattern: z.string().min(1).optional(),
   cpu2CoreName: z.string().min(1).default("C28xx_CPU2"),
-  cpu2CorePattern: z.string().min(1).optional()
+  cpu2CorePattern: z.string().min(1).optional(),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false)
 });
 
 export const runBootHandoffDiagnosisSchema = z.object({
@@ -333,12 +359,17 @@ export const runReloadAndDiagnoseSchema = z.object({
   cpu2OutPath: z.string().min(1),
   cpu1MapPath: z.string().min(1).optional(),
   cpu2MapPath: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).default("require-map"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   runCpu1: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
   waitExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
   intervalMs: z.number().int().positive().default(100),
+  pollingStrategy: z.enum(["fixed", "adaptive"]).default("adaptive"),
+  pollingSchedule: z.array(pollingScheduleItemSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
@@ -373,6 +404,8 @@ export const launchCoreSchema = z.object({
   corePattern: z.string().min(1).optional(),
   programUri: z.string().min(1).optional(),
   mapUri: z.string().min(1).optional(),
+  ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
+  fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   connect: z.boolean().default(true),
   load: z.boolean().default(true),
   haltAtEntry: z.boolean().default(true)
@@ -385,6 +418,9 @@ export const launchMulticoreDebugSchema = z.object({
   ccxmlPath: z.string().min(1).optional(),
   autoCloseOnComplete: z.boolean().default(false),
   autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
+  probeId: z.string().min(1).optional(),
+  preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
+  allowAutoProbeAllocation: z.boolean().default(false),
   programDiscovery: z.object({
     enabled: z.boolean().default(false),
     cpu1Program: z.string().min(1).optional(),
@@ -434,3 +470,9 @@ export const launchMultiBoardDebugSchema = z.object({
   rollbackOnFailure: z.boolean().default(true),
   boards: z.array(multiBoardLaunchEntrySchema).min(1).max(8)
 });
+
+export const launchMulticoreDebugSafeSchema = launchMulticoreDebugSchema
+  .omit({ postLaunchActions: true, postLaunchChecks: true })
+  .extend({ postLaunchChecks: launchMulticoreDebugSchema.shape.postLaunchChecks.unwrap().omit({ verifyRunPauseIsolation: true }).optional() });
+
+export const launchMulticoreDebugWithActionsSchema = launchMulticoreDebugSchema;

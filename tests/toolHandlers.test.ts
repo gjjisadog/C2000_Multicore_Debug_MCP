@@ -144,6 +144,29 @@ class OwnershipMismatchRecordingAdapter extends WorkflowRecordingAdapter {
 }
 
 describe("tool handlers", () => {
+  test("getEnvironment returns validated TI paths and discovery evidence", async () => {
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager, {
+      resolveTiEnvironment: async options => ({
+        ccs: { path: options?.ccsInstallPath, version: "21.0.0", source: "explicit", valid: true },
+        c2000Ware: { path: options?.c2000WarePath, version: "26.1.0.0", source: "explicit", valid: true },
+        ccxml: { path: options?.ccxmlPath, source: "explicit", valid: true },
+        attempts: [{ kind: "ccs", path: options?.ccsInstallPath ?? "", source: "explicit", valid: true, reason: "Validated CCS DSLite anchor" }]
+      }),
+      tiEnvironment: { ccsInstallPath: "/ti/ccs", c2000WarePath: "/ti/C2000Ware", ccxmlPath: "/ti/target.ccxml" }
+    });
+
+    const result = await handlers.getEnvironment({});
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      ccs: expect.objectContaining({ path: "/ti/ccs", valid: true }),
+      c2000Ware: expect.objectContaining({ path: "/ti/C2000Ware", valid: true }),
+      ccxml: expect.objectContaining({ path: "/ti/target.ccxml", valid: true }),
+      attempts: [expect.objectContaining({ kind: "ccs", valid: true })]
+    }));
+  });
+
   test("getToolContracts returns injected scope metadata", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager, {
@@ -1044,6 +1067,7 @@ describe("tool handlers", () => {
       cpu2OutPath,
       cpu1MapPath,
       cpu2MapPath,
+      sessionMode: "interactive" as const,
       resetType: "cpu" as const,
       runSequence: { runCpu1First: true, runCpu2: true },
       timeoutMs: 20,
@@ -1163,6 +1187,7 @@ describe("tool handlers", () => {
       cpu2CoreId: 2,
       cpu1OutPath,
       cpu2OutPath,
+      ramOwnershipPolicy: "skip",
       resetType: "cpu",
       runCpu1: true,
       runCpu2: false,

@@ -3,6 +3,8 @@ import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
+import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy.js";
+import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
@@ -17,6 +19,7 @@ import {
   debugBoundarySchema,
   diagnoseCpu2BootSchema,
   evaluateManySchema,
+  environmentSchema,
   hardwarePreflightSchema,
   getTestArtifactsSchema,
   getTestRunSchema,
@@ -27,6 +30,8 @@ import {
   recoverBoardSchema,
   listTestRunsSchema,
   launchMulticoreDebugSchema,
+  launchMulticoreDebugSafeSchema,
+  launchMulticoreDebugWithActionsSchema,
   loadProgramsSchema,
   loadProgramSchema,
   multicoreSnapshotSchema,
@@ -42,6 +47,7 @@ import {
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
   sessionSchema,
+  serverHealthSchema,
   toolContractsSchema,
   submitMultiBoardIpcAcceptanceSchema,
   submitMultiBoardCanAcceptanceSchema,
@@ -86,6 +92,10 @@ type ToolFamily =
   | "diagnosis"
   | "workflow";
 
+export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
+export type ToolProfile = "readonly" | "safe" | "full";
+type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
+
 export interface ToolDefinition {
   name: string;
   title: string;
@@ -100,6 +110,9 @@ export interface ToolDefinition {
   aliasOf?: string;
   coreIdentityFields?: string[];
   responseCoreIdentityFields?: string[];
+  effects: ToolEffect[];
+  annotations: ToolAnnotations;
+  approvalClass: "read-only" | "session-lifecycle" | "target-control" | "program-load" | "target-mutation" | "workflow-confirmation";
 }
 
 const singleCoreResponseIdentity = ["coreId", "coreName"] as const;
@@ -174,7 +187,7 @@ const multiBoardLaunchResponseIdentity = [
   "results[].snapshot.cores[].coreName"
 ] as const;
 
-export const c2000ToolDefinitions: ToolDefinition[] = [
+const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">> = [
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence without touching a target.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_recoverBoard", title: "Recover C2000 Board Worker", description: "Dry-run or restart only the daemon-owned worker for one registered board. It never kills external CCS/DSS processes.", schema: recoverBoardSchema, handlerName: "recoverBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
@@ -190,6 +203,8 @@ export const c2000ToolDefinitions: ToolDefinition[] = [
   { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return tool taxonomy: families, preferred atomic tools vs aliases, and input scope metadata.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return runtime and adapter health without touching a target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Resolve CCS, C2000Ware, and target configuration paths without touching a target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getDebugBoundary", title: "Get C2000 Debug Boundary", description: "Return read-only guarantees that F28P65x debug control uses explicit per-core c2000 tools, not TI official MCP active-target controls.", schema: debugBoundarySchema, handlerName: "getDebugBoundary", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getAcceptanceEvidence", title: "Get C2000 Acceptance Evidence", description: "Return a read-only map from final F28P65x acceptance requirements to the c2000 tools and evidence fields that prove them.", schema: acceptanceEvidenceSchema, handlerName: "getAcceptanceEvidence", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getHardwarePreflight", title: "Get C2000 Hardware Preflight", description: "Run read-only host checks for XDS110 enumeration and existing CCS debug owner processes before target control.", schema: hardwarePreflightSchema, handlerName: "getHardwarePreflight", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
@@ -247,8 +262,12 @@ export const c2000ToolDefinitions: ToolDefinition[] = [
     "postLaunchChecks.diagnoseCpu2Boot.cpu2CoreId",
     "postLaunchChecks.verifyRunPauseIsolation.cpu1CoreId",
     "postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"
-  ], responseCoreIdentityFields: [...launchResponseIdentity] }
+  ], responseCoreIdentityFields: [...launchResponseIdentity] },
+  { name: "c2000_launchMulticoreDebugSafe", title: "Launch C2000 Multicore Debug Safely", description: "Create, connect, load, halt, snapshot and perform read-only checks without expression writes, fault injection, reset or automatic run.", schema: launchMulticoreDebugSafeSchema, handlerName: "launchMulticoreDebugSafe", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cores[].coreId"], responseCoreIdentityFields: [...launchResponseIdentity] },
+  { name: "c2000_launchMulticoreDebugWithActions", title: "Launch C2000 Multicore Debug With Target Actions", description: "Create and launch a multicore session with explicit target mutations including assignments, fault injection, or run/pause isolation.", schema: launchMulticoreDebugWithActionsSchema, handlerName: "launchMulticoreDebugWithActions", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cores[].coreId"], responseCoreIdentityFields: [...launchResponseIdentity] }
 ];
+
+export const c2000ToolDefinitions: ToolDefinition[] = baseToolDefinitions.map(definition => decorateDefinition(definition));
 
 export interface C2000ToolInvoker {
   invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>>;
@@ -286,21 +305,36 @@ export function createC2000ToolInvoker(
 export function registerC2000Tools(
   server: McpServer,
   source: DebugSessionManager | C2000ToolInvoker,
-  deps: ToolHandlerDeps = {}
+  deps: ToolHandlerDeps = {},
+  profile: ToolProfile = toolProfileFromEnv(),
+  filesystem: FilesystemPolicy = { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] },
+  tiEnvironment: ResolveTiEnvironmentOptions = {},
+  runtime: { getServerHealth?: () => Record<string, any> } = {}
 ) {
-  const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, deps);
+  const registered = definitionsForProfile(profile);
+  const effectiveDeps: ToolHandlerDeps = {
+    getToolContracts: () => getToolContracts(profile),
+    getToolSurfaceGuide: () => getToolSurfaceGuide(),
+    getToolProfile: () => ({ activeToolProfile: profile, hiddenTools: c2000ToolDefinitions.filter(tool => !registered.includes(tool)).map(tool => tool.name), profileReason: `C2000_MCP_TOOL_PROFILE=${profile}` }),
+    getServerHealth: runtime.getServerHealth,
+    tiEnvironment,
+    ...deps
+  };
+  const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, effectiveDeps);
 
-  for (const definition of c2000ToolDefinitions) {
+  for (const definition of registered) {
     server.registerTool(
       definition.name,
       {
         title: definition.title,
         description: definition.description,
-        inputSchema: definition.schema.shape
+        inputSchema: definition.schema.shape,
+        annotations: definition.annotations
       },
       async (input: any) => {
         let result: Record<string, unknown>;
         try {
+          await validateToolPaths(input, filesystem);
           result = await invoker.invokeTool(definition.name, input);
         } catch (error) {
           result = failedInvocation(error, getInputSessionId(input));
@@ -334,8 +368,8 @@ function failedInvocation(error: unknown, sessionId?: string): Record<string, un
   };
 }
 
-export function getToolContracts() {
-  return c2000ToolDefinitions.map(definition => {
+export function getToolContracts(profile: ToolProfile = "full") {
+  return definitionsForProfile(profile).map(definition => {
     const inputFields = Object.keys(definition.schema.shape);
     return {
       name: definition.name,
@@ -347,6 +381,15 @@ export function getToolContracts() {
       family: definition.family,
       aliasOf: definition.aliasOf,
       preferred: definition.role !== "alias",
+      effects: definition.effects,
+      annotations: definition.annotations,
+      approvalClass: definition.approvalClass,
+      touchesTarget: definition.effects.some(effect => effect.startsWith("target-") || effect === "program-load" || effect === "ram-ownership-change"),
+      writesTarget: definition.effects.some(effect => ["target-memory-write", "program-load", "ram-ownership-change"].includes(effect)),
+      runsTarget: definition.effects.includes("target-run"),
+      resetsTarget: definition.effects.includes("target-reset"),
+      writesHostFiles: definition.effects.some(effect => effect === "host-write" || effect === "bundle-write"),
+      changesRamOwnership: definition.effects.includes("ram-ownership-change"),
       inputFields,
       requiredInputFields: requiredInputFields(definition.schema),
       coreIdentityFields: definition.coreIdentityFields ?? [],
@@ -387,6 +430,45 @@ export function getToolSurfaceGuide() {
       diagnostic: tools.filter(tool => tool.role === "diagnostic").length
     }
   };
+}
+
+export function definitionsForProfile(profile: ToolProfile): ToolDefinition[] {
+  return c2000ToolDefinitions.filter(tool => profile === "full" || (profile === "readonly" ? tool.annotations.readOnlyHint : !tool.effects.includes("fault-injection") && !tool.effects.includes("target-memory-write")));
+}
+
+export function toolProfileFromEnv(): ToolProfile {
+  const value = process.env.C2000_MCP_TOOL_PROFILE ?? "safe";
+  return value === "readonly" || value === "full" ? value : "safe";
+}
+
+function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">): ToolDefinition {
+  const effects = effectsFor(definition.name, definition.targetEffect);
+  const readOnlyHint = effects.every(effect => ["host-read", "target-read"].includes(effect));
+  const destructiveHint = effects.some(effect => ["host-process-terminate", "target-reset", "target-memory-write", "ram-ownership-change", "fault-injection"].includes(effect));
+  return {
+    ...definition,
+    effects,
+    annotations: { readOnlyHint, destructiveHint, idempotentHint: readOnlyHint, openWorldHint: false },
+    approvalClass: readOnlyHint ? "read-only" : definition.targetEffect === "session-lifecycle" ? "session-lifecycle" : effects.includes("program-load") ? "program-load" : destructiveHint ? "target-mutation" : definition.targetEffect === "launch-workflow" ? "workflow-confirmation" : "target-control"
+  };
+}
+
+function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
+  if (targetEffect === "host-read" || targetEffect === "session-read") return ["host-read"];
+  if (name === "c2000_createDebugSession") return ["session-create", "host-process-terminate"];
+  if (name === "c2000_closeDebugSession") return ["session-dispose"];
+  if (targetEffect === "target-read") return ["target-read"];
+  if (targetEffect === "connectivity-control") return [name.includes("disconnect") ? "target-disconnect" : "target-connect"];
+  if (targetEffect === "reset-control") return ["target-reset"];
+  if (targetEffect === "program-load") return ["program-load", "ram-ownership-change"];
+  if (targetEffect === "memory-write") return name.includes("injectFault") ? ["target-memory-write", "fault-injection"] : ["target-memory-write"];
+  if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];
+  if (name === "c2000_runBootHandoffDiagnosis") return ["target-read"];
+  if (name === "c2000_runFullDebugBundle") return ["target-read", "bundle-write"];
+  if (name === "c2000_launchAndRunIpcAcceptance") return ["session-create", "host-process-terminate", "target-connect", "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"];
+  if (name === "c2000_launchMulticoreDebugSafe") return ["session-create", "host-process-terminate", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read"];
+  if (name === "c2000_launchMulticoreDebug" || name === "c2000_launchMulticoreDebugWithActions") return ["session-create", "host-process-terminate", "target-connect", "program-load", "ram-ownership-change", "target-halt", "target-read", "target-memory-write", "fault-injection", "target-run"];
+  return ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"];
 }
 
 function requiredInputFields(schema: ZodObjectSchema): string[] {
