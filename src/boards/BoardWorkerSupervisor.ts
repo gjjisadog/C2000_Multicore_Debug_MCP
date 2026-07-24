@@ -8,6 +8,7 @@ import { BoardRegistry } from "./BoardRegistry.js";
 import type { BoardWorkerClient, BoardWorkerFactory } from "./BoardWorkerClient.js";
 import { BoardWorkerProcess } from "./BoardWorkerProcess.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
+import type { BoardLeaseContext } from "./types.js";
 
 interface ManagedWorker {
   client: BoardWorkerClient;
@@ -85,6 +86,16 @@ export class BoardWorkerSupervisor {
 
   async invokeBoard(boardId: string, toolName: string, input: unknown, timeoutMs = this.workerConfig.defaultCommandTimeoutMs): Promise<Record<string, unknown>> {
     const worker = await this.startBoard(boardId);
+    const leaseContext = readLeaseContext(input);
+    if (!leaseContext) throw new DebugMcpError("BoardLeaseRequired", "Board-bound worker command requires a lease fencing context", { boardId, toolName });
+    this.options.registry.leases.validate(leaseContext);
+    if (leaseContext.boardId !== boardId || leaseContext.workerInstanceId !== worker.workerInstanceId) {
+      throw new DebugMcpError("LeaseWorkerMismatch", "Lease context does not match the selected worker route", {
+        boardId,
+        expectedWorkerInstanceId: worker.workerInstanceId,
+        receivedWorkerInstanceId: leaseContext.workerInstanceId
+      });
+    }
     this.options.registry.transition(boardId, "RUNNING");
     try {
       const result = await worker.invokeTool(toolName, input, timeoutMs);
@@ -187,4 +198,11 @@ export class BoardWorkerSupervisor {
       });
     }
   }
+}
+
+function readLeaseContext(input: unknown): BoardLeaseContext | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const value = (input as Record<string, unknown>).__leaseContext;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as BoardLeaseContext;
 }

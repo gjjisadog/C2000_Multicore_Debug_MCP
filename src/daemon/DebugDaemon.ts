@@ -28,6 +28,9 @@ import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/B
 import { CanReportService } from "../can/CanReportService.js";
 import { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecker.js";
+import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
+import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
+import { PcanBasicCanBusAdapter } from "../can/pcan/PcanBasicCanBusAdapter.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -155,7 +158,23 @@ export class DebugDaemon {
       artifacts,
       tools: toolRouter,
       maxParallelBoards: this.config.scheduler?.maxParallelBoards ?? 4,
-      canAcceptance: new CanAcceptanceService({ groups, barriers: groupBarriers, profiles: canProfiles, campaigns: canCampaigns, reports: canReports, results: canResults, events, tools: toolRouter }),
+      canAcceptance: new CanAcceptanceService({
+        groups,
+        barriers: groupBarriers,
+        profiles: canProfiles,
+        campaigns: canCampaigns,
+        reports: canReports,
+        results: canResults,
+        events,
+        tools: toolRouter,
+        adapterFactory: kind => {
+          if (kind === "mock") return new MockCanBusAdapter();
+          const configured = this.config.canAdapters?.[0];
+          return configured?.type === "pcan-basic"
+            ? new PcanBasicCanBusAdapter(configured)
+            : new NoopCanBusAdapter();
+        }
+      }),
       canCampaigns,
       canResults,
       boardGroups: groups,
@@ -166,7 +185,8 @@ export class DebugDaemon {
       authToken: this.authToken,
       port: this.daemonConfig.port,
       toolInvoker: toolRouter,
-      health: () => this.getHealth()
+      health: () => this.getHealth(),
+      shutdown: () => { void this.stop(); }
     });
     this.rpcServer = rpcServer;
     try {
@@ -215,8 +235,9 @@ export class DebugDaemon {
       this.startedAtMs,
       Boolean(this.store),
       this.workers?.countHealthy(),
-      this.testRuns?.counts()
-      , this.consistency?.check()
+      this.testRuns?.counts(),
+      this.consistency?.check(),
+      this.jobEngine?.boardConcurrencySnapshot()
     );
   }
 

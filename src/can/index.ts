@@ -11,3 +11,8 @@ export * from "./CanProfileSchema.js";
 export * from "./MockCanBusAdapter.js";
 export * from "./NoopCanBusAdapter.js";
 export * from "./UnavailableCanBusAdapter.js";
+export * from "./pcan/PcanBasicCanBusAdapter.js";
+export * from "./pcan/PcanBasicDriver.js";
+export * from "./pcan/PcanBasicNativeDriver.js";
+export * from "./pcan/FakePcanBasicDriver.js";
+export * from "./pcan/PcanBasicTypes.js";

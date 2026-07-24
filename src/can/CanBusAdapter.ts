@@ -23,6 +23,13 @@ export interface CanAdapterInfo {
   availability: "available" | "unavailable";
   transport: "mock" | "hardware";
   reason?: string;
+  channel?: string;
+  bitrate?: number;
+  libraryPath?: string;
+  dllVersion?: string;
+  driverVersion?: string;
+  platform?: string;
+  architecture?: string;
 }
 
 export interface CanAdapterSession {

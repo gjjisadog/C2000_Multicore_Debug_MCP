@@ -17,6 +17,7 @@ export class DaemonRpcServer {
     port: number;
     toolInvoker: C2000ToolInvoker;
     health: () => Record<string, unknown>;
+    shutdown?: () => void;
   }) {
     this.server = new LocalRpcServer({
       host: "127.0.0.1",
@@ -30,6 +31,10 @@ export class DaemonRpcServer {
           const request = invokeToolParamsSchema.parse(params);
           const result = await options.toolInvoker.invokeTool(request.toolName, request.arguments);
           return { requestId: request.requestId, result };
+        }
+        if (method === "shutdown" && options.shutdown) {
+          setImmediate(options.shutdown);
+          return { accepted: true };
         }
         throw new DebugMcpError("DaemonProtocolError", `Unsupported daemon RPC method: ${method}`);
       }

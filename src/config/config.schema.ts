@@ -88,6 +88,16 @@ export const c2000McpConfigSchema = z.object({
     maxParallelBoards: z.number().int().positive().default(4),
     pollIntervalMs: z.number().int().positive().default(250)
   }).optional(),
+  canAdapters: z.array(z.object({
+    adapterId: z.string().min(1),
+    type: z.literal("pcan-basic"),
+    channel: z.string().regex(/^PCAN_USBBUS(?:[1-9]|1[0-6])$/),
+    bitrate: z.union([z.literal(125000), z.literal(250000), z.literal(500000), z.literal(1000000)]),
+    libraryPath: z.string().min(1).optional(),
+    receivePollIntervalMs: z.number().int().positive().default(1),
+    captureBufferFrames: z.number().int().positive().default(100000),
+    busOffRecovery: z.enum(["manual", "reinitialize"]).default("manual")
+  })).optional(),
   boards: z.array(boardConfigSchema).optional()
 });
 

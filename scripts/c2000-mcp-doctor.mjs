@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const isolated = process.argv.includes("--isolated");
@@ -33,6 +34,7 @@ for (const requiredEntry of [
     fail("RuntimeArtifactMissing", `Built runtime entrypoint does not exist: ${requiredEntry}`, "Run npm run build before npm run doctor.");
   }
 }
+await verifyRuntimeManifest(sourceRuntimeDirectory);
 
 if (isolated) {
   isolatedDirectory = await mkdtemp(path.join(os.tmpdir(), "c2000-mcp-doctor-"));
@@ -186,6 +188,34 @@ function fail(code, message, remediation, serverStderr = "") {
   process.stderr.write(`${JSON.stringify({ ok: false, code, message, remediation, serverStderr: serverStderr.trim() }, null, 2)}\n`);
   child?.kill("SIGTERM");
   process.exit(1);
+}
+
+async function verifyRuntimeManifest(runtimeDirectory) {
+  const manifestPath = path.join(runtimeDirectory, "runtime-manifest.json");
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  } catch {
+    fail("RuntimeNativeBindingMismatch", `Runtime manifest is missing or invalid: ${manifestPath}`, "Run npm run build on the target platform.");
+  }
+  if (manifest.platform !== process.platform) {
+    fail("RuntimePlatformMismatch", `Runtime was built for ${manifest.platform}, current platform is ${process.platform}.`, "Rebuild the runtime on this platform.");
+  }
+  if (manifest.arch !== process.arch) {
+    fail("RuntimeArchitectureMismatch", `Runtime was built for ${manifest.arch}, current architecture is ${process.arch}.`, "Rebuild the runtime for this architecture.");
+  }
+  if (String(manifest.nodeModulesAbi) !== String(process.versions.modules)) {
+    fail("RuntimeAbiMismatch", `Runtime ABI ${manifest.nodeModulesAbi} does not match current Node ABI ${process.versions.modules}.`, "Run npm ci and npm run build with the active Node version.");
+  }
+  for (const binding of manifest.nativeBindings ?? []) {
+    try {
+      const data = await readFile(path.join(runtimeDirectory, binding.path));
+      const actual = createHash("sha256").update(data).digest("hex");
+      if (actual !== binding.sha256) throw new Error(`SHA-256 ${actual} != ${binding.sha256}`);
+    } catch (error) {
+      fail("RuntimeNativeBindingMismatch", `Native binding verification failed for ${binding.path}: ${error instanceof Error ? error.message : String(error)}`, "Run npm ci and npm run build on this platform.");
+    }
+  }
 }
 
 async function stopDoctorDaemon(runtimeDirectory) {

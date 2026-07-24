@@ -2,6 +2,55 @@
 
 Independent MCP server for explicit TI C2000 multicore debug control. The first implementation targets F28P65x CPU1/CPU2 workflows and keeps all debug APIs scoped by `sessionId` and `coreId`.
 
+## Round 4 execution safety
+
+`scheduler.maxParallelBoards` is now a daemon-wide physical-board limit.
+Every board flow obtains a `BoardExecutionPermit`; two-board CAN flows obtain
+both permits atomically and fail immediately with
+`InsufficientBoardConcurrency` when the limit is below two. Daemon health
+reports the limit, active holders, and waiting requests.
+
+Board leases are fencing contracts. Every lease has a monotonically increasing
+token/generation, and every board-bound command carries its complete lease
+context through the Daemon to the Board Worker. Both layers reject expired,
+invalidated, identity-mismatched, or stale-generation commands. Repeated
+renewal failure records events, invalidates the lease, and stops further target
+commands.
+
+PCAN-Basic support is Windows x64 only and dynamically uses the official
+`PCANBasic.dll` through the optional Koffi binding. PEAK binaries are not
+redistributed, and hardware mode never falls back to Mock CAN. Install the
+official PEAK package; set `C2000_PCAN_BASIC_LIBRARY` only if discovery fails.
+The first backend supports Classical CAN with 11/29-bit IDs, DLC 0–8, and
+125/250/500 kbit/s or 1 Mbit/s. Hardware preflight is explicitly opt-in:
+
+```powershell
+$env:C2000_PCAN_HARDWARE_TEST = "1"
+npm run verify:pcan:hardware
+```
+
+Without opt-in this prints `SKIPPED` and touches no hardware. Passing preflight
+does not mean two-board CAN acceptance passed.
+
+Detached daemon management:
+
+```powershell
+npm run build
+npm run daemon:detached
+npm run daemon:status
+npm run daemon:stop
+```
+
+The launcher returns after health is ready, avoids duplicate daemons, and stop
+uses authenticated local RPC rather than unconditional `taskkill`. For
+production Windows deployment use a service manager such as NSSM; these npm
+scripts are not a complete Windows Service manager.
+
+Runtime bundles are platform-, architecture-, Node ABI-, and native-binding
+specific. Each build clears `dist/src`, overwrites `better_sqlite3.node`, and
+writes `runtime-manifest.json`. Doctor verifies platform, architecture, ABI,
+and binding SHA-256. Do not copy bundles across platforms or Node ABIs.
+
 ## What It Solves
 
 This server avoids controlling "whatever target CCS UI has focused". Every tool call takes a logical `sessionId`; every core operation takes an explicit `coreId`.

@@ -1,6 +1,7 @@
 import type { C2000ToolInvoker } from "../mcp/tools.js";
 import { resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import type { CanAcceptanceService } from "../can/CanAcceptanceService.js";
+import type { BoardLeaseContext } from "../boards/types.js";
 
 export interface StepExecutionContext {
   jobId: string;
@@ -8,6 +9,7 @@ export interface StepExecutionContext {
   sessionId?: string;
   /** Durable lease held by the job engine; group work never invents ownership. */
   leaseId?: string;
+  leaseContext?: BoardLeaseContext;
   probeSerial?: string;
   plan: TestPlan;
   step: TestPlanStep;
@@ -29,16 +31,16 @@ export class StepRegistry {
       case "preflight":
         return this.tools.invokeTool("c2000_getHardwarePreflight", {});
       case "launchMulticore":
-        return this.tools.invokeTool("c2000_launchMulticoreDebug", {
+        return this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
           boardId,
           sessionName: `${plan.name}-${boardId}`,
           cores: [
             { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", programUri: artifacts?.cpu1OutPath, mapUri: artifacts?.cpu1MapPath, connect: true, load: Boolean(artifacts?.cpu1OutPath), haltAtEntry: true },
             { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", programUri: artifacts?.cpu2OutPath, mapUri: artifacts?.cpu2MapPath, connect: true, load: Boolean(artifacts?.cpu2OutPath), haltAtEntry: true }
           ]
-        });
+        }));
       case "runIpcAcceptance":
-        return this.tools.invokeTool("c2000_runIpcAcceptance", requiredSession({
+        return this.tools.invokeTool("c2000_runIpcAcceptance", fenced(context, requiredSession({
           sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2,
           cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath,
           cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath,
@@ -47,17 +49,21 @@ export class StepRegistry {
           verifyRuntimeRamOwnership: Boolean((step as Record<string, unknown>).verifyRuntimeRamOwnership),
           collectDebugBundle: plan.failurePolicy.collectDebugBundle,
           outputDir: artifacts?.outputDir
-        }));
+        })));
       case "runBootHandoffDiagnosis":
-        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, verifyRuntimeRamOwnership: false, outputDir: artifacts?.outputDir }));
+        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, verifyRuntimeRamOwnership: false, outputDir: artifacts?.outputDir })));
       case "runReloadAndDiagnose":
-        return this.tools.invokeTool("c2000_runReloadAndDiagnose", requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir }));
+        return this.tools.invokeTool("c2000_runReloadAndDiagnose", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir })));
       case "runFullDebugBundle":
-        return this.tools.invokeTool("c2000_runFullDebugBundle", requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, outputDir: artifacts?.outputDir }));
+        return this.tools.invokeTool("c2000_runFullDebugBundle", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, outputDir: artifacts?.outputDir })));
       case "cleanup":
-        return sessionId ? this.tools.invokeTool("c2000_closeDebugSession", { sessionId }) : { success: true, skipped: true };
+        return sessionId ? this.tools.invokeTool("c2000_closeDebugSession", fenced(context, { sessionId })) : { success: true, skipped: true };
     }
   }
+}
+
+function fenced<T extends Record<string, unknown>>(context: StepExecutionContext, input: T): T & { __leaseContext?: BoardLeaseContext } {
+  return { ...input, ...(context.leaseContext ? { __leaseContext: context.leaseContext } : {}) };
 }
 
 function requiredSession<T extends Record<string, unknown>>(input: T): T {
