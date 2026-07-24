@@ -10,6 +10,24 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG): Pro
     target: { name: "F28P65x", coreMap: defaultF28P65xCoreMap },
     diagnostics: {},
     logging: { level: "info" },
+    daemon: {
+      enabled: true,
+      host: "127.0.0.1",
+      port: 0,
+      runtimeDir: "./runtime",
+      autoStart: true,
+      startupTimeoutMs: 15000
+    },
+    storage: { sqlitePath: "./runtime/c2000-debugd.sqlite", wal: true },
+    workers: {
+      heartbeatIntervalMs: 1000,
+      heartbeatTimeoutMs: 5000,
+      defaultCommandTimeoutMs: 15000,
+      restartLimit: 5,
+      restartWindowMs: 60000
+    },
+    scheduler: { maxParallelBoards: 4, pollIntervalMs: 250 },
+    boards: [],
     ...fileConfig
   });
   return c2000McpConfigSchema.parse(merged);
@@ -18,6 +36,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG): Pro
 function applyEnvOverrides(config: Record<string, unknown>): Record<string, unknown> {
   const ccs = { ...objectAt(config, "ccs") };
   const logging = { ...objectAt(config, "logging") };
+  const daemon = { ...objectAt(config, "daemon") };
   if (process.env.C2000_MCP_ADAPTER) {
     config.adapter = process.env.C2000_MCP_ADAPTER;
     ccs.scriptingMode = process.env.C2000_MCP_ADAPTER;
@@ -40,7 +59,13 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_LOG_FILE) {
     logging.logFile = process.env.C2000_MCP_LOG_FILE;
   }
-  return { ...config, ccs, logging };
+  if (process.env.C2000_MCP_DAEMON_RUNTIME_DIR) {
+    daemon.runtimeDir = process.env.C2000_MCP_DAEMON_RUNTIME_DIR;
+  }
+  if (process.env.C2000_MCP_DAEMON_AUTO_START) {
+    daemon.autoStart = process.env.C2000_MCP_DAEMON_AUTO_START !== "0";
+  }
+  return { ...config, ccs, logging, daemon };
 }
 
 function objectAt(config: Record<string, unknown>, key: string): Record<string, unknown> {

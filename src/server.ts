@@ -11,7 +11,8 @@ import type { DebugAdapter } from "./adapters/types.js";
 import type { C2000McpConfig } from "./config/config.schema.js";
 import { DebugSessionManager } from "./debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
-import { registerC2000Tools } from "./mcp/tools.js";
+import { createC2000ToolInvoker, registerC2000Tools, type C2000ToolInvoker } from "./mcp/tools.js";
+import type { ToolHandlerDeps } from "./mcp/toolHandlers.js";
 import { Logger } from "./utils/logger.js";
 import { normalizeWorkspacePath } from "./utils/pathUtils.js";
 
@@ -21,14 +22,18 @@ export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterRe
 export interface C2000McpRuntime {
   server: McpServer;
   manager: DebugSessionManager;
+  toolInvoker: C2000ToolInvoker;
   dispose(): Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>>;
 }
 
-export async function createC2000McpRuntime(config: C2000McpConfig): Promise<C2000McpRuntime> {
+export async function createC2000McpRuntime(
+  config: C2000McpConfig,
+  toolHandlerDeps: ToolHandlerDeps = {}
+): Promise<C2000McpRuntime> {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const adapterResolution = await resolveAdapterMode(config);
   logger.info("debug adapter selected", adapterResolution);
-  return buildRuntime(config, adapterResolution, logger);
+  return buildRuntime(config, adapterResolution, logger, toolHandlerDeps);
 }
 
 /**
@@ -37,12 +42,13 @@ export async function createC2000McpRuntime(config: C2000McpConfig): Promise<C20
  */
 export function createC2000McpRuntimeSync(
   config: C2000McpConfig,
-  resolution?: AdapterResolution
+  resolution?: AdapterResolution,
+  toolHandlerDeps: ToolHandlerDeps = {}
 ): C2000McpRuntime {
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const adapterResolution = resolution ?? resolveAdapterModeSync(config);
   logger.info("debug adapter selected", adapterResolution);
-  return buildRuntime(config, adapterResolution, logger);
+  return buildRuntime(config, adapterResolution, logger, toolHandlerDeps);
 }
 
 export async function createC2000McpServer(config: C2000McpConfig): Promise<McpServer> {
@@ -56,7 +62,8 @@ export function createC2000McpServerSync(config: C2000McpConfig, resolution?: Ad
 function buildRuntime(
   config: C2000McpConfig,
   adapterResolution: AdapterResolution,
-  logger: Logger
+  logger: Logger,
+  toolHandlerDeps: ToolHandlerDeps
 ): C2000McpRuntime {
   const server = new McpServer(
     { name: "c2000-multicore-mcp", version: "0.1.0" },
@@ -78,11 +85,13 @@ function buildRuntime(
       }
     }
   );
-  registerC2000Tools(server, manager);
+  const toolInvoker = createC2000ToolInvoker(manager, toolHandlerDeps);
+  registerC2000Tools(server, toolInvoker);
   let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
   return {
     server,
     manager,
+    toolInvoker,
     dispose: () => (disposal ??= manager.disposeAllSessions())
   };
 }

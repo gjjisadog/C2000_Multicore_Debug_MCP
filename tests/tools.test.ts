@@ -382,7 +382,7 @@ describe("MCP tool registration contract", () => {
     }
 
     const targetTouchingWithoutCoreIdentity = Array.from(byName.values())
-      .filter(contract => !["host-read", "session-read", "session-lifecycle"].includes(contract.targetEffect))
+      .filter(contract => !["host-read", "session-read", "session-lifecycle", "job-control"].includes(contract.targetEffect))
       .filter(contract => contract.coreIdentityFields.length === 0)
       .map(contract => contract.name);
     expect(targetTouchingWithoutCoreIdentity).toEqual([]);
@@ -488,7 +488,7 @@ describe("MCP tool registration contract", () => {
     }
 
     const targetTouchingWithoutResponseIdentity = Array.from(byName.values())
-      .filter(contract => !["host-read", "session-read", "session-lifecycle"].includes(contract.targetEffect))
+      .filter(contract => !["host-read", "session-read", "session-lifecycle", "job-control"].includes(contract.targetEffect))
       .filter(contract => contract.responseCoreIdentityFields.length === 0)
       .map(contract => contract.name);
     expect(targetTouchingWithoutResponseIdentity).toEqual([]);

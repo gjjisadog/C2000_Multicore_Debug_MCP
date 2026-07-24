@@ -70,6 +70,86 @@ Built server:
 C2000_MCP_CONFIG=./examples/f28p65x.config.json npm start
 ```
 
+## Persistent daemon, jobs, and board ownership
+
+The stdio executable is a short-lived MCP proxy. It discovers or starts a
+loopback-only `c2000-debugd`, then forwards calls with a per-daemon local token.
+Closing a stdio client therefore does **not** dispose board workers, debug
+sessions, DSS children, leases, or queued jobs. The daemon keeps SQLite state
+in `storage.sqlitePath` (WAL enabled by default) and starts one worker per
+registered `boards[]` entry. A non-mock worker checks that its `.ccxml` binds
+the expected XDS110 serial before it starts.
+
+Use the daemon/job surface for multi-board work:
+
+- `c2000_getDaemonHealth` reports daemon, worker, job, and read-only database-consistency state.
+- `c2000_listBoards` reports persisted registrations, leases, workers, and quarantine state.
+- `c2000_recoverBoard` defaults to a dry run and can restart only the daemon-owned
+  worker for one board. It deliberately never terminates an external CCS/DSS owner.
+- `c2000_submitTestPlan` returns a stable `jobId` immediately; use
+  `c2000_getTestRun`, `c2000_listTestRuns`, `c2000_cancelTestRun`, and
+  `c2000_getTestArtifacts` afterwards.
+- A daemon stop marks in-flight runs `RECOVERING`. Startup only restarts a plan
+  from its declared whole-board safe boundary; a non-idempotent interruption
+  becomes `NEEDS_MANUAL_INTERVENTION` instead of being replayed.
+
+To use real multiple boards, add unique `boardId`, `probeSerial`, `ccxmlPath`,
+and tags in `boards[]`; do not leave probe allocation to CCS UI focus.
+
+## Two-board CAN acceptance
+
+`c2000_submitMultiBoardCanAcceptance` creates a durable `CAN_PAIR` group,
+allocates both board leases, launches isolated sessions, synchronizes the pair
+at a timeout-bounded barrier, starts the chosen cores, and records each
+direction, frame capture, optional expression observation, and failure in
+SQLite. It returns a `jobId` immediately. Querying the job exposes `can.group`
+and `can.results` in addition to ordinary step history.
+
+Start with
+[`examples/two-board-can.mock.config.json`](examples/two-board-can.mock.config.json)
+and
+[`examples/two-board-can.mock.request.json`](examples/two-board-can.mock.request.json).
+The profile must contain both `board-a → board-b` and `board-b → board-a`
+directions. It can declare `drop`, `delay`, or `bus_off` fault scenarios and
+cross-board `c2000_evaluateMany` observations.
+
+`profile.adapter: "mock"` is a deterministic simulation only. It validates
+pair lifecycle, barriers, matching, injected faults, proxy independence, and
+persisted evidence; it does **not** prove real wiring, bit timing, transceiver
+state, firmware ISR behavior, or physical frame delivery. The safe default is
+`"hardware"`, which fails with `CanAdapterUnavailable` until an application
+supplies a real `CanBusAdapter` (USB/CAN, PCAN, Vector, or firmware-backed).
+Never report a Mock result as hardware CAN acceptance.
+
+### Persistent P1 CAN orchestration
+
+Board groups now persist member lease/worker/session evidence, named barriers,
+profile hash/version, and conservative reconciliation decisions. Use
+`c2000_getBoardGroupSnapshot` for this durable evidence and
+`c2000_listCanProfiles` for registered profiles. Profile version 2+ declares
+role mappings, read-only safety expressions, and cross-board comparisons; the
+daemon evaluates those internally as `group → board → worker/session → core`
+and exposes no atomic cross-board CAN I/O MCP tools.
+
+`c2000_submitCanFaultCampaign` and `c2000_submitCanSoakTest` submit finite,
+checkpointed jobs. A generic test plan can declare a bounded deterministic
+matrix. Interrupted fault/reset/rejoin work is never blindly replayed. Each
+successful job registers JSON, Markdown, and JUnit report artifacts. When the
+adapter lacks independent bus verification, reports omit a fake CAN trace and
+say so explicitly.
+
+Useful local verification commands:
+
+```bash
+npm run verify:daemon-proxy
+npm run verify:can:mock
+npm run acceptance:can:hardware
+```
+
+`acceptance:can:hardware` is a configuration-only preflight: it checks two
+distinct F28P65x board/probe bindings and performs no target control, CAN
+traffic, power enable, PWM-trip modification, or contactor action.
+
 ## Client Config
 
 Codex, Claude Desktop, ChatGPT MCP clients, or other stdio MCP hosts can spawn the built server:

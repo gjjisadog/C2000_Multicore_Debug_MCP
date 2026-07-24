@@ -24,14 +24,21 @@ import {
   batchCoresSchema,
   compareExpressionsSchema,
   createDebugSessionSchema,
+  cancelTestRunSchema,
+  daemonHealthSchema,
   debugBoundarySchema,
   diagnoseCpu2BootSchema,
   diagnoseBootHandoffSchema,
   evaluateManySchema,
   hardwarePreflightSchema,
+  getTestArtifactsSchema,
+  getTestRunSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
   launchMultiBoardDebugSchema,
+  listBoardsSchema,
+  recoverBoardSchema,
+  listTestRunsSchema,
   launchMulticoreDebugSchema,
   loadProgramsSchema,
   loadProgramSchema,
@@ -48,6 +55,13 @@ import {
   sessionCoreSchema,
   sessionSchema,
   toolContractsSchema,
+  submitMultiBoardIpcAcceptanceSchema,
+  submitMultiBoardCanAcceptanceSchema,
+  listCanProfilesSchema,
+  getBoardGroupSnapshotSchema,
+  submitCanFaultCampaignSchema,
+  submitCanSoakTestSchema,
+  submitTestPlanSchema,
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
   waitForExpressionSetSchema,
@@ -62,6 +76,20 @@ export interface ToolHandlerDeps {
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
   getToolSurfaceGuide?: () => ToolResult;
+  getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
+  listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
+  recoverBoard?: (input: z.infer<typeof recoverBoardSchema>) => Promise<ToolResult> | ToolResult;
+  submitTestPlan?: (input: z.infer<typeof submitTestPlanSchema>) => Promise<ToolResult> | ToolResult;
+  getTestRun?: (input: z.infer<typeof getTestRunSchema>) => Promise<ToolResult> | ToolResult;
+  listTestRuns?: (input: z.infer<typeof listTestRunsSchema>) => Promise<ToolResult> | ToolResult;
+  cancelTestRun?: (input: z.infer<typeof cancelTestRunSchema>) => Promise<ToolResult> | ToolResult;
+  getTestArtifacts?: (input: z.infer<typeof getTestArtifactsSchema>) => Promise<ToolResult> | ToolResult;
+  submitMultiBoardIpcAcceptance?: (input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
+  submitMultiBoardCanAcceptance?: (input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
+  listCanProfiles?: (input: z.infer<typeof listCanProfilesSchema>) => Promise<ToolResult> | ToolResult;
+  getBoardGroupSnapshot?: (input: z.infer<typeof getBoardGroupSnapshotSchema>) => Promise<ToolResult> | ToolResult;
+  submitCanFaultCampaign?: (input: z.infer<typeof submitCanFaultCampaignSchema>) => Promise<ToolResult> | ToolResult;
+  submitCanSoakTest?: (input: z.infer<typeof submitCanSoakTestSchema>) => Promise<ToolResult> | ToolResult;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -70,6 +98,26 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const analyzeRamOwnership = deps.analyzeRamOwnership ?? analyzeRamOwnershipDefault;
   const getToolContracts = deps.getToolContracts ?? (() => []);
   const getToolSurfaceGuide = deps.getToolSurfaceGuide ?? (() => ({}));
+  const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
+    daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
+    workers: { total: 0, healthy: 0, unhealthy: 0 },
+    jobs: { queued: 0, running: 0 }
+  }));
+  const unavailableJobEngine = () => { throw new DebugMcpError("DaemonUnavailable", "Background test jobs require c2000-debugd"); };
+  const unavailableRecovery = () => { throw new DebugMcpError("DaemonUnavailable", "Board recovery requires c2000-debugd"); };
+  const listBoards = deps.listBoards ?? (() => ({ boards: [] }));
+  const recoverBoard = deps.recoverBoard ?? unavailableRecovery;
+  const submitTestPlan = deps.submitTestPlan ?? unavailableJobEngine;
+  const getTestRun = deps.getTestRun ?? unavailableJobEngine;
+  const listTestRuns = deps.listTestRuns ?? unavailableJobEngine;
+  const cancelTestRun = deps.cancelTestRun ?? unavailableJobEngine;
+  const getTestArtifacts = deps.getTestArtifacts ?? unavailableJobEngine;
+  const submitMultiBoardIpcAcceptance = deps.submitMultiBoardIpcAcceptance ?? unavailableJobEngine;
+  const submitMultiBoardCanAcceptance = deps.submitMultiBoardCanAcceptance ?? unavailableJobEngine;
+  const listCanProfiles = deps.listCanProfiles ?? unavailableJobEngine;
+  const getBoardGroupSnapshot = deps.getBoardGroupSnapshot ?? unavailableJobEngine;
+  const submitCanFaultCampaign = deps.submitCanFaultCampaign ?? unavailableJobEngine;
+  const submitCanSoakTest = deps.submitCanSoakTest ?? unavailableJobEngine;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
@@ -98,6 +146,36 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   };
 
   return {
+    async getDaemonHealth(_input: z.infer<typeof daemonHealthSchema>) {
+      try {
+        return ok(await getDaemonHealth());
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async listBoards(input: z.infer<typeof listBoardsSchema>) {
+      try {
+        return ok(await listBoards(input));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async recoverBoard(input: z.infer<typeof recoverBoardSchema>) { try { return ok(await recoverBoard(input)); } catch (error) { return fail(error, { boardId: input.boardId }); } },
+
+    async submitTestPlan(input: z.infer<typeof submitTestPlanSchema>) { try { return ok(await submitTestPlan(input)); } catch (error) { return fail(error); } },
+    async getTestRun(input: z.infer<typeof getTestRunSchema>) { try { return ok(await getTestRun(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async listTestRuns(input: z.infer<typeof listTestRunsSchema>) { try { return ok(await listTestRuns(input)); } catch (error) { return fail(error); } },
+    async cancelTestRun(input: z.infer<typeof cancelTestRunSchema>) { try { return ok(await cancelTestRun(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async getTestArtifacts(input: z.infer<typeof getTestArtifactsSchema>) { try { return ok(await getTestArtifacts(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async submitMultiBoardIpcAcceptance(input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) { try { return ok(await submitMultiBoardIpcAcceptance(input)); } catch (error) { return fail(error); } },
+    async submitMultiBoardCanAcceptance(input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) { try { return ok(await submitMultiBoardCanAcceptance(input)); } catch (error) { return fail(error); } },
+    async listCanProfiles(input: z.infer<typeof listCanProfilesSchema>) { try { return ok(await listCanProfiles(input)); } catch (error) { return fail(error); } },
+    async getBoardGroupSnapshot(input: z.infer<typeof getBoardGroupSnapshotSchema>) { try { return ok(await getBoardGroupSnapshot(input)); } catch (error) { return fail(error, { groupId: input.groupId }); } },
+    async submitCanFaultCampaign(input: z.infer<typeof submitCanFaultCampaignSchema>) { try { return ok(await submitCanFaultCampaign(input)); } catch (error) { return fail(error); } },
+    async submitCanSoakTest(input: z.infer<typeof submitCanSoakTestSchema>) { try { return ok(await submitCanSoakTest(input)); } catch (error) { return fail(error); } },
+
     async getToolContracts(_input: z.infer<typeof toolContractsSchema>) {
       try {
         return ok({
