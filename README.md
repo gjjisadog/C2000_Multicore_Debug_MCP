@@ -123,9 +123,11 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ### One-command install (Windows and macOS)
 
-Prerequisites: Node.js 20, 22, or 24 LTS; an authenticated GitHub CLI (`gh auth
-status`); and Codex. This repository is private, so anonymous release URLs do
-not work. The installer copies the
+Prerequisites: Node.js >=20.19 <21, >=22.12 <23, or 24; an authenticated GitHub
+CLI (`gh auth status`); and Codex. This repository is private, so anonymous
+release URLs do not work. On macOS, the bootstrap automatically reuses a
+compatible `node@20`, `node@22`, or `node@24` installed by Homebrew even when
+another Node release is the system default. The installer copies the
 platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
 bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
 runtime handshake check. Restart Codex after it succeeds.

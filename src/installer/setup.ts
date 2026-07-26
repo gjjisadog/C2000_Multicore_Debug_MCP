@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -394,15 +394,10 @@ async function installRuntimeAtomically(
     if (manifest.nodeModulesAbi !== activeNodeModulesAbi) {
       const binding = manifest.nativeBindings?.find(candidate => candidate.name === "better_sqlite3.node");
       if (!binding) throw new Error("Runtime manifest does not declare the better_sqlite3.node binding");
-      const dependencyBinding = path.join(
-        packageRoot,
-        "node_modules",
-        "better-sqlite3",
-        "build",
-        "Release",
-        "better_sqlite3.node"
-      );
+      let dependencyBinding: string;
       try {
+        const dependencyRoot = resolveInstalledPackageRoot(packageRoot, "better-sqlite3");
+        dependencyBinding = path.join(dependencyRoot, "build", "Release", "better_sqlite3.node");
         const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
         const Database = requireFromPackage("better-sqlite3") as new (filename: string) => { close(): void };
         const database = new Database(":memory:");
@@ -444,8 +439,32 @@ async function installRuntimeAtomically(
   }
 }
 
-async function findPackageRoot(entrypoint?: string): Promise<string> {
-  let current = path.resolve(entrypoint ? path.dirname(entrypoint) : process.cwd());
+export function resolveInstalledPackageRoot(packageRoot: string, packageName: string): string {
+  const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
+  let current = path.dirname(requireFromPackage.resolve(packageName));
+  while (true) {
+    const manifestPath = path.join(current, "package.json");
+    if (fs.existsSync(manifestPath)) {
+      try {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { name?: string };
+        if (manifest.name === packageName) return current;
+      } catch {
+        // Keep walking: a malformed unrelated package.json is not the dependency root.
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      throw new Error(`Could not locate installed dependency root for ${packageName}`);
+    }
+    current = parent;
+  }
+}
+
+export async function findPackageRoot(entrypoint?: string): Promise<string> {
+  const resolvedEntrypoint = entrypoint
+    ? await realpath(entrypoint).catch(() => path.resolve(entrypoint))
+    : undefined;
+  let current = path.resolve(resolvedEntrypoint ? path.dirname(resolvedEntrypoint) : process.cwd());
   while (true) {
     if (
       await exists(path.join(current, "package.json"))

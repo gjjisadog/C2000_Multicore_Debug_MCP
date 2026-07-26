@@ -12,9 +12,18 @@ if ($architecture -ne "x64") {
   throw "Windows one-command installation currently supports x64; detected $architecture."
 }
 
-$nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
-if ($LASTEXITCODE -ne 0 -or $nodeMajor -notin @(20, 22, 24)) {
-  throw "Node.js 20, 22, or 24 LTS is required."
+$nodeVersion = & node -p "process.versions.node" 2>$null
+if ($LASTEXITCODE -ne 0) {
+  throw "Node.js >=20.19 <21, >=22.12 <23, or 24 is required; Node.js was not found."
+}
+$nodeParts = $nodeVersion.Split(".")
+$nodeMajor = [int]$nodeParts[0]
+$nodeMinor = [int]$nodeParts[1]
+$supportedNode = ($nodeMajor -eq 20 -and $nodeMinor -ge 19) `
+  -or ($nodeMajor -eq 22 -and $nodeMinor -ge 12) `
+  -or ($nodeMajor -eq 24)
+if (-not $supportedNode) {
+  throw "Node.js >=20.19 <21, >=22.12 <23, or 24 is required; active Node is v$nodeVersion."
 }
 
 $assetName = "c2000-multicore-mcp-$($tag.TrimStart('v'))-win32-x64.tgz"
