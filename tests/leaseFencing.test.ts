@@ -46,4 +46,24 @@ describe("lease fencing", () => {
     expect(() => registry.leases.validate({ ...leased.context, leaseToken: "wrong" })).toThrowError(expect.objectContaining({ code: "LeaseFencingRejected" }));
     store.close();
   });
+
+  test("worker restart invalidation requires the exact board and worker identity", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-lease-worker-restart-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "test.sqlite"));
+    const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.setWorker("board-a", "worker-1");
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", ttlMs: 1000 });
+
+    expect(registry.leases.invalidateForWorkerRestart("board-a", "worker-2", "test")).toBe(false);
+    expect(registry.leases.active("board-a")?.leaseId).toBe(leased.lease.leaseId);
+    expect(registry.leases.invalidateForWorkerRestart("board-a", "worker-1", "test")).toBe(true);
+    expect(registry.leases.active("board-a")).toBeUndefined();
+    expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+    expect(() => registry.leases.validate(leased.context)).toThrowError(
+      expect.objectContaining({ code: "LeaseInvalidated" })
+    );
+    store.close();
+  });
 });

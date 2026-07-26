@@ -679,14 +679,13 @@ Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores
 7. Run CPU2 only when CPU1 boot/release and IPC/MSGRAM initialization make that valid.
 8. `c2000_evaluateMany` for IPC variables:
    - `g_stCoreCommCpu1Watch.emStage`
-   - `g_stCoreCommCpu1Watch.ulIpcPass`
-   - `g_stCoreCommCpu1Watch.ulCpu2Ready`
+   - `g_stCoreCommCpu1Watch.uiCpu2Ready`
    - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
    - `g_stCoreCommCpu2Watch.emStage`
-   - `g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq`
-   - `g_stCoreCommCpu2Watch.ulInitialParameterApplied`
+   - `g_stCoreCommCpu2Watch.ulInitParamSnapSeq`
+   - `g_stCoreCommCpu2Watch.uiInitParamApplied`
 9. If stuck, `c2000_haltCores`, then `c2000_resolvePc` (for PC) or `c2000_resolveAddress` (address only; symbol mapping may be `partial` / not implemented).
-10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/pass flags, and CPU2 stage.
+10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/ready/error fields, and CPU2 stage.
 11. `c2000_analyzeRamOwnership` for host-side `.map` RAMGS ownership evidence.
 12. `c2000_diagnoseBootHandoff` to combine CPU2 boot diagnosis with RAM ownership evidence.
 13. `c2000_waitForIpcReady` to wait for the default CPU1/CPU2 IPC-ready symbols or supplied explicit conditions.
@@ -785,13 +784,12 @@ For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `owne
 - CPU2 PC via `c2000_resolvePc`
 - CPU1 expressions:
   - `g_stCoreCommCpu1Watch.emStage`
-  - `g_stCoreCommCpu1Watch.ulIpcPass`
-  - `g_stCoreCommCpu1Watch.ulCpu2Ready`
+  - `g_stCoreCommCpu1Watch.uiCpu2Ready`
   - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
 - CPU2 expressions:
   - `g_stCoreCommCpu2Watch.emStage`
-  - `g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq`
-  - `g_stCoreCommCpu2Watch.ulInitialParameterApplied`
+  - `g_stCoreCommCpu2Watch.ulInitParamSnapSeq`
+  - `g_stCoreCommCpu2Watch.uiInitParamApplied`
 
 Example:
 
@@ -805,7 +803,7 @@ Example:
 
 This is intended for cases where CPU1 reaches a CPU2 boot/release wait path and CPU2 does not enter its application.
 
-`c2000_diagnoseBootHandoff` wraps the same read-only CPU1/CPU2 boot diagnosis and can add RAM ownership evidence from `.map` files. It returns a compact `verdict` showing whether CPU1 IPC/pass flags, CPU2 stage evidence, and RAM ownership evidence look ready.
+`c2000_diagnoseBootHandoff` wraps the same read-only CPU1/CPU2 boot diagnosis and can add RAM ownership evidence from `.map` files. It returns a compact `verdict` showing whether CPU1 IPC stage/ready/error fields, CPU2 stage evidence, and RAM ownership evidence look ready.
 
 Example:
 
@@ -821,10 +819,11 @@ Example:
 ```
 
 `c2000_waitForIpcReady` waits for CPU1/CPU2 IPC-ready conditions. If no custom
-`conditions` array is supplied, it polls the current seven-condition Hybrid30K
-product gate: both stages are running, CPU1 IPC and CPU2-ready flags are set,
-CPU1 boot error is clear, and CPU2 has published and applied the initial
-parameter snapshot. Historical `ulMsgRamPass` and `ulParamPass` self-test flags
+`conditions` array is supplied, it polls the current five-condition Hybrid30K
+product gate: both stages are running, CPU1 reports CPU2 ready, CPU1 boot error
+is clear, and CPU2 has applied the initial parameter snapshot. The monotonically
+increasing snapshot sequence is diagnostic evidence rather than an exact-value
+gate. Historical `ulMsgRamPass` and `ulParamPass` self-test flags
 are intentionally excluded from the default gate. Every condition is evaluated
 through the requested `sessionId` and explicit `coreId`.
 
@@ -873,7 +872,7 @@ Example:
 {
   "sessionId": "dbg-...",
   "coreId": 0,
-  "expression": "g_stCoreCommCpu1Watch.ulIpcPass",
+  "expression": "g_stCoreCommCpu1Watch.uiCpu2Ready",
   "value": 0,
   "verify": true
 }
@@ -940,7 +939,7 @@ Example:
 {
   "sessionId": "dbg-...",
   "conditions": [
-    { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.ulIpcPass", "expected": 1 },
+    { "label": "cpu1-cpu2-ready", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.uiCpu2Ready", "expected": 1 },
     { "label": "cpu2-stage", "coreId": 2, "expression": "g_stCoreCommCpu2Watch.emStage", "expected": 5 }
   ],
   "timeoutMs": 5000,
@@ -1012,7 +1011,7 @@ Example:
   "postLaunchChecks": {
     "waitForExpressionSet": {
       "conditions": [
-        { "label": "cpu1-ipc-pass", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.ulIpcPass", "expected": 1 },
+        { "label": "cpu1-cpu2-ready", "coreId": 0, "expression": "g_stCoreCommCpu1Watch.uiCpu2Ready", "expected": 1 },
         { "label": "cpu2-stage", "coreId": 2, "expression": "g_stCoreCommCpu2Watch.emStage", "expected": 5 }
       ],
       "timeoutMs": 5000,

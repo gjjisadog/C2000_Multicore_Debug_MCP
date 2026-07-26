@@ -126,6 +126,11 @@ export class BoardWorkerSupervisor {
     if (managed) {
       this.workers.delete(boardId);
       await managed.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      this.options.registry.leases.invalidateForWorkerRestart(
+        boardId,
+        managed.client.workerInstanceId,
+        `worker-restart:${reason}`
+      );
     }
     this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, eventType: "WORKER_RESTARTING", payload: { reason, ...details } });
     const client = await this.startBoard(boardId);

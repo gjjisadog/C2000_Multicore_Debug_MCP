@@ -26,12 +26,11 @@ function serialBoundCcxml(serial: string, debugProbeSelection = "0"): string {
 
 const hybrid30kReadyExpressionValues = {
   "g_stCoreCommCpu1Watch.emStage": { value: "5" },
-  "g_stCoreCommCpu1Watch.ulIpcPass": { value: "1" },
-  "g_stCoreCommCpu1Watch.ulCpu2Ready": { value: "1" },
+  "g_stCoreCommCpu1Watch.uiCpu2Ready": { value: "1" },
   "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "0" },
   "g_stCoreCommCpu2Watch.emStage": { value: "5" },
-  "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq": { value: "1" },
-  "g_stCoreCommCpu2Watch.ulInitialParameterApplied": { value: "1" }
+  "g_stCoreCommCpu2Watch.ulInitParamSnapSeq": { value: "1" },
+  "g_stCoreCommCpu2Watch.uiInitParamApplied": { value: "1" }
 };
 
 function createHandlers(adapter = new MockDebugAdapter()) {
@@ -496,11 +495,11 @@ describe("tool handlers", () => {
       success: true,
       matched: true,
       conditions: expect.arrayContaining([
-        expect.objectContaining({ coreId: 0, expression: "g_stCoreCommCpu1Watch.ulIpcPass", matched: true }),
+        expect.objectContaining({ coreId: 0, expression: "g_stCoreCommCpu1Watch.uiCpu2Ready", matched: true }),
         expect.objectContaining({ coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", matched: true })
       ])
     }));
-    expect(result.conditions).toHaveLength(7);
+    expect(result.conditions).toHaveLength(5);
     expect(result.conditions.map((condition: { expression: string }) => condition.expression)).not.toEqual(
       expect.arrayContaining([
         "g_stCoreCommCpu1Watch.ulMsgRamPass",
@@ -1149,7 +1148,7 @@ describe("tool handlers", () => {
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
         ...hybrid30kReadyExpressionValues,
-        "g_stCoreCommCpu1Watch.ulIpcPass": { value: "0" }
+        "g_stCoreCommCpu1Watch.uiCpu2Ready": { value: "0" }
       }
     }));
     const created = await handlers.createDebugSession({ sessionName: "boot-handoff-workflow", coreMap });
@@ -1209,7 +1208,7 @@ describe("tool handlers", () => {
       runCpu1: true,
       runCpu2: false,
       waitExpressions: [
-        { coreId: 0, expression: "g_stCoreCommCpu1Watch.ulIpcPass", expected: 1 },
+        { coreId: 0, expression: "g_stCoreCommCpu1Watch.uiCpu2Ready", expected: 1 },
         { coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", expected: 5 }
       ],
       timeoutMs: 20,
@@ -1347,7 +1346,7 @@ describe("tool handlers", () => {
       cpu2OutPath,
       maps: [{ coreId: 2, coreName: "C28xx_CPU2", mapPath: cpu2MapPath }],
       expressions: [
-        { coreId: 0, expressions: ["g_stCoreCommCpu1Watch.ulIpcPass"] },
+        { coreId: 0, expressions: ["g_stCoreCommCpu1Watch.uiCpu2Ready"] },
         { coreId: 2, expressions: ["g_stCoreCommCpu2Watch.emStage"] }
       ],
       verifyRuntimeRamOwnership: true,
@@ -1374,7 +1373,7 @@ describe("tool handlers", () => {
       expressions: expect.arrayContaining([
         expect.objectContaining({
           coreId: 0,
-          results: [expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.ulIpcPass" })]
+          results: [expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.uiCpu2Ready" })]
         })
       ]),
       bootHandoff: expect.objectContaining({
@@ -2028,12 +2027,11 @@ describe("tool handlers", () => {
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
         "g_stCoreCommCpu1Watch.emStage": { value: "2", type: "enum", address: "0x0000A844" },
-        "g_stCoreCommCpu1Watch.ulIpcPass": { value: "0", type: "uint32_t", address: "0x0000A802" },
-        "g_stCoreCommCpu1Watch.ulCpu2Ready": { value: "0", type: "uint32_t", address: "0x0000A80A" },
+        "g_stCoreCommCpu1Watch.uiCpu2Ready": { value: "0", type: "uint16_t", address: "0x0000A80A" },
         "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "1", type: "uint32_t", address: "0x0000A816" },
         "g_stCoreCommCpu2Watch.emStage": { value: "0", type: "enum", address: "0x00018870" },
-        "g_stCoreCommCpu2Watch.ulInitialParameterSnapshotSeq": { value: "0", type: "uint32_t" },
-        "g_stCoreCommCpu2Watch.ulInitialParameterApplied": { value: "0", type: "uint32_t" }
+        "g_stCoreCommCpu2Watch.ulInitParamSnapSeq": { value: "0", type: "uint32_t" },
+        "g_stCoreCommCpu2Watch.uiInitParamApplied": { value: "0", type: "uint16_t" }
       }
     }));
     const created = await handlers.createDebugSession({ sessionName: "diag-cpu2", coreMap });
@@ -2048,7 +2046,7 @@ describe("tool handlers", () => {
         coreId: 0,
         expressions: expect.arrayContaining([
           expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.emStage", success: true, value: "2" }),
-          expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.ulIpcPass", success: true, value: "0" })
+          expect.objectContaining({ expression: "g_stCoreCommCpu1Watch.uiCpu2Ready", success: true, value: "0" })
         ])
       }),
       cpu2: expect.objectContaining({

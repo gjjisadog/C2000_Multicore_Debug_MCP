@@ -111,6 +111,28 @@ export class BoardLeaseManager {
     });
   }
 
+  /**
+   * Invalidates the lease fenced to a daemon-owned worker that is being
+   * restarted. The exact board and worker identity must both match, so an
+   * operator recovery cannot steal a lease owned by a different worker.
+   */
+  invalidateForWorkerRestart(
+    boardId: string,
+    workerInstanceId: string,
+    reason: string
+  ): boolean {
+    return this.store.transaction(() => {
+      const existing = this.leases.activeForBoard(boardId);
+      if (!existing || existing.workerInstanceId !== workerInstanceId) {
+        return false;
+      }
+      const now = new Date().toISOString();
+      this.leases.invalidate(existing.leaseId, now, reason);
+      this.boards.setLease(boardId, undefined);
+      return true;
+    });
+  }
+
   validate(context: BoardLeaseContext): BoardLease {
     return this.store.transaction(() => {
       const existing = this.leases.activeForBoardByLeaseId(context.leaseId);

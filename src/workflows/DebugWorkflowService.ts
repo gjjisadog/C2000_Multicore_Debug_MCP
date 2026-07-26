@@ -753,7 +753,7 @@ function bootEvidence(evidence: DebugEvidence, cpu1CoreId: CoreId, cpu2CoreId: C
 function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwnership?: RamOwnershipAnalysis): string[] {
   if (diagnosisCode === "IPC_READY_TIMEOUT") {
     return [
-      "Halt both cores and inspect CPU1 IPC pass flags and CPU2 stage expression.",
+      "Halt both cores and inspect CPU1 IPC stage/ready/error fields and the CPU2 stage expression.",
       "Verify CPU1 runs first and releases CPU2 boot handoff before CPU2 is expected to report IPC ready."
     ];
   }
@@ -765,7 +765,7 @@ function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwner
     return actions;
   }
   if (diagnosisCode === "BOOT_HANDOFF_NOT_READY") {
-    const actions = ["Check CPU1 IPC/pass expressions and CPU2 boot stage before rerunning acceptance."];
+    const actions = ["Check CPU1 IPC stage/ready/error expressions and CPU2 boot stage before rerunning acceptance."];
     if (!verdict.ramOwnershipReady || (ramOwnership?.ownershipActions.length ?? 0) === 0) {
       actions.push("Review CPU2 .map RAMGS usage and CPU1 MEMCFG_GSXMSEL ownership setup.");
     }

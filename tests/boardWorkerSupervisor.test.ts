@@ -52,6 +52,12 @@ describe("board worker supervisor", () => {
       await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", { __leaseContext: leaseA.context }, 5)).rejects.toMatchObject({ code: "WorkerCommandTimeout" });
       expect(starts.get("board-a")).toBe(2);
       expect(starts.get("board-b")).toBe(1);
+      expect(registry.leases.active("board-a")).toBeUndefined();
+      expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+      expect(() => registry.leases.validate(leaseA.context)).toThrowError(
+        expect.objectContaining({ code: "LeaseInvalidated" })
+      );
+      expect(registry.leases.active("board-b")?.leaseId).toBe(leaseB.lease.leaseId);
       await expect(supervisor.invokeBoard("board-b", "c2000_getTargetState", { __leaseContext: leaseB.context }, 5)).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
       await expect(supervisor.invokeBoard("board-b", "c2000_launchMulticoreDebugSafe", {
         __leaseContext: leaseB.context,

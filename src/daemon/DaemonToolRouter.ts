@@ -50,9 +50,12 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       const interactive = supplied ? undefined : await this.acquireInteractiveLease(boardId, leaseTtlMs(timeoutMs));
       try {
         const result = await this.workers.invokeBoard(boardId, toolName, this.withLeaseInput(input, interactive), timeoutMs);
-        this.persistCreatedSession(boardId, input, result);
-        if (interactive && typeof result.sessionId === "string") this.interactiveLeases.set(result.sessionId, interactive);
-        else if (interactive) this.releaseLease(interactive);
+        const sessionPersisted = this.persistCreatedSession(boardId, input, result);
+        if (interactive && sessionPersisted && typeof result.sessionId === "string") {
+          this.interactiveLeases.set(result.sessionId, interactive);
+        } else if (interactive) {
+          this.releaseLease(interactive);
+        }
         return result;
       } catch (error) {
         if (interactive) this.releaseLease(interactive);
@@ -102,9 +105,14 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     throw new DebugMcpError("ProbeBindingMissing", "Multiple registered boards require an explicit boardId", { boardIds: boards.map(board => board.boardId) });
   }
 
-  private persistCreatedSession(boardId: string, input: unknown, result: Record<string, unknown>): void {
-    if (result.success !== true || typeof result.sessionId !== "string") return;
+  private persistCreatedSession(
+    boardId: string,
+    input: unknown,
+    result: Record<string, unknown>
+  ): boolean {
+    if (typeof result.sessionId !== "string") return false;
     const values = record(input);
+    if (values.sessionMode === "ephemeral") return false;
     this.sessions.upsert({
       sessionId: result.sessionId,
       boardId,
@@ -115,6 +123,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       status: "OPEN",
       createdAt: new Date().toISOString()
     });
+    return true;
   }
 
   private async launchMultiBoard(input: unknown): Promise<Record<string, unknown>> {
@@ -137,9 +146,12 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           ...workerInput,
           __leaseContext: interactive.context
         }, timeoutMs);
-        this.persistCreatedSession(boardId, boardInput, result);
-        if (typeof result.sessionId === "string") this.interactiveLeases.set(result.sessionId, interactive);
-        else this.releaseLease(interactive);
+        const sessionPersisted = this.persistCreatedSession(boardId, boardInput, result);
+        if (sessionPersisted && typeof result.sessionId === "string") {
+          this.interactiveLeases.set(result.sessionId, interactive);
+        } else {
+          this.releaseLease(interactive);
+        }
         return { boardId, probeSerial: this.registry.get(boardId).probeSerial, ...result };
       } catch (error) {
         this.releaseLease(interactive);
