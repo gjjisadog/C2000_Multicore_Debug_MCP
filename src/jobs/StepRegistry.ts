@@ -33,12 +33,21 @@ export class StepRegistry {
       case "preflight":
         return this.tools.invokeTool("c2000_getHardwarePreflight", {});
       case "launchMulticore":
+        const loadPrograms = (step as Record<string, unknown>).loadPrograms !== false;
         return this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
           boardId,
           sessionName: `${plan.name}-${boardId}`,
           cores: [
-            { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", programUri: artifacts?.cpu1OutPath, mapUri: artifacts?.cpu1MapPath, connect: true, load: Boolean(artifacts?.cpu1OutPath), haltAtEntry: true },
-            { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", programUri: artifacts?.cpu2OutPath, mapUri: artifacts?.cpu2MapPath, connect: true, load: Boolean(artifacts?.cpu2OutPath), haltAtEntry: true }
+            {
+              coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1",
+              ...(loadPrograms && artifacts?.cpu1OutPath ? { programUri: artifacts.cpu1OutPath, mapUri: artifacts.cpu1MapPath } : {}),
+              connect: true, load: loadPrograms && Boolean(artifacts?.cpu1OutPath), haltAtEntry: true
+            },
+            {
+              coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
+              ...(loadPrograms && artifacts?.cpu2OutPath ? { programUri: artifacts.cpu2OutPath, mapUri: artifacts.cpu2MapPath } : {}),
+              connect: true, load: loadPrograms && Boolean(artifacts?.cpu2OutPath), haltAtEntry: true
+            }
           ]
         }));
       case "runIpcAcceptance":
@@ -46,7 +55,10 @@ export class StepRegistry {
           sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2,
           cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath,
           cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath,
-          resetType: "cpu", runSequence: { runCpu1First: true, runCpu2: true, settleMs: 0 },
+          resetType: "cpu",
+          loadPolicy: (step as Record<string, unknown>).loadPolicy,
+          loadSequence: (step as Record<string, unknown>).loadSequence,
+          runSequence: { runCpu1First: true, runCpu2: true, settleMs: 0 },
           timeoutMs: step.timeoutMs ?? 10000, intervalMs: step.intervalMs ?? 100,
           verifyRuntimeRamOwnership: Boolean((step as Record<string, unknown>).verifyRuntimeRamOwnership),
           collectDebugBundle: plan.failurePolicy.collectDebugBundle,

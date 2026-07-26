@@ -3,7 +3,7 @@ import path from "node:path";
 import type { C2000McpConfig } from "../config/config.schema.js";
 import { createC2000McpRuntime, type C2000McpRuntime } from "../server.js";
 import { createDaemonHealth } from "./DaemonHealthService.js";
-import { daemonRuntimePaths, newAuthTokenFile, removeDaemonInstance, writeDaemonInstance, type DaemonRuntimePaths, type DebugDaemonInstance } from "./DaemonInstanceFile.js";
+import { acquireDaemonSingletonLock, daemonRuntimePaths, newAuthTokenFile, removeDaemonInstance, writeDaemonInstance, type DaemonRuntimePaths, type DebugDaemonInstance } from "./DaemonInstanceFile.js";
 import { resolveDaemonConfig } from "./DaemonConfig.js";
 import { DaemonRpcServer } from "./DaemonRpcServer.js";
 import { SqliteStore } from "../storage/SqliteStore.js";
@@ -32,6 +32,8 @@ import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
 import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
 import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
 import { SERVER_VERSION } from "../runtimeInfo.js";
+import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
+import { DebugMcpError } from "../utils/errors.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -51,6 +53,7 @@ export class DebugDaemon {
   private jobEngine?: TestJobEngine;
   private rpcServer?: DaemonRpcServer;
   private instance?: DebugDaemonInstance;
+  private releaseSingleton?: () => Promise<void>;
   private stopping?: Promise<void>;
 
   constructor(private readonly config: C2000McpConfig) {
@@ -88,6 +91,7 @@ export class DebugDaemon {
     const runtime = await createC2000McpRuntime(this.config, {
       getDaemonHealth: () => this.getHealth(),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
+      registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),
       submitTestPlan: input => this.requireJobEngine().submit(input.plan),
       getTestRun: input => this.requireJobEngine().get(input.jobId, input),
@@ -101,8 +105,14 @@ export class DebugDaemon {
         artifacts: input.artifacts,
         parallelism: input.parallelism,
         steps: [
-          { type: "launchMulticore" },
-          { type: "runIpcAcceptance", timeoutMs: input.timeoutMs, verifyRuntimeRamOwnership: input.verifyRuntimeRamOwnership },
+          { type: "launchMulticore", loadPrograms: false },
+          {
+            type: "runIpcAcceptance",
+            timeoutMs: input.timeoutMs,
+            verifyRuntimeRamOwnership: input.verifyRuntimeRamOwnership,
+            loadPolicy: input.loadPolicy,
+            loadSequence: input.loadSequence
+          },
           { type: "cleanup" }
         ],
         failurePolicy: { ...input.failurePolicy, collectDebugBundle: input.collectDebugBundle },
@@ -194,6 +204,7 @@ export class DebugDaemon {
     });
     this.rpcServer = rpcServer;
     try {
+      this.releaseSingleton = await acquireDaemonSingletonLock(this.paths, this.instanceId);
       const endpoint = await rpcServer.listen();
       const instance: DebugDaemonInstance = {
         instanceId: this.instanceId,
@@ -229,6 +240,8 @@ export class DebugDaemon {
       this.sessions = undefined;
       this.workerSupervisor = undefined;
       this.jobEngine = undefined;
+      await this.releaseSingleton?.().catch(() => undefined);
+      this.releaseSingleton = undefined;
       throw error;
     }
   }
@@ -241,7 +254,8 @@ export class DebugDaemon {
       this.workers?.countHealthy(),
       this.testRuns?.counts(),
       this.consistency?.check(),
-      this.jobEngine?.boardConcurrencySnapshot()
+      this.jobEngine?.boardConcurrencySnapshot(),
+      this.registry?.list()
     );
   }
 
@@ -265,6 +279,8 @@ export class DebugDaemon {
     await this.runtime?.dispose().catch(() => undefined);
     this.store?.close();
     await removeDaemonInstance(this.paths, this.instance?.instanceId);
+    await this.releaseSingleton?.().catch(() => undefined);
+    this.releaseSingleton = undefined;
     this.rpcServer = undefined;
     this.runtime = undefined;
     this.store = undefined;
@@ -281,6 +297,57 @@ export class DebugDaemon {
   private requireJobEngine(): TestJobEngine {
     if (!this.jobEngine) throw new Error("Test job engine is not ready");
     return this.jobEngine;
+  }
+
+  private async registerBoard(input: {
+    boardId: string;
+    probeSerial: string;
+    device: string;
+    ccxmlPath: string;
+    tags: string[];
+    startWorker: boolean;
+  }): Promise<Record<string, unknown>> {
+    const registry = this.registry;
+    const supervisor = this.workerSupervisor;
+    if (!registry || !supervisor) throw new DebugMcpError("DaemonStarting", "Board registration is not ready");
+    await assertCcxmlProbeBinding(input.ccxmlPath, input.probeSerial);
+    const registered = registry.list();
+    const conflicting = registered.find(board =>
+      board.probeSerial === input.probeSerial && board.boardId !== input.boardId
+    );
+    if (conflicting) {
+      throw new DebugMcpError("DuplicateProbeAllocation", `XDS110 ${input.probeSerial} is already registered`, {
+        requestedBoardId: input.boardId,
+        existingBoardId: conflicting.boardId,
+        probeSerial: input.probeSerial
+      });
+    }
+    const previous = registered.find(board => board.boardId === input.boardId);
+    const bindingChanged = previous !== undefined
+      && (previous.probeSerial !== input.probeSerial || previous.ccxmlPath !== input.ccxmlPath);
+    const board = registry.register({
+      boardId: input.boardId,
+      probeSerial: input.probeSerial,
+      device: input.device,
+      ccxmlPath: input.ccxmlPath,
+      tags: input.tags
+    });
+    if (!input.startWorker) {
+      return { board, workerStarted: false, action: previous ? "UPDATED" : "REGISTERED" };
+    }
+    if (bindingChanged && previous.currentWorkerInstanceId) {
+      await supervisor.restartBoard(input.boardId, "board-registration-updated", {
+        previousProbeSerial: previous.probeSerial,
+        probeSerial: input.probeSerial
+      });
+    } else {
+      await supervisor.startBoard(input.boardId);
+    }
+    return {
+      board: registry.get(input.boardId),
+      workerStarted: true,
+      action: previous ? "UPDATED" : "REGISTERED"
+    };
   }
 
   private async recoverBoard(input: { boardId: string; dryRun: boolean }): Promise<Record<string, unknown>> {

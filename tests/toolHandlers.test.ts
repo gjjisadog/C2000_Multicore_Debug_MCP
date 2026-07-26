@@ -6,7 +6,7 @@ import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import type { AdapterSession } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
-import type { CoreId, ResetType } from "../src/debug/types.js";
+import type { CoreId, EvaluateResult, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 
 const coreMap = [
@@ -74,6 +74,15 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`run:${coreId}`);
     await super.run(session, coreId);
+  }
+}
+
+class ExpressionBatchRecordingAdapter extends MockDebugAdapter {
+  readonly batches: Array<{ coreId: CoreId; expressions: string[] }> = [];
+
+  override async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    this.batches.push({ coreId, expressions });
+    return super.evaluateExpressions(session, coreId, expressions);
   }
 }
 
@@ -266,7 +275,8 @@ describe("tool handlers", () => {
             "c2000_pause",
             "c2000_reset",
             "c2000_getTargetState",
-            "c2000_loadProgram"
+            "c2000_loadProgram",
+            "c2000_loadSymbols"
           ],
           expectedRequiredInputs: ["sessionId", "coreId"],
           expectedResponseCoreIdentityFields: ["coreId", "coreName"]
@@ -1036,7 +1046,7 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([]);
   });
 
-  test("launchAndRunIpcAcceptance creates and connects both cores before one server-side IPC workflow", async () => {
+  test("launchAndRunIpcAcceptance can run CPU1 initialization before loading a CPU2 RAM image", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
     const cpu2OutPath = path.join(tempDir, "cpu2.out");
@@ -1069,6 +1079,7 @@ describe("tool handlers", () => {
       cpu2MapPath,
       sessionMode: "interactive" as const,
       resetType: "cpu" as const,
+      loadSequence: { mode: "cpu1-run-before-cpu2" as const, cpu1SettleMs: 0 },
       runSequence: { runCpu1First: true, runCpu2: true },
       timeoutMs: 20,
       intervalMs: 1
@@ -1083,6 +1094,7 @@ describe("tool handlers", () => {
       "reset:0:cpu",
       "reset:2:cpu",
       "load:0:cpu1.out",
+      "run:0",
       "load:2:cpu2.out",
       "halt:0",
       "halt:2",
@@ -1094,6 +1106,11 @@ describe("tool handlers", () => {
       workflow: "c2000_launchAndRunIpcAcceptance",
       orchestration: "server-internal",
       mcpToolCalls: [],
+      performedSteps: expect.arrayContaining([
+        "loadCpu1Program",
+        "runCpu1BeforeCpu2Load",
+        "loadCpu2Program"
+      ]),
       autoCloseOnComplete: false,
       sessionId: expect.any(String),
       launch: expect.objectContaining({
@@ -1221,6 +1238,77 @@ describe("tool handlers", () => {
           expect.objectContaining({ coreId: 2 })
         ])
       })
+    }));
+  });
+
+  test("runReloadAndDiagnose can reset after Flash programming and boot CPU1 before CPU2", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-post-load-boot-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    const adapter = new WorkflowRecordingAdapter({
+      expressionValues: hybrid30kReadyExpressionValues
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "post-load-boot", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runReloadAndDiagnose({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      ramOwnershipPolicy: "skip",
+      resetType: "cpu",
+      runCpu1: false,
+      runCpu2: false,
+      postLoadBoot: {
+        resetType: "system",
+        runCpu1: true,
+        cpu1SettleMs: 0,
+        runCpu2: true
+      }
+    });
+
+    expect(adapter.events).toEqual([
+      "halt:0",
+      "halt:2",
+      "reset:0:cpu",
+      "reset:2:cpu",
+      "load:0:cpu1.out",
+      "load:2:cpu2.out",
+      "halt:0",
+      "halt:2",
+      "reset:0:system",
+      "reset:2:system",
+      "halt:0",
+      "halt:2",
+      "run:0",
+      "run:2"
+    ]);
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      performedSteps: expect.arrayContaining([
+        "resetCoresAfterLoad",
+        "haltCoresAfterPostLoadReset",
+        "runCpu1",
+        "runCpu2"
+      ]),
+      postLoadBoot: {
+        controlled: true,
+        resetType: "system",
+        runCpu1: true,
+        runCpu2: true,
+        cpu1SettleMs: 0,
+        pcWritten: false
+      },
+      postLoadReset: expect.objectContaining({ results: expect.any(Array) }),
+      postLoadResetHalt: expect.objectContaining({ results: expect.any(Array) })
     }));
   });
 
@@ -1446,6 +1534,128 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("getAcceptanceReadiness blocks daemon hardware acceptance until a board route is ready", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-daemon-route-"));
+    const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
+    const cpu1Program = path.join(tempDir, "cpu1.out");
+    const cpu2Program = path.join(tempDir, "cpu2.out");
+    await writeFile(ccxmlPath, "<configurations />");
+    await writeFile(cpu1Program, "cpu1");
+    await writeFile(cpu2Program, "cpu2");
+    const sharedDeps = {
+      runHardwarePreflight: async () => ({
+        xdsdfuPath: "/Applications/ti/ccs2100/ccs/ccs_base/common/uscif/xds110/xdsdfu",
+        xdsdfu: {
+          ok: true,
+          devices: [{ serialNumber: "CL650001", mode: "Runtime", configuration: "Standard", version: "3.0.0.43", name: "XDS110" }]
+        },
+        debugProcesses: [],
+        debugProcessDetails: []
+      }),
+      discoverAcceptancePrograms: async () => ({
+        searchRoots: [tempDir],
+        cpu1: { selected: cpu1Program, source: "discovered" as const, candidates: [cpu1Program] },
+        cpu2: { selected: cpu2Program, source: "discovered" as const, candidates: [cpu2Program] }
+      }),
+      getDaemonHealth: async () => ({
+        workers: { total: 1, healthy: 1, unhealthy: 0 },
+        boardConcurrency: { limit: 1, active: 0, available: 1 }
+      })
+    };
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const withoutBoard = createToolHandlers(manager, {
+      ...sharedDeps,
+      listBoards: async () => ({ boards: [] })
+    });
+
+    const blocked = await withoutBoard.getAcceptanceReadiness({ ccxmlPath, searchRoots: [tempDir] });
+    expect(blocked).toEqual(expect.objectContaining({
+      readyForHardwareAcceptance: false,
+      blockers: expect.arrayContaining([expect.stringContaining("c2000_registerBoard")]),
+      checks: expect.objectContaining({
+        daemonRoute: expect.objectContaining({
+          applicable: true,
+          ok: false,
+          registeredBoardIds: [],
+          nextTool: "c2000_registerBoard"
+        })
+      })
+    }));
+
+    const withDifferentProbe = createToolHandlers(manager, {
+      ...sharedDeps,
+      listBoards: async () => ({
+        boards: [{
+          boardId: "board-b",
+          probeSerial: "CL659999",
+          status: "READY",
+          currentWorkerInstanceId: "worker-b"
+        }]
+      })
+    });
+    const mismatched = await withDifferentProbe.getAcceptanceReadiness({ ccxmlPath, searchRoots: [tempDir] });
+    expect(mismatched).toEqual(expect.objectContaining({
+      readyForHardwareAcceptance: false,
+      checks: expect.objectContaining({
+        daemonRoute: expect.objectContaining({
+          ok: false,
+          enumeratedProbeSerials: ["CL650001"],
+          registeredBoardIds: ["board-b"],
+          selectedBoards: []
+        })
+      })
+    }));
+
+    const withLeasedBoard = createToolHandlers(manager, {
+      ...sharedDeps,
+      listBoards: async () => ({
+        boards: [{
+          boardId: "board-a",
+          probeSerial: "CL650001",
+          status: "READY",
+          currentLeaseId: "lease-running",
+          currentWorkerInstanceId: "worker-a"
+        }]
+      })
+    });
+    const leased = await withLeasedBoard.getAcceptanceReadiness({ ccxmlPath, searchRoots: [tempDir] });
+    expect(leased).toEqual(expect.objectContaining({
+      readyForHardwareAcceptance: false,
+      checks: expect.objectContaining({
+        daemonRoute: expect.objectContaining({
+          ok: false,
+          selectedBoards: [
+            expect.objectContaining({ boardId: "board-a", currentLeaseId: "lease-running" })
+          ]
+        })
+      })
+    }));
+
+    const withReadyBoard = createToolHandlers(manager, {
+      ...sharedDeps,
+      listBoards: async () => ({
+        boards: [{
+          boardId: "board-a",
+          probeSerial: "CL650001",
+          status: "READY",
+          currentWorkerInstanceId: "worker-a"
+        }]
+      })
+    });
+    const ready = await withReadyBoard.getAcceptanceReadiness({ ccxmlPath, searchRoots: [tempDir] });
+    expect(ready).toEqual(expect.objectContaining({
+      readyForHardwareAcceptance: true,
+      blockers: [],
+      checks: expect.objectContaining({
+        daemonRoute: expect.objectContaining({
+          applicable: true,
+          ok: true,
+          registeredBoardIds: ["board-a"]
+        })
+      })
+    }));
+  });
+
   test("getAcceptanceReadiness waits for an existing probe owner to release", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-wait-"));
     const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
@@ -1655,13 +1865,52 @@ describe("tool handlers", () => {
     await handlers.connectTarget({ sessionId: created.sessionId, coreId: 0 });
 
     await expect(handlers.loadProgram({ sessionId: created.sessionId, coreId: 0, programUri })).resolves.toEqual(
-      expect.objectContaining({ success: true, programUri, sha256: expect.any(String) })
+      expect.objectContaining({ success: true, programUri, sha256: expect.any(String), loaded: true, skipped: false })
+    );
+    await expect(handlers.loadProgram({
+      sessionId: created.sessionId,
+      coreId: 0,
+      programUri,
+      loadPolicy: "verify-mcp-registry"
+    })).resolves.toEqual(
+      expect.objectContaining({
+        success: true,
+        programUri,
+        loaded: false,
+        skipped: true,
+        verificationScope: "mcp-session-loaded-program-registry",
+        targetFlashVerified: false
+      })
     );
     await expect(handlers.getLoadedProgramInfo({ sessionId: created.sessionId, coreId: 0 })).resolves.toEqual(
       expect.objectContaining({ success: true, coreName: "C28xx_CPU1", programUri, warning: expect.stringContaining("loaded through this MCP") })
     );
     await expect(handlers.getLoadedProgramInfo({ sessionId: created.sessionId, coreId: 2 })).resolves.toEqual(
       expect.objectContaining({ success: true, coreName: "C28xx_CPU2", warning: expect.stringContaining("No program was loaded") })
+    );
+  });
+
+  test("loadSymbols exposes symbol metadata without recording or writing a target program", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-symbols-"));
+    const programUri = path.join(tempDir, "cpu2-flash.out");
+    await writeFile(programUri, "flash-symbols");
+    const handlers = createHandlers();
+    const created = await handlers.createDebugSession({ sessionName: "symbols-only", coreMap });
+    await handlers.connectTarget({ sessionId: created.sessionId, coreId: 2 });
+
+    await expect(handlers.loadSymbols({ sessionId: created.sessionId, coreId: 2, programUri })).resolves.toEqual(
+      expect.objectContaining({
+        success: true,
+        coreId: 2,
+        coreName: "C28xx_CPU2",
+        programUri,
+        symbolsLoaded: true,
+        targetMemoryWritten: false,
+        sha256: expect.any(String)
+      })
+    );
+    await expect(handlers.getLoadedProgramInfo({ sessionId: created.sessionId, coreId: 2 })).resolves.toEqual(
+      expect.objectContaining({ success: true, warning: expect.stringContaining("No program was loaded") })
     );
   });
 
@@ -2005,12 +2254,14 @@ describe("tool handlers", () => {
   });
 
   test("waitForExpressionSet returns matched when all explicit-core conditions are satisfied", async () => {
-    const handlers = createHandlers(new MockDebugAdapter({
+    const adapter = new ExpressionBatchRecordingAdapter({
       expressionValues: {
         g_ulHybrid30kIpcPass: { value: "1", type: "uint32_t", address: "0x00002000" },
+        g_ulHybrid30kMsgRamPass: { value: "1", type: "uint32_t", address: "0x00002004" },
         g_emHybrid30kCpu2Stage: { value: "3", type: "uint16_t", address: "0x00018870" }
       }
-    }));
+    });
+    const handlers = createHandlers(adapter);
     const created = await handlers.createDebugSession({ sessionName: "wait-expression-set", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
 
@@ -2018,6 +2269,7 @@ describe("tool handlers", () => {
       sessionId: created.sessionId,
       conditions: [
         { label: "cpu1-ipc-pass", coreId: 0, expression: "g_ulHybrid30kIpcPass", expected: 1 },
+        { label: "cpu1-msgram-pass", coreId: 0, expression: "g_ulHybrid30kMsgRamPass", expected: 1 },
         { label: "cpu2-stage", coreId: 2, expression: "g_emHybrid30kCpu2Stage", expected: "3" }
       ],
       timeoutMs: 20,
@@ -2029,11 +2281,21 @@ describe("tool handlers", () => {
       sessionId: created.sessionId,
       matched: true,
       timedOut: false,
+      pollIterations: 1,
+      expressionBatchCalls: 2,
+      expressionCount: 3,
+      pollDurationMs: expect.any(Number),
+      matchedAtMs: expect.any(Number),
       conditions: [
         expect.objectContaining({ label: "cpu1-ipc-pass", coreId: 0, matched: true, result: expect.objectContaining({ value: "1" }) }),
+        expect.objectContaining({ label: "cpu1-msgram-pass", coreId: 0, matched: true, result: expect.objectContaining({ value: "1" }) }),
         expect.objectContaining({ label: "cpu2-stage", coreId: 2, matched: true, result: expect.objectContaining({ value: "3" }) })
       ]
     }));
+    expect(adapter.batches).toEqual([
+      { coreId: 0, expressions: ["g_ulHybrid30kIpcPass", "g_ulHybrid30kMsgRamPass"] },
+      { coreId: 2, expressions: ["g_emHybrid30kCpu2Stage"] }
+    ]);
   });
 
   test("waitForExpressionSet returns last results when any explicit-core condition times out", async () => {

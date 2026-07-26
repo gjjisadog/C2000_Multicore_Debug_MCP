@@ -395,6 +395,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "reset", resetType: command.resetType };
     case "loadProgram":
       return { ...base, name: "load", program: command.programUri };
+    case "loadSymbols":
+      return { ...base, name: "loadSymbols", program: command.programUri };
     case "prepareFlashLoad":
       return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
     case "writeMemory":
@@ -720,6 +722,9 @@ function handleCommand(command) {
   } else if (command.name === "load") {
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
+  } else if (command.name === "loadSymbols") {
+    session.symbol.load(command.program);
+    return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true, targetMemoryWritten: false }) };
   } else if (command.name === "prepareFlashLoad") {
     var cpu1Session = sessionsByCoreId["0"];
     if (!cpu1Session) {

@@ -194,12 +194,19 @@ Closing a stdio client therefore does **not** dispose board workers, debug
 sessions, DSS children, leases, or queued jobs. The daemon keeps SQLite state
 in `storage.sqlitePath` (WAL enabled by default) and starts one worker per
 registered `boards[]` entry. A non-mock worker checks that its `.ccxml` binds
-the expected XDS110 serial before it starts.
+the expected XDS110 serial before it starts. An atomic runtime lock prevents
+concurrent proxies from starting two daemons against the same database. If a
+daemon is restarted, the MCP proxy safely rediscovers its endpoint and token
+once after a connection or authentication failure; it never retries a request
+that merely timed out after dispatch.
 
 Use the daemon/job surface for multi-board work:
 
 - `c2000_getDaemonHealth` reports daemon, worker, job, and read-only database-consistency state.
 - `c2000_listBoards` reports persisted registrations, leases, workers, and quarantine state.
+- `c2000_registerBoard` validates a serial-bound `.ccxml`, persists the board,
+  and starts its isolated worker. Use it when health reports
+  `boards.registrationRequired: true`; no daemon restart is required.
 - `c2000_recoverBoard` defaults to a dry run and can restart only the daemon-owned
   worker for one board. It deliberately never terminates an external CCS/DSS owner.
 - `c2000_submitTestPlan` returns a stable `jobId` immediately; use
@@ -215,7 +222,23 @@ Use the daemon/job surface for multi-board work:
   these explicit capability flags as evidence.
 
 To use real multiple boards, add unique `boardId`, `probeSerial`, `ccxmlPath`,
-and tags in `boards[]`; do not leave probe allocation to CCS UI focus.
+and tags in `boards[]`, or register them through `c2000_registerBoard`; do not
+leave probe allocation to CCS UI focus. Board-bound launch tools fail fast with
+`ProbeBindingMissing`, `nextTool: "c2000_registerBoard"`, registered board IDs,
+and the standard `{ cpu1: 0, cpu2: 2 }` core convention instead of falling
+through to an unfenced local launch.
+
+Example runtime registration:
+
+```json
+{
+  "boardId": "dk9-cl650001",
+  "probeSerial": "CL650001",
+  "device": "F28P65x",
+  "ccxmlPath": "/allowed/path/TMS320F28P650DK9-CL650001.ccxml",
+  "tags": ["dk9"]
+}
+```
 
 ## Two-board CAN acceptance
 
@@ -317,11 +340,26 @@ These checks do not connect XDS110, create a debug session, load programs, reset
 
 High-level one-shot workflows use `sessionMode: "ephemeral"` by default and close the logical DebugSession, Persistent DSS process, and probe lease in a unified `finally` cleanup. Use `interactive` only for consecutive read/run/halt operations, then explicitly close the session.
 
-The CCS adapter uses operation-specific timeouts under `ccs.timeouts`: short state/expression/address/shutdown deadlines remain independent from the long program-load deadline. `C2000_MCP_DSS_TIMEOUT_MS` remains a compatibility fallback.
+The CCS adapter uses operation-specific timeouts under `ccs.timeouts`: short state/expression/address/shutdown deadlines remain independent from the long program-load deadline. `C2000_MCP_DSS_TIMEOUT_MS` remains a compatibility fallback. The board worker command floor is 60 seconds, and load/launch workflows automatically receive an outer timeout envelope large enough for their nested CCS startup, connect, reset, and per-program load budgets.
 
 Persistent DSS now keeps one request-correlated TCP channel per explicit core. Commands on one core are serialized, responses are matched by `requestId`, and one reconnect is attempted without changing the bound `coreId`/`coreName`. Expression reads use one `evaluateMany` DSS command per core. Adaptive IPC polling groups and deduplicates conditions, using 50 ms through 500 ms, 100 ms through 2 seconds, then 250 ms unless a schedule is supplied.
 
-Program loading supports `always`, `if-changed`, and `verify-only`. The `if-changed` policy compares canonical path, size, mtime, SHA-256, and the session registry independently for CPU1 and CPU2. A bounded host cache shares hashes between loading and ELF freshness checks.
+`c2000_waitForExpressionSet` also groups all conditions by core for each poll
+and returns `pollIterations`, `expressionBatchCalls`, `expressionCount`,
+`pollDurationMs`, and `matchedAtMs` when matched. Use these fields for bounded
+latency/WCET evidence before increasing the timeout.
+
+Program loading supports `always`, `if-changed`, and
+`verify-mcp-registry`. The last policy only compares canonical path, size,
+mtime, SHA-256, and the loaded-program registry for the same MCP session; it
+returns `targetFlashVerified: false` and must not be presented as target Flash
+verification. `verify-only` remains a deprecated alias. A bounded host cache
+shares hashes between loading and ELF freshness checks.
+
+For firmware that is already resident in Flash, use `c2000_loadSymbols` with
+the matching `.out` file. It calls the DSS symbol loader only and returns
+`targetMemoryWritten: false`; it does not erase or program Flash and does not
+insert a false entry into the MCP loaded-program registry.
 
 Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
 
@@ -457,7 +495,7 @@ Example:
 }
 ```
 
-`target.coreMap` must use unique `coreId` values and unique target selectors. The target selector is `corePattern` when present, otherwise `coreName`. Duplicate IDs are rejected with `DuplicateCoreId`; duplicate target selectors are rejected with `DuplicateCoreTarget`. Both checks protect the internal `sessionId -> coreId -> DebugSession` mapping from becoming ambiguous.
+`target.coreMap` must use unique `coreId` values and unique target selectors. The target selector is `corePattern` when present, otherwise `coreName`. Use the exact CCS selectors `C28xx_CPU1` and `C28xx_CPU2`; do not wrap them in regular expressions such as `.*C28xx_CPU1.*`. Duplicate IDs are rejected with `DuplicateCoreId`; duplicate target selectors are rejected with `DuplicateCoreTarget`. Both checks protect the internal `sessionId -> coreId -> DebugSession` mapping from becoming ambiguous.
 
 ### Adapter selection (`adapter` / `ccs.scriptingMode`)
 
@@ -499,7 +537,7 @@ Environment overrides:
 - `C2000_MCP_WORKSPACE_PATH`
 - `C2000_MCP_CCXML_PATH`
 - `C2000_MCP_DSS_TIMEOUT_MS` (default hardware acceptance value: `300000`)
-- `C2000_MCP_REQUEST_TIMEOUT_MS` (MCP hardware acceptance client request timeout; default: `600000`)
+- `C2000_MCP_REQUEST_TIMEOUT_MS` (end-to-end MCP/daemon long-operation response timeout; default: `600000`)
 - `C2000_MCP_PROBE_QUEUE_DIR` (shared FIFO lease directory; every MCP instance must use the same absolute path)
 - `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `600000`)
 - `C2000_MCP_PROBE_RECOVERY_POLICY=block|owned-and-stale|terminate-external` (default: `owned-and-stale`)
@@ -666,6 +704,11 @@ The automation main path should use workflow tools. A workflow tool is still one
 
 `c2000_launchAndRunIpcAcceptance` additionally creates the logical session and connects CPU1/CPU2 before running acceptance, so an unconnected target still requires only one client-visible MCP call.
 
+RAM builds that initialize GS ownership or CPU2 release from CPU1 can set
+`"loadSequence": {"mode": "cpu1-run-before-cpu2", "cpu1SettleMs": 250}`.
+This explicitly loads and runs CPU1 before the CPU2 image is loaded. The
+default remains `"cpu1-then-cpu2"` and introduces no extra pre-load run.
+
 Use atomic tools for manual inspection and bottom-layer validation:
 
 - `c2000_getMulticoreSnapshot`
@@ -680,7 +723,10 @@ Use workflow tools for AI-driven automation:
 - `c2000_launchAndRunIpcAcceptance`: preferred default when no debug session exists; it creates the logical session, connects CPU1/CPU2, then runs IPC acceptance in one client-visible call.
 - `c2000_runIpcAcceptance`: use when a session already exists and both cores are connected.
 - `c2000_runBootHandoffDiagnosis`: one-shot CPU2 boot handoff diagnosis.
-- `c2000_runReloadAndDiagnose`: reload/reset/prepare, optionally run/wait, then diagnose.
+- `c2000_runReloadAndDiagnose`: reload/reset/prepare, optionally perform a
+  controlled post-load reset and CPU1-first boot, then wait/diagnose. Set
+  `postLoadBoot` for freshly programmed Flash; it does not write PC or verify
+  resident Flash contents.
 - `c2000_runFullDebugBundle`: collect snapshot, loaded-program info, expressions, PC, `.map` evidence, ELF freshness, boot diagnosis, and `summary.md`.
 
 Recommended one-approval call from an unconnected target through `c2000_launchAndRunIpcAcceptance`:
@@ -1037,7 +1083,23 @@ Read-only preflight checks XDS110 enumeration and possible debug-process owners.
 
 Preflight keeps the legacy `debugProcesses` string array and also returns `debugProcessDetails`, with `pid`, optional `ppid`, optional `elapsed`, `kind`, `command`, and `rawLine` for each possible probe owner. Readiness and hardware acceptance use this structured detail to report blockers such as `93717 DSLite: ./DSLite` without terminating anything automatically.
 
-For one-shot host-side acceptance gating, call `c2000_getAcceptanceReadiness`. It combines `.ccxml` checks, CPU1/CPU2 `.out` discovery, XDS110 preflight, debug-process ownership, the debug boundary contract, UI-independence proof, and the acceptance evidence plan in one read-only report. Set `waitForProbeMs` plus `probePollIntervalMs` to wait for an existing debug process to release the probe without killing it; the response reports `probeWait.requestedMs`, `elapsedMs`, `attempts`, and `released`. The tool returns `readyForHardwareAcceptance`, `blockers`, `warnings`, `checks`, `programDiscovery`, `preflight`, `probeWait`, `debugBoundary`, `uiIndependenceEvidence`, `acceptanceEvidence`, and `nextCommand`; it does not create a debug session or call any target-control method. Transient XDS110 launch failures such as Error -260 are retried with capped exponential backoff.
+For one-shot host-side acceptance gating, call
+`c2000_getAcceptanceReadiness`. It combines `.ccxml` checks, CPU1/CPU2 `.out`
+discovery, XDS110 preflight, debug-process ownership, the debug boundary
+contract, UI-independence proof, and the acceptance evidence plan in one
+read-only report. In daemon mode it additionally requires a registered board
+whose `probeSerial` is currently enumerated, whose route is READY and
+unleased, a healthy worker, and available `boardConcurrency`; otherwise
+`checks.daemonRoute` names the blocker and directs an empty registry to
+`c2000_registerBoard`. Set `waitForProbeMs` plus `probePollIntervalMs` to wait
+for an existing debug process to release the probe without killing it; the
+response reports `probeWait.requestedMs`, `elapsedMs`, `attempts`, and
+`released`. The tool returns `readyForHardwareAcceptance`, `blockers`,
+`warnings`, `checks`, `programDiscovery`, `preflight`, `probeWait`,
+`debugBoundary`, `uiIndependenceEvidence`, `acceptanceEvidence`, and
+`nextCommand`; it does not create a debug session or call any target-control
+method. Transient XDS110 launch failures such as Error -260 are retried with
+capped exponential backoff.
 
 The same check is also available from the CLI:
 
@@ -1262,7 +1324,7 @@ Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exp
 
 ## Filesystem Policy
 
-`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output.
+`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output. Tool errors return the canonical rejected path and configured roots. Keep `.ccxml`, `.out`, and `.map` inputs under a read root, and `outputDir` under a write root.
 
 ## RAM Ownership Policy
 

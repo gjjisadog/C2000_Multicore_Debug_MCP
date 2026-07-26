@@ -59,7 +59,7 @@ export interface LoadProgramRequest {
   loadPolicy?: LoadPolicy;
 }
 
-export type LoadPolicy = "always" | "if-changed" | "verify-only";
+export type LoadPolicy = "always" | "if-changed" | "verify-mcp-registry" | "verify-only";
 
 export type RamOwnershipPolicy = "require-map" | "explicit-fallback" | "skip";
 

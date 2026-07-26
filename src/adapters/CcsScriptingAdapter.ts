@@ -88,6 +88,10 @@ export class CcsScriptingAdapter implements DebugAdapter {
     await this.execute(session, coreId, { operation: "connect" });
   }
 
+  async loadSymbols(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    await this.execute(session, coreId, { operation: "loadSymbols", programUri });
+  }
+
   async disconnect(session: AdapterSession, coreId: CoreId): Promise<void> {
     await this.execute(session, coreId, { operation: "disconnect" });
   }
@@ -273,7 +277,7 @@ function timeoutForOperation(operation: CcsScriptingCommand["operation"], timeou
     case "evaluateExpression": case "evaluateExpressions": case "assignExpression": return timeouts.expressionReadMs;
     case "resolveAddress": return timeouts.addressResolveMs;
     case "reset": return timeouts.resetMs;
-    case "loadProgram": return timeouts.programLoadMs;
+    case "loadProgram": case "loadSymbols": return timeouts.programLoadMs;
     case "writeMemory": return timeouts.memoryWriteMs;
     default: return fallback ?? timeouts.stateReadMs;
   }

@@ -11,7 +11,8 @@ export const ACCEPTANCE_CORE_DEBUG_TOOLS = [
   "c2000_pause",
   "c2000_reset",
   "c2000_getTargetState",
-  "c2000_loadProgram"
+  "c2000_loadProgram",
+  "c2000_loadSymbols"
 ] as const;
 export const ACCEPTANCE_CORE_DEBUG_REQUIRED_INPUTS = ["sessionId", "coreId"] as const;
 export const ACCEPTANCE_CORE_RESPONSE_IDENTITY_FIELDS = ["coreId", "coreName"] as const;
@@ -265,6 +266,7 @@ export const c2000DebugTools = [
   "c2000_disconnectTarget",
   "c2000_getTargetState",
   "c2000_loadProgram",
+  "c2000_loadSymbols",
   "c2000_loadPrograms",
   "c2000_getMulticoreSnapshot",
   "c2000_connectCores",
@@ -292,6 +294,7 @@ export const perCoreDebugSessionMethods = {
   c2000_pause: "session.target.halt()",
   c2000_reset: "session.target.reset()",
   c2000_loadProgram: "session.memory.loadProgram(programUri)",
+  c2000_loadSymbols: "session.symbol.load(programUri)",
   c2000_getTargetState: "session.target.isConnected(), session.target.isHalted(), session.expression.evaluate(\"PC\")"
 } as const;
 

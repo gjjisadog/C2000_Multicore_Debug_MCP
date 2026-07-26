@@ -9,6 +9,7 @@ interface MockCoreState {
   state: TargetStateName;
   pc: string;
   loadedProgram?: string;
+  loadedSymbols?: string;
   expressions: Map<string, Omit<EvaluateResult, "expression" | "success">>;
   memory: Map<string, string>;
 }
@@ -96,6 +97,11 @@ export class MockDebugAdapter implements DebugAdapter {
     state.loadedProgram = programUri;
     state.state = "Halted";
     state.pc = "0x00000000";
+  }
+
+  async loadSymbols(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    const state = this.requireConnected(session, coreId);
+    state.loadedSymbols = programUri;
   }
 
   async writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void> {

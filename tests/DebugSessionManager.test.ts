@@ -136,6 +136,48 @@ describe("DebugSessionManager", () => {
     expect(info!.sha256).toHaveLength(64);
   });
 
+  test("registry verification is explicit and never claims to verify target Flash", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-registry-verify-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    await writeFile(cpu1Out, "cpu1-image");
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "registry-verify", coreMap });
+    await manager.connectTarget(session.sessionId, 0);
+
+    const missing = await manager.loadPrograms(session.sessionId, [
+      { coreId: 0, programUri: cpu1Out, loadPolicy: "verify-mcp-registry" }
+    ]);
+    expect(missing.results).toEqual([
+      expect.objectContaining({
+        coreId: 0,
+        success: false,
+        loaded: false,
+        skipped: true,
+        skipReason: "mcp-registry-verification-failed",
+        verificationScope: "mcp-session-loaded-program-registry",
+        targetFlashVerified: false,
+        deprecatedPolicyAliasUsed: false
+      })
+    ]);
+
+    await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out }]);
+    const verified = await manager.loadPrograms(session.sessionId, [
+      { coreId: 0, programUri: cpu1Out, loadPolicy: "verify-only" }
+    ]);
+    expect(verified.results).toEqual([
+      expect.objectContaining({
+        coreId: 0,
+        success: true,
+        loaded: false,
+        skipped: true,
+        skipReason: "program-unchanged",
+        verificationScope: "mcp-session-loaded-program-registry",
+        targetFlashVerified: false,
+        deprecatedPolicyAliasUsed: true
+      })
+    ]);
+  });
+
   test("requires CPU1 to be connected before writing GS ownership for CPU2 load", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-owner-"));
     const cpu2Out = path.join(tempDir, "cpu2.out");

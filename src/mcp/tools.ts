@@ -34,9 +34,11 @@ import {
   launchMulticoreDebugWithActionsSchema,
   loadProgramsSchema,
   loadProgramSchema,
+  loadSymbolsSchema,
   multicoreSnapshotSchema,
   diagnoseBootHandoffSchema,
   ramOwnershipAnalysisSchema,
+  registerBoardSchema,
   reloadResetRunToMainSchema,
   resetCoresSchema,
   resetCoreSchema,
@@ -74,6 +76,7 @@ type ToolTargetEffect =
   | "execution-control"
   | "reset-control"
   | "program-load"
+  | "symbol-load"
   | "memory-write"
   | "launch-workflow"
   | "job-control";
@@ -92,7 +95,7 @@ type ToolFamily =
   | "diagnosis"
   | "workflow";
 
-export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
+export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
 type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
 
@@ -189,7 +192,8 @@ const multiBoardLaunchResponseIdentity = [
 
 const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">> = [
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence without touching a target.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_recoverBoard", title: "Recover C2000 Board Worker", description: "Dry-run or restart only the daemon-owned worker for one registered board. It never kills external CCS/DSS processes.", schema: recoverBoardSchema, handlerName: "recoverBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_submitTestPlan", title: "Submit C2000 Test Plan", description: "Persist and schedule a structured background test plan; returns immediately with a stable jobId.", schema: submitTestPlanSchema, handlerName: "submitTestPlan", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_submitMultiBoardIpcAcceptance", title: "Submit Multi-Board IPC Acceptance", description: "Create and submit a structured multi-board IPC job without waiting for test completion.", schema: submitMultiBoardIpcAcceptanceSchema, handlerName: "submitMultiBoardIpcAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
@@ -224,6 +228,7 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_reset", title: "Reset C2000 Core", description: "Reset a specific core by sessionId, coreId, and resetType.", schema: resetCoreSchema, handlerName: "resetCore", inputScope: "core", targetEffect: "reset-control", role: "primary", family: "reset", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_getTargetState", title: "Get C2000 Target State", description: "Read connection state, run state and PC for one explicit core.", schema: sessionCoreSchema, handlerName: "getTargetState", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_loadProgram", title: "Load C2000 Program", description: "Load a .out program to one explicit core and record file metadata.", schema: loadProgramSchema, handlerName: "loadProgram", inputScope: "core", targetEffect: "program-load", role: "primary", family: "program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_loadSymbols", title: "Load C2000 Symbols Only", description: "Load debug symbols from a .out file into one explicit core session without erasing, programming, or writing target memory. Use for an image already resident in Flash.", schema: loadSymbolsSchema, handlerName: "loadSymbols", inputScope: "core", targetEffect: "symbol-load", role: "primary", family: "program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_loadPrograms", title: "Load C2000 Programs", description: "Load multiple core programs and return independent per-core results.", schema: loadProgramsSchema, handlerName: "loadPrograms", inputScope: "batch", targetEffect: "program-load", role: "primary", family: "program", coreIdentityFields: ["programs[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_connectCores", title: "Connect C2000 Cores", description: "Connect multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "connectCores", inputScope: "batch", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_haltCores", title: "Halt C2000 Cores", description: "Halt multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "haltCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
@@ -244,10 +249,10 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_diagnoseBootHandoff", title: "Diagnose C2000 Boot Handoff", description: "Collect CPU1/CPU2 boot diagnostics plus RAM ownership map evidence and a compact handoff verdict. Prefer workflow c2000_runBootHandoffDiagnosis when available.", schema: diagnoseBootHandoffSchema, handlerName: "diagnoseBootHandoff", inputScope: "session", targetEffect: "target-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...diagnoseBootHandoffResponseIdentity] },
   { name: "c2000_waitForIpcReady", title: "Wait For C2000 IPC Ready", description: "Poll default or supplied CPU1/CPU2 IPC-ready expressions until all match or timeout.", schema: waitForIpcReadySchema, handlerName: "waitForIpcReady", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
   { name: "c2000_reloadResetRunToMain", title: "Reload Reset Run C2000 Core", description: "Reload one explicit core, reset it, run it, and report that true breakpoint run-to-main is not supported by the current adapter.", schema: reloadResetRunToMainSchema, handlerName: "reloadResetRunToMain", inputScope: "core", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_launchAndRunIpcAcceptance", title: "Launch And Run C2000 IPC Acceptance", description: "Preferred one-shot: create and connect CPU1/CPU2, then run full IPC acceptance inside the MCP server.", schema: launchAndRunIpcAcceptanceSchema, handlerName: "launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...launchAndRunIpcAcceptanceResponseIdentity] },
-  { name: "c2000_runIpcAcceptance", title: "Run C2000 IPC Acceptance Workflow", description: "Preferred when session already exists: full F28P65x CPU1/CPU2 IPC acceptance in one server-side call.", schema: runIpcAcceptanceSchema, handlerName: "runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...workflowIpcAcceptanceResponseIdentity] },
+  { name: "c2000_launchAndRunIpcAcceptance", title: "Launch And Run C2000 IPC Acceptance", description: "Preferred one-shot after c2000_listBoards confirms a registered worker: create and connect CPU1/CPU2 (standard coreIds 0 and 2), then run full IPC acceptance. For RAM builds that initialize ownership from CPU1, use loadSequence.mode=cpu1-run-before-cpu2.", schema: launchAndRunIpcAcceptanceSchema, handlerName: "launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...launchAndRunIpcAcceptanceResponseIdentity] },
+  { name: "c2000_runIpcAcceptance", title: "Run C2000 IPC Acceptance Workflow", description: "Preferred when session already exists: full F28P65x CPU1/CPU2 IPC acceptance in one server-side call. Supports CPU1 pre-run before CPU2 RAM load through loadSequence.", schema: runIpcAcceptanceSchema, handlerName: "runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...workflowIpcAcceptanceResponseIdentity] },
   { name: "c2000_runBootHandoffDiagnosis", title: "Run C2000 Boot Handoff Diagnosis Workflow", description: "Preferred boot diagnosis: snapshot, programs, expressions, PC, RAM ownership, ELF freshness, and CPU2 handoff in one workflow.", schema: runBootHandoffDiagnosisSchema, handlerName: "runBootHandoffDiagnosis", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"], responseCoreIdentityFields: [...workflowBootHandoffResponseIdentity] },
-  { name: "c2000_runReloadAndDiagnose", title: "Run C2000 Reload And Diagnose Workflow", description: "Preferred reload path: halt/reset/load/run/wait then boot handoff diagnosis in one workflow.", schema: runReloadAndDiagnoseSchema, handlerName: "runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: [...workflowReloadAndDiagnoseResponseIdentity] },
+  { name: "c2000_runReloadAndDiagnose", title: "Run C2000 Reload And Diagnose Workflow", description: "Preferred reload path: halt/reset/load, optionally perform a controlled post-load reset and CPU1-first boot, wait, then diagnose in one workflow. The post-load boot does not write PC or claim Flash verification.", schema: runReloadAndDiagnoseSchema, handlerName: "runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: [...workflowReloadAndDiagnoseResponseIdentity] },
   { name: "c2000_runFullDebugBundle", title: "Run C2000 Full Debug Bundle Workflow", description: "Preferred evidence capture: full multicore debug bundle with summary files in one workflow.", schema: runFullDebugBundleSchema, handlerName: "runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: [...workflowFullBundleResponseIdentity] },
   { name: "c2000_verifyRunPauseIsolation", title: "Verify C2000 Run/Pause Isolation", description: "Run and pause CPU1/CPU2 one at a time, proving each command affects only the requested core.", schema: verifyRunPauseIsolationSchema, handlerName: "verifyRunPauseIsolation", inputScope: "session", targetEffect: "execution-control", role: "diagnostic", family: "execution", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...runPauseAcceptanceResponseIdentity] },
   { name: "c2000_launchMultiBoardDebug", title: "Launch C2000 Multi-Board Debug", description: "Allocate explicit XDS110 serial numbers to independently bound .ccxml configurations, then create isolated multicore sessions for every connected board in one MCP call.", schema: launchMultiBoardDebugSchema, handlerName: "launchMultiBoardDebug", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["boards[].cores[].coreId"], responseCoreIdentityFields: [...multiBoardLaunchResponseIdentity] },
@@ -263,7 +268,7 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
     "postLaunchChecks.verifyRunPauseIsolation.cpu1CoreId",
     "postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"
   ], responseCoreIdentityFields: [...launchResponseIdentity] },
-  { name: "c2000_launchMulticoreDebugSafe", title: "Launch C2000 Multicore Debug Safely", description: "Create, connect, load, halt, snapshot and perform read-only checks without expression writes, fault injection, reset or automatic run.", schema: launchMulticoreDebugSafeSchema, handlerName: "launchMulticoreDebugSafe", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cores[].coreId"], responseCoreIdentityFields: [...launchResponseIdentity] },
+  { name: "c2000_launchMulticoreDebugSafe", title: "Launch C2000 Multicore Debug Safely", description: "After confirming board registration, create, connect, load, halt, snapshot and perform read-only checks without expression writes, fault injection, reset or automatic run. F28P65x CPU1/CPU2 use coreIds 0/2.", schema: launchMulticoreDebugSafeSchema, handlerName: "launchMulticoreDebugSafe", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cores[].coreId"], responseCoreIdentityFields: [...launchResponseIdentity] },
   { name: "c2000_launchMulticoreDebugWithActions", title: "Launch C2000 Multicore Debug With Target Actions", description: "Create and launch a multicore session with explicit target mutations including assignments, fault injection, or run/pause isolation.", schema: launchMulticoreDebugWithActionsSchema, handlerName: "launchMulticoreDebugWithActions", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cores[].coreId"], responseCoreIdentityFields: [...launchResponseIdentity] }
 ];
 
@@ -291,7 +296,9 @@ export function createC2000ToolInvoker(
         // The daemon validates again even when a proxy has already checked this input.
         const parsedInput = definition.schema.parse(input);
         const handler = handlers[definition.handlerName] as Handler;
-        const invoke = () => handler(parsedInput);
+        // Several workflow wrappers intentionally call sibling handlers through
+        // `this`; preserve the handler object when invoking through the generic router.
+        const invoke = () => handler.call(handlers, parsedInput);
         return typeof sessionId === "string" && definition.name !== "c2000_closeDebugSession"
           ? await manager.withSessionActivity(sessionId, invoke)
           : await invoke();
@@ -415,7 +422,13 @@ export function getToolSurfaceGuide() {
       "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle) over long atomic chains.",
       "For single-step control prefer primary tools: c2000_runCore / c2000_haltCore (not c2000_continue / c2000_pause aliases).",
       "c2000_continue and c2000_pause remain registered for TI MCP naming familiarity and acceptance scripts; they are aliases, not separate semantics.",
-      "Use host tools (readiness/preflight/boundary) before target-touching acceptance."
+      "Use host tools (readiness/preflight/boundary) before target-touching acceptance.",
+      "For daemon-routed hardware, call c2000_getDaemonHealth and c2000_listBoards first. If no board is registered, stop and call c2000_registerBoard; do not try alternate launch tools.",
+      "Use F28P65x coreId 0 for C28xx_CPU1 and coreId 2 for C28xx_CPU2.",
+      "Use exact CCS corePattern selectors C28xx_CPU1 and C28xx_CPU2; do not send regular expressions.",
+      "For a CPU2 RAM image that requires CPU1 ownership initialization, explicitly use loadSequence.mode=cpu1-run-before-cpu2.",
+      "If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute.",
+      "outputDir must be inside a configured allowedWriteRoots path; program, map, and ccxml files must be inside allowedReadRoots."
     ],
     families,
     preferredWorkflows,
@@ -461,7 +474,9 @@ function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] 
   if (targetEffect === "connectivity-control") return [name.includes("disconnect") ? "target-disconnect" : "target-connect"];
   if (targetEffect === "reset-control") return ["target-reset"];
   if (targetEffect === "program-load") return ["program-load", "ram-ownership-change"];
+  if (targetEffect === "symbol-load") return ["symbol-load"];
   if (targetEffect === "memory-write") return name.includes("injectFault") ? ["target-memory-write", "fault-injection"] : ["target-memory-write"];
+  if (targetEffect === "job-control") return name === "c2000_recoverBoard" ? ["host-process-terminate"] : ["host-write"];
   if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];
   if (name === "c2000_runBootHandoffDiagnosis") return ["target-read"];
   if (name === "c2000_runFullDebugBundle") return ["target-read", "bundle-write"];

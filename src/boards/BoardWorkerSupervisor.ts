@@ -84,7 +84,7 @@ export class BoardWorkerSupervisor {
     }
   }
 
-  async invokeBoard(boardId: string, toolName: string, input: unknown, timeoutMs = this.workerConfig.defaultCommandTimeoutMs): Promise<Record<string, unknown>> {
+  async invokeBoard(boardId: string, toolName: string, input: unknown, timeoutMs?: number): Promise<Record<string, unknown>> {
     const worker = await this.startBoard(boardId);
     const leaseContext = readLeaseContext(input);
     if (!leaseContext) throw new DebugMcpError("BoardLeaseRequired", "Board-bound worker command requires a lease fencing context", { boardId, toolName });
@@ -98,7 +98,7 @@ export class BoardWorkerSupervisor {
     }
     this.options.registry.transition(boardId, "RUNNING");
     try {
-      const result = await worker.invokeTool(toolName, input, timeoutMs);
+      const result = await worker.invokeTool(toolName, input, timeoutMs ?? this.commandTimeoutMs(toolName, input));
       this.assertResponseIdentity(boardId, worker, result);
       return result;
     } catch (error) {
@@ -175,11 +175,54 @@ export class BoardWorkerSupervisor {
     return {
       heartbeatIntervalMs: this.options.config.workers?.heartbeatIntervalMs ?? 1000,
       heartbeatTimeoutMs: this.options.config.workers?.heartbeatTimeoutMs ?? 5000,
-      defaultCommandTimeoutMs: this.options.config.workers?.defaultCommandTimeoutMs ?? 15000,
+      defaultCommandTimeoutMs: this.options.config.workers?.defaultCommandTimeoutMs ?? 60000,
       restartLimit: this.options.config.workers?.restartLimit ?? 5,
       restartWindowMs: this.options.config.workers?.restartWindowMs ?? 60000,
       shutdownTimeoutMs: 10000
     };
+  }
+
+  /**
+   * The worker timeout fences the whole MCP call, so it must be wider than the
+   * CCS operation timeouts nested inside that call. Long load workflows receive
+   * a budget per program instead of inheriting the short command default.
+   */
+  commandTimeoutMs(toolName: string, input: unknown): number {
+    const config = this.options.config.ccs;
+    const baseMs = this.workerConfig.defaultCommandTimeoutMs;
+    const startupMs = config.timeouts?.startupMs ?? config.dssTimeoutMs ?? 60000;
+    const connectMs = config.timeouts?.connectMs ?? 30000;
+    const resetMs = config.timeouts?.resetMs ?? 30000;
+    const programLoadMs = config.timeouts?.programLoadMs ?? 300000;
+    const requestedMs = positiveNumber(record(input).timeoutMs) ?? 0;
+    const marginMs = 30000;
+
+    if (toolName === "c2000_createDebugSession") {
+      return Math.max(baseMs, startupMs + marginMs);
+    }
+    if (toolName === "c2000_loadProgram" || toolName === "c2000_loadSymbols" || toolName === "c2000_reloadResetRunToMain") {
+      return Math.max(baseMs, programLoadMs + resetMs + marginMs);
+    }
+    if (toolName === "c2000_loadPrograms") {
+      const count = Math.max(1, arrayLength(record(input).programs));
+      return Math.max(baseMs, count * programLoadMs + marginMs);
+    }
+    if (toolName.startsWith("c2000_launchMulticoreDebug")) {
+      const cores = arrayRecords(record(input).cores);
+      const loadCount = Math.max(1, cores.filter(core => core.load !== false).length);
+      const connectCount = Math.max(1, cores.filter(core => core.connect !== false).length);
+      return Math.max(baseMs, startupMs + connectCount * connectMs + loadCount * programLoadMs + requestedMs + marginMs);
+    }
+    if (toolName === "c2000_launchAndRunIpcAcceptance") {
+      return Math.max(baseMs, startupMs + 2 * connectMs + 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
+    }
+    if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_runReloadAndDiagnose") {
+      return Math.max(baseMs, 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
+    }
+    if (requestedMs > 0) {
+      return Math.max(baseMs, requestedMs + marginMs);
+    }
+    return baseMs;
   }
 
   private get requiresCcxmlProbeValidation(): boolean {
@@ -205,4 +248,22 @@ function readLeaseContext(input: unknown): BoardLeaseContext | undefined {
   const value = (input as Record<string, unknown>).__leaseContext;
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   return value as BoardLeaseContext;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function arrayLength(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function arrayRecords(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.map(record) : [];
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }

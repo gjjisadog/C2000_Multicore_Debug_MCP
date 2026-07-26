@@ -22,6 +22,8 @@ Default core IDs:
 - `coreId = 0`: `C28xx_CPU1`
 - `coreId = 2`: `C28xx_CPU2`
 
+Use those exact names as `corePattern` values; do not send regular expressions.
+
 ## Environment Discovery
 
 Before using any CCS, C2000Ware, or `.ccxml` path, call `c2000_getEnvironment`. Use only paths returned with `valid: true`; never guess, hardcode, or adapt a path from an example. The resolver prioritizes explicit environment/config values, then searches standard TI installation roots and validates product anchors. If a path is unresolved, report the attempted paths and reasons from `attempts` and ask for an explicit override instead of inventing a location.
@@ -39,7 +41,8 @@ Prefer one workflow tool call:
 - `c2000_launchAndRunIpcAcceptance`: create and connect CPU1/CPU2, then execute full IPC acceptance in one client-visible call; use when no session exists.
 - `c2000_runIpcAcceptance`: full F28P65x IPC acceptance when a session already exists and both cores are connected.
 - `c2000_runBootHandoffDiagnosis`: CPU2 boot handoff diagnosis.
-- `c2000_runReloadAndDiagnose`: halt/reset/load/halt, optional run/wait, then diagnosis.
+- `c2000_runReloadAndDiagnose`: halt/reset/load/halt, optional controlled
+  post-load reset and CPU1-first boot, then wait/diagnosis.
 - `c2000_runFullDebugBundle`: snapshot, loaded programs, expressions, PC, map/RAM evidence, ELF freshness, diagnosis, and `summary.md`.
 
 For durable multi-board work, submit one background job instead of keeping a
@@ -53,8 +56,18 @@ stdio request open:
 
 Before a multi-board run, call `c2000_getDaemonHealth` and
 `c2000_listBoards`; require distinct `boardId` and `probeSerial` values and do
-not select a board that is leased or quarantined. A returned `jobId` is the
+not select a board that is leased or quarantined. If the board list is empty or
+health reports `boards.registrationRequired`, call `c2000_registerBoard` with
+a serial-bound `.ccxml` and wait for its worker to become `READY`; do not try
+alternate launch tools, direct DSS, or manual daemon config/port edits.
+F28P65x uses `coreId = 0` for CPU1 and `coreId = 2` for CPU2. Keep `.ccxml`,
+`.out`, and `.map` inputs under `allowedReadRoots`, and evidence `outputDir`
+under `allowedWriteRoots`. A returned `jobId` is the
 durable handle; reconnecting the MCP client must not change it.
+
+The proxy automatically rediscovers a restarted daemon after a safe
+connection/authentication failure. Do not blindly retry a request timeout:
+the target operation may already have started.
 
 If a board worker is unhealthy, call `c2000_recoverBoard` with its default
 `dryRun: true` first. A non-dry run can restart only the daemon-owned worker;
@@ -147,6 +160,19 @@ If these symbols fail to resolve, ask for the real project variable names instea
 
 When no session exists, call `c2000_launchAndRunIpcAcceptance` once. Do not pre-call `c2000_createDebugSession`, `c2000_connectCores`, or `c2000_evaluateMany`. With an existing connected session, call `c2000_runIpcAcceptance` once.
 
+For a CPU2 RAM image that depends on CPU1 initialization of GS ownership or
+CPU2 release, add
+`"loadSequence": {"mode": "cpu1-run-before-cpu2", "cpu1SettleMs": 250}`.
+Do not enable this staged run for ordinary or Flash loads without that evidence.
+
+For an image already resident in Flash, load matching debug information with
+`c2000_loadSymbols`. Do not use `c2000_loadProgram` as a symbol-loading
+substitute because it can erase or reprogram Flash.
+
+`verify-mcp-registry` only checks the loaded-program record in the same MCP
+session and returns `targetFlashVerified: false`; never present it as resident
+Flash verification. `verify-only` is a deprecated alias.
+
 ```json
 {
   "sessionName": "f28p65x-ipc-acceptance",
@@ -180,7 +206,12 @@ Call `c2000_runBootHandoffDiagnosis` once. Require evidence for CPU1/CPU2 state,
 
 ### Reload And Diagnose
 
-Call `c2000_runReloadAndDiagnose` when the user asks to reload both images or prepare a clean run before diagnosis. Use `runCpu1: true`; set `runCpu2` only if the project flow expects explicit CPU2 run.
+Call `c2000_runReloadAndDiagnose` when the user asks to reload both images or
+prepare a clean run before diagnosis. For freshly programmed Flash, set
+`postLoadBoot` to reset both cores after load and start CPU1 before CPU2 with
+an explicit settle time. This workflow does not write PC. If the firmware
+requires a nonstandard entry address, stop and require a target-specific,
+explicitly approved procedure instead of silently assigning `PC`.
 
 ### RAM Ownership
 

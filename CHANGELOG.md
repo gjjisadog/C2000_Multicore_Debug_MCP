@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased
+
+- Add `c2000_registerBoard` for validated, persisted XDS110 registration and
+  isolated worker startup without manual daemon config editing.
+- Route safe/action launch wrappers through the same daemon worker and lease
+  boundary as the base launch workflow.
+- Preserve workflow handler context through the generic tool invoker.
+- Replace the proxy's fixed five-second daemon response timeout with the
+  configurable `C2000_MCP_REQUEST_TIMEOUT_MS` long-operation timeout.
+- Enforce one daemon process per runtime directory and let proxies rediscover
+  once after a stale endpoint or authentication token.
+- Add fail-fast board-registration remediation, core ID conventions, and
+  filesystem-root guidance to machine-readable tool surface metadata.
+- Raise the worker command floor to 60 seconds and derive long workflow
+  envelopes and lease TTLs from nested CCS startup, reset, connect, and
+  program-load budgets.
+- Add an explicit `cpu1-run-before-cpu2` IPC load sequence for RAM builds that
+  require CPU1 ownership initialization before loading the CPU2 image.
+- Clarify that `corePattern` should be an exact CCS target selector such as
+  `C28xx_CPU1` or `C28xx_CPU2`, not a regular expression.
+- Add `c2000_loadSymbols`, a symbol-only Flash debugging path backed by DSS
+  `DebugSession.symbol.load` that does not erase, program, or write target
+  memory and does not claim the image was loaded through this MCP.
+- Make durable IPC jobs create one connect-only session, then perform the
+  requested load policy and CPU1/CPU2 load sequence exactly once.
+- Gate daemon-hosted acceptance readiness on an enumerated, registered,
+  READY/unleased board, a healthy worker, and available board concurrency.
+- Rename registry-only verification to `verify-mcp-registry`; retain
+  `verify-only` as a deprecated alias and explicitly report that target Flash
+  was not verified. Honor the policy consistently in single-core, batch, and
+  reload workflow program loads.
+- Skip disabled-core program/map path checks when `load: false`.
+- Add an optional controlled post-load reset and CPU1-first boot stage to
+  `c2000_runReloadAndDiagnose` without writing PC.
+- Batch `c2000_waitForExpressionSet` reads per core and report poll iterations,
+  expression batch calls, expression count, and measured poll duration.
+
 ## 0.6.1
 
 - Add short authenticated one-command bootstrap scripts for Windows and macOS

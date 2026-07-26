@@ -136,11 +136,23 @@ export class DebugWorkflowService {
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
     assertBatchSucceeded("resetCores", reset);
-    const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy }
-    ]);
-    performedSteps.push("loadPrograms");
+    const cpu1Program = { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy };
+    const cpu2Program = { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy };
+    let load;
+    if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
+      const cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
+      assertBatchSucceeded("loadCpu1Program", cpu1Load);
+      performedSteps.push("loadCpu1Program");
+      await this.manager.runCore(input.sessionId, input.cpu1CoreId);
+      performedSteps.push("runCpu1BeforeCpu2Load");
+      await sleep(input.loadSequence.cpu1SettleMs);
+      const cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
+      load = { sessionId: input.sessionId, results: [...cpu1Load.results, ...cpu2Load.results] };
+      performedSteps.push("loadCpu2Program");
+    } else {
+      load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
+      performedSteps.push("loadPrograms");
+    }
     assertBatchSucceeded("loadPrograms", load);
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
@@ -273,6 +285,16 @@ export class DebugWorkflowService {
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
     assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
+    let postLoadReset: ToolResult | undefined;
+    let postLoadResetHalt: ToolResult | undefined;
+    if (input.postLoadBoot) {
+      postLoadReset = await this.manager.resetCores(input.sessionId, coreIds, input.postLoadBoot.resetType as ResetType);
+      performedSteps.push("resetCoresAfterLoad");
+      assertBatchSucceeded("resetCoresAfterLoad", postLoadReset);
+      postLoadResetHalt = await this.manager.haltCores(input.sessionId, coreIds);
+      performedSteps.push("haltCoresAfterPostLoadReset");
+      assertBatchSucceeded("haltCoresAfterPostLoadReset", postLoadResetHalt);
+    }
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
     const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
@@ -280,11 +302,17 @@ export class DebugWorkflowService {
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
     ]);
-    if (input.runCpu1) {
+    const runCpu1 = input.postLoadBoot?.runCpu1 ?? input.runCpu1;
+    const runCpu2 = input.postLoadBoot?.runCpu2 ?? input.runCpu2;
+    if (runCpu1) {
       await this.manager.runCore(input.sessionId, input.cpu1CoreId);
       performedSteps.push("runCpu1");
     }
-    if (input.runCpu2) {
+    if (input.postLoadBoot && runCpu1 && runCpu2 && input.postLoadBoot.cpu1SettleMs > 0) {
+      await sleep(input.postLoadBoot.cpu1SettleMs);
+      performedSteps.push("cpu1PostLoadBootSettle");
+    }
+    if (runCpu2) {
       await this.manager.runCore(input.sessionId, input.cpu2CoreId);
       performedSteps.push("runCpu2");
     }
@@ -327,6 +355,18 @@ export class DebugWorkflowService {
       reset,
       load,
       postLoadHalt,
+      ...(postLoadReset ? {
+        postLoadBoot: {
+          controlled: true,
+          resetType: input.postLoadBoot?.resetType,
+          runCpu1,
+          runCpu2,
+          cpu1SettleMs: input.postLoadBoot?.cpu1SettleMs,
+          pcWritten: false
+        },
+        postLoadReset,
+        postLoadResetHalt
+      } : {}),
       snapshot,
       ...(ramOwnership ? { ramOwnership } : {}),
       elfFreshness,

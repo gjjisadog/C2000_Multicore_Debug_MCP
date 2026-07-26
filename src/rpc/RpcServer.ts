@@ -113,13 +113,14 @@ export class LocalRpcClient {
     private readonly options: { host: "127.0.0.1"; port: number; authToken: string; timeoutMs?: number }
   ) {}
 
-  async request(method: DaemonRpcMethod, params: unknown): Promise<unknown> {
+  async request(method: DaemonRpcMethod, params: unknown, timeoutOverrideMs?: number): Promise<unknown> {
     const id = randomUUID();
-    const timeoutMs = this.options.timeoutMs ?? 5000;
+    const timeoutMs = timeoutOverrideMs ?? this.options.timeoutMs ?? 5000;
     return new Promise<unknown>((resolve, reject) => {
       const socket = net.createConnection({ host: this.options.host, port: this.options.port });
       let buffer = "";
       let settled = false;
+      let connected = false;
       const finish = (callback: () => void) => {
         if (settled) return;
         settled = true;
@@ -129,9 +130,11 @@ export class LocalRpcClient {
       socket.setEncoding("utf8");
       socket.setNoDelay(true);
       socket.setTimeout(timeoutMs, () => finish(() => reject(new DebugMcpError(
-        "DaemonUnavailable",
-        `Timed out connecting to c2000-debugd after ${timeoutMs}ms`,
-        { host: this.options.host, port: this.options.port }
+        connected ? "DaemonRequestTimeout" : "DaemonUnavailable",
+        connected
+          ? `Timed out waiting for c2000-debugd response after ${timeoutMs}ms`
+          : `Timed out connecting to c2000-debugd after ${timeoutMs}ms`,
+        { host: this.options.host, port: this.options.port, method, timeoutMs }
       ))));
       socket.once("error", error => finish(() => reject(new DebugMcpError(
         "DaemonUnavailable",
@@ -157,6 +160,7 @@ export class LocalRpcClient {
         }
       });
       socket.once("connect", () => {
+        connected = true;
         socket.write(stringifyRpcMessage({
           type: "request",
           id,

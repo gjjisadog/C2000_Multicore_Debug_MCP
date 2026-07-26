@@ -12,12 +12,21 @@ export interface C2000McpProxyRuntime {
 
 export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promise<C2000McpProxyRuntime> {
   const daemon = await ensureDaemon(config);
-  const client = new McpDaemonClient(daemon.client);
+  const client = new McpDaemonClient(
+    daemon.client,
+    async () => (await ensureDaemon(config)).client
+  );
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
   );
-  registerC2000Tools(server, client);
+  registerC2000Tools(
+    server,
+    client,
+    {},
+    config.toolProfile,
+    config.filesystem
+  );
   return {
     server,
     dispose: () => client.close()

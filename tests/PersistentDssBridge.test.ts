@@ -68,11 +68,21 @@ describe("PersistentDssBridge", () => {
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2"
     });
+    await bridge.execute({
+      adapterSessionId: "ccs-session-1",
+      operation: "loadSymbols",
+      ccxmlPath: "/tmp/target.ccxml",
+      coreId: 2,
+      coreName: "C28xx_CPU2",
+      corePattern: "C28xx_CPU2",
+      programUri: "/tmp/cpu2.out"
+    });
 
     expect(result).toEqual(expect.objectContaining({ core: "cpu2" }));
     expect(receivedByPort.get(cpu1.port) ?? []).toHaveLength(0);
     expect(receivedByPort.get(cpu2.port)).toEqual([
-      expect.objectContaining({ name: "runAsynch", coreId: 2, coreName: "C28xx_CPU2", authToken: TEST_AUTH_TOKEN })
+      expect.objectContaining({ name: "runAsynch", coreId: 2, coreName: "C28xx_CPU2", authToken: TEST_AUTH_TOKEN }),
+      expect.objectContaining({ name: "loadSymbols", coreId: 2, coreName: "C28xx_CPU2", program: "/tmp/cpu2.out", authToken: TEST_AUTH_TOKEN })
     ]);
   });
 
@@ -635,18 +645,17 @@ async function startJsonLineServer(
     let buffer = "";
     socket.on("data", chunk => {
       buffer += chunk.toString("utf8");
-      const newlineIndex = buffer.indexOf("\n");
-      if (newlineIndex < 0) {
-        return;
+      for (let newlineIndex = buffer.indexOf("\n"); newlineIndex >= 0; newlineIndex = buffer.indexOf("\n")) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const command = JSON.parse(line);
+        const address = server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        const received = receivedByPort.get(port) ?? [];
+        received.push(command);
+        receivedByPort.set(port, received);
+        socket.write(`${JSON.stringify(respond(command))}\n`);
       }
-      const line = buffer.slice(0, newlineIndex);
-      const command = JSON.parse(line);
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      const received = receivedByPort.get(port) ?? [];
-      received.push(command);
-      receivedByPort.set(port, received);
-      socket.write(`${JSON.stringify(respond(command))}\n`);
     });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", () => resolve()));

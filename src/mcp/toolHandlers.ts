@@ -46,8 +46,10 @@ import {
   launchMulticoreDebugWithActionsSchema,
   loadProgramsSchema,
   loadProgramSchema,
+  loadSymbolsSchema,
   multicoreSnapshotSchema,
   ramOwnershipAnalysisSchema,
+  registerBoardSchema,
   reloadResetRunToMainSchema,
   resetCoresSchema,
   resetCoreSchema,
@@ -83,6 +85,7 @@ export interface ToolHandlerDeps {
   getToolSurfaceGuide?: () => ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
+  registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
   recoverBoard?: (input: z.infer<typeof recoverBoardSchema>) => Promise<ToolResult> | ToolResult;
   submitTestPlan?: (input: z.infer<typeof submitTestPlanSchema>) => Promise<ToolResult> | ToolResult;
   getTestRun?: (input: z.infer<typeof getTestRunSchema>) => Promise<ToolResult> | ToolResult;
@@ -114,7 +117,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   }));
   const unavailableJobEngine = () => { throw new DebugMcpError("DaemonUnavailable", "Background test jobs require c2000-debugd"); };
   const unavailableRecovery = () => { throw new DebugMcpError("DaemonUnavailable", "Board recovery requires c2000-debugd"); };
+  const unavailableRegistration = () => { throw new DebugMcpError("DaemonUnavailable", "Board registration requires c2000-debugd"); };
   const listBoards = deps.listBoards ?? (() => ({ boards: [] }));
+  const registerBoard = deps.registerBoard ?? unavailableRegistration;
   const recoverBoard = deps.recoverBoard ?? unavailableRecovery;
   const submitTestPlan = deps.submitTestPlan ?? unavailableJobEngine;
   const getTestRun = deps.getTestRun ?? unavailableJobEngine;
@@ -129,6 +134,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const submitCanSoakTest = deps.submitCanSoakTest ?? unavailableJobEngine;
   const getToolProfile = deps.getToolProfile ?? (() => ({ activeToolProfile: "full", hiddenTools: [], profileReason: "All tools are available." }));
   const getServerHealth = deps.getServerHealth ?? (() => ({ status: "ready" }));
+  const daemonRoutingConfigured = Boolean(deps.getDaemonHealth && deps.listBoards);
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
@@ -171,6 +177,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await listBoards(input));
       } catch (error) {
         return fail(error);
+      }
+    },
+
+    async registerBoard(input: z.infer<typeof registerBoardSchema>) {
+      try {
+        return ok(await registerBoard(input));
+      } catch (error) {
+        return fail(error, { boardId: input.boardId, probeSerial: input.probeSerial });
       }
     },
 
@@ -289,6 +303,53 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, "F28P65x");
         const debugProcessOwners = formatDebugProcessOwners(preflight);
         const hasDebugProcessOwners = preflight.debugProcessDetails.length > 0 || preflight.debugProcesses.length > 0;
+        const daemonHealth: ToolResult | undefined = daemonRoutingConfigured
+          ? await Promise.resolve(getDaemonHealth()) as ToolResult
+          : undefined;
+        const boardListing = daemonRoutingConfigured ? await Promise.resolve(listBoards({})) : undefined;
+        const registeredBoards = Array.isArray(boardListing?.boards) ? boardListing.boards as ToolResult[] : [];
+        const enumeratedProbeSerials = new Set(
+          (Array.isArray(preflight.xdsdfu.devices) ? preflight.xdsdfu.devices : [])
+            .map((device: ToolResult) => device.serialNumber)
+            .filter((serialNumber: unknown): serialNumber is string => typeof serialNumber === "string" && serialNumber.length > 0)
+        );
+        const selectedBoards = registeredBoards.filter(board =>
+          typeof board.probeSerial === "string" && enumeratedProbeSerials.has(board.probeSerial)
+        );
+        const readyBoards = selectedBoards.filter(board => board.status === "READY" && !board.currentLeaseId);
+        const boardConcurrency = daemonHealth?.boardConcurrency as ToolResult | undefined;
+        const workers = daemonHealth?.workers as ToolResult | undefined;
+        const workersHealthy = typeof workers?.healthy === "number" && workers.healthy > 0;
+        const concurrencyAvailable = typeof boardConcurrency?.limit === "number"
+          && typeof boardConcurrency?.active === "number"
+          && boardConcurrency.limit > 0
+          && boardConcurrency.active < boardConcurrency.limit;
+        const daemonRoute = daemonRoutingConfigured
+          ? {
+            applicable: true,
+            ok: registeredBoards.length > 0
+              && selectedBoards.length > 0
+              && readyBoards.length > 0
+              && workersHealthy
+              && concurrencyAvailable,
+            enumeratedProbeSerials: [...enumeratedProbeSerials],
+            registeredBoardIds: registeredBoards.map(board => board.boardId),
+            selectedBoards: selectedBoards.map(board => ({
+              boardId: board.boardId,
+              probeSerial: board.probeSerial,
+              status: board.status,
+              currentLeaseId: board.currentLeaseId,
+              workerInstanceId: board.currentWorkerInstanceId
+            })),
+            workers,
+            boardConcurrency,
+            nextTool: registeredBoards.length === 0
+              ? "c2000_registerBoard"
+              : readyBoards.length === 0
+                ? "c2000_listBoards"
+                : undefined
+          }
+          : { applicable: false, ok: true, reason: "Readiness is running without the c2000-debugd board router." };
         const checks = {
           ccxml: await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required"),
           cpu1Program: await hostFileCheck(cpu1Program, "CPU1 .out program was not discovered"),
@@ -322,7 +383,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             activeTargetAllowed: debugBoundary.activeTargetAllowed,
             uiFocusRequired: debugBoundary.uiFocusRequired,
             selectedCpuRequired: debugBoundary.selectedCpuRequired
-          }
+          },
+          daemonRoute
         };
         const blockers = acceptanceBlockers(checks);
         const warnings = acceptanceWarnings(checks);
@@ -432,10 +494,40 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async loadProgram(input: z.infer<typeof loadProgramSchema>) {
       try {
-        const info = await manager.loadProgramWithMap(input.sessionId, input.coreId, input.programUri, input.mapUri, input.ramOwnershipPolicy, input.fallbackGsRegions);
-        return ok(info as unknown as ToolResult);
+        const loaded = await manager.loadPrograms(input.sessionId, [{
+          coreId: input.coreId,
+          programUri: input.programUri,
+          mapUri: input.mapUri,
+          ramOwnershipPolicy: input.ramOwnershipPolicy,
+          fallbackGsRegions: input.fallbackGsRegions,
+          loadPolicy: input.loadPolicy
+        }]);
+        const result = loaded.results[0] as ToolResult | undefined;
+        if (!result || result.success !== true) {
+          return {
+            success: false,
+            timestamp: new Date().toISOString(),
+            sessionId: input.sessionId,
+            coreId: input.coreId,
+            ...(result ?? {
+              error: {
+                code: "ProgramLoadFailed",
+                message: "Program load returned no per-core result"
+              }
+            })
+          };
+        }
+        return ok(result);
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId });
+      }
+    },
+
+    async loadSymbols(input: z.infer<typeof loadSymbolsSchema>) {
+      try {
+        return ok(await manager.loadSymbols(input.sessionId, input.coreId, input.programUri));
+      } catch (error) {
+        return fail(error, { sessionId: input.sessionId, coreId: input.coreId, targetMemoryWritten: false });
       }
     },
 
@@ -595,19 +687,33 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async waitForExpressionSet(input: z.input<typeof waitForExpressionSetSchema>) {
       const parsed = waitForExpressionSetSchema.parse(input);
-      const deadline = Date.now() + parsed.timeoutMs;
+      const startedAt = performance.now();
+      const deadline = startedAt + parsed.timeoutMs;
       let lastConditions: ToolResult[] = [];
-      while (Date.now() <= deadline) {
-        lastConditions = await evaluateConditions(parsed.sessionId, parsed.conditions);
+      let pollIterations = 0;
+      let expressionBatchCalls = 0;
+      while (performance.now() <= deadline) {
+        pollIterations++;
+        const evaluated = await evaluateConditions(parsed.sessionId, parsed.conditions);
+        lastConditions = evaluated.conditions;
+        expressionBatchCalls += evaluated.expressionBatchCalls;
         if (lastConditions.every(condition => condition.matched)) {
+          const pollDurationMs = performance.now() - startedAt;
           return ok({
             sessionId: parsed.sessionId,
             matched: true,
             timedOut: false,
-            conditions: lastConditions
+            conditions: lastConditions,
+            pollIterations,
+            expressionBatchCalls,
+            expressionCount: pollIterations * parsed.conditions.length,
+            pollDurationMs,
+            matchedAtMs: pollDurationMs
           });
         }
-        await sleep(parsed.intervalMs);
+        const remainingMs = deadline - performance.now();
+        if (remainingMs <= 0) break;
+        await sleep(Math.min(parsed.intervalMs, remainingMs));
       }
       return {
         success: false,
@@ -615,7 +721,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         sessionId: parsed.sessionId,
         matched: false,
         timedOut: true,
-        conditions: lastConditions
+        conditions: lastConditions,
+        pollIterations,
+        expressionBatchCalls,
+        expressionCount: pollIterations * parsed.conditions.length,
+        pollDurationMs: performance.now() - startedAt
       };
     },
 
@@ -659,7 +769,22 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async reloadResetRunToMain(input: z.input<typeof reloadResetRunToMainSchema>) {
       try {
         const parsed = reloadResetRunToMainSchema.parse(input);
-        const loadedProgram = await manager.loadProgramWithMap(parsed.sessionId, parsed.coreId, parsed.programUri, parsed.mapUri, parsed.ramOwnershipPolicy, parsed.fallbackGsRegions);
+        const load = await manager.loadPrograms(parsed.sessionId, [{
+          coreId: parsed.coreId,
+          programUri: parsed.programUri,
+          mapUri: parsed.mapUri,
+          ramOwnershipPolicy: parsed.ramOwnershipPolicy,
+          fallbackGsRegions: parsed.fallbackGsRegions,
+          loadPolicy: parsed.loadPolicy
+        }]);
+        const loadedProgram = load.results[0] as ToolResult | undefined;
+        if (!loadedProgram || loadedProgram.success !== true) {
+          throw new DebugMcpError("BatchOperationFailed", "Reload workflow program step failed", {
+            sessionId: parsed.sessionId,
+            coreId: parsed.coreId,
+            failed: loadedProgram
+          });
+        }
         const reset = await manager.resetCore(parsed.sessionId, parsed.coreId, parsed.resetType as ResetType);
         if (parsed.settleMs > 0) {
           await sleep(parsed.settleMs);
@@ -1052,17 +1177,29 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   }
 
   async function evaluateConditions(sessionId: string, conditions: z.infer<typeof waitForExpressionSetSchema>["conditions"]) {
-    return Promise.all(conditions.map(async condition => {
-      const [result] = await manager.evaluateMany(sessionId, condition.coreId, [condition.expression]);
-      return {
-        label: condition.label,
-        coreId: condition.coreId,
-        expression: condition.expression,
-        expected: condition.expected,
-        matched: result?.success === true && valuesEqual(result.value, condition.expected),
-        result
-      };
-    }));
+    const grouped = new Map<number, string[]>();
+    for (const condition of conditions) {
+      grouped.set(condition.coreId, [...(grouped.get(condition.coreId) ?? []), condition.expression]);
+    }
+    const batches = await Promise.all([...grouped].map(async ([coreId, expressions]) => ({
+      coreId,
+      results: await manager.evaluateMany(sessionId, coreId, [...new Set(expressions)])
+    })));
+    const byCore = new Map(batches.map(batch => [batch.coreId, batch.results]));
+    return {
+      expressionBatchCalls: batches.length,
+      conditions: conditions.map(condition => {
+        const result = byCore.get(condition.coreId)?.find(item => item.expression === condition.expression);
+        return {
+          label: condition.label,
+          coreId: condition.coreId,
+          expression: condition.expression,
+          expected: condition.expected,
+          matched: result?.success === true && valuesEqual(result.value, condition.expected),
+          result
+        };
+      })
+    };
   }
 
   async function resolveCoreName(sessionId: string, coreId: number): Promise<string> {
@@ -1083,7 +1220,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     const deadline = Date.now() + timeoutMs;
     let lastConditions: ToolResult[] = [];
     while (Date.now() <= deadline) {
-      lastConditions = await evaluateConditions(sessionId, conditions);
+      lastConditions = (await evaluateConditions(sessionId, conditions)).conditions;
       if (lastConditions.every(condition => condition.matched)) {
         return {
           sessionId,
@@ -1328,6 +1465,11 @@ function acceptanceBlockers(checks: ToolResult): string[] {
   }
   if (!checks.debugBoundary?.ok) {
     blockers.push("Debug boundary contract is not ready for F28P65x explicit per-core automation");
+  }
+  if (!checks.daemonRoute?.ok) {
+    blockers.push(checks.daemonRoute?.nextTool === "c2000_registerBoard"
+      ? "No board is registered with c2000-debugd; call c2000_registerBoard before hardware acceptance"
+      : "No matching registered board has a READY, unleased worker route with available concurrency");
   }
   return blockers;
 }

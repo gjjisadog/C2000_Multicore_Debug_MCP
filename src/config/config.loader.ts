@@ -31,7 +31,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     workers: {
       heartbeatIntervalMs: 1000,
       heartbeatTimeoutMs: 5000,
-      defaultCommandTimeoutMs: 15000,
+      defaultCommandTimeoutMs: 60000,
       restartLimit: 5,
       restartWindowMs: 60000
     },

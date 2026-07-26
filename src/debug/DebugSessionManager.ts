@@ -406,6 +406,49 @@ export class DebugSessionManager {
     return this.loadProgramWithMap(sessionId, coreId, programUri);
   }
 
+  async loadSymbols(sessionId: string, coreId: CoreId, programUri: string) {
+    return this.exclusive(sessionId, async () => {
+      const normalizedUri = this.normalizeArtifactUri(programUri);
+      const { session, core } = this.requireCore(sessionId, coreId);
+      try {
+        await access(normalizedUri);
+      } catch {
+        throw new DebugMcpError("ProgramFileNotFound", `Symbol file was not found: ${normalizedUri}`, { programUri: normalizedUri });
+      }
+      if (!this.adapter.loadSymbols) {
+        throw new DebugMcpError("AdapterNotAvailable", "The active debug adapter does not support symbol-only loading", {
+          adapter: this.adapter.name,
+          sessionId,
+          coreId
+        });
+      }
+      try {
+        await this.adapter.loadSymbols(session.adapterSession, coreId, normalizedUri);
+      } catch (error) {
+        throw new DebugMcpError("ProgramLoadFailed", `Symbol-only load failed for core ${coreId}`, {
+          coreId,
+          programUri: normalizedUri,
+          targetMemoryWritten: false,
+          cause: toStructuredError(error)
+        });
+      }
+      const metadata = await fileMetadata(normalizedUri);
+      this.logger.info("symbols loaded without target programming", { sessionId, coreId, programUri: normalizedUri, sha256: metadata.sha256 });
+      return {
+        sessionId,
+        coreId,
+        coreName: core.coreName,
+        programUri: normalizedUri,
+        symbolsLoaded: true,
+        targetMemoryWritten: false,
+        loadedAt: new Date().toISOString(),
+        fileMTime: metadata.fileMTime,
+        fileSize: metadata.fileSize,
+        sha256: metadata.sha256
+      };
+    });
+  }
+
   async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
     return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, coreId, programUri, mapUri, ramOwnershipPolicy, fallbackGsRegions));
   }
@@ -702,12 +745,26 @@ export class DebugSessionManager {
           const existing = this.loadedPrograms.get(sessionId, program.coreId);
           const metadata = await fileMetadata(normalizedUri);
           const unchanged = Boolean(existing && existing.programUri === normalizedUri && existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256);
-          if (program.loadPolicy === "verify-only" || (program.loadPolicy === "if-changed" && unchanged)) {
-            results.push({ coreId: program.coreId, coreName: this.requireCore(sessionId, program.coreId).core.coreName, success: program.loadPolicy !== "verify-only" || unchanged, programUri: normalizedUri, loaded: false, skipped: true, skipReason: unchanged ? "program-unchanged" : "load-verification-failed" });
+          const registryVerification = program.loadPolicy === "verify-mcp-registry" || program.loadPolicy === "verify-only";
+          if (registryVerification || (program.loadPolicy === "if-changed" && unchanged)) {
+            results.push({
+              coreId: program.coreId,
+              coreName: this.requireCore(sessionId, program.coreId).core.coreName,
+              success: !registryVerification || unchanged,
+              programUri: normalizedUri,
+              loaded: false,
+              skipped: true,
+              skipReason: unchanged ? "program-unchanged" : "mcp-registry-verification-failed",
+              ...(registryVerification ? {
+                verificationScope: "mcp-session-loaded-program-registry",
+                targetFlashVerified: false,
+                deprecatedPolicyAliasUsed: program.loadPolicy === "verify-only"
+              } : {})
+            });
             continue;
           }
           const info = await this.loadProgramWithMapUnlocked(sessionId, program.coreId, program.programUri, program.mapUri, program.ramOwnershipPolicy, program.fallbackGsRegions);
-        results.push({ coreId: program.coreId, coreName: info.coreName, success: true, programUri: info.programUri, loaded: true, skipped: false });
+          results.push({ ...info, success: true, loaded: true, skipped: false });
         } catch (error) {
           results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
           this.logger.error("program load failed", error);

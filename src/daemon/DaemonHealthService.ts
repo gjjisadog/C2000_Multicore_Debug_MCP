@@ -1,6 +1,7 @@
 import type { DebugDaemonInstance } from "./DaemonInstanceFile.js";
 import type { DatabaseConsistencyReport } from "../storage/DatabaseConsistencyChecker.js";
 import type { BoardExecutionSnapshot } from "../jobs/BoardExecutionSemaphore.js";
+import type { BoardRecord } from "../boards/types.js";
 
 export interface DaemonHealthSnapshot {
   instanceId: string;
@@ -18,7 +19,8 @@ export function createDaemonHealth(
   workers = { total: 0, healthy: 0, unhealthy: 0 },
   jobs = { queued: 0, running: 0 },
   consistency: DatabaseConsistencyReport = { healthy: true, checkedAt: new Date().toISOString(), issues: [] },
-  boardConcurrency: BoardExecutionSnapshot = { limit: 0, active: 0, waiting: 0, holders: [], queue: [] }
+  boardConcurrency: BoardExecutionSnapshot = { limit: 0, active: 0, waiting: 0, holders: [], queue: [] },
+  registeredBoards: BoardRecord[] = []
 ): Record<string, unknown> {
   const daemon: DaemonHealthSnapshot = {
     instanceId: instance?.instanceId ?? "starting",
@@ -31,6 +33,13 @@ export function createDaemonHealth(
   return {
     daemon,
     workers,
+    boards: {
+      registered: registeredBoards.length,
+      ready: registeredBoards.filter(board => board.status === "READY").length,
+      registrationRequired: registeredBoards.length === 0,
+      nextTool: registeredBoards.length === 0 ? "c2000_registerBoard" : "c2000_listBoards",
+      boardIds: registeredBoards.map(board => board.boardId)
+    },
     jobs,
     consistency,
     boardConcurrency

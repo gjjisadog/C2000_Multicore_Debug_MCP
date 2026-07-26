@@ -80,7 +80,7 @@ export const c2000McpConfigSchema = z.object({
   workers: z.object({
     heartbeatIntervalMs: z.number().int().positive().default(1000),
     heartbeatTimeoutMs: z.number().int().positive().default(5000),
-    defaultCommandTimeoutMs: z.number().int().positive().default(15000),
+    defaultCommandTimeoutMs: z.number().int().positive().default(60000),
     restartLimit: z.number().int().nonnegative().default(5),
     restartWindowMs: z.number().int().positive().default(60000)
   }).optional(),

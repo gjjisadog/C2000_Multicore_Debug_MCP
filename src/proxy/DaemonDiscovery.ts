@@ -40,9 +40,18 @@ export async function discoverDaemon(config: C2000McpConfig): Promise<Discovered
       authTokenFile: instance.authTokenFile
     });
   }
-  const client = new LocalRpcClient({ host: "127.0.0.1", port: instance.port, authToken });
+  const requestTimeoutMs = positiveInteger(
+    process.env.C2000_MCP_REQUEST_TIMEOUT_MS,
+    600_000
+  );
+  const client = new LocalRpcClient({
+    host: "127.0.0.1",
+    port: instance.port,
+    authToken,
+    timeoutMs: requestTimeoutMs
+  });
   try {
-    const health = asRecord(await client.request("health", {}));
+    const health = asRecord(await client.request("health", {}, 5_000));
     const reportedId = asRecord(health.daemon).instanceId;
     if (reportedId !== instance.instanceId) {
       await removeDaemonInstance(paths, instance.instanceId);
@@ -79,4 +88,9 @@ function asRecord(value: unknown): Record<string, unknown> {
     throw new DebugMcpError("DaemonProtocolError", "c2000-debugd returned a malformed response");
   }
   return value as Record<string, unknown>;
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = value === undefined ? NaN : Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }

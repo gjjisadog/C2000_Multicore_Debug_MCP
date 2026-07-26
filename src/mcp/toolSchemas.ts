@@ -5,7 +5,7 @@ import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 export const coreConfigSchema = z.object({
   coreId: z.number().int(),
   coreName: z.string().min(1),
-  corePattern: z.string().min(1).optional()
+  corePattern: z.string().min(1).optional().describe("Exact CCS core selector; prefer C28xx_CPU1 or C28xx_CPU2 instead of a regular expression")
 });
 
 export const createDebugSessionSchema = z.object({
@@ -70,6 +70,16 @@ export const listBoardsSchema = z.object({
   tags: z.array(z.string().min(1)).min(1).optional()
 });
 
+/** Persist a serial-bound board registration and optionally start its isolated worker. */
+export const registerBoardSchema = z.object({
+  boardId: z.string().min(1),
+  probeSerial: z.string().min(1),
+  device: z.string().min(1).default("F28P65x"),
+  ccxmlPath: z.string().min(1),
+  tags: z.array(z.string().min(1)).default([]),
+  startWorker: z.boolean().default(true)
+});
+
 /** Restart only the daemon-owned worker for a registered board. This never terminates external CCS/DSS processes. */
 export const recoverBoardSchema = z.object({
   boardId: z.string().min(1),
@@ -86,6 +96,12 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
   artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
   parallelism: z.number().int().positive().optional(),
   timeoutMs: z.number().int().positive().default(10000),
+  loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  loadSequence: z.object({
+    mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-run-before-cpu2"),
+    cpu1SettleMs: z.number().int().nonnegative().default(250)
+  }).default({ mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 }),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(true),
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true })
@@ -163,7 +179,12 @@ export const loadProgramSchema = sessionCoreSchema.extend({
   mapUri: z.string().min(1).optional(),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
-  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always")
+  loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias")
+});
+
+export const loadSymbolsSchema = sessionCoreSchema.extend({
+  programUri: z.string().min(1)
 });
 
 export const loadProgramsSchema = z.object({
@@ -290,7 +311,8 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
-  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   settleMs: z.number().int().nonnegative().default(250)
 });
 
@@ -311,7 +333,12 @@ export const runIpcAcceptanceSchema = z.object({
   cpu1MapPath: z.string().min(1),
   cpu2MapPath: z.string().min(1),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
-  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  loadSequence: z.object({
+    mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
+    cpu1SettleMs: z.number().int().nonnegative().default(250)
+  }).default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   runSequence: workflowRunSequenceSchema,
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive(),
@@ -332,9 +359,9 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ ses
   autoCloseOnComplete: z.boolean().default(false),
   autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
   cpu1CoreName: z.string().min(1).default("C28xx_CPU1"),
-  cpu1CorePattern: z.string().min(1).optional(),
+  cpu1CorePattern: z.string().min(1).optional().describe("Exact CCS selector for CPU1; normally C28xx_CPU1"),
   cpu2CoreName: z.string().min(1).default("C28xx_CPU2"),
-  cpu2CorePattern: z.string().min(1).optional(),
+  cpu2CorePattern: z.string().min(1).optional().describe("Exact CCS selector for CPU2; normally C28xx_CPU2"),
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
   allowAutoProbeAllocation: z.boolean().default(false)
@@ -365,11 +392,18 @@ export const runReloadAndDiagnoseSchema = z.object({
   cpu1MapPath: z.string().min(1).optional(),
   cpu2MapPath: z.string().min(1).optional(),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).default("require-map"),
-  loadPolicy: z.enum(["always", "if-changed", "verify-only"]).default("always"),
+  loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   runCpu1: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
+  postLoadBoot: z.object({
+    resetType: z.enum(["cpu", "system", "restart", "default"]).default("system"),
+    runCpu1: z.boolean().default(true),
+    cpu1SettleMs: z.number().int().nonnegative().default(250),
+    runCpu2: z.boolean().default(false)
+  }).optional().describe("After programming and halting, reset both cores again and start them in a controlled CPU1-first order. This does not write PC or claim target Flash verification."),
   waitExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
   intervalMs: z.number().int().positive().default(100),
@@ -406,7 +440,7 @@ export const verifyRunPauseIsolationSchema = z.object({
 export const launchCoreSchema = z.object({
   coreId: z.number().int(),
   coreName: z.string().min(1),
-  corePattern: z.string().min(1).optional(),
+  corePattern: z.string().min(1).optional().describe("Exact CCS core selector; prefer C28xx_CPU1 or C28xx_CPU2 instead of a regular expression"),
   programUri: z.string().min(1).optional(),
   mapUri: z.string().min(1).optional(),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),

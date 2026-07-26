@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -59,6 +59,77 @@ describe("daemon / proxy lifecycle", () => {
       const client = new McpDaemonClient((await discoverDaemon(configFor(runtimeDir))).client);
       expect(await client.invokeTool("c2000_recoverBoard", { boardId: "board-a" })).toEqual(expect.objectContaining({
         success: true, dryRun: true, boardId: "board-a", action: "RESTART_DAEMON_OWNED_WORKER_ONLY", externalProcessTermination: false
+      }));
+      await client.close();
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  test("registers an unconfigured board and launches the safe workflow through its worker", async () => {
+    const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "c2000-debugd-register-"));
+    runtimeDirs.push(runtimeDir);
+    const config = configFor(runtimeDir);
+    config.boards = [];
+    const ccxmlPath = path.join(runtimeDir, "board-b.ccxml");
+    await writeFile(
+      ccxmlPath,
+      '<property Type="stringfield" Value="CL650002" id="-- Enter the serial number"/>\n'
+    );
+    const daemon = new DebugDaemon(config);
+    try {
+      await daemon.start();
+      const client = new McpDaemonClient((await discoverDaemon(config)).client);
+      const before = await client.invokeTool("c2000_getDaemonHealth", {});
+      expect(before).toEqual(expect.objectContaining({
+        boards: expect.objectContaining({
+          registered: 0,
+          registrationRequired: true,
+          nextTool: "c2000_registerBoard"
+        })
+      }));
+      await expect(client.invokeTool("c2000_launchMulticoreDebugSafe", {
+        boardId: "board-b",
+        cores: [{ coreId: 0, coreName: "C28xx_CPU1", load: false }]
+      })).rejects.toEqual(expect.objectContaining({
+        code: "ProbeBindingMissing",
+        details: expect.objectContaining({
+          nextTool: "c2000_registerBoard",
+          standardCoreIds: { cpu1: 0, cpu2: 2 }
+        })
+      }));
+
+      const registration = await client.invokeTool("c2000_registerBoard", {
+        boardId: "board-b",
+        probeSerial: "CL650002",
+        ccxmlPath,
+        tags: ["F28P65x"]
+      });
+      expect(registration).toEqual(expect.objectContaining({
+        success: true,
+        workerStarted: true,
+        action: "REGISTERED",
+        board: expect.objectContaining({
+          boardId: "board-b",
+          probeSerial: "CL650002",
+          status: "READY"
+        })
+      }));
+
+      const launched = await client.invokeTool("c2000_launchMulticoreDebugSafe", {
+        boardId: "board-b",
+        sessionName: "registered-safe-launch",
+        cores: [
+          { coreId: 0, coreName: "C28xx_CPU1", connect: true, load: false, haltAtEntry: true },
+          { coreId: 2, coreName: "C28xx_CPU2", connect: true, load: false, haltAtEntry: true }
+        ]
+      });
+      expect(launched).toEqual(expect.objectContaining({
+        success: true,
+        boardId: "board-b",
+        probeSerial: "CL650002",
+        workerInstanceId: expect.any(String),
+        sessionId: expect.any(String)
       }));
       await client.close();
     } finally {

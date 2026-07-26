@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { assertAllowedReadPath, assertAllowedWritePath } from "../src/security/pathPolicy.js";
+import { assertAllowedReadPath, assertAllowedWritePath, validateToolPaths } from "../src/security/pathPolicy.js";
 
 describe("filesystem path policy", () => {
   test("allows configured reads and writes and rejects escapes", async () => {
@@ -28,6 +28,22 @@ describe("filesystem path policy", () => {
       throw error;
     }
     await expect(assertAllowedReadPath(path.join(root, "links", "outside", "secret.out"), { allowedReadRoots: [root], allowedWriteRoots: [] })).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
+  });
+
+  test("does not validate program artifacts for an explicitly non-loading core", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "c2000-path-disabled-load-root-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "c2000-path-disabled-load-outside-"));
+    const policy = { allowedReadRoots: [root], allowedWriteRoots: [root] };
+    const programUri = path.join(outside, "cpu2.out");
+    const mapUri = path.join(outside, "cpu2.map");
+
+    await expect(validateToolPaths({
+      cores: [{ coreId: 2, load: false, programUri, mapUri }]
+    }, policy)).resolves.toBeUndefined();
+
+    await expect(validateToolPaths({
+      cores: [{ coreId: 2, load: true, programUri, mapUri }]
+    }, policy)).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
   });
 });
 

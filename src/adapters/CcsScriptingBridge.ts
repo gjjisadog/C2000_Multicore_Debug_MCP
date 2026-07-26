@@ -16,6 +16,7 @@ export type CcsScriptingOperation =
   | "halt"
   | "reset"
   | "loadProgram"
+  | "loadSymbols"
   | "prepareFlashLoad"
   | "writeMemory"
   | "readMemory"
@@ -345,6 +346,9 @@ try {
   } else if (command.operation === "loadProgram") {
     debugSession.memory.loadProgram(command.programUri);
     result = { symbolsLoaded: true };
+  } else if (command.operation === "loadSymbols") {
+    debugSession.symbol.load(command.programUri);
+    result = { symbolsLoaded: true, targetMemoryWritten: false };
   } else if (command.operation === "writeMemory") {
     debugSession.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     result = { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };

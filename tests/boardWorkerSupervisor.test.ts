@@ -53,6 +53,14 @@ describe("board worker supervisor", () => {
       expect(starts.get("board-a")).toBe(2);
       expect(starts.get("board-b")).toBe(1);
       await expect(supervisor.invokeBoard("board-b", "c2000_getTargetState", { __leaseContext: leaseB.context }, 5)).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
+      await expect(supervisor.invokeBoard("board-b", "c2000_launchMulticoreDebugSafe", {
+        __leaseContext: leaseB.context,
+        cores: [
+          { coreId: 0, coreName: "C28xx_CPU1", load: true },
+          { coreId: 2, coreName: "C28xx_CPU2", load: true }
+        ]
+      })).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
+      expect(clients.find(client => client.boardId === "board-b")?.invokedTimeouts.at(-1)).toBe(750000);
       expect(clients.filter(client => client.boardId === "board-b" && client.stopped).length).toBe(0);
       expect(events.list({ boardId: "board-a" })).toEqual(expect.arrayContaining([
         expect.objectContaining({ eventType: "WORKER_RESTARTING" })
@@ -73,6 +81,7 @@ class FakeWorker implements BoardWorkerClient {
   lastHeartbeatAt?: number;
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
   stopped = false;
+  readonly invokedTimeouts: number[] = [];
 
   constructor(options: BoardWorkerLaunchOptions, private readonly shouldTimeout: boolean) {
     this.workerInstanceId = options.workerInstanceId;
@@ -85,6 +94,7 @@ class FakeWorker implements BoardWorkerClient {
   }
 
   async invokeTool(_toolName: string, _input: unknown, _timeoutMs: number): Promise<Record<string, unknown>> {
+    this.invokedTimeouts.push(_timeoutMs);
     if (this.shouldTimeout) {
       throw new DebugMcpError("WorkerCommandTimeout", "simulated stuck command", { boardId: this.boardId });
     }

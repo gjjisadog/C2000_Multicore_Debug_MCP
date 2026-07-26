@@ -1,10 +1,11 @@
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 export interface DaemonRuntimePaths {
   runtimeDir: string;
   instanceFile: string;
+  lockFile: string;
 }
 
 export interface DebugDaemonInstance {
@@ -21,8 +22,48 @@ export interface DebugDaemonInstance {
 export function daemonRuntimePaths(runtimeDir: string): DaemonRuntimePaths {
   return {
     runtimeDir: path.resolve(runtimeDir),
-    instanceFile: path.join(path.resolve(runtimeDir), "debugd-instance.json")
+    instanceFile: path.join(path.resolve(runtimeDir), "debugd-instance.json"),
+    lockFile: path.join(path.resolve(runtimeDir), "debugd-singleton.lock")
   };
+}
+
+/** Acquire an atomic per-runtime daemon lock. A live owner is never terminated or replaced. */
+export async function acquireDaemonSingletonLock(
+  paths: DaemonRuntimePaths,
+  instanceId: string
+): Promise<() => Promise<void>> {
+  await mkdir(paths.runtimeDir, { recursive: true });
+  const owner = { instanceId, pid: process.pid, acquiredAt: new Date().toISOString() };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(paths.lockFile, "wx", 0o600);
+      try {
+        await handle.writeFile(`${JSON.stringify(owner)}\n`, "utf8");
+      } catch (error) {
+        await rm(paths.lockFile, { force: true }).catch(() => undefined);
+        throw error;
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
+      return async () => {
+        const current = await readLockOwner(paths.lockFile);
+        if (current?.instanceId === instanceId && current.pid === process.pid) {
+          await rm(paths.lockFile, { force: true });
+        }
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = await readLockOwner(paths.lockFile);
+      if (existing && isPidAlive(existing.pid)) {
+        throw new Error(
+          `c2000-debugd is already running for ${paths.runtimeDir} `
+          + `(pid ${existing.pid}, instance ${existing.instanceId})`
+        );
+      }
+      await rm(paths.lockFile, { force: true });
+    }
+  }
+  throw new Error(`Unable to acquire c2000-debugd singleton lock: ${paths.lockFile}`);
 }
 
 export async function writeDaemonInstance(
@@ -107,4 +148,25 @@ async function writePrivateFile(filePath: string, data: string): Promise<void> {
 function isInsideRuntimeDir(candidate: string, runtimeDir: string): boolean {
   const relative = path.relative(path.resolve(runtimeDir), path.resolve(candidate));
   return relative !== "" && !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+}
+
+async function readLockOwner(lockFile: string): Promise<{ instanceId: string; pid: number } | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(lockFile, "utf8")) as Record<string, unknown>;
+    return typeof parsed.instanceId === "string" && typeof parsed.pid === "number"
+      ? { instanceId: parsed.instanceId, pid: parsed.pid }
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }

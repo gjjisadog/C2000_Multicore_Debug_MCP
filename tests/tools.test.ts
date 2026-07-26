@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
-import { c2000ToolDefinitions, getToolContracts, getToolSurfaceGuide, registerC2000Tools } from "../src/mcp/tools.js";
+import { c2000ToolDefinitions, createC2000ToolInvoker, getToolContracts, getToolSurfaceGuide, registerC2000Tools } from "../src/mcp/tools.js";
 
 describe("MCP tool registration contract", () => {
   test("returns structured failures instead of rejecting tools for unknown or closed sessions", async () => {
@@ -36,12 +36,40 @@ describe("MCP tool registration contract", () => {
     }
   });
 
+  test("preserves workflow handler context through the generic tool invoker", async () => {
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    try {
+      const invoker = createC2000ToolInvoker(manager);
+      const result = await invoker.invokeTool("c2000_launchMulticoreDebugSafe", {
+        sessionName: "safe-wrapper-context",
+        cores: [
+          { coreId: 0, coreName: "C28xx_CPU1", connect: true, load: false, haltAtEntry: true },
+          { coreId: 2, coreName: "C28xx_CPU2", connect: true, load: false, haltAtEntry: true }
+        ]
+      });
+
+      expect(result).toEqual(expect.objectContaining({
+        success: true,
+        sessionId: expect.any(String),
+        snapshot: expect.objectContaining({
+          cores: expect.arrayContaining([
+            expect.objectContaining({ coreId: 0, coreName: "C28xx_CPU1" }),
+            expect.objectContaining({ coreId: 2, coreName: "C28xx_CPU2" })
+          ])
+        })
+      }));
+    } finally {
+      await manager.disposeAllSessions();
+    }
+  });
+
   test("registers only c2000-prefixed tool names to avoid TI official MCP collisions", () => {
     const names = c2000ToolDefinitions.map(tool => tool.name);
 
     expect(names.every(name => name.startsWith("c2000_"))).toBe(true);
     expect(names).toEqual(expect.arrayContaining([
       "c2000_getServerHealth",
+      "c2000_registerBoard",
       "c2000_createDebugSession",
       "c2000_getToolContracts",
       "c2000_getDebugBoundary",
@@ -132,6 +160,11 @@ describe("MCP tool registration contract", () => {
     ]));
     expect(guide.counts.total).toBe(c2000ToolDefinitions.length);
     expect(guide.counts.alias).toBe(2);
+    expect(guide.guidance).toEqual(expect.arrayContaining([
+      expect.stringContaining("c2000_registerBoard"),
+      expect.stringContaining("coreId 0"),
+      expect.stringContaining("allowedWriteRoots")
+    ]));
   });
 
   test("hardware preflight is read-only and does not require sessionId or coreId", () => {

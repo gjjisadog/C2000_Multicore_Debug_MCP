@@ -41,6 +41,7 @@ describe("debug control boundary", () => {
         "c2000_disconnectTarget",
         "c2000_getTargetState",
         "c2000_loadProgram",
+        "c2000_loadSymbols",
         "c2000_loadPrograms",
         "c2000_getMulticoreSnapshot",
         "c2000_diagnoseBootHandoff",
@@ -61,6 +62,7 @@ describe("debug control boundary", () => {
         c2000_pause: "session.target.halt()",
         c2000_reset: "session.target.reset()",
         c2000_loadProgram: "session.memory.loadProgram(programUri)",
+        c2000_loadSymbols: "session.symbol.load(programUri)",
         c2000_getTargetState: "session.target.isConnected(), session.target.isHalted(), session.expression.evaluate(\"PC\")"
       },
       continueSemantics: "non-blocking"
@@ -167,7 +169,8 @@ describe("debug control boundary", () => {
           "c2000_pause",
           "c2000_reset",
           "c2000_getTargetState",
-          "c2000_loadProgram"
+          "c2000_loadProgram",
+          "c2000_loadSymbols"
         ],
         expectedRequiredInputs: ["sessionId", "coreId"],
         expectedResponseCoreIdentityFields: ["coreId", "coreName"],

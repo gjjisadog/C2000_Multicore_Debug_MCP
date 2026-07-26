@@ -60,5 +60,11 @@ export async function validateToolPaths(input: unknown, policy: FilesystemPolicy
 async function visit(value: unknown, check: (key: string, value: string) => Promise<void>, parentKey = ""): Promise<void> {
   if (typeof value === "string") { if (parentKey) await check(parentKey, value); return; }
   if (Array.isArray(value)) { for (const item of value) await visit(item, check, parentKey); return; }
-  if (value && typeof value === "object") for (const [key, child] of Object.entries(value)) await visit(child, check, key);
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      if (record.load === false && (key === "programUri" || key === "mapUri")) continue;
+      await visit(child, check, key);
+    }
+  }
 }
