@@ -5,8 +5,12 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: write
+
 jobs:
   package:
+    name: Package ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
@@ -17,6 +21,8 @@ jobs:
             target: linux-x64
           - os: macos-14
             target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,13 +31,35 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm pack
+      - run: npm run verify:package
+      - run: node scripts/prepare-release-asset.mjs ${{ matrix.target }}
       - run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
       - run: node scripts/write-release-metadata.mjs ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: c2000-multicore-mcp-${{ matrix.target }}
           path: |
-            c2000-multicore-mcp-*.tgz
-            dist/src/runtime-manifest.json
-            sbom.cdx.json
-            SHA256SUMS.json
+            c2000-multicore-mcp-*-${{ matrix.target }}.tgz
+            runtime-manifest-${{ matrix.target }}.json
+            sbom-${{ matrix.target }}.cdx.json
+            SHA256SUMS-${{ matrix.target }}.json
+            release-asset-name.txt
+
+  github-release:
+    name: Publish GitHub Release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: c2000-multicore-mcp-*
+          path: release-assets
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            release-assets/**/c2000-multicore-mcp-*.tgz
+            release-assets/**/SHA256SUMS-*.json
+            release-assets/**/runtime-manifest-*.json
+            release-assets/**/sbom-*.cdx.json

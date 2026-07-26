@@ -14,9 +14,25 @@ try {
     : spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["install", path.join(root, tarball), "--ignore-scripts"], { cwd: temporary, stdio: "inherit", shell: process.platform === "win32" });
   if (install.error || install.status !== 0) throw new Error(`temporary package installation failed: ${install.error?.message ?? `exit ${install.status}`}`);
   const packageRoot = path.join(temporary, "node_modules", "c2000-multicore-mcp");
-  for (const entry of ["dist/src/index.js", "dist/src/daemon/index.js", "dist/src/worker/index.js", "dist/src/can-worker/index.js", "dist/src/runtime-manifest.json"]) {
+  for (const entry of ["dist/src/index.js", "dist/src/daemon/index.js", "dist/src/worker/index.js", "dist/src/can-worker/index.js", "dist/src/installer/index.js", "dist/src/runtime-manifest.json", "scripts/c2000-mcp-doctor.mjs"]) {
     await access(path.join(packageRoot, entry));
   }
+  const durableRoot = path.join(temporary, "durable-install");
+  const setup = spawnSync(process.execPath, [
+    path.join(packageRoot, "dist", "src", "installer", "index.js"),
+    "install",
+    "--install-root", durableRoot,
+    "--workspace", temporary,
+    "--no-register",
+    "--no-skill",
+    "--json"
+  ], { cwd: temporary, encoding: "utf8" });
+  if (setup.error || setup.status !== 0) {
+    throw new Error(`one-command setup verification failed: ${setup.stderr || setup.stdout || setup.error?.message || `exit ${setup.status}`}`);
+  }
+  const setupResult = JSON.parse(setup.stdout);
+  await access(setupResult.entrypoint);
+  await access(setupResult.configPath);
   for (const entry of ["worker/index.js", "can-worker/index.js"]) {
     const child = spawn(process.execPath, [path.join(packageRoot, "dist", "src", entry)], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
     await new Promise((resolve, reject) => {

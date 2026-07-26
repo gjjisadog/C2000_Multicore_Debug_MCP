@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Add `c2000-multicore-setup`, a durable one-command installer for Windows and
+  macOS that validates the platform runtime, installs the bundled Codex skill,
+  registers the MCP server, and runs the installed-runtime doctor.
+- Publish platform-specific Windows x64, macOS arm64, and macOS x64 release
+  archives with package-install verification, checksums, and SBOMs.
+
 ## 0.5.0
 
 - Added firmware-driven CAN evidence with explicit TX, independent bus capture, peer RX, application processing, and simulation-only evidence levels.

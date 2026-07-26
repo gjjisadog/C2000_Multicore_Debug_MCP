@@ -31,6 +31,7 @@ import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecke
 import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
 import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
 import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
+import { SERVER_VERSION } from "../runtimeInfo.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -202,7 +203,7 @@ export class DebugDaemon {
         port: endpoint.port,
         authTokenFile: newAuthTokenFile(this.paths, this.instanceId),
         databasePath,
-        version: "0.5.0"
+        version: SERVER_VERSION
       };
       // Do not publish discovery metadata before every configured worker has
       // completed its own runtime handshake. Otherwise a fresh proxy can

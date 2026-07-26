@@ -1,5 +1,6 @@
 import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +18,8 @@ await build({
     index: "src/index.ts",
     "daemon/index": "src/daemon/index.ts",
     "worker/index": "src/worker/index.ts",
-    "can-worker/index": "src/can-worker/index.ts"
+    "can-worker/index": "src/can-worker/index.ts",
+    "installer/index": "src/installer/index.ts"
   },
   outdir,
   bundle: true,
@@ -42,10 +44,22 @@ await Promise.all([
   chmod(path.join(outdir, "index.js"), 0o755),
   chmod(path.join(outdir, "daemon", "index.js"), 0o755),
   chmod(path.join(outdir, "worker", "index.js"), 0o755),
-  chmod(path.join(outdir, "can-worker", "index.js"), 0o755)
+  chmod(path.join(outdir, "can-worker", "index.js"), 0o755),
+  chmod(path.join(outdir, "installer", "index.js"), 0o755)
 ]);
 
 async function copyNativeSqliteBinding(root, runtimeDirectory) {
+  const require = createRequire(import.meta.url);
+  try {
+    const Database = require("better-sqlite3");
+    const database = new Database(":memory:");
+    database.close();
+  } catch (error) {
+    throw new Error(
+      `better-sqlite3 is incompatible with the active Node ${process.version} (ABI ${process.versions.modules}). `
+      + `Run npm ci with this Node version before npm run build. Cause: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
   const source = path.join(root, "node_modules", "better-sqlite3", "build", "Release", "better_sqlite3.node");
   try {
     await access(source);
@@ -74,7 +88,8 @@ async function writeRuntimeManifest(root, runtimeDirectory) {
       proxy: "index.js",
       daemon: "daemon/index.js",
       worker: "worker/index.js",
-      canWorker: "can-worker/index.js"
+      canWorker: "can-worker/index.js",
+      installer: "installer/index.js"
     },
     nativeBindings: [{
       name: "better_sqlite3.node",

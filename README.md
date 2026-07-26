@@ -121,13 +121,60 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ## Install
 
+### One-command install (Windows and macOS)
+
+Prerequisites: Node.js 20–24 and Codex. The installer copies the
+platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
+bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
+runtime handshake check. Restart Codex after it succeeds.
+
+Windows x64 (PowerShell):
+
+```powershell
+npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-win32-x64.tgz -- c2000-multicore-setup install
+```
+
+macOS Apple Silicon:
+
+```bash
+npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-darwin-arm64.tgz -- c2000-multicore-setup install
+```
+
+macOS Intel:
+
+```bash
+npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-darwin-x64.tgz -- c2000-multicore-setup install
+```
+
+The release tag and assets must exist before these download commands can be
+used. For an unpublished local tarball, use the same installer directly:
+
+```bash
+npm exec --yes --package=./c2000-multicore-mcp-0.6.0-<platform>-<arch>.tgz -- c2000-multicore-setup install
+```
+
+Useful options:
+
+- `--config /absolute/path/config.json` preserves an existing hardware config.
+- `--workspace /absolute/path` sets the default allowed program/read root.
+- `--scope project` writes project-scoped Codex MCP configuration.
+- `--no-register`, `--no-skill`, and `--no-doctor` opt out of individual steps.
+- `--json` emits a machine-readable installation result.
+
+The installer prefers the official `codex mcp add` command. If the Codex CLI
+cannot be launched, it writes a clearly marked, replaceable block to
+`~/.codex/config.toml` (or `.codex/config.toml` with `--scope project`) without
+rewriting unrelated configuration.
+
+### Install from source
+
 ```bash
 npm ci
 npm run build
 npm run doctor
 ```
 
-`npm run build` first type-checks production sources with the pinned TypeScript CLI (`lib/_tsc.js`), then invokes esbuild for the proxy, daemon, and board-worker entrypoints. It emits CommonJS self-contained bundles under `dist/src/` plus the required `better_sqlite3.node` binding, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci`.
+`npm run build` first type-checks production sources with the pinned TypeScript CLI (`lib/_tsc.js`), then invokes esbuild for the proxy, daemon, board-worker, CAN-worker, and installer entrypoints. It emits CommonJS self-contained bundles under `dist/src/` plus the required `better_sqlite3.node` binding, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci`.
 
 ## Start
 
