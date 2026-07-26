@@ -123,7 +123,9 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ### One-command install (Windows and macOS)
 
-Prerequisites: Node.js 20–24 and Codex. The installer copies the
+Prerequisites: Node.js 20, 22, or 24 LTS; an authenticated GitHub CLI (`gh auth
+status`); and Codex. This repository is private, so anonymous release URLs do
+not work. The installer copies the
 platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
 bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
 runtime handshake check. Restart Codex after it succeeds.
@@ -131,26 +133,20 @@ runtime handshake check. Restart Codex after it succeeds.
 Windows x64 (PowerShell):
 
 ```powershell
-npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-win32-x64.tgz -- c2000-multicore-setup install
+gh release download v0.6.1 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - | powershell -NoProfile -ExecutionPolicy Bypass -Command -
 ```
 
-macOS Apple Silicon:
+macOS (Apple Silicon and Intel):
 
 ```bash
-npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-darwin-arm64.tgz -- c2000-multicore-setup install
-```
-
-macOS Intel:
-
-```bash
-npm exec --yes --package=https://github.com/gjjisadog/C2000_Multicore_Debug_MCP/releases/download/v0.6.0/c2000-multicore-mcp-0.6.0-darwin-x64.tgz -- c2000-multicore-setup install
+gh release download v0.6.1 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
 ```
 
 The release tag and assets must exist before these download commands can be
 used. For an unpublished local tarball, use the same installer directly:
 
 ```bash
-npm exec --yes --package=./c2000-multicore-mcp-0.6.0-<platform>-<arch>.tgz -- c2000-multicore-setup install
+npm exec --yes --package=./c2000-multicore-mcp-0.6.1-<platform>-<arch>.tgz -- c2000-multicore-setup install
 ```
 
 Useful options:

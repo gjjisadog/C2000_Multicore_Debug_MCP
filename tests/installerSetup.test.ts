@@ -117,6 +117,22 @@ describe("one-command installer", () => {
         "--no-skill",
         "--no-doctor"
       ]);
+      const codexConfigPath = path.join(temporary, "home", ".codex", "config.toml");
+      await mkdir(path.dirname(codexConfigPath), { recursive: true });
+      await writeFile(codexConfigPath, [
+        "model = \"gpt-test\"",
+        "",
+        "[mcp_servers.c2000-multicore]",
+        "command = \"old-node\"",
+        "args = [\"old-entrypoint\"]",
+        "",
+        "[mcp_servers.c2000-multicore.env]",
+        "C2000_MCP_CONFIG = \"old-config.json\"",
+        "",
+        "[mcp_servers.keep-me]",
+        "command = \"keep\"",
+        ""
+      ].join("\n"));
       const result = await runSetup(options, {
         packageRoot,
         homeDirectory: path.join(temporary, "home"),
@@ -128,6 +144,9 @@ describe("one-command installer", () => {
       expect(configToml).toContain("# BEGIN c2000-multicore-mcp managed block");
       expect(configToml).toContain("[mcp_servers.c2000-multicore]");
       expect(configToml).toContain("C2000_MCP_CONFIG");
+      expect(configToml).not.toContain("old-node");
+      expect(configToml).toContain("[mcp_servers.keep-me]");
+      expect(configToml).toContain("model = \"gpt-test\"");
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }

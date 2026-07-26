@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+- Add short authenticated one-command bootstrap scripts for Windows and macOS
+  private-repository installations.
+- Detect the host architecture and require a supported Node.js LTS release
+  before downloading the platform-specific runtime.
+
 ## 0.6.0
 
 - Add `c2000-multicore-setup`, a durable one-command installer for Windows and

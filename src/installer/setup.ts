@@ -336,14 +336,7 @@ function writeManagedCodexConfigSync(
 ): void {
   fs.mkdirSync(path.dirname(configFile), { recursive: true });
   const existing = fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf8") : "";
-  const withoutManagedBlock = removeManagedBlock(existing);
-  const tablePattern = new RegExp(`^\\s*\\[mcp_servers\\.(?:"${escapeRegExp(serverName)}"|${escapeRegExp(serverName)})\\]\\s*$`, "m");
-  if (tablePattern.test(withoutManagedBlock)) {
-    throw new Error(
-      `Codex CLI registration failed (${cliFailure}) and ${configFile} already defines MCP server "${serverName}". `
-      + "Re-run with a different --name or update that entry manually."
-    );
-  }
+  const withoutManagedBlock = removeServerTables(removeManagedBlock(existing), serverName);
   const block = [
     MANAGED_BLOCK_START,
     `# Codex CLI fallback reason: ${cliFailure.replace(/[\r\n]+/g, " ").slice(0, 240)}`,
@@ -365,6 +358,24 @@ function removeManagedBlock(content: string): string {
   const end = content.indexOf(MANAGED_BLOCK_END, start);
   if (end < 0) throw new Error("Codex config contains an incomplete c2000-multicore-mcp managed block");
   return `${content.slice(0, start)}${content.slice(end + MANAGED_BLOCK_END.length)}`;
+}
+
+function removeServerTables(content: string, serverName: string): string {
+  const barePrefix = `mcp_servers.${serverName}`;
+  const quotedPrefix = `mcp_servers.${tomlString(serverName)}`;
+  let removing = false;
+  const kept: string[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const header = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/)?.[1]?.trim();
+    if (header) {
+      removing = header === barePrefix
+        || header.startsWith(`${barePrefix}.`)
+        || header === quotedPrefix
+        || header.startsWith(`${quotedPrefix}.`);
+    }
+    if (!removing) kept.push(line);
+  }
+  return kept.join("\n");
 }
 
 async function installRuntimeAtomically(
@@ -461,10 +472,6 @@ function tomlKey(value: string): string {
 
 function tomlString(value: string): string {
   return JSON.stringify(value);
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export class SetupHelpRequested extends Error {}

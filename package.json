@@ -1,6 +1,6 @@
 {
   "name": "c2000-multicore-mcp",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
   "type": "module",
   "bin": {
@@ -71,7 +71,7 @@
     "fast-uri": "3.1.4"
   },
   "engines": {
-    "node": ">=20.0.0 <25"
+    "node": ">=20.19.0 <21 || >=22.12.0 <23 || >=24.0.0 <25"
   },
   "files": [
     "dist/**",

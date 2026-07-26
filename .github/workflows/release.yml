@@ -51,6 +51,7 @@ jobs:
     needs: package
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: c2000-multicore-mcp-*
@@ -63,3 +64,5 @@ jobs:
             release-assets/**/SHA256SUMS-*.json
             release-assets/**/runtime-manifest-*.json
             release-assets/**/sbom-*.cdx.json
+            scripts/install-release.ps1
+            scripts/install-release.sh
