@@ -55,6 +55,7 @@ interface SetupDependencies {
   packageRoot?: string;
   platform?: NodeJS.Platform;
   arch?: string;
+  nodeVersion?: string;
   nodeModulesAbi?: string;
   homeDirectory?: string;
   cwd?: string;
@@ -122,6 +123,23 @@ export function validateRuntimeManifest(
   }
 }
 
+export function validateNodeVersion(nodeVersion: string): void {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(nodeVersion.trim());
+  if (!match) {
+    throw new Error(`Could not parse active Node.js version: ${nodeVersion}`);
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12);
+  if (!supported) {
+    throw new Error(
+      `Node.js ${match[1]}.${match[2]}.${match[3]} is unsupported. `
+      + "Use Node.js 22.12+ LTS (recommended) or Node.js 20.19+ LTS. "
+      + "Node.js 24 is not supported by the current published native dependency bundle."
+    );
+  }
+}
+
 export function buildCodexMcpAddArgs(
   serverName: string,
   entrypoint: string,
@@ -176,11 +194,13 @@ export function createInstalledConfig(workspace: string, runtimeDirectory: strin
 export async function runSetup(options: SetupOptions, dependencies: SetupDependencies = {}): Promise<SetupResult> {
   const platform = dependencies.platform ?? process.platform;
   const arch = dependencies.arch ?? process.arch;
+  const nodeVersion = dependencies.nodeVersion ?? process.version;
   const nodeModulesAbi = dependencies.nodeModulesAbi ?? process.versions.modules;
   const homeDirectory = dependencies.homeDirectory ?? os.homedir();
   const cwd = path.resolve(dependencies.cwd ?? process.cwd());
   const env = dependencies.env ?? process.env;
   const packageRoot = dependencies.packageRoot ?? await findPackageRoot(process.argv[1]);
+  validateNodeVersion(nodeVersion);
   const manifestPath = path.join(packageRoot, "dist", "src", "runtime-manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as RuntimeManifest;
   validateRuntimeManifest(manifest, { platform, arch, nodeModulesAbi }, { allowAbiMismatch: true });

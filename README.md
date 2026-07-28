@@ -123,9 +123,13 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ### One-command install (Windows and macOS)
 
-Prerequisites: Node.js 20, 22, or 24 LTS; an authenticated GitHub CLI (`gh auth
-status`); and Codex. This repository is private, so anonymous release URLs do
-not work. The installer copies the
+Prerequisites: Node.js 22.12+ LTS (recommended) or Node.js 20.19+ LTS; an
+authenticated GitHub CLI (`gh auth status --hostname github.com`); and Codex.
+Node.js 24 is not currently supported by the published native dependency bundle.
+This repository is private, so anonymous release URLs do not work. The
+bootstrap fails before downloading when the Node version or GitHub
+authentication is invalid, verifies the release archive against the published
+SHA-256 metadata, and removes its temporary download directory. The installer copies the
 platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
 bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
 runtime handshake check. Restart Codex after it succeeds.
@@ -163,6 +167,27 @@ cannot be launched, it writes a clearly marked, replaceable block to
 rewriting unrelated configuration.
 
 ### Install from source
+
+Windows x64 should use the isolated source installer:
+
+```powershell
+npm run install:source:windows
+```
+
+Pass installer options after `--`, for example:
+
+```powershell
+npm run install:source:windows -- --config C:\absolute\c2000.json --force
+```
+
+This path validates the complete Node version before changing dependencies,
+skips `npm ci` when the lockfile dependencies and native SQLite binding are
+already usable, and builds under a unique temporary directory. It never
+overwrites the repository `dist` directory, so running Codex MCP
+proxy/supervisor/daemon processes cannot lock the upgrade build. The temporary
+staging directory is removed on success or failure.
+
+The lower-level cross-platform development sequence remains:
 
 ```bash
 npm ci

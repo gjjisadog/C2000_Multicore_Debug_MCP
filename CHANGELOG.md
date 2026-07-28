@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Fail fast on unsupported Node patch/minor versions and invalid private GitHub
+  authentication before downloading release assets; verify downloaded archives
+  against published SHA-256 metadata and clean temporary files.
+- Add a Windows isolated source installer that reuses healthy dependencies,
+  builds outside the repository `dist` directory to avoid live MCP file locks,
+  installs through the bundled setup entrypoint, and always removes staging
+  files.
+- Align the supported runtime contract and documentation with tested Node
+  20.19+ and Node 22.12+ releases; recommend Node 22 and stop advertising Node
+  24 while the Windows native dependency bundle requires an unavailable
+  prebuilt binding or an extra ClangCL toolchain.
 - Add `c2000_registerBoard` for validated, persisted XDS110 registration and
   isolated worker startup without manual daemon config editing.
 - Route safe/action launch wrappers through the same daemon worker and lease
