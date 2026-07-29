@@ -32,33 +32,29 @@ if ($LASTEXITCODE -ne 0) {
   throw "GitHub CLI authentication is invalid. Run 'gh auth login --hostname github.com' and retry."
 }
 
-if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
-  throw "npm.cmd was not found next to the active Node.js installation."
-}
-
-$assetName = "c2000-multicore-mcp-$($tag.TrimStart('v'))-win32-x64.tgz"
-$checksumName = "SHA256SUMS-win32-x64.json"
+$nodeAbi = & node -p "process.versions.modules"
+if ($LASTEXITCODE -ne 0) { throw "Failed to read the active Node modules ABI." }
+$target = "win32-x64-abi$nodeAbi"
+$assetPattern = "c2000-multicore-mcp-*-$target.tgz"
+$checksumName = "SHA256SUMS-$target.json"
+$offlineInstallerName = "install-offline.ps1"
 $downloadDirectory = Join-Path ([System.IO.Path]::GetTempPath()) "c2000-multicore-mcp-$tag-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Path $downloadDirectory | Out-Null
 
 try {
-  & gh release download $tag --repo $repository --pattern $assetName --pattern $checksumName --dir $downloadDirectory
+  & gh release download $tag --repo $repository --pattern $assetPattern --pattern $checksumName --pattern $offlineInstallerName --dir $downloadDirectory
   if ($LASTEXITCODE -ne 0) {
-    throw "Failed to download $assetName. Confirm the release exists and the authenticated account can access it."
+    throw "Failed to download the $target package. Confirm the release exists and the authenticated account can access it."
   }
 
-  $assetPath = Join-Path $downloadDirectory $assetName
+  $assetFiles = @(Get-ChildItem -LiteralPath $downloadDirectory -File -Filter $assetPattern)
+  if ($assetFiles.Count -ne 1) {
+    throw "Expected exactly one $target package in release $tag; found $($assetFiles.Count)."
+  }
+  $assetPath = $assetFiles[0].FullName
   $checksumPath = Join-Path $downloadDirectory $checksumName
-  $metadata = Get-Content -Raw -LiteralPath $checksumPath | ConvertFrom-Json
-  $expected = @($metadata.files) | Where-Object { $_.file -eq $assetName } | Select-Object -First 1
-  if (-not $expected) { throw "Release checksum metadata does not contain $assetName." }
-  $actualHash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
-  if ($actualHash -ne "$($expected.sha256)".ToLowerInvariant()) {
-    throw "Release checksum mismatch for $assetName."
-  }
-
-  $npmAssetPath = $assetPath.Replace("\", "/")
-  & npm.cmd exec --yes "--package=file:$npmAssetPath" -- c2000-multicore-setup install @InstallerArguments
+  $offlineInstallerPath = Join-Path $downloadDirectory $offlineInstallerName
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $offlineInstallerPath -PackagePath $assetPath -ChecksumPath $checksumPath @InstallerArguments
   if ($LASTEXITCODE -ne 0) {
     throw "C2000 Multicore MCP installation failed."
   }

@@ -16,18 +16,25 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: win32-x64
+            target: win32-x64-abi115
+            node: "20.19"
+          - os: windows-latest
+            target: win32-x64-abi127
+            node: "22.12"
           - os: ubuntu-latest
             target: linux-x64
+            node: "22.12"
           - os: macos-14
             target: darwin-arm64
+            node: "22.12"
           - os: macos-15-intel
             target: darwin-x64
+            node: "22.12"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm }
+        with: { node-version: "${{ matrix.node }}", cache: npm }
       - run: npm ci
       - run: npm run build
       - run: npm pack
@@ -56,6 +63,17 @@ jobs:
         with:
           pattern: c2000-multicore-mcp-*
           path: release-assets
+      - name: Build Windows offline bundle
+        shell: pwsh
+        run: |
+          $bundle = "offline-bundle-win32-x64"
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          Copy-Item scripts/install-offline.ps1 $bundle
+          Get-ChildItem release-assets -Recurse -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz" | Copy-Item -Destination $bundle
+          Get-ChildItem release-assets -Recurse -File -Filter "SHA256SUMS-win32-x64-abi*.json" | Copy-Item -Destination $bundle
+          $abis = Get-ChildItem $bundle -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz"
+          if ($abis.Count -ne 2) { throw "Expected Node 20 and Node 22 Windows packages in the offline bundle." }
+          Compress-Archive -Path "$bundle/*" -DestinationPath "offline-bundle-win32-x64.zip"
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
@@ -64,5 +82,7 @@ jobs:
             release-assets/**/SHA256SUMS-*.json
             release-assets/**/runtime-manifest-*.json
             release-assets/**/sbom-*.cdx.json
+            offline-bundle-win32-x64.zip
             scripts/install-release.ps1
+            scripts/install-offline.ps1
             scripts/install-release.sh

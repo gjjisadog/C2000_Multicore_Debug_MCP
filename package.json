@@ -44,6 +44,7 @@
     "verify:runtime-cwd": "npm run build --silent && node scripts/c2000-mcp-doctor.mjs --isolated --verify-worker",
     "verify:package": "node scripts/verify-package-install.mjs",
     "install:source:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-source.ps1",
+    "install:offline:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-offline.ps1",
     "benchmark:debug": "tsx scripts/debug-performance-benchmark.ts",
     "benchmark:hardware": "tsx scripts/debug-hardware-benchmark.ts",
     "acceptance:preflight": "tsx scripts/ccs-preflight.ts",

@@ -61,16 +61,22 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            target: win32-x64
+            target: win32-x64-abi115
+            node: "20.19"
+          - os: windows-latest
+            target: win32-x64-abi127
+            node: "22.12"
           - os: macos-14
             target: darwin-arm64
+            node: "22.12"
           - os: macos-15-intel
             target: darwin-x64
+            node: "22.12"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm }
+        with: { node-version: "${{ matrix.node }}", cache: npm }
       - run: npm ci
       - run: npm run build
       - run: npm pack
