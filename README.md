@@ -128,8 +128,10 @@ authenticated GitHub CLI (`gh auth status --hostname github.com`); and Codex.
 Node.js 24 is not currently supported by the published native dependency bundle.
 This repository is private, so anonymous release URLs do not work. The
 bootstrap fails before downloading when the Node version or GitHub
-authentication is invalid, verifies the release archive against the published
-SHA-256 metadata, and removes its temporary download directory. The installer copies the
+authentication is invalid, selects the runtime for the active Node ABI, verifies
+the release archive against the published SHA-256 metadata, and removes its
+temporary download directory. No npm command or dependency download is used.
+The installer copies the
 platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
 bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
 runtime handshake check. Restart Codex after it succeeds.
@@ -147,10 +149,32 @@ gh release download v0.6.1 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-rel
 ```
 
 The release tag and assets must exist before these download commands can be
-used. For an unpublished local tarball, use the same installer directly:
+used.
 
-```bash
-npm exec --yes --package=./c2000-multicore-mcp-0.6.1-<platform>-<arch>.tgz -- c2000-multicore-setup install
+### One-command offline install (Windows x64)
+
+On a connected machine, download `offline-bundle-win32-x64.zip` from the
+release and transfer it to the offline machine. The bundle contains the native
+runtimes for Node 20 ABI 115 and Node 22 ABI 127, their SHA-256 metadata, and
+the installer. Extract it and run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-offline.ps1
+```
+
+The script detects the active ABI, selects the matching local `.tgz`, verifies
+the archive SHA-256 and size, rejects unsafe archive paths, verifies the
+platform, ABI, and bundled native binding, directly runs
+`dist/src/installer/index.js`, and finishes with the installer's doctor check.
+It never invokes npm or accesses the network.
+
+For an unpublished or separately transferred package, pass both files
+explicitly:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-offline.ps1 `
+  -PackagePath .\c2000-multicore-mcp-0.6.1-win32-x64-abi127.tgz `
+  -ChecksumPath .\SHA256SUMS-win32-x64-abi127.json
 ```
 
 Useful options:
