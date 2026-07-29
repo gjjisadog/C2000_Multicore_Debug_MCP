@@ -1,6 +1,6 @@
 {
   "name": "c2000-multicore-mcp",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
   "type": "module",
   "bin": {
@@ -43,14 +43,25 @@
     "doctor:isolated": "node scripts/c2000-mcp-doctor.mjs --isolated",
     "verify:runtime-cwd": "npm run build --silent && node scripts/c2000-mcp-doctor.mjs --isolated --verify-worker",
     "verify:package": "node scripts/verify-package-install.mjs",
+    "verify:python-package": "python scripts/verify-python-package.py",
     "install:source:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-source.ps1",
     "install:offline:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-offline.ps1",
     "benchmark:debug": "tsx scripts/debug-performance-benchmark.ts",
     "benchmark:hardware": "tsx scripts/debug-hardware-benchmark.ts",
     "acceptance:preflight": "tsx scripts/ccs-preflight.ts",
-    "acceptance:ready": "npm run build --silent && tsx scripts/ccs-acceptance-readiness.ts",
+    "acceptance:ready": "tsx scripts/hardware-gated-run.ts --operation acceptance:ready --script scripts/ccs-acceptance-readiness.ts",
     "acceptance:ccs": "tsx scripts/ccs-hardware-acceptance.ts",
-    "acceptance:ccs:mcp": "npm run build --silent && tsx scripts/ccs-mcp-hardware-acceptance.ts"
+    "acceptance:ccs:mcp": "tsx scripts/hardware-gated-run.ts --operation acceptance:ccs:mcp --script scripts/ccs-mcp-hardware-acceptance.ts",
+    "acceptance:hardware:single-board": "tsx scripts/hardware-acceptance.ts --scope single-board",
+    "acceptance:hardware:multicore": "tsx scripts/hardware-acceptance.ts --scope multicore",
+    "acceptance:hardware:variables": "tsx scripts/hardware-acceptance.ts --scope variables",
+    "acceptance:hardware:dlog": "tsx scripts/hardware-acceptance.ts --scope dlog",
+    "acceptance:hardware:erad": "tsx scripts/hardware-acceptance.ts --scope erad",
+    "acceptance:hardware:trace": "tsx scripts/hardware-acceptance.ts --scope trace",
+    "acceptance:hardware:can": "tsx scripts/hardware-acceptance.ts --scope can",
+    "acceptance:hardware:two-board": "tsx scripts/hardware-acceptance.ts --scope two-board",
+    "acceptance:hardware:soak": "tsx scripts/hardware-acceptance.ts --scope soak",
+    "acceptance:hardware:all": "tsx scripts/hardware-acceptance.ts --scope all"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -76,8 +87,15 @@
     "node": ">=20.19.0 <21 || >=22.12.0 <23"
   },
   "files": [
-    "dist/**",
+    "dist/src/**",
     "scripts/c2000-mcp-doctor.mjs",
+    "scripts/install-release.sh",
+    "scripts/install-release.ps1",
+    "scripts/install-source.ps1",
+    "scripts/install-offline.ps1",
+    "python/pyproject.toml",
+    "python/README.md",
+    "python/src/**",
     "skills/c2000-multicore-debug/**",
     "README.md",
     "CHANGELOG.md"

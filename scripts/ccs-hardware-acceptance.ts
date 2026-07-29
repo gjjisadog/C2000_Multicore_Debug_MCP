@@ -13,7 +13,10 @@ import { formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { getToolContracts } from "../src/mcp/tools.js";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
+import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";
 
+requireHardwareOptIn({ operation: "acceptance:ccs" });
+requireSupportedHardwareRuntime("acceptance:ccs");
 const environment = await resolveTiEnvironment({
   ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
   c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,

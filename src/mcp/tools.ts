@@ -6,6 +6,24 @@ import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
 import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy.js";
 import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import {
+  exportVariableStreamSchema,
+  getVariableStreamStatusSchema,
+  readVariableSamplesSchema,
+  startVariableStreamSchema,
+  stopVariableStreamSchema
+} from "../observability/VariableStreamSchemas.js";
+import { dlogBufferRequestSchema } from "../observability/DlogSchemas.js";
+import {
+  configureEradProfileSchema,
+  exportEradProfileSchema,
+  getEradCapabilitiesSchema,
+  readEradProfileSchema,
+  startEradProfileSchema,
+  stopEradProfileSchema
+} from "../observability/EradSchemas.js";
+import { collectFailureBundleSchema, exportTraceSchema } from "../observability/TraceSchemas.js";
+import { compareRunWithBaselineSchema, createRunBaselineSchema } from "../analytics/MetricSchemas.js";
+import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
   acceptanceReadinessSchema,
@@ -79,7 +97,8 @@ type ToolTargetEffect =
   | "symbol-load"
   | "memory-write"
   | "launch-workflow"
-  | "job-control";
+  | "job-control"
+  | "observation-control";
 
 type ToolRole = "primary" | "alias" | "workflow" | "host" | "diagnostic";
 type ToolFamily =
@@ -93,7 +112,8 @@ type ToolFamily =
   | "write"
   | "wait"
   | "diagnosis"
-  | "workflow";
+  | "workflow"
+  | "observability";
 
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
@@ -206,6 +226,25 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_exportTrace", title: "Export C2000 Perfetto Trace", description: "Atomically export an offline Perfetto timeline from durable SQLite and/or completed artifacts. It never reconnects to a target or changes a job result.", schema: exportTraceSchema, handlerName: "exportTrace", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_compareRunWithBaseline", title: "Compare C2000 Run With Baseline", description: "Compare deterministic run metrics with a compatible baseline using explicit thresholds. Identity mismatches fail closed unless explicitly overridden.", schema: compareRunWithBaselineSchema, handlerName: "compareRunWithBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_startVariableStream", title: "Start C2000 Slow Variable Stream", description: "Start one bounded, low-priority host-polled variable stream for one explicit board/session/core. This does not halt the target and is not a high-rate waveform sampler.", schema: startVariableStreamSchema, handlerName: "startVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_stopVariableStream", title: "Stop C2000 Slow Variable Stream", description: "Idempotently stop or cancel an explicitly identified variable stream.", schema: stopVariableStreamSchema, handlerName: "stopVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getVariableStreamStatus", title: "Get C2000 Variable Stream Status", description: "Read persisted stream identity, metadata, statistics, status, and artifact status without touching the target.", schema: getVariableStreamStatusSchema, handlerName: "getVariableStreamStatus", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readVariableSamples", title: "Read C2000 Variable Samples", description: "Page through ordered variable samples persisted by c2000-debugd without touching the target.", schema: readVariableSamplesSchema, handlerName: "readVariableSamples", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName", "samples[].coreId", "samples[].coreName"] },
+  { name: "c2000_exportVariableStream", title: "Export C2000 Variable Stream", description: "Idempotently generate the portable variable-stream evidence snapshot from SQLite.", schema: exportVariableStreamSchema, handlerName: "exportVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_describeDlogBuffer", title: "Describe C2000 DLOG Buffer", description: "Resolve and validate a read-only structure-of-arrays DLOG buffer on one explicit board/session/core without reading its samples.", schema: dlogBufferRequestSchema, handlerName: "describeDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getDlogStatus", title: "Get C2000 DLOG Status", description: "Read DLOG state, write index, trigger index, optional capture generation, and sample rate from one explicit core.", schema: dlogBufferRequestSchema, handlerName: "getDlogStatus", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readDlogBuffer", title: "Read C2000 DLOG Buffer", description: "Read and normalize an existing target-side DLOG capture with bounded consistency retries. This never arms or modifies firmware.", schema: dlogBufferRequestSchema, handlerName: "readDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_exportDlog", title: "Export C2000 DLOG", description: "Read a consistent target-side DLOG capture and atomically export dlog.json, dlog.csv, and the standard evidence snapshot.", schema: dlogBufferRequestSchema, handlerName: "exportDlog", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getEradCapabilities", title: "Get F28P65x ERAD Capabilities", description: "Inspect F28P65x ERAD ownership, occupied resources, and supported first-version profiling features on one explicit board/session/core.", schema: getEradCapabilitiesSchema, handlerName: "getEradCapabilities", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_configureEradProfile", title: "Configure F28P65x ERAD Profile", description: "Resolve a PC range and configure explicitly fenced F28P65x ERAD resources. This writes ERAD registers and never silently overwrites occupied resources.", schema: configureEradProfileSchema, handlerName: "configureEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_startEradProfile", title: "Start F28P65x ERAD Profile", description: "Enable a previously configured ERAD profile on its frozen board/session/core and resource set.", schema: startEradProfileSchema, handlerName: "startEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_stopEradProfile", title: "Stop F28P65x ERAD Profile", description: "Idempotently stop or cancel an ERAD profile, read counters, and restore the prior selected-resource configuration.", schema: stopEradProfileSchema, handlerName: "stopEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readEradProfile", title: "Read F28P65x ERAD Profile", description: "Read persisted ERAD profile status and completed statistics without touching the target.", schema: readEradProfileSchema, handlerName: "readEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_exportEradProfile", title: "Export F28P65x ERAD Profile", description: "Idempotently export erad.json and the standardized atomic evidence snapshot for a terminal profile.", schema: exportEradProfileSchema, handlerName: "exportEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return tool taxonomy: families, preferred atomic tools vs aliases, and input scope metadata.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return runtime and adapter health without touching a target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Resolve CCS, C2000Ware, and target configuration paths without touching a target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
@@ -467,6 +506,17 @@ function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annota
 }
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
+  if (targetEffect === "observation-control") {
+    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline") return ["host-read", "bundle-write"];
+    if (name === "c2000_startVariableStream") return ["target-read", "bundle-write"];
+    if (name === "c2000_exportVariableStream") return ["bundle-write"];
+    if (name === "c2000_stopVariableStream") return ["host-write"];
+    if (name === "c2000_exportDlog") return ["target-read", "bundle-write"];
+    if (name === "c2000_describeDlogBuffer" || name === "c2000_getDlogStatus" || name === "c2000_readDlogBuffer") return ["target-read"];
+    if (name === "c2000_exportEradProfile") return ["bundle-write"];
+    if (name === "c2000_readEradProfile") return ["host-read"];
+    return ["host-read"];
+  }
   if (targetEffect === "host-read" || targetEffect === "session-read") return ["host-read"];
   if (name === "c2000_createDebugSession") return ["session-create", "host-process-terminate"];
   if (name === "c2000_closeDebugSession") return ["session-dispose"];
@@ -476,7 +526,11 @@ function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] 
   if (targetEffect === "program-load") return ["program-load", "ram-ownership-change"];
   if (targetEffect === "symbol-load") return ["symbol-load"];
   if (targetEffect === "memory-write") return name.includes("injectFault") ? ["target-memory-write", "fault-injection"] : ["target-memory-write"];
-  if (targetEffect === "job-control") return name === "c2000_recoverBoard" ? ["host-process-terminate"] : ["host-write"];
+  if (targetEffect === "job-control") {
+    if (name === "c2000_recoverBoard") return ["host-process-terminate"];
+    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline") return ["host-read", "bundle-write"];
+    return ["host-write"];
+  }
   if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];
   if (name === "c2000_runBootHandoffDiagnosis") return ["target-read"];
   if (name === "c2000_runFullDebugBundle") return ["target-read", "bundle-write"];

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "runId": "round8-2026-07-29-no-hardware",
+  "selectedScope": "all",
+  "resultPath": "hardware-acceptance-result.json",
+  "eventsPath": "hardware-acceptance-events.jsonl",
+  "reportPath": "HARDWARE_ACCEPTANCE_REPORT.md",
+  "generatedFiles": [
+    {
+      "path": "hardware-acceptance-result.json",
+      "sha256": "d5fff6d1965f807d11758b6eb97ada05b905138d1950fcd46c2d182efc442ac7",
+      "size": 9621
+    },
+    {
+      "path": "hardware-acceptance-events.jsonl",
+      "sha256": "4e3beddf522516a2d904012a37de1421b122238795ab27e94b6047a23877405c",
+      "size": 5739
+    },
+    {
+      "path": "HARDWARE_ACCEPTANCE_REPORT.md",
+      "sha256": "ed110c810a4cc3e2dd5cf1a4dcb9a8f0a25ec1533e917ae52654cabfa2a22ec1",
+      "size": 6473
+    }
+  ],
+  "completeness": "COMPLETE",
+  "incompleteReason": null
+}

@@ -6,6 +6,7 @@ export interface WorkerRecord {
   pid: number;
   processStartTime: string;
   daemonInstanceId: string;
+  workerGeneration?: number;
   status: string;
   startedAt: string;
   lastHeartbeatAt?: string;
@@ -20,6 +21,7 @@ interface WorkerRow {
   pid: number;
   process_start_time: string;
   daemon_instance_id: string;
+  worker_generation: number;
   status: string;
   started_at: string;
   last_heartbeat_at: string | null;
@@ -32,16 +34,17 @@ export class WorkerRepository {
   constructor(private readonly store: SqliteStore) {}
 
   upsert(worker: WorkerRecord): void {
+    const workerGeneration = worker.workerGeneration ?? this.get(worker.workerInstanceId)?.workerGeneration ?? this.nextGeneration(worker.boardId);
     this.store.run(`
-      INSERT INTO workers(worker_instance_id, board_id, pid, process_start_time, daemon_instance_id, status, started_at, last_heartbeat_at, current_command_id, owned_dss_processes_json, last_error_json)
-      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO workers(worker_instance_id, board_id, pid, process_start_time, daemon_instance_id, worker_generation, status, started_at, last_heartbeat_at, current_command_id, owned_dss_processes_json, last_error_json)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(worker_instance_id) DO UPDATE SET
         status = excluded.status,
         last_heartbeat_at = excluded.last_heartbeat_at,
         current_command_id = excluded.current_command_id,
         owned_dss_processes_json = excluded.owned_dss_processes_json,
         last_error_json = excluded.last_error_json
-    `, [worker.workerInstanceId, worker.boardId, worker.pid, worker.processStartTime, worker.daemonInstanceId, worker.status, worker.startedAt, worker.lastHeartbeatAt ?? null, worker.currentCommandId ?? null, JSON.stringify(worker.ownedDssProcesses), worker.lastError ? JSON.stringify(worker.lastError) : null]);
+    `, [worker.workerInstanceId, worker.boardId, worker.pid, worker.processStartTime, worker.daemonInstanceId, workerGeneration, worker.status, worker.startedAt, worker.lastHeartbeatAt ?? null, worker.currentCommandId ?? null, JSON.stringify(worker.ownedDssProcesses), worker.lastError ? JSON.stringify(worker.lastError) : null]);
   }
 
   heartbeat(workerInstanceId: string, status: string, currentCommandId?: string): void {
@@ -50,6 +53,15 @@ export class WorkerRepository {
 
   list(): WorkerRecord[] {
     return this.store.all<WorkerRow>("SELECT * FROM workers ORDER BY started_at").map(mapWorker);
+  }
+
+  nextGeneration(boardId: string): number {
+    return Number(this.store.get<{ generation: number }>("SELECT COALESCE(MAX(worker_generation), 0) + 1 AS generation FROM workers WHERE board_id = ?", [boardId])?.generation ?? 1);
+  }
+
+  get(workerInstanceId: string): WorkerRecord | undefined {
+    const row = this.store.get<WorkerRow>("SELECT * FROM workers WHERE worker_instance_id = ?", [workerInstanceId]);
+    return row ? mapWorker(row) : undefined;
   }
 
   countHealthy(): { total: number; healthy: number; unhealthy: number } {
@@ -66,6 +78,7 @@ function mapWorker(row: WorkerRow): WorkerRecord {
     pid: row.pid,
     processStartTime: row.process_start_time,
     daemonInstanceId: row.daemon_instance_id,
+    workerGeneration: row.worker_generation,
     status: row.status,
     startedAt: row.started_at,
     ...(row.last_heartbeat_at ? { lastHeartbeatAt: row.last_heartbeat_at } : {}),

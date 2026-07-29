@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Add Round 8 F28P65x hardware-acceptance result/event/manifest schemas and
+  atomic `HARDWARE_ACCEPTANCE_REPORT.md` generation.
+- Add fail-closed general, PCAN, two-board, and supported-Node runtime gates
+  before CCS/DSS/XDS110/PCAN access.
+- Add standardized `acceptance:hardware:*` entry points with explicit
+  evidence classifications and no Mock-to-hardware promotion.
+- Move the `acceptance:ready` and `acceptance:ccs:mcp` opt-in gate before
+  their build step.
+- Add the pure-Python `c2000-hil` SDK and pytest fixture. The SDK speaks only
+  authenticated daemon RPC, acquires/releases boards through explicit debug
+  sessions, and never opens DSS, XDS110, SQLite, or PCAN directly.
+- Add deterministic run metrics (`metrics.json`) with raw-source linkage,
+  linear-R7 percentiles, population standard deviation, invalid/miss/overflow
+  counters, and DLOG RMS derivation.
+- Add `c2000_createRunBaseline` and `c2000_compareRunWithBaseline` with
+  firmware, device, board-profile, test-plan, metric-schema, tool-version, and
+  evidence-level identity binding. Incompatible comparisons fail closed unless
+  the caller explicitly records an override.
+- Package the Python SDK with the npm runtime, add an offline-safe Python
+  packaging smoke check, and keep CycloneDX SBOM/SHA-256 generation in the
+  release workflow.
 - Fail fast on unsupported Node patch/minor versions and invalid private GitHub
   authentication before downloading release assets; verify downloaded archives
   against published SHA-256 metadata and clean temporary files.

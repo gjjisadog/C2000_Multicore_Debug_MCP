@@ -2,6 +2,72 @@
 
 Independent MCP server for explicit TI C2000 multicore debug control. The first implementation targets F28P65x CPU1/CPU2 workflows and keeps all debug APIs scoped by `sessionId` and `coreId`.
 
+## Capability status
+
+| Capability | Status | Evidence |
+|---|---|---|
+| Daemon/job/lease/worker persistence | Mock verified; selected hardware manually verified | Automated SQLite/Mock tests plus prior explicit F28P65x acceptance |
+| Variable stream | Implemented but not hardware verified | Deterministic Mock only; host polling, minimum configured period 10 ms |
+| Read-only DLOG export (SoA) | Implemented but not hardware verified | Deterministic Mock only |
+| F28P65x ERAD profiling | Implemented but not hardware verified | Structured Mock ERAD backend only |
+| Perfetto trace/failure bundle | Mock verified | Offline SQLite/artifact regeneration tests |
+| Python pytest HIL SDK | Mock verified | Fake daemon contract tests; hardware is explicit opt-in |
+| Deterministic metrics/baselines | Mock verified | Raw-linked metric and compatibility/threshold tests |
+| DLOG arm/trigger writes | Unsupported | No write capability is exposed |
+| CLA timing, cross-core ERAD synchronization | Planned | No completion claim |
+
+Automated Mock results are never classified as real XDS110, PCAN, DLOG, ERAD,
+or target-timing evidence.
+
+## pytest HIL SDK
+
+The package contains a pure-Python SDK under `python/`. Install it from a
+release/offline bundle without resolving network dependencies:
+
+```text
+python -m pip install --no-deps ./python
+```
+
+The SDK reads daemon discovery metadata and calls authenticated public RPC. It
+does not import CCS libraries, access XDS110/PCAN, or read SQLite tables.
+Creating `c2000_board` calls `c2000_createDebugSession` with an explicit
+`boardId` and CPU1/CPU2 core map; the daemon owns and fences the lease.
+Fixture teardown closes the session and releases that lease.
+
+```python
+def test_cpu2_boots(c2000_board):
+    c2000_board.load_programs(cpu1="cpu1.out", cpu2="cpu2.out")
+    c2000_board.run(core_id=0)
+    result = c2000_board.wait_for_variable(
+        core_id=2,
+        symbol="g_stBoot.uiIpcReady",
+        equals=1,
+        timeout=5.0,
+    )
+    assert result.matched
+```
+
+Normal `pytest` does not contact a daemon or target. Use
+`C2000_HIL_MODE=mock` for a registered Mock daemon. Real hardware additionally
+requires `C2000_HARDWARE_TEST=1`; the fixture skips when CCS/XDS110, a matching
+board, requested PCAN capability, or two-board capacity is unavailable.
+
+## Deterministic metrics and baselines
+
+`c2000_createRunBaseline` regenerates `metrics.json` from durable job events and
+available variable, DLOG, ERAD, and CAN evidence, then creates an atomic
+baseline under `artifacts/baselines/`. Metrics retain raw numeric samples and
+source selectors; statistics use linear-R7 percentiles and population standard
+deviation. A baseline stores statistics plus a SHA-256 link to the source
+`metrics.json`, so it does not replace measurement evidence.
+
+`c2000_compareRunWithBaseline` rejects firmware, CPU image, test plan/version,
+device, board-profile, or metric-schema mismatches by default. An explicit
+`allowCompatibleComparison` records an `OVERRIDDEN` compatibility status.
+Supported first-version rules are upper/lower bound, absolute difference,
+relative increase, and p95/p99 upper bounds. Comparisons are artifacts and
+never modify the original job verdict.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.
@@ -139,13 +205,13 @@ runtime handshake check. Restart Codex after it succeeds.
 Windows x64 (PowerShell):
 
 ```powershell
-gh release download v0.6.1 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - | powershell -NoProfile -ExecutionPolicy Bypass -Command -
 ```
 
 macOS (Apple Silicon and Intel):
 
 ```bash
-gh release download v0.6.1 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
+gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
 ```
 
 The release tag and assets must exist before these download commands can be
@@ -173,7 +239,7 @@ explicitly:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-offline.ps1 `
-  -PackagePath .\c2000-multicore-mcp-0.6.1-win32-x64-abi127.tgz `
+  -PackagePath .\c2000-multicore-mcp-0.7.0-win32-x64-abi127.tgz `
   -ChecksumPath .\SHA256SUMS-win32-x64-abi127.json
 ```
 
@@ -1414,3 +1480,38 @@ Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true
 Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, and wait time. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
 
 The default `owned-and-stale` recovery policy blocks on a live external DSLite owner. For a dedicated unattended test machine, set `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external`; only the FIFO lease holder may then send TERM/KILL to detected DSLite, DebugServer, or dss.sh processes before starting the test. The CCS application itself is not terminated. `c2000_createDebugSession` returns `probeQueue` and `probeRecovery` evidence so callers can see queue position, wait time, and recovered PIDs.
+
+## F28P65x hardware acceptance
+
+Hardware acceptance is fail-closed. Without `C2000_HARDWARE_TEST=1`, every
+hardware entry prints `SKIPPED_NO_HARDWARE` and exits before CCS discovery,
+DSS startup, XDS110 access, program load, reset, or PCAN initialization.
+PCAN additionally requires `C2000_PCAN_HARDWARE_TEST=1`; two-board tests also
+require `C2000_TWO_BOARD_TEST=1`.
+
+The standardized source-checkout entry points are:
+
+```text
+npm run acceptance:hardware:single-board
+npm run acceptance:hardware:multicore
+npm run acceptance:hardware:variables
+npm run acceptance:hardware:dlog
+npm run acceptance:hardware:erad
+npm run acceptance:hardware:trace
+npm run acceptance:hardware:can
+npm run acceptance:hardware:two-board
+npm run acceptance:hardware:soak
+npm run acceptance:hardware:all
+```
+
+Each entry writes `HARDWARE_ACCEPTANCE_REPORT.md`,
+`hardware-acceptance-result.json`, `hardware-acceptance-events.jsonl`, and
+`hardware-acceptance-manifest.json`. Results use only
+`PASS_HARDWARE`, `FAIL_HARDWARE`, `SKIPPED_NO_HARDWARE`,
+`SKIPPED_UNSUPPORTED`, `INCONCLUSIVE`, or `PASS_MOCK`.
+
+The report orchestrator currently provides complete opt-in gating and
+machine-readable evidence aggregation. It deliberately reports
+`SKIPPED_UNSUPPORTED` after opt-in for scopes that do not yet have a dedicated
+automated target-side executor; it never turns an existing CCS/PCAN preflight
+or Mock result into `PASS_HARDWARE`.

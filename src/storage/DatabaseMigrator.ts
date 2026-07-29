@@ -370,6 +370,126 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_can_adapter_fencing ON can_adapter_leases(adapter_id, channel, fencing_token DESC);
       `);
     }
+  },
+  {
+    version: 6,
+    apply(store) {
+      store.exec(`
+        ALTER TABLE workers ADD COLUMN worker_generation INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE events ADD COLUMN sequence INTEGER;
+        ALTER TABLE events ADD COLUMN monotonic_timestamp_ns TEXT;
+        ALTER TABLE events ADD COLUMN worker_generation INTEGER;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_events_job_sequence
+          ON events(job_id, sequence)
+          WHERE job_id IS NOT NULL AND sequence IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS artifact_exports (
+          job_id TEXT PRIMARY KEY,
+          root_path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          completeness TEXT NOT NULL,
+          last_error_json TEXT,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(job_id) REFERENCES test_runs(job_id)
+        );
+      `);
+      const jobs = store.all<{ job_id: string }>("SELECT DISTINCT job_id FROM events WHERE job_id IS NOT NULL ORDER BY job_id");
+      for (const job of jobs) {
+        const rows = store.all<{ event_id: string }>("SELECT event_id FROM events WHERE job_id = ? ORDER BY timestamp, rowid", [job.job_id]);
+        rows.forEach((row, index) => {
+          store.run("UPDATE events SET sequence = ?, monotonic_timestamp_ns = ? WHERE event_id = ?", [index + 1, String(index + 1), row.event_id]);
+        });
+      }
+    }
+  },
+  {
+    version: 7,
+    apply(store) {
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS variable_streams (
+          stream_id TEXT PRIMARY KEY,
+          board_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          adapter_session_id TEXT NOT NULL,
+          core_id INTEGER NOT NULL,
+          core_name TEXT NOT NULL,
+          worker_instance_id TEXT NOT NULL,
+          worker_generation INTEGER NOT NULL,
+          lease_id TEXT NOT NULL,
+          lease_generation INTEGER NOT NULL,
+          fencing_token INTEGER NOT NULL,
+          config_json TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          stats_json TEXT NOT NULL,
+          started_at TEXT NOT NULL,
+          ended_at TEXT,
+          stop_reason TEXT,
+          error_json TEXT,
+          artifact_directory TEXT NOT NULL,
+          evidence_level TEXT NOT NULL,
+          artifact_bytes INTEGER NOT NULL DEFAULT 0,
+          artifact_status TEXT NOT NULL DEFAULT 'PENDING',
+          artifact_error_json TEXT,
+          FOREIGN KEY(board_id) REFERENCES boards(board_id),
+          FOREIGN KEY(session_id) REFERENCES debug_sessions(session_id)
+        );
+        CREATE TABLE IF NOT EXISTS variable_stream_samples (
+          stream_id TEXT NOT NULL,
+          sequence INTEGER NOT NULL,
+          sample_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(stream_id, sequence),
+          FOREIGN KEY(stream_id) REFERENCES variable_streams(stream_id) ON DELETE CASCADE
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_variable_stream_active_board
+          ON variable_streams(board_id)
+          WHERE status IN ('STARTING','RUNNING','STOPPING');
+        CREATE INDEX IF NOT EXISTS idx_variable_stream_samples
+          ON variable_stream_samples(stream_id, sequence);
+      `);
+    }
+  },
+  {
+    version: 8,
+    apply(store) {
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS erad_profiles (
+          profile_id TEXT PRIMARY KEY,
+          board_id TEXT NOT NULL,
+          session_id TEXT NOT NULL,
+          adapter_session_id TEXT NOT NULL,
+          core_id INTEGER NOT NULL,
+          core_name TEXT NOT NULL,
+          worker_instance_id TEXT NOT NULL,
+          worker_generation INTEGER NOT NULL,
+          lease_id TEXT NOT NULL,
+          lease_generation INTEGER NOT NULL,
+          fencing_token INTEGER NOT NULL,
+          device TEXT NOT NULL,
+          config_json TEXT NOT NULL,
+          resources_json TEXT NOT NULL,
+          saved_configuration_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          configured_at TEXT NOT NULL,
+          started_at TEXT,
+          ended_at TEXT,
+          stop_reason TEXT,
+          result_json TEXT,
+          error_json TEXT,
+          artifact_directory TEXT NOT NULL,
+          artifact_status TEXT NOT NULL DEFAULT 'PENDING',
+          artifact_error_json TEXT,
+          FOREIGN KEY(board_id) REFERENCES boards(board_id),
+          FOREIGN KEY(session_id) REFERENCES debug_sessions(session_id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_erad_active_board
+          ON erad_profiles(board_id)
+          WHERE status IN ('CONFIGURED','RUNNING');
+        CREATE INDEX IF NOT EXISTS idx_erad_session_core
+          ON erad_profiles(session_id, core_id, configured_at);
+      `);
+    }
   }
 ];
 

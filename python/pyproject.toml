@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "c2000-hil"
+version = "0.7.0"
+description = "Thin pytest HIL client for the C2000 Multicore Debug MCP daemon"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "C2000 Multicore Debug MCP contributors" }]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS"
+]
+
+[project.optional-dependencies]
+pytest = ["pytest>=7"]
+
+[project.entry-points.pytest11]
+c2000_hil = "c2000_hil.pytest_plugin"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

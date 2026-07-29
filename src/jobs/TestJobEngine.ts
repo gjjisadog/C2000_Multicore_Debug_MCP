@@ -19,6 +19,7 @@ import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
 import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecutionSnapshot } from "./BoardExecutionSemaphore.js";
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
+import type { JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
@@ -47,6 +48,8 @@ export class TestJobEngine {
     canCampaigns?: CanCampaignRepository;
     groupBarriers?: BoardGroupBarrierRepository;
     groupReconcileDecisions?: BoardGroupReconcileDecisionRepository;
+    artifactSnapshots?: JobArtifactSnapshotService;
+    failureBundles?: { collectForJob(jobId: string, reason?: string): Promise<void> };
   }) {
     this.scheduler = new TestScheduler(Math.max(1, options.maxActiveJobs ?? 16));
     this.boardPermits = new BoardExecutionSemaphore(Math.max(1, options.maxParallelBoards), {
@@ -66,10 +69,12 @@ export class TestJobEngine {
           : undefined;
         if (groupDecision?.decision === "MARK_PASSED") {
           this.options.runs.updateStatus(run.jobId, "PASSED", { finishedAt: new Date().toISOString(), resultSummary: { recoveredFromGroupEvidence: true } });
+          void this.exportTerminalEvidence(run.jobId, "PASSED");
           continue;
         }
         if (groupDecision && groupDecision.decision !== "RESTART_GROUP_FROM_SAFE_BOUNDARY") {
           this.options.runs.updateStatus(run.jobId, "NEEDS_MANUAL_INTERVENTION", { finishedAt: new Date().toISOString(), error: { code: "CanGroupManualRecoveryRequired", reason: groupDecision.reason, evidence: groupDecision.evidence } });
+          void this.exportTerminalEvidence(run.jobId, "NEEDS_MANUAL_INTERVENTION");
           continue;
         }
         const interrupted = this.options.runs.steps(run.jobId).find(step => step.status === "INTERRUPTED" || step.status === "RUNNING");
@@ -82,6 +87,7 @@ export class TestJobEngine {
         if (decision.decision !== "RESTART_BOARD_FLOW") {
           this.options.runs.updateStatus(run.jobId, "NEEDS_MANUAL_INTERVENTION", { finishedAt: new Date().toISOString(), error: { code: "ManualRecoveryRequired", reason: decision.reason, evidence: decision.evidence } });
           this.options.events.append({ level: "error", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_RECONCILE_MANUAL_REQUIRED", payload: { ...decision } });
+          void this.exportTerminalEvidence(run.jobId, "NEEDS_MANUAL_INTERVENTION");
           continue;
         }
         const releasedLeases = this.releaseRecoveredJobLeases(run.jobId);
@@ -264,6 +270,23 @@ export class TestJobEngine {
       resultSummary: { totalBoards: outcomes.length, passedBoards: outcomes.filter(outcome => outcome.success).length, failedBoards: failed.length, cancelledBoards: outcomes.filter(outcome => outcome.cancelled).length }
     });
     this.options.events.append({ level: status === "PASSED" ? "info" : "warn", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_FINISHED", payload: { status } });
+    await this.exportTerminalEvidence(jobId, status);
+  }
+
+  private async exportTerminalEvidence(jobId: string, status: string): Promise<void> {
+    await this.options.artifactSnapshots?.exportJob(jobId).catch(() => undefined);
+    if (status !== "PASSED") {
+      await this.options.failureBundles?.collectForJob(jobId, `JOB_${status}`).catch(error => {
+        this.options.events.append({
+          level: "warn",
+          sourceType: "failure-bundle",
+          sourceId: jobId,
+          jobId,
+          eventType: "FAILURE_BUNDLE_COLLECTION_FAILED",
+          payload: { error: toStructuredError(error), originalJobStatus: status }
+        });
+      });
+    }
   }
 
   private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit, groupLease?: LeasedBoard): Promise<{ success: boolean; cancelled: boolean }> {

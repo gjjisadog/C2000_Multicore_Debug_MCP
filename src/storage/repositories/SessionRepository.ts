@@ -39,6 +39,10 @@ export class SessionRepository {
     return row ? mapSession(row) : undefined;
   }
 
+  listByBoard(boardId: string): PersistedSession[] {
+    return this.store.all<SessionRow>("SELECT * FROM debug_sessions WHERE board_id = ? ORDER BY created_at DESC", [boardId]).map(mapSession);
+  }
+
   close(sessionId: string): void {
     this.store.run("UPDATE debug_sessions SET status = 'CLOSED', closed_at = ? WHERE session_id = ?", [new Date().toISOString(), sessionId]);
   }

@@ -12,6 +12,7 @@ import type { BoardLeaseContext } from "./types.js";
 
 interface ManagedWorker {
   client: BoardWorkerClient;
+  workerGeneration: number;
   restartTimes: number[];
 }
 
@@ -20,6 +21,7 @@ export class BoardWorkerSupervisor {
   private readonly workers = new Map<string, ManagedWorker>();
   private readonly factory: BoardWorkerFactory;
   private watchdog?: NodeJS.Timeout;
+  private lowPriorityPreemptor?: (boardId: string, toolName: string) => Promise<void>;
 
   constructor(
     private readonly options: {
@@ -50,6 +52,7 @@ export class BoardWorkerSupervisor {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
     }
     this.options.registry.transition(boardId, "STARTING");
+    const workerGeneration = this.options.workers.nextGeneration(boardId);
     const client = this.factory({
       boardId,
       probeSerial: board.probeSerial,
@@ -59,7 +62,7 @@ export class BoardWorkerSupervisor {
       authToken: randomBytes(32).toString("base64url")
     }, this.options.config);
     client.onHeartbeat = heartbeat => this.handleHeartbeat(heartbeat);
-    const managed: ManagedWorker = { client, restartTimes: [] };
+    const managed: ManagedWorker = { client, workerGeneration, restartTimes: [] };
     this.workers.set(boardId, managed);
     try {
       await client.start();
@@ -69,13 +72,14 @@ export class BoardWorkerSupervisor {
         pid: client.pid ?? -1,
         processStartTime: client.processStartTime,
         daemonInstanceId: this.options.daemonInstanceId,
+        workerGeneration,
         status: "READY",
         startedAt: client.processStartTime,
         ownedDssProcesses: []
       });
       this.options.registry.setWorker(boardId, client.workerInstanceId);
       this.options.registry.transition(boardId, "READY");
-      this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, eventType: "WORKER_STARTED", payload: { pid: client.pid, probeSerial: board.probeSerial } });
+      this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, workerGeneration, eventType: "WORKER_STARTED", payload: { pid: client.pid, probeSerial: board.probeSerial } });
       return client;
     } catch (error) {
       this.workers.delete(boardId);
@@ -85,6 +89,26 @@ export class BoardWorkerSupervisor {
   }
 
   async invokeBoard(boardId: string, toolName: string, input: unknown, timeoutMs?: number): Promise<Record<string, unknown>> {
+    await this.lowPriorityPreemptor?.(boardId, toolName);
+    return this.invokeBoardInternal(boardId, toolName, input, timeoutMs);
+  }
+
+  async invokeBoardLowPriority(boardId: string, toolName: string, input: unknown, timeoutMs?: number): Promise<Record<string, unknown>> {
+    return this.invokeBoardInternal(boardId, toolName, input, timeoutMs);
+  }
+
+  setLowPriorityPreemptor(preemptor: (boardId: string, toolName: string) => Promise<void>): void {
+    this.lowPriorityPreemptor = preemptor;
+  }
+
+  currentWorker(boardId: string): { workerInstanceId: string; workerGeneration: number } | undefined {
+    const managed = this.workers.get(boardId);
+    return managed
+      ? { workerInstanceId: managed.client.workerInstanceId, workerGeneration: managed.workerGeneration }
+      : undefined;
+  }
+
+  private async invokeBoardInternal(boardId: string, toolName: string, input: unknown, timeoutMs?: number): Promise<Record<string, unknown>> {
     const worker = await this.startBoard(boardId);
     const leaseContext = readLeaseContext(input);
     if (!leaseContext) throw new DebugMcpError("BoardLeaseRequired", "Board-bound worker command requires a lease fencing context", { boardId, toolName });
@@ -119,7 +143,7 @@ export class BoardWorkerSupervisor {
     const restartTimes = (managed?.restartTimes ?? []).filter(time => now - time <= this.workerConfig.restartWindowMs);
     if (restartTimes.length >= this.workerConfig.restartLimit) {
       this.options.registry.transition(boardId, "QUARANTINED", { code: "WorkerRestartLimitReached", reason, ...details });
-      this.options.events.append({ level: "error", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, eventType: "WORKER_RESTART_LIMIT_REACHED", payload: { reason, ...details } });
+      this.options.events.append({ level: "error", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, workerGeneration: managed?.workerGeneration, eventType: "WORKER_RESTART_LIMIT_REACHED", payload: { reason, ...details } });
       return;
     }
     restartTimes.push(now);
@@ -132,11 +156,11 @@ export class BoardWorkerSupervisor {
         `worker-restart:${reason}`
       );
     }
-    this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, eventType: "WORKER_RESTARTING", payload: { reason, ...details } });
+    this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, workerGeneration: managed?.workerGeneration, eventType: "WORKER_RESTARTING", payload: { reason, ...details } });
     const client = await this.startBoard(boardId);
     const next = this.workers.get(boardId);
     if (next) next.restartTimes = restartTimes;
-    this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, eventType: "WORKER_RESTARTED", payload: { reason } });
+    this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, workerGeneration: next?.workerGeneration, eventType: "WORKER_RESTARTED", payload: { reason } });
   }
 
   async stopAll(): Promise<void> {
@@ -157,6 +181,7 @@ export class BoardWorkerSupervisor {
       pid: managed.client.pid ?? -1,
       processStartTime: managed.client.processStartTime,
       daemonInstanceId: this.options.daemonInstanceId,
+      workerGeneration: managed.workerGeneration,
       status: heartbeat.status,
       startedAt: managed.client.processStartTime,
       lastHeartbeatAt: heartbeat.timestamp,
@@ -171,7 +196,7 @@ export class BoardWorkerSupervisor {
     for (const [boardId, managed] of this.workers) {
       const last = managed.client.lastHeartbeatAt ?? Date.parse(managed.client.processStartTime);
       if (now - last <= this.workerConfig.heartbeatTimeoutMs) continue;
-      this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed.client.workerInstanceId, boardId, workerInstanceId: managed.client.workerInstanceId, eventType: "WORKER_HEARTBEAT_TIMEOUT", payload: { timeoutMs: this.workerConfig.heartbeatTimeoutMs } });
+      this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed.client.workerInstanceId, boardId, workerInstanceId: managed.client.workerInstanceId, workerGeneration: managed.workerGeneration, eventType: "WORKER_HEARTBEAT_TIMEOUT", payload: { timeoutMs: this.workerConfig.heartbeatTimeoutMs } });
       await this.restartBoard(boardId, "heartbeat-timeout", { code: "WorkerHeartbeatTimeout" });
     }
   }

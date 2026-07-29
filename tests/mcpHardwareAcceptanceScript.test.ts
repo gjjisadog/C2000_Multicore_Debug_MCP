@@ -5,7 +5,7 @@ describe("MCP hardware acceptance script contract", () => {
   test("provides a stdio MCP path for real CCS hardware acceptance", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
 
-    expect(packageJson.scripts["acceptance:ccs:mcp"]).toBe("npm run build --silent && tsx scripts/ccs-mcp-hardware-acceptance.ts");
+    expect(packageJson.scripts["acceptance:ccs:mcp"]).toBe("tsx scripts/hardware-gated-run.ts --operation acceptance:ccs:mcp --script scripts/ccs-mcp-hardware-acceptance.ts");
   });
 
   test("uses MCP client tool calls rather than direct tool handlers", async () => {

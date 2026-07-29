@@ -168,8 +168,8 @@ export class CcsScriptingAdapter implements DebugAdapter {
     };
   }
 
-  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
-    const result = await this.execute(session, coreId, { operation: "evaluateExpressions", expressions });
+  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[], timeoutMs?: number): Promise<EvaluateResult[]> {
+    const result = await this.execute(session, coreId, { operation: "evaluateExpressions", expressions }, timeoutMs);
     return Array.isArray(result.results) ? result.results as EvaluateResult[] : [];
   }
 
@@ -216,11 +216,12 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "expressions" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">
+    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "expressions" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">,
+    timeoutOverrideMs?: number
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);
     const timeouts = { ...DEFAULT_TIMEOUTS, ...this.options.timeouts };
-    const timeoutMs = timeoutForOperation(command.operation, timeouts, this.options.dssTimeoutMs);
+    const timeoutMs = timeoutOverrideMs ?? timeoutForOperation(command.operation, timeouts, this.options.dssTimeoutMs);
     const result = await this.bridge.execute({
       ...command,
       adapterSessionId: session.adapterSessionId,

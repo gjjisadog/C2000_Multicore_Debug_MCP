@@ -631,6 +631,25 @@ export class DebugSessionManager {
     });
   }
 
+  /**
+   * Narrow manager-level primitive for worker-owned, capability-gated register
+   * backends (for example ERAD). It is intentionally not exposed as an
+   * arbitrary-address MCP tool.
+   */
+  async writeMemory(
+    sessionId: string,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    value: number,
+    typeSize: number
+  ): Promise<void> {
+    return this.exclusive(sessionId, async () => {
+      const { session } = this.requireCore(sessionId, coreId);
+      await this.adapter.writeMemory(session.adapterSession, coreId, page, address, value, typeSize);
+    });
+  }
+
   async verifyRuntimeRamOwnership(
     sessionId: string,
     actions: RamOwnershipAction[]
@@ -821,11 +840,15 @@ export class DebugSessionManager {
     return this.exclusive(sessionId, async () => this.evaluateManyUnlocked(sessionId, coreId, expressions));
   }
 
-  private async evaluateManyUnlocked(sessionId: string, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+  async evaluateManyWithTimeout(sessionId: string, coreId: CoreId, expressions: string[], timeoutMs: number): Promise<EvaluateResult[]> {
+    return this.exclusive(sessionId, async () => this.evaluateManyUnlocked(sessionId, coreId, expressions, timeoutMs));
+  }
+
+  private async evaluateManyUnlocked(sessionId: string, coreId: CoreId, expressions: string[], timeoutMs?: number): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
     if (this.adapter.evaluateExpressions) {
       try {
-        return await this.adapter.evaluateExpressions(session.adapterSession, coreId, [...new Set(expressions)]);
+        return await this.adapter.evaluateExpressions(session.adapterSession, coreId, [...new Set(expressions)], timeoutMs);
       } catch (error) {
         this.logger.warn("batch expression evaluation failed", { sessionId, coreId, error: toStructuredError(error) });
       }

@@ -9,7 +9,10 @@ import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../s
 import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
 import { formatDebugProcessOwners } from "../src/hardware/preflight.js";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
+import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";
 
+requireHardwareOptIn({ operation: "acceptance:ccs:mcp" });
+requireSupportedHardwareRuntime("acceptance:ccs:mcp");
 const environment = await resolveTiEnvironment({
   ccsInstallPath: process.env.C2000_MCP_CCS_INSTALL_PATH,
   c2000WarePath: process.env.C2000_MCP_C2000WARE_PATH,

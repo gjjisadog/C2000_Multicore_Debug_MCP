@@ -1,10 +1,9 @@
 import { PcanBasicNativeDriver } from "../src/can/pcan/PcanBasicNativeDriver.js";
 import { PCAN_BITRATES, PCAN_CHANNELS } from "../src/can/pcan/PcanBasicConstants.js";
+import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";
 
-if (process.env.C2000_PCAN_HARDWARE_TEST !== "1") {
-  process.stdout.write(`${JSON.stringify({ status: "SKIPPED", reason: "Set C2000_PCAN_HARDWARE_TEST=1 to opt in; no PCAN hardware was accessed" }, null, 2)}\n`);
-  process.exit(0);
-}
+requireHardwareOptIn({ operation: "verify:pcan:hardware", pcan: true });
+requireSupportedHardwareRuntime("verify:pcan:hardware");
 
 const channelName = process.env.C2000_PCAN_CHANNEL ?? "PCAN_USBBUS1";
 const bitrate = Number(process.env.C2000_PCAN_BITRATE ?? "500000");

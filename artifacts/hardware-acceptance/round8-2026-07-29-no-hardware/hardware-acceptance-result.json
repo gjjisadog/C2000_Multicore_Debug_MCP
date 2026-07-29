@@ -1,0 +1,308 @@
+{
+  "schemaVersion": 1,
+  "runId": "round8-2026-07-29-no-hardware",
+  "selectedScope": "all",
+  "overallStatus": "SKIPPED_NO_HARDWARE",
+  "environment": {
+    "windowsVersion": "win32 10.0.26200",
+    "architecture": "x64",
+    "nodeVersion": "v22.23.1",
+    "repositoryCommitSha": "19db3750b03f1fe83b7bc9fe26c73a0b8308f5c3",
+    "packageVersion": "0.7.0",
+    "ccsVersion": null,
+    "dssVersion": null,
+    "xds110Serials": [],
+    "pcan": {
+      "model": null,
+      "channel": null,
+      "driverVersion": null
+    },
+    "firmwareCommitSha": null,
+    "operator": null,
+    "testDate": "2026-07-29T15:42:15.668Z"
+  },
+  "optIn": {
+    "hardware": false,
+    "pcan": false,
+    "twoBoard": false
+  },
+  "safety": {
+    "highVoltageBusConnected": false,
+    "powerStageDriven": false,
+    "pwmAutomaticallyEnabled": false,
+    "tripAutomaticallyReleased": false,
+    "protectionThresholdsModified": false,
+    "unknownFirmwareAllowed": false
+  },
+  "cases": [
+    {
+      "caseId": "A1",
+      "scope": "single-board",
+      "title": "Board registration and identity fencing",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "A2",
+      "scope": "single-board",
+      "title": "CPU1/CPU2 independent connect",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "A3",
+      "scope": "multicore",
+      "title": "CPU1/CPU2 independent run and pause",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "A4",
+      "scope": "single-board",
+      "title": "Reset scope and observer invalidation",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "B1",
+      "scope": "single-board",
+      "title": "CPU1 program load",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "B2",
+      "scope": "multicore",
+      "title": "CPU2 load and GS RAM ownership",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "B3",
+      "scope": "multicore",
+      "title": "Dual-core boot and IPC ready repeatability",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "C",
+      "scope": "variables",
+      "title": "Online slow variable stream",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "D",
+      "scope": "dlog",
+      "title": "Read-only target DLOG export",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "E",
+      "scope": "erad",
+      "title": "F28P65x ERAD profiling",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "F",
+      "scope": "trace",
+      "title": "Perfetto trace and failure bundle",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "G",
+      "scope": "can",
+      "title": "Two-board CAN three-segment physical evidence",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "H",
+      "scope": "two-board",
+      "title": "Multi-board concurrency and isolation",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    },
+    {
+      "caseId": "I",
+      "scope": "soak",
+      "title": "Two-hour stability and recovery",
+      "status": "SKIPPED_NO_HARDWARE",
+      "evidenceLevel": "HOST_COMMAND_EVIDENCE",
+      "startedAt": "2026-07-29T15:42:15.668Z",
+      "endedAt": "2026-07-29T15:42:15.668Z",
+      "durationMs": 0,
+      "reason": "C2000_HARDWARE_TEST=1 is required; no target or probe was accessed",
+      "boardIds": [],
+      "coreIdentities": [],
+      "evidencePaths": [],
+      "details": {
+        "targetAccessAttempted": false,
+        "pcanOpened": false,
+        "mockResultPromoted": false
+      }
+    }
+  ],
+  "startedAt": "2026-07-29T15:42:15.668Z",
+  "endedAt": "2026-07-29T15:42:15.669Z",
+  "completeness": "COMPLETE"
+}

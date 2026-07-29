@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repository="gjjisadog/C2000_Multicore_Debug_MCP"
-tag="${C2000_MCP_VERSION:-v0.6.1}"
+tag="${C2000_MCP_VERSION:-v0.7.0}"
 
 case "$(uname -m)" in
   arm64) target="darwin-arm64" ;;

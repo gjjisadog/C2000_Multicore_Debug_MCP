@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
 import { assertPartialAddressResolution } from "./mcpSmokeAssertions.js";
+import { LocalRpcClient } from "../src/rpc/RpcServer.js";
 
 const requiredTools = [
   "c2000_getServerHealth",
@@ -13,6 +14,8 @@ const requiredTools = [
   "c2000_getDebugBoundary",
   "c2000_getAcceptanceEvidence",
   "c2000_getHardwarePreflight",
+  "c2000_createRunBaseline",
+  "c2000_compareRunWithBaseline",
   "c2000_discoverAcceptancePrograms",
   "c2000_getAcceptanceReadiness",
   "c2000_analyzeRamOwnership",
@@ -50,9 +53,31 @@ const requiredTools = [
 ];
 
 async function main() {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-stdio-smoke-"));
+  const smokeConfigPath = path.join(tempDir, "smoke-config.json");
+  await writeFile(smokeConfigPath, `${JSON.stringify({
+    adapter: "mock",
+    ccs: { scriptingMode: "mock" },
+    target: {
+      name: "F28P65x",
+      coreMap: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
+        { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
+      ]
+    },
+    daemon: { enabled: true, autoStart: true, runtimeDir: path.join(tempDir, "daemon-runtime") },
+    storage: { sqlitePath: path.join(tempDir, "smoke.sqlite") },
+    boards: [{
+      boardId: "smoke-board",
+      probeSerial: "MOCK-XDS110",
+      device: "F28P65x",
+      ccxmlPath: path.join(tempDir, "target.ccxml"),
+      tags: ["mock"]
+    }]
+  }, null, 2)}\n`);
   const transport = new StdioClientTransport({
     command: process.execPath,
-    args: ["dist/src/index.js"],
+    args: [process.env.C2000_MCP_SMOKE_ENTRYPOINT ?? "dist/src/index.js"],
     cwd: process.cwd(),
     stderr: "pipe",
     env: {
@@ -60,6 +85,7 @@ async function main() {
       C2000_MCP_ADAPTER: "mock",
       C2000_MCP_LOG_LEVEL: "error",
       C2000_MCP_TOOL_PROFILE: "full",
+      C2000_MCP_CONFIG: smokeConfigPath,
       C2000_MCP_ALLOWED_READ_ROOTS: tmpdir(),
       C2000_MCP_ALLOWED_WRITE_ROOTS: tmpdir()
     }
@@ -68,7 +94,6 @@ async function main() {
   transport.stderr?.on("data", chunk => stderrChunks.push(Buffer.from(chunk)));
 
   const client = new Client({ name: "c2000-mcp-stdio-smoke", version: "0.1.0" });
-  const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-stdio-smoke-"));
   const ccxmlPath = path.join(tempDir, "target.ccxml");
   const cpu1Out = path.join(tempDir, "cpu1.out");
   const cpu1ReloadOut = path.join(tempDir, "cpu1-reload.out");
@@ -279,7 +304,7 @@ async function main() {
       checkedPeerFields: ["connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
     });
     assertAcceptanceRequirement(acceptanceEvidence, "debug_tool_contracts", "c2000_getToolContracts", {
-      expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram"],
+      expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram", "c2000_loadSymbols"],
       expectedRequiredInputs: ["sessionId", "coreId"],
       expectedResponseCoreIdentityFields: ["coreId", "coreName"]
     });
@@ -659,14 +684,27 @@ async function main() {
     assert.equal(ipcReadyAssignments.success, true);
     const ipcReady = structured(await client.callTool({
       name: "c2000_waitForIpcReady",
-      arguments: { sessionId, cpu1CoreId: 0, cpu2CoreId: 2, timeoutMs: 50, intervalMs: 5 }
+      arguments: {
+        sessionId, cpu1CoreId: 0, cpu2CoreId: 2, timeoutMs: 50, intervalMs: 5,
+        conditions: [
+          { label: "ipc", coreId: 0, expression: "g_ulHybrid30kIpcPass", expected: 1 },
+          { label: "msg-ram", coreId: 0, expression: "g_ulHybrid30kMsgRamPass", expected: 1 },
+          { label: "parameter", coreId: 0, expression: "g_ulHybrid30kParamPass", expected: 1 },
+          { label: "cpu2-stage", coreId: 2, expression: "g_emHybrid30kCpu2Stage", expected: 1 }
+        ]
+      }
     }));
-    assert.equal(ipcReady.success, true);
+    assert.equal(ipcReady.success, true, JSON.stringify(ipcReady));
     assert.equal(ipcReady.matched, true);
     assert(ipcReady.conditions.every((condition: Record<string, any>) => condition.matched === true));
     const bootHandoff = structured(await client.callTool({
       name: "c2000_diagnoseBootHandoff",
-      arguments: { sessionId, cpu1CoreId: 0, cpu2CoreId: 2, maps: [{ coreId: 2, coreName: "C28xx_CPU2", mapPath: cpu2Map }] }
+      arguments: {
+        sessionId, cpu1CoreId: 0, cpu2CoreId: 2,
+        cpu1Expressions: ["g_ulHybrid30kIpcPass", "g_ulHybrid30kMsgRamPass", "g_ulHybrid30kParamPass"],
+        cpu2Expressions: ["g_emHybrid30kCpu2Stage"],
+        maps: [{ coreId: 2, coreName: "C28xx_CPU2", mapPath: cpu2Map }]
+      }
     }));
     assert.equal(bootHandoff.success, true);
     assert.equal(bootHandoff.cpu1.coreId, 0);
@@ -842,6 +880,13 @@ async function main() {
       await client.callTool({ name: "c2000_closeDebugSession", arguments: { sessionId: launchSessionId } }).catch(() => undefined);
     }
     await client.close();
+    try {
+      const instance = JSON.parse(await readFile(path.join(tempDir, "daemon-runtime", "debugd-instance.json"), "utf8"));
+      const authToken = (await readFile(instance.authTokenFile, "utf8")).trim();
+      await new LocalRpcClient({ host: "127.0.0.1", port: instance.port, authToken }).request("shutdown", {});
+    } catch {
+      // The daemon may already be gone after a startup failure.
+    }
     const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
     if (stderr) {
       process.stderr.write(`${stderr}\n`);

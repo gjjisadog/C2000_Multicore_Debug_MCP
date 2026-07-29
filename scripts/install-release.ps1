@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repository = "gjjisadog/C2000_Multicore_Debug_MCP"
-$tag = if ($env:C2000_MCP_VERSION) { $env:C2000_MCP_VERSION } else { "v0.6.1" }
+$tag = if ($env:C2000_MCP_VERSION) { $env:C2000_MCP_VERSION } else { "v0.7.0" }
 $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($architecture -ne "x64") {
   throw "Windows one-command installation currently supports x64; detected $architecture."

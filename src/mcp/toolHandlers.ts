@@ -17,6 +17,30 @@ import { sleep as sleepCore } from "../utils/async.js";
 import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import {
+  exportVariableStreamSchema,
+  getVariableStreamStatusSchema,
+  readVariableSamplesSchema,
+  startVariableStreamSchema,
+  stopVariableStreamSchema
+} from "../observability/VariableStreamSchemas.js";
+import { dlogBufferRequestSchema } from "../observability/DlogSchemas.js";
+import {
+  configureEradProfileSchema,
+  exportEradProfileSchema,
+  getEradCapabilitiesSchema,
+  readEradProfileSchema,
+  startEradProfileSchema,
+  stopEradProfileSchema
+} from "../observability/EradSchemas.js";
+import {
+  collectFailureBundleSchema,
+  exportTraceSchema
+} from "../observability/TraceSchemas.js";
+import {
+  compareRunWithBaselineSchema,
+  createRunBaselineSchema
+} from "../analytics/MetricSchemas.js";
+import {
   acceptanceProgramDiscoverySchema,
   acceptanceEvidenceSchema,
   acceptanceReadinessSchema,
@@ -92,6 +116,10 @@ export interface ToolHandlerDeps {
   listTestRuns?: (input: z.infer<typeof listTestRunsSchema>) => Promise<ToolResult> | ToolResult;
   cancelTestRun?: (input: z.infer<typeof cancelTestRunSchema>) => Promise<ToolResult> | ToolResult;
   getTestArtifacts?: (input: z.infer<typeof getTestArtifactsSchema>) => Promise<ToolResult> | ToolResult;
+  exportTrace?: (input: z.infer<typeof exportTraceSchema>) => Promise<ToolResult> | ToolResult;
+  collectFailureBundle?: (input: z.infer<typeof collectFailureBundleSchema>) => Promise<ToolResult> | ToolResult;
+  createRunBaseline?: (input: z.infer<typeof createRunBaselineSchema>) => Promise<ToolResult> | ToolResult;
+  compareRunWithBaseline?: (input: z.infer<typeof compareRunWithBaselineSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardIpcAcceptance?: (input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardCanAcceptance?: (input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
   listCanProfiles?: (input: z.infer<typeof listCanProfilesSchema>) => Promise<ToolResult> | ToolResult;
@@ -118,6 +146,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const unavailableJobEngine = () => { throw new DebugMcpError("DaemonUnavailable", "Background test jobs require c2000-debugd"); };
   const unavailableRecovery = () => { throw new DebugMcpError("DaemonUnavailable", "Board recovery requires c2000-debugd"); };
   const unavailableRegistration = () => { throw new DebugMcpError("DaemonUnavailable", "Board registration requires c2000-debugd"); };
+  const unavailableVariableStream = () => { throw new DebugMcpError("DaemonUnavailable", "Variable streaming requires c2000-debugd"); };
+  const unavailableDlog = () => { throw new DebugMcpError("DaemonUnavailable", "DLOG buffer access requires c2000-debugd"); };
+  const unavailableErad = () => { throw new DebugMcpError("DaemonUnavailable", "ERAD profiling requires c2000-debugd"); };
+  const unavailableTrace = () => { throw new DebugMcpError("DaemonUnavailable", "Trace and failure bundle export require c2000-debugd"); };
   const listBoards = deps.listBoards ?? (() => ({ boards: [] }));
   const registerBoard = deps.registerBoard ?? unavailableRegistration;
   const recoverBoard = deps.recoverBoard ?? unavailableRecovery;
@@ -126,6 +158,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listTestRuns = deps.listTestRuns ?? unavailableJobEngine;
   const cancelTestRun = deps.cancelTestRun ?? unavailableJobEngine;
   const getTestArtifacts = deps.getTestArtifacts ?? unavailableJobEngine;
+  const exportTrace = deps.exportTrace ?? unavailableTrace;
+  const collectFailureBundle = deps.collectFailureBundle ?? unavailableTrace;
+  const createRunBaseline = deps.createRunBaseline ?? unavailableJobEngine;
+  const compareRunWithBaseline = deps.compareRunWithBaseline ?? unavailableJobEngine;
   const submitMultiBoardIpcAcceptance = deps.submitMultiBoardIpcAcceptance ?? unavailableJobEngine;
   const submitMultiBoardCanAcceptance = deps.submitMultiBoardCanAcceptance ?? unavailableJobEngine;
   const listCanProfiles = deps.listCanProfiles ?? unavailableJobEngine;
@@ -195,12 +231,31 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async listTestRuns(input: z.infer<typeof listTestRunsSchema>) { try { return ok(await listTestRuns(input)); } catch (error) { return fail(error); } },
     async cancelTestRun(input: z.infer<typeof cancelTestRunSchema>) { try { return ok(await cancelTestRun(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async getTestArtifacts(input: z.infer<typeof getTestArtifactsSchema>) { try { return ok(await getTestArtifacts(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async exportTrace(input: z.input<typeof exportTraceSchema>) { try { return ok(await exportTrace(exportTraceSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async collectFailureBundle(input: z.input<typeof collectFailureBundleSchema>) { try { return ok(await collectFailureBundle(collectFailureBundleSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async createRunBaseline(input: z.input<typeof createRunBaselineSchema>) { try { return ok(await createRunBaseline(createRunBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async compareRunWithBaseline(input: z.input<typeof compareRunWithBaselineSchema>) { try { return ok(await compareRunWithBaseline(compareRunWithBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId, baselineId: input.baselineId }); } },
     async submitMultiBoardIpcAcceptance(input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) { try { return ok(await submitMultiBoardIpcAcceptance(input)); } catch (error) { return fail(error); } },
     async submitMultiBoardCanAcceptance(input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) { try { return ok(await submitMultiBoardCanAcceptance(input)); } catch (error) { return fail(error); } },
     async listCanProfiles(input: z.infer<typeof listCanProfilesSchema>) { try { return ok(await listCanProfiles(input)); } catch (error) { return fail(error); } },
     async getBoardGroupSnapshot(input: z.infer<typeof getBoardGroupSnapshotSchema>) { try { return ok(await getBoardGroupSnapshot(input)); } catch (error) { return fail(error, { groupId: input.groupId }); } },
     async submitCanFaultCampaign(input: z.infer<typeof submitCanFaultCampaignSchema>) { try { return ok(await submitCanFaultCampaign(input)); } catch (error) { return fail(error); } },
     async submitCanSoakTest(input: z.infer<typeof submitCanSoakTestSchema>) { try { return ok(await submitCanSoakTest(input)); } catch (error) { return fail(error); } },
+    async startVariableStream(input: z.input<typeof startVariableStreamSchema>) { try { startVariableStreamSchema.parse(input); return ok(await unavailableVariableStream()); } catch (error) { return fail(error); } },
+    async stopVariableStream(input: z.input<typeof stopVariableStreamSchema>) { try { stopVariableStreamSchema.parse(input); return ok(await unavailableVariableStream()); } catch (error) { return fail(error); } },
+    async getVariableStreamStatus(input: z.input<typeof getVariableStreamStatusSchema>) { try { getVariableStreamStatusSchema.parse(input); return ok(await unavailableVariableStream()); } catch (error) { return fail(error); } },
+    async readVariableSamples(input: z.input<typeof readVariableSamplesSchema>) { try { readVariableSamplesSchema.parse(input); return ok(await unavailableVariableStream()); } catch (error) { return fail(error); } },
+    async exportVariableStream(input: z.input<typeof exportVariableStreamSchema>) { try { exportVariableStreamSchema.parse(input); return ok(await unavailableVariableStream()); } catch (error) { return fail(error); } },
+    async describeDlogBuffer(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
+    async getDlogStatus(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
+    async readDlogBuffer(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
+    async exportDlog(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
+    async getEradCapabilities(input: z.input<typeof getEradCapabilitiesSchema>) { try { getEradCapabilitiesSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async configureEradProfile(input: z.input<typeof configureEradProfileSchema>) { try { configureEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async startEradProfile(input: z.input<typeof startEradProfileSchema>) { try { startEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async stopEradProfile(input: z.input<typeof stopEradProfileSchema>) { try { stopEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async readEradProfile(input: z.input<typeof readEradProfileSchema>) { try { readEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async exportEradProfile(input: z.input<typeof exportEradProfileSchema>) { try { exportEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
     async getServerHealth(_input: z.infer<typeof serverHealthSchema>) {
       try {
         return ok(getServerHealth());

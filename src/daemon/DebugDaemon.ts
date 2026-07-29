@@ -34,6 +34,17 @@ import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
 import { SERVER_VERSION } from "../runtimeInfo.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { ArtifactExportRepository } from "../storage/repositories/ArtifactExportRepository.js";
+import { JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
+import { VariableStreamRepository } from "../storage/repositories/VariableStreamRepository.js";
+import { VariableStreamService } from "../observability/VariableStreamService.js";
+import { DlogService } from "../observability/DlogService.js";
+import { EradProfileRepository } from "../storage/repositories/EradProfileRepository.js";
+import { EradService } from "../observability/EradService.js";
+import { TraceService } from "../observability/TraceService.js";
+import { FailureBundleService } from "../observability/FailureBundleService.js";
+import { RunMetricsService } from "../analytics/RunMetricsService.js";
+import { BaselineService } from "../analytics/BaselineService.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -50,6 +61,9 @@ export class DebugDaemon {
   private testRuns?: TestRunRepository;
   private sessions?: SessionRepository;
   private workerSupervisor?: BoardWorkerSupervisor;
+  private variableStreams?: VariableStreamService;
+  private dlog?: DlogService;
+  private erad?: EradService;
   private jobEngine?: TestJobEngine;
   private rpcServer?: DaemonRpcServer;
   private instance?: DebugDaemonInstance;
@@ -70,6 +84,7 @@ export class DebugDaemon {
     const boards = new BoardRepository(store);
     const events = new EventRepository(store);
     const artifacts = new ArtifactRepository(store);
+    const artifactExports = new ArtifactExportRepository(store);
     const canReports = new CanReportService(artifacts, path.join(path.dirname(databasePath), "can-artifacts"));
     const groups = new BoardGroupRepository(store);
     const groupBarriers = new BoardGroupBarrierRepository(store);
@@ -80,6 +95,53 @@ export class DebugDaemon {
     this.workers = new WorkerRepository(store);
     this.testRuns = new TestRunRepository(store);
     this.sessions = new SessionRepository(store);
+    const variableStreamRecords = new VariableStreamRepository(store);
+    const eradProfileRecords = new EradProfileRepository(store);
+    const artifactSnapshots = new JobArtifactSnapshotService({
+      rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
+      config: this.config,
+      runs: this.testRuns,
+      boards,
+      sessions: this.sessions,
+      workers: this.workers,
+      events,
+      artifacts,
+      exports: artifactExports
+    });
+    const observabilityRoot = path.join(path.dirname(databasePath), "artifacts");
+    const trace = new TraceService({
+      rootDirectory: observabilityRoot,
+      runs: this.testRuns,
+      events,
+      artifacts,
+      exports: artifactExports,
+      canResults
+    });
+    const failureBundles = new FailureBundleService({
+      rootDirectory: observabilityRoot,
+      runs: this.testRuns,
+      sessions: this.sessions,
+      events,
+      artifacts,
+      exports: artifactExports,
+      canResults,
+      trace
+    });
+    const metrics = new RunMetricsService({
+      rootDirectory: observabilityRoot,
+      runs: this.testRuns,
+      events,
+      artifacts,
+      exports: artifactExports,
+      canResults
+    });
+    const baselines = new BaselineService({
+      rootDirectory: observabilityRoot,
+      runs: this.testRuns,
+      artifacts,
+      exports: artifactExports,
+      metrics
+    });
     this.registry = new BoardRegistry(boards, events, store, new LeaseRepository(store));
     this.registry.registerAll((this.config.boards ?? []).map(board => ({
       boardId: board.boardId,
@@ -97,7 +159,15 @@ export class DebugDaemon {
       getTestRun: input => this.requireJobEngine().get(input.jobId, input),
       listTestRuns: input => this.requireJobEngine().list(input.status),
       cancelTestRun: input => this.requireJobEngine().cancel(input.jobId),
-      getTestArtifacts: input => ({ jobId: input.jobId, artifacts: artifacts.list(input.jobId) }),
+      getTestArtifacts: input => ({
+        jobId: input.jobId,
+        artifacts: artifacts.list(input.jobId),
+        artifactExport: artifactExports.get(input.jobId) ?? null
+      }),
+      exportTrace: input => trace.export(input),
+      collectFailureBundle: input => failureBundles.collect(input),
+      createRunBaseline: input => baselines.create(input),
+      compareRunWithBaseline: input => baselines.compare(input),
       submitMultiBoardIpcAcceptance: input => this.requireJobEngine().submit({
         planVersion: 1,
         name: "multi-board-ipc-acceptance",
@@ -162,6 +232,42 @@ export class DebugDaemon {
     });
     this.workerSupervisor = workerSupervisor;
     const toolRouter = new DaemonToolRouter(runtime.toolInvoker, this.registry, workerSupervisor, this.sessions);
+    const variableStreams = new VariableStreamService({
+      rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
+      config: this.config,
+      streams: variableStreamRecords,
+      boards,
+      sessions: this.sessions,
+      workers: workerSupervisor,
+      leaseContext: (sessionId, boardId, ttlMs) => toolRouter.requireInteractiveLeaseContext(sessionId, boardId, ttlMs)
+    });
+    this.variableStreams = variableStreams;
+    toolRouter.setVariableStreamService(variableStreams);
+    const dlog = new DlogService({
+      rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
+      config: this.config,
+      boards,
+      sessions: this.sessions,
+      workers: workerSupervisor,
+      leaseContext: (sessionId, boardId, ttlMs) => toolRouter.requireInteractiveLeaseContext(sessionId, boardId, ttlMs)
+    });
+    this.dlog = dlog;
+    toolRouter.setDlogService(dlog);
+    const erad = new EradService({
+      rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
+      config: this.config,
+      profiles: eradProfileRecords,
+      boards,
+      sessions: this.sessions,
+      workers: workerSupervisor,
+      leaseContext: (sessionId, boardId, ttlMs) => toolRouter.requireInteractiveLeaseContext(sessionId, boardId, ttlMs)
+    });
+    this.erad = erad;
+    toolRouter.setEradService(erad);
+    workerSupervisor.setLowPriorityPreemptor(async (boardId, toolName) => {
+      await variableStreams.preemptBoard(boardId, toolName);
+      await erad.preemptBoard(boardId, toolName);
+    });
     this.jobEngine = new TestJobEngine({
       registry: this.registry,
       runs: this.testRuns,
@@ -193,7 +299,9 @@ export class DebugDaemon {
       canResults,
       boardGroups: groups,
       groupBarriers,
-      groupReconcileDecisions
+      groupReconcileDecisions,
+      artifactSnapshots,
+      failureBundles
     });
     const rpcServer = new DaemonRpcServer({
       authToken: this.authToken,
@@ -226,6 +334,8 @@ export class DebugDaemon {
       for (const jobId of recovering) {
         events.append({ level: "warn", sourceType: "daemon", sourceId: instance.instanceId, jobId, eventType: "JOB_MARKED_RECOVERING", payload: {} });
       }
+      await artifactSnapshots.recoverExisting();
+      await variableStreams.recoverInterrupted();
       this.jobEngine.start();
       return instance;
     } catch (error) {
@@ -239,6 +349,9 @@ export class DebugDaemon {
       this.consistency = undefined;
       this.sessions = undefined;
       this.workerSupervisor = undefined;
+      this.variableStreams = undefined;
+      this.dlog = undefined;
+      this.erad = undefined;
       this.jobEngine = undefined;
       await this.releaseSingleton?.().catch(() => undefined);
       this.releaseSingleton = undefined;
@@ -275,6 +388,8 @@ export class DebugDaemon {
     }
     await this.rpcServer?.close().catch(() => undefined);
     await this.jobEngine?.stop().catch(() => undefined);
+    await this.variableStreams?.stopAll().catch(() => undefined);
+    await this.erad?.stopAll().catch(() => undefined);
     await this.workerSupervisor?.stopAll().catch(() => undefined);
     await this.runtime?.dispose().catch(() => undefined);
     this.store?.close();
@@ -290,6 +405,9 @@ export class DebugDaemon {
     this.testRuns = undefined;
     this.sessions = undefined;
     this.workerSupervisor = undefined;
+    this.variableStreams = undefined;
+    this.dlog = undefined;
+    this.erad = undefined;
     this.jobEngine = undefined;
     this.instance = undefined;
   }

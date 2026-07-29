@@ -4,10 +4,17 @@ import { BoardRegistry } from "../boards/BoardRegistry.js";
 import { BoardWorkerSupervisor } from "../boards/BoardWorkerSupervisor.js";
 import { SessionRepository } from "../storage/repositories/SessionRepository.js";
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
+import type { BoardLeaseContext } from "../boards/types.js";
+import type { VariableStreamService } from "../observability/VariableStreamService.js";
+import type { DlogService } from "../observability/DlogService.js";
+import type { EradService } from "../observability/EradService.js";
 
 /** Routes board-bound tools to a single worker without changing sessionId/coreId semantics. */
 export class DaemonToolRouter implements C2000ToolInvoker {
   private readonly interactiveLeases = new Map<string, LeasedBoard>();
+  private variableStreams?: VariableStreamService;
+  private dlog?: DlogService;
+  private erad?: EradService;
   constructor(
     private readonly local: C2000ToolInvoker,
     private readonly registry: BoardRegistry,
@@ -15,7 +22,59 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     private readonly sessions: SessionRepository
   ) {}
 
+  setVariableStreamService(service: VariableStreamService): void {
+    this.variableStreams = service;
+  }
+
+  setDlogService(service: DlogService): void {
+    this.dlog = service;
+  }
+
+  setEradService(service: EradService): void {
+    this.erad = service;
+  }
+
+  requireInteractiveLeaseContext(sessionId: string, boardId: string, ttlMs: number): BoardLeaseContext {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.boardId !== boardId || session.closedAt || session.status === "CLOSED") {
+      throw new DebugMcpError("SessionNotFound", "No open board-bound session exists for the variable stream", {
+        sessionId,
+        boardId
+      });
+    }
+    const interactive = this.interactiveLeases.get(sessionId);
+    if (!interactive) {
+      throw new DebugMcpError("BoardLeaseRequired", "Variable streams require the live fencing lease owned by the debug session", {
+        sessionId,
+        boardId
+      });
+    }
+    this.registry.leases.renew(interactive.lease.leaseId, interactive.leaseToken, ttlMs);
+    return interactive.context;
+  }
+
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
+    if (this.variableStreams) {
+      if (toolName === "c2000_startVariableStream") return this.variableStreams.start(input);
+      if (toolName === "c2000_stopVariableStream") return this.variableStreams.stop(input);
+      if (toolName === "c2000_getVariableStreamStatus") return this.variableStreams.status(input);
+      if (toolName === "c2000_readVariableSamples") return this.variableStreams.readSamples(input);
+      if (toolName === "c2000_exportVariableStream") return this.variableStreams.export(input);
+    }
+    if (this.dlog) {
+      if (toolName === "c2000_describeDlogBuffer") return this.dlog.describe(input);
+      if (toolName === "c2000_getDlogStatus") return this.dlog.status(input);
+      if (toolName === "c2000_readDlogBuffer") return this.dlog.read(input);
+      if (toolName === "c2000_exportDlog") return this.dlog.export(input);
+    }
+    if (this.erad) {
+      if (toolName === "c2000_getEradCapabilities") return this.erad.capabilities(input);
+      if (toolName === "c2000_configureEradProfile") return this.erad.configure(input);
+      if (toolName === "c2000_startEradProfile") return this.erad.start(input);
+      if (toolName === "c2000_stopEradProfile") return this.erad.stop(input);
+      if (toolName === "c2000_readEradProfile") return this.erad.read(input);
+      if (toolName === "c2000_exportEradProfile") return this.erad.export(input);
+    }
     if (toolName === "c2000_launchMultiBoardDebug") {
       return this.launchMultiBoard(input);
     }
@@ -118,6 +177,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       boardId,
       ...(typeof result.workerInstanceId === "string" ? { workerInstanceId: result.workerInstanceId } : {}),
       sessionName: typeof values.sessionName === "string" ? values.sessionName : "c2000-debug-session",
+      ...(typeof result.adapterSessionId === "string" ? { adapterSessionId: result.adapterSessionId } : {}),
       ...(typeof values.ccxmlPath === "string" ? { ccxmlPath: values.ccxmlPath } : {}),
       coreMap: Array.isArray(values.coreMap) ? values.coreMap : Array.isArray(values.cores) ? values.cores : [],
       status: "OPEN",

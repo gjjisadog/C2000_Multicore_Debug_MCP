@@ -5,7 +5,7 @@ describe("Hardware acceptance readiness script contract", () => {
   test("provides a read-only readiness command before real target acceptance", async () => {
     const packageJson = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
 
-    expect(packageJson.scripts["acceptance:ready"]).toBe("npm run build --silent && tsx scripts/ccs-acceptance-readiness.ts");
+    expect(packageJson.scripts["acceptance:ready"]).toBe("tsx scripts/hardware-gated-run.ts --operation acceptance:ready --script scripts/ccs-acceptance-readiness.ts");
   });
 
   test("checks MCP contracts and hardware preflight without target control", async () => {

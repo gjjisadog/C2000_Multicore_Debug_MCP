@@ -1,5 +1,6 @@
 import { access, readFile } from "node:fs/promises";
 import path from "node:path";
+import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";
 
 /**
  * Hardware-safe preflight only. It validates the two-board configuration and
@@ -7,6 +8,8 @@ import path from "node:path";
  * traffic action. A real adapter/operator must submit an explicit job later.
  */
 async function main(): Promise<void> {
+  requireHardwareOptIn({ operation: "acceptance:can:hardware", pcan: true, twoBoard: true });
+  requireSupportedHardwareRuntime("acceptance:can:hardware");
   const configPath = process.env.C2000_MCP_CONFIG;
   if (!configPath) throw new Error("C2000_MCP_CONFIG must point to a two-board daemon config");
   const resolved = path.resolve(configPath);

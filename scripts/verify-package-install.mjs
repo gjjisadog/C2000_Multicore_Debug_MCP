@@ -14,8 +14,19 @@ try {
     : spawnSync(process.platform === "win32" ? "npm.cmd" : "npm", ["install", path.join(root, tarball), "--ignore-scripts"], { cwd: temporary, stdio: "inherit", shell: process.platform === "win32" });
   if (install.error || install.status !== 0) throw new Error(`temporary package installation failed: ${install.error?.message ?? `exit ${install.status}`}`);
   const packageRoot = path.join(temporary, "node_modules", "c2000-multicore-mcp");
-  for (const entry of ["dist/src/index.js", "dist/src/daemon/index.js", "dist/src/worker/index.js", "dist/src/can-worker/index.js", "dist/src/installer/index.js", "dist/src/runtime-manifest.json", "scripts/c2000-mcp-doctor.mjs"]) {
+  for (const entry of ["dist/src/index.js", "dist/src/daemon/index.js", "dist/src/worker/index.js", "dist/src/can-worker/index.js", "dist/src/installer/index.js", "dist/src/runtime-manifest.json", "scripts/c2000-mcp-doctor.mjs", "python/pyproject.toml", "python/src/c2000_hil/client.py", "python/src/c2000_hil/pytest_plugin.py"]) {
     await access(path.join(packageRoot, entry));
+  }
+  const python = spawnSync(process.platform === "win32" ? "python.exe" : "python3", [
+    "-c",
+    "import c2000_hil; assert c2000_hil.__version__ == '0.7.0'; print(c2000_hil.__version__)"
+  ], {
+    cwd: temporary,
+    encoding: "utf8",
+    env: { ...process.env, PYTHONPATH: path.join(packageRoot, "python", "src"), PYTHONDONTWRITEBYTECODE: "1" }
+  });
+  if (python.error || python.status !== 0) {
+    throw new Error(`Python SDK offline import verification failed: ${python.stderr || python.stdout || python.error?.message || `exit ${python.status}`}`);
   }
   const durableRoot = path.join(temporary, "durable-install");
   const setup = spawnSync(process.execPath, [

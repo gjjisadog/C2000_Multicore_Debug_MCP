@@ -12,20 +12,49 @@ interface MockCoreState {
   loadedSymbols?: string;
   expressions: Map<string, Omit<EvaluateResult, "expression" | "success">>;
   memory: Map<string, string>;
+  variableReadIndexes: Map<string, number>;
+}
+
+export interface MockVariableSequence {
+  typeName: string;
+  address: string;
+  values: Array<string | number>;
+  errorAt?: number[];
+}
+
+export interface MockDlogChannel {
+  typeName: "float" | "uint16_t" | "int16_t" | "uint32_t" | "int32_t";
+  address: string;
+  values: Array<string | number>;
 }
 
 export interface MockDebugAdapterOptions {
   expressionValues?: Record<string, Omit<EvaluateResult, "expression" | "success">>;
+  variableSequences?: Record<string, MockVariableSequence>;
+  variableBatchDelayMs?: number;
+  dlogChannels?: Record<string, MockDlogChannel>;
 }
+
+const DEFAULT_MOCK_VARIABLE_SEQUENCES: Record<string, MockVariableSequence> = {
+  "g_stCtrl.uiState": { typeName: "uint16_t", address: "0x1000", values: [0, 1, 2, 3] },
+  "g_stClaDiag.ulExecCnt": { typeName: "uint32_t", address: "0x1010", values: [100, 101, 102, 103] },
+  "g_stIpcDiag.ulRxCnt": { typeName: "uint32_t", address: "0x1020", values: [10, 11, 12, 13] }
+};
 
 export class MockDebugAdapter implements DebugAdapter {
   readonly name = "mock";
   readonly supportsSimultaneousOperations = false;
   private readonly sessions = new Map<string, Map<CoreId, MockCoreState>>();
   private readonly expressionValues: Record<string, Omit<EvaluateResult, "expression" | "success">>;
+  private readonly variableSequences: Record<string, MockVariableSequence>;
+  private readonly variableBatchDelayMs: number;
+  private readonly dlogChannels: Record<string, MockDlogChannel>;
 
   constructor(options: MockDebugAdapterOptions = {}) {
     this.expressionValues = options.expressionValues ?? {};
+    this.variableSequences = { ...DEFAULT_MOCK_VARIABLE_SEQUENCES, ...(options.variableSequences ?? {}) };
+    this.variableBatchDelayMs = options.variableBatchDelayMs ?? 0;
+    this.dlogChannels = options.dlogChannels ?? {};
   }
 
   async createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession> {
@@ -38,7 +67,8 @@ export class MockDebugAdapter implements DebugAdapter {
         state: "Disconnected",
         pc: "0x00000000",
         expressions: new Map(Object.entries(this.expressionValues).map(([expression, value]) => [expression, { ...value }])),
-        memory: new Map()
+        memory: new Map(),
+        variableReadIndexes: new Map()
       });
     }
     this.sessions.set(adapterSessionId, states);
@@ -138,15 +168,70 @@ export class MockDebugAdapter implements DebugAdapter {
   }
 
   async evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult> {
-    const value = this.getCoreState(session, coreId).expressions.get(expression);
+    const state = this.getCoreState(session, coreId);
+    const addressMatch = expression.match(/^&\((.+)\)$/);
+    if (addressMatch) {
+      const dlog = this.dlogChannels[addressMatch[1]!];
+      if (dlog) return { expression, success: true, value: dlog.address, type: `${dlog.typeName} *` };
+      const sequence = this.variableSequences[addressMatch[1]!];
+      if (sequence) return { expression, success: true, value: sequence.address, type: `${sequence.typeName} *` };
+    }
+    const sizeMatch = expression.match(/^sizeof\((.+)\)$/);
+    if (sizeMatch) {
+      const dlogSymbol = sizeMatch[1]!.replace(/\[0\]$/, "");
+      const dlog = this.dlogChannels[dlogSymbol];
+      if (dlog) return { expression, success: true, value: String(c28xAddressUnits(dlog.typeName)), type: "unsigned int" };
+      const sequence = this.variableSequences[sizeMatch[1]!];
+      if (sequence) return { expression, success: true, value: String(c28xAddressUnits(sequence.typeName)), type: "unsigned int" };
+    }
+    const dlogElementMatch = expression.match(/^(.+)\[(\d+)\]$/);
+    if (dlogElementMatch) {
+      const dlog = this.dlogChannels[dlogElementMatch[1]!];
+      const index = Number(dlogElementMatch[2]);
+      if (dlog && Number.isSafeInteger(index) && index >= 0 && index < dlog.values.length) {
+        return {
+          expression,
+          success: true,
+          value: String(dlog.values[index]),
+          type: dlog.typeName,
+          address: dlog.address
+        };
+      }
+    }
+    const sequence = this.variableSequences[expression];
+    if (sequence) {
+      const index = state.variableReadIndexes.get(expression) ?? 0;
+      state.variableReadIndexes.set(expression, index + 1);
+      if (sequence.errorAt?.includes(index)) {
+        throw new DebugMcpError("MockVariableReadError", `Injected variable read error: ${expression}`, { expression, index });
+      }
+      const value = sequence.values[Math.min(index, Math.max(0, sequence.values.length - 1))];
+      if (value === undefined) throw new DebugMcpError("MockVariableSequenceEmpty", `Mock variable sequence is empty: ${expression}`, { expression });
+      return { expression, success: true, value: String(value), type: sequence.typeName, address: sequence.address };
+    }
+    const value = state.expressions.get(expression);
     if (!value) {
       throw new DebugMcpError("SymbolNotFound", `Symbol not found: ${expression}`, { expression });
     }
     return { expression, success: true, ...value };
   }
 
-  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
-    return Promise.all(expressions.map(expression => this.evaluateExpression(session, coreId, expression)));
+  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[], _timeoutMs?: number): Promise<EvaluateResult[]> {
+    if (this.variableBatchDelayMs > 0) await new Promise(resolve => setTimeout(resolve, this.variableBatchDelayMs));
+    return Promise.all(expressions.map(async expression => {
+      try {
+        return await this.evaluateExpression(session, coreId, expression);
+      } catch (error) {
+        return {
+          expression,
+          success: false,
+          error: {
+            code: error instanceof DebugMcpError ? error.code : "MockVariableReadError",
+            message: error instanceof Error ? error.message : String(error)
+          }
+        };
+      }
+    }));
   }
 
   async assignExpression(session: AdapterSession, coreId: CoreId, expression: string, value: ExpressionAssignmentValue): Promise<{ success: boolean; value?: string }> {
@@ -210,4 +295,12 @@ function formatAssignmentValue(value: ExpressionAssignmentValue): string {
     return value ? "1" : "0";
   }
   return String(value);
+}
+
+function c28xAddressUnits(typeName: string): 1 | 2 {
+  const normalized = typeName.toLowerCase().replace(/\b(const|volatile)\b/g, "").replace(/\s+/g, " ").trim();
+  if (["uint16_t", "int16_t", "int", "signed int", "unsigned int", "short", "signed short", "unsigned short"].includes(normalized) ||
+      /^enum(?:\s|$)/.test(normalized)) return 1;
+  if (["uint32_t", "int32_t", "long", "signed long", "unsigned long", "float"].includes(normalized)) return 2;
+  throw new DebugMcpError("VariableTypeUnsupported", "Mock variable sequence type is unsupported", { typeName });
 }

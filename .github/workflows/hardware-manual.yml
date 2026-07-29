@@ -30,16 +30,25 @@ jobs:
       - run: npm ci
       - run: npm run build
       - if: inputs.run_xds_acceptance
+        env:
+          C2000_HARDWARE_TEST: "1"
         run: npm run acceptance:ccs
       - if: inputs.run_pcan_preflight
         env:
+          C2000_HARDWARE_TEST: "1"
           C2000_PCAN_HARDWARE_TEST: "1"
         run: npm run verify:pcan:hardware
       - if: inputs.run_two_board_can
+        env:
+          C2000_HARDWARE_TEST: "1"
+          C2000_PCAN_HARDWARE_TEST: "1"
+          C2000_TWO_BOARD_TEST: "1"
         run: npm run acceptance:can:hardware
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: hardware-evidence
           if-no-files-found: ignore
-          path: runtime/**
+          path: |
+            runtime/**
+            artifacts/hardware-acceptance/**
