@@ -154,7 +154,7 @@ try {
     checkedPeerFields: ["connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
   });
   assertAcceptanceRequirement(acceptanceEvidence, "debug_tool_contracts", "c2000_getToolContracts", {
-    expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram"],
+    expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram", "c2000_loadSymbols"],
     expectedRequiredInputs: ["sessionId", "coreId"],
     expectedResponseCoreIdentityFields: ["coreId", "coreName"]
   });

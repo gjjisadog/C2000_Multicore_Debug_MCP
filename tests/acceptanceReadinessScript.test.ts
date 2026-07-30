@@ -41,7 +41,7 @@ describe("Hardware acceptance readiness script contract", () => {
     expect(source).toContain("readiness.acceptanceEvidence");
     expect(source).toContain("assertAcceptanceEvidence(acceptanceEvidence)");
     expect(source).toContain('"debug_tool_contracts", "c2000_getToolContracts"');
-    expect(source).toContain('expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram"]');
+    expect(source).toContain('expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram", "c2000_loadSymbols"]');
     expect(source).toContain('expectedRequiredInputs: ["sessionId", "coreId"]');
     expect(source).toContain('expectedResponseCoreIdentityFields: ["coreId", "coreName"]');
     expect(source).toContain("assert.deepEqual(requirement.expectedCoreDebugTools, expected.expectedCoreDebugTools)");
