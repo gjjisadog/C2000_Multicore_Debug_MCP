@@ -91,6 +91,12 @@ export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeStep
 export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
 export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
 export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });
+export const expressionConditionSchema = z.object({
+  label: z.string().min(1).optional(),
+  coreId: z.number().int(),
+  expression: z.string().min(1),
+  expected: z.union([z.string(), z.number(), z.boolean()])
+});
 export const submitMultiBoardIpcAcceptanceSchema = z.object({
   boardIds: z.array(z.string().min(1)).min(1),
   artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
@@ -102,6 +108,7 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
     mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-run-before-cpu2"),
     cpu1SettleMs: z.number().int().nonnegative().default(250)
   }).default({ mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 }),
+  ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(true),
   failurePolicy: z.object({ continueHealthyBoards: z.boolean().default(true), quarantineFailedBoard: z.boolean().default(true) }).default({ continueHealthyBoards: true, quarantineFailedBoard: true })
@@ -221,13 +228,6 @@ const expressionAssignmentSchema = z.object({
 const expressionEndpointSchema = z.object({
   coreId: z.number().int(),
   expression: z.string().min(1)
-});
-
-export const expressionConditionSchema = z.object({
-  label: z.string().min(1).optional(),
-  coreId: z.number().int(),
-  expression: z.string().min(1),
-  expected: z.union([z.string(), z.number(), z.boolean()])
 });
 
 export const expressionReadSetSchema = z.object({

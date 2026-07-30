@@ -1,0 +1,121 @@
+{
+  "success": false,
+  "workflow": "c2000_runIpcAcceptance",
+  "diagnosisCode": "IPC_READY_TIMEOUT",
+  "severity": "error",
+  "verdictReady": false,
+  "conditions": [
+    {
+      "label": "cpu1-stage-running",
+      "coreId": 0,
+      "expression": "g_stCoreCommCpu1Watch.emStage",
+      "expected": 5,
+      "matched": false
+    },
+    {
+      "label": "cpu1-cpu2-ready",
+      "coreId": 0,
+      "expression": "g_stCoreCommCpu1Watch.uiCpu2Ready",
+      "expected": 1,
+      "matched": false
+    },
+    {
+      "label": "cpu1-boot-error-clear",
+      "coreId": 0,
+      "expression": "g_stCoreCommCpu1Watch.ulCpu2BootLastError",
+      "expected": 0,
+      "matched": false
+    },
+    {
+      "label": "cpu2-stage-running",
+      "coreId": 2,
+      "expression": "g_stCoreCommCpu2Watch.emStage",
+      "expected": 5,
+      "matched": false
+    },
+    {
+      "label": "cpu2-initial-param-applied",
+      "coreId": 2,
+      "expression": "g_stCoreCommCpu2Watch.uiInitParamApplied",
+      "expected": 1,
+      "matched": false
+    }
+  ],
+  "runtimeRamOwnership": {
+    "requested": true,
+    "supported": true,
+    "skipped": false,
+    "matched": true,
+    "expectedMask": 16,
+    "actualValue": 16,
+    "reads": [
+      {
+        "address": 390212,
+        "value": 16,
+        "expectedBits": 16
+      }
+    ]
+  },
+  "programs": [
+    {
+      "coreId": 0,
+      "path": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+      "sha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+      "fresh": true
+    },
+    {
+      "coreId": 2,
+      "path": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+      "sha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+      "fresh": true
+    }
+  ],
+  "pc": [
+    {
+      "coreId": 0,
+      "success": true,
+      "address": "0xC5FC",
+      "function": "main",
+      "offset": "0x59",
+      "memoryRegion": "RAMD0",
+      "partial": true,
+      "resolutionSource": "linker-map",
+      "pc": "50684"
+    },
+    {
+      "coreId": 2,
+      "success": true,
+      "address": "0x183C9",
+      "function": "main",
+      "offset": "0x1A",
+      "memoryRegion": "RAMGS4",
+      "partial": true,
+      "resolutionSource": "linker-map",
+      "pc": "99273"
+    }
+  ],
+  "runPlan": {
+    "mode": "legacy_flags",
+    "coreOrder": [
+      0,
+      2
+    ],
+    "warnings": []
+  },
+  "performedSteps": [
+    "haltCores",
+    "resetCores",
+    "loadCpu1Program",
+    "runCpu1BeforeCpu2Load",
+    "loadCpu2Program",
+    "haltCoresAfterLoad",
+    "getMulticoreSnapshot",
+    "analyzeRamOwnership",
+    "checkElfFreshness",
+    "runCpu1",
+    "runCpu2",
+    "waitForIpcReady",
+    "haltAndResolvePcOnTimeout",
+    "diagnoseBootHandoff"
+  ]
+}

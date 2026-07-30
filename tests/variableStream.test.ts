@@ -88,6 +88,16 @@ describe("slow variable stream contracts", () => {
     fixture.close();
   });
 
+  it("normalizes decimal C28x addresses returned by real CCS", async () => {
+    const fixture = await createFixture({ decimalAddress: true });
+    const started = await fixture.service.start(startInput({ maxSamples: 1, durationMs: 50 }));
+    const terminal = await fixture.waitTerminal(started);
+    expect(terminal.metadata).toEqual([
+      expect.objectContaining({ symbol: "g_u16", resolvedAddress: "0x1000" })
+    ]);
+    fixture.close();
+  });
+
   it("fails closed when the requested core is not in the explicit session topology", async () => {
     const fixture = await createFixture();
     await expect(fixture.service.start(startInput({ coreId: 2 }))).rejects.toThrow(/absent/);
@@ -331,6 +341,7 @@ interface FixtureOptions {
   readErrorAt?: number;
   leaseFailureAfter?: number;
   mismatchAfterMetadata?: boolean;
+  decimalAddress?: boolean;
   writer?: AtomicArtifactWriter;
 }
 
@@ -441,7 +452,9 @@ class FakeWorkers {
     const metadata = expressions.some(expression => expression.startsWith("sizeof("));
     if (!metadata && this.options.delayMs) await new Promise(resolve => setTimeout(resolve, this.options.delayMs));
     const results = expressions.map(expression => {
-      if (expression === "&(g_u16)") return { expression, success: true, value: "0x1000", type: "uint16_t *" };
+      if (expression === "&(g_u16)") {
+        return { expression, success: true, value: this.options.decimalAddress ? "4096" : "0x1000", type: "uint16_t *" };
+      }
       if (expression === "sizeof(g_u16)") return { expression, success: true, value: "1", type: "unsigned int" };
       if (!metadata && this.options.readErrorAt === this.sampleIndex) {
         return { expression, success: false, error: { code: "MockVariableReadError", message: "injected" } };

@@ -1,0 +1,819 @@
+{
+  "workflow": "c2000_runBootHandoffDiagnosis",
+  "orchestration": "server-internal",
+  "mcpToolCalls": [],
+  "approvalClass": "read-only",
+  "performedSteps": [
+    "snapshot",
+    "loadedPrograms",
+    "expressions",
+    "pc",
+    "ramOwnership",
+    "elfFreshness",
+    "diagnosis"
+  ],
+  "effectsApplied": [
+    "target-read"
+  ],
+  "device": "F28P65x",
+  "diagnosisCode": "IPC_ACCEPTANCE_READY",
+  "severity": "info",
+  "recommendedActions": [
+    "Evidence indicates CPU1/CPU2 boot handoff and IPC-ready state are consistent."
+  ],
+  "evidence": {
+    "explicitCores": {
+      "cpu1CoreId": 0,
+      "cpu2CoreId": 2
+    },
+    "noCcsUiFocusRequired": true,
+    "managerRoute": "sessionId -> coreId -> DebugSession",
+    "verdict": {
+      "cpu1Ready": true,
+      "cpu2Ready": true,
+      "ipcReady": true,
+      "readinessBasis": "matched-ipc-conditions",
+      "ramOwnershipReady": true,
+      "ready": true,
+      "reasons": [],
+      "runtimeRamOwnershipReady": true
+    }
+  },
+  "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+  "snapshot": {
+    "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+    "cores": [
+      {
+        "coreId": 0,
+        "coreName": "C28xx_CPU1",
+        "name": "C28xx_CPU1",
+        "connected": true,
+        "state": "Running",
+        "pc": "50684",
+        "loadedProgram": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+        "loadedProgramInfo": {
+          "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+          "coreId": 0,
+          "coreName": "C28xx_CPU1",
+          "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+          "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.map",
+          "loadedAt": "2026-07-30T16:15:51.708Z",
+          "fileMTime": "2026-07-30T15:41:37.351Z",
+          "fileSize": 75428,
+          "sha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+          "symbolsLoaded": true,
+          "warning": "This info is guaranteed only if program was loaded through this MCP."
+        }
+      },
+      {
+        "coreId": 2,
+        "coreName": "C28xx_CPU2",
+        "name": "C28xx_CPU2",
+        "connected": true,
+        "state": "Running",
+        "pc": "99273",
+        "loadedProgram": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+        "loadedProgramInfo": {
+          "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+          "coreId": 2,
+          "coreName": "C28xx_CPU2",
+          "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+          "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.map",
+          "loadedAt": "2026-07-30T16:15:53.139Z",
+          "fileMTime": "2026-07-30T15:41:40.041Z",
+          "fileSize": 46412,
+          "sha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+          "symbolsLoaded": true,
+          "warning": "This info is guaranteed only if program was loaded through this MCP."
+        }
+      }
+    ]
+  },
+  "cpu1": {
+    "coreId": 0,
+    "pc": {
+      "success": true,
+      "address": "0xC5FC",
+      "function": "main",
+      "offset": "0x59",
+      "memoryRegion": "RAMD0",
+      "partial": true,
+      "resolutionSource": "linker-map",
+      "pc": "50684"
+    },
+    "expressions": [
+      {
+        "success": true,
+        "value": "1",
+        "expression": "pass"
+      }
+    ]
+  },
+  "cpu2": {
+    "coreId": 2,
+    "pc": {
+      "success": true,
+      "address": "0x183C9",
+      "function": "main",
+      "offset": "0x1A",
+      "memoryRegion": "RAMGS4",
+      "partial": true,
+      "resolutionSource": "linker-map",
+      "pc": "99273"
+    },
+    "expressions": []
+  },
+  "verdict": {
+    "cpu1Ready": true,
+    "cpu2Ready": true,
+    "ipcReady": true,
+    "readinessBasis": "matched-ipc-conditions",
+    "ramOwnershipReady": true,
+    "ready": true,
+    "reasons": [],
+    "runtimeRamOwnershipReady": true
+  },
+  "ramOwnership": {
+    "success": true,
+    "target": "F28P65x",
+    "memcfgGsxmSelAddress": 390212,
+    "flashBankMuxSelAddress": 381024,
+    "maps": [
+      {
+        "coreId": 0,
+        "coreName": "C28xx_CPU1",
+        "mapPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.map",
+        "memoryRegions": [
+          {
+            "name": "BEGIN",
+            "origin": 0,
+            "length": 2,
+            "used": 2,
+            "unused": 0,
+            "attr": "RWIX"
+          },
+          {
+            "name": "BOOT_RSVD",
+            "origin": 2,
+            "length": 431,
+            "used": 0,
+            "unused": 431,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMM0",
+            "origin": 433,
+            "length": 591,
+            "used": 30,
+            "unused": 561,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMM1",
+            "origin": 1024,
+            "length": 1024,
+            "used": 1016,
+            "unused": 8,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CLATOCPURAM",
+            "origin": 5248,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPUTOCLARAM",
+            "origin": 5376,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CLATODMARAM",
+            "origin": 5760,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "DMATOCLARAM",
+            "origin": 5888,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS0",
+            "origin": 32768,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS1",
+            "origin": 34816,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS2",
+            "origin": 36864,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS3",
+            "origin": 38912,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS4",
+            "origin": 40960,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS5",
+            "origin": 43008,
+            "length": 2048,
+            "used": 472,
+            "unused": 1576,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS6",
+            "origin": 45056,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS7",
+            "origin": 47104,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD0",
+            "origin": 49152,
+            "length": 8192,
+            "used": 2912,
+            "unused": 5280,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD1",
+            "origin": 57344,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS0",
+            "origin": 65536,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS1",
+            "origin": 73728,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS2",
+            "origin": 81920,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS3",
+            "origin": 90112,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS4",
+            "origin": 98304,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD2",
+            "origin": 106496,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD3",
+            "origin": 114688,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD4",
+            "origin": 122880,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMD5",
+            "origin": 131072,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS8",
+            "origin": 139264,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMLS9",
+            "origin": 147456,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPU1TOCPU2RAM",
+            "origin": 237568,
+            "length": 1024,
+            "used": 156,
+            "unused": 868,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPU2TOCPU1RAM",
+            "origin": 241664,
+            "length": 1024,
+            "used": 136,
+            "unused": 888,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CANA_MSG_RAM",
+            "origin": 299008,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CANB_MSG_RAM",
+            "origin": 307200,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "FLASH_BANK0",
+            "origin": 524288,
+            "length": 131072,
+            "used": 0,
+            "unused": 131072,
+            "attr": "RWIX"
+          },
+          {
+            "name": "FLASH_BANK1",
+            "origin": 655360,
+            "length": 131072,
+            "used": 0,
+            "unused": 131072,
+            "attr": "RWIX"
+          },
+          {
+            "name": "FLASH_BANK2",
+            "origin": 786432,
+            "length": 131072,
+            "used": 0,
+            "unused": 131072,
+            "attr": "RWIX"
+          },
+          {
+            "name": "FLASH_BANK3",
+            "origin": 917504,
+            "length": 131072,
+            "used": 0,
+            "unused": 131072,
+            "attr": "RWIX"
+          },
+          {
+            "name": "FLASH_BANK4",
+            "origin": 1048576,
+            "length": 131072,
+            "used": 0,
+            "unused": 131072,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RESET",
+            "origin": 4194240,
+            "length": 2,
+            "used": 0,
+            "unused": 2,
+            "attr": "RWIX"
+          }
+        ],
+        "sections": [
+          {
+            "name": ".cinit",
+            "page": 0,
+            "origin": 438,
+            "length": 26,
+            "memoryRegion": "RAMM0"
+          },
+          {
+            "name": ".reset",
+            "page": 0,
+            "origin": 4194240,
+            "length": 0,
+            "memoryRegion": "RESET"
+          },
+          {
+            "name": ".stack",
+            "page": 0,
+            "origin": 1024,
+            "length": 1016,
+            "memoryRegion": "RAMM1"
+          },
+          {
+            "name": ".data",
+            "page": 0,
+            "origin": 43008,
+            "length": 10,
+            "memoryRegion": "RAMLS5"
+          },
+          {
+            "name": ".bss",
+            "page": 0,
+            "origin": 43018,
+            "length": 2,
+            "memoryRegion": "RAMLS5"
+          },
+          {
+            "name": ".const",
+            "page": 0,
+            "origin": 43020,
+            "length": 460,
+            "memoryRegion": "RAMLS5"
+          },
+          {
+            "name": ".text",
+            "page": 0,
+            "origin": 49152,
+            "length": 2912,
+            "memoryRegion": "RAMD0"
+          }
+        ],
+        "usedGsRam": [],
+        "usedFlashBanks": []
+      },
+      {
+        "coreId": 2,
+        "coreName": "C28xx_CPU2",
+        "mapPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.map",
+        "memoryRegions": [
+          {
+            "name": "BEGIN",
+            "origin": 0,
+            "length": 2,
+            "used": 2,
+            "unused": 0,
+            "attr": "RWIX"
+          },
+          {
+            "name": "BOOT_RSVD",
+            "origin": 2,
+            "length": 431,
+            "used": 0,
+            "unused": 431,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMM0",
+            "origin": 433,
+            "length": 591,
+            "used": 18,
+            "unused": 573,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMM1",
+            "origin": 1024,
+            "length": 1024,
+            "used": 1016,
+            "unused": 8,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CLATOCPURAM",
+            "origin": 5248,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPUTOCLARAM",
+            "origin": 5376,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CLATODMARAM",
+            "origin": 5760,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "DMATOCLARAM",
+            "origin": 5888,
+            "length": 128,
+            "used": 0,
+            "unused": 128,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS0",
+            "origin": 65536,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS1",
+            "origin": 73728,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS2",
+            "origin": 81920,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS3",
+            "origin": 90112,
+            "length": 8192,
+            "used": 0,
+            "unused": 8192,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RAMGS4",
+            "origin": 98304,
+            "length": 8192,
+            "used": 1462,
+            "unused": 6730,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPU1TOCPU2RAM",
+            "origin": 237568,
+            "length": 1024,
+            "used": 136,
+            "unused": 888,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CPU2TOCPU1RAM",
+            "origin": 241664,
+            "length": 1024,
+            "used": 136,
+            "unused": 888,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CANA_MSG_RAM",
+            "origin": 299008,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "CANB_MSG_RAM",
+            "origin": 307200,
+            "length": 2048,
+            "used": 0,
+            "unused": 2048,
+            "attr": "RWIX"
+          },
+          {
+            "name": "RESET",
+            "origin": 4194240,
+            "length": 2,
+            "used": 0,
+            "unused": 2,
+            "attr": "RWIX"
+          }
+        ],
+        "sections": [
+          {
+            "name": ".cinit",
+            "page": 0,
+            "origin": 434,
+            "length": 18,
+            "memoryRegion": "RAMM0"
+          },
+          {
+            "name": ".text",
+            "page": 0,
+            "origin": 98304,
+            "length": 1308,
+            "memoryRegion": "RAMGS4"
+          },
+          {
+            "name": ".reset",
+            "page": 0,
+            "origin": 4194240,
+            "length": 0,
+            "memoryRegion": "RESET"
+          },
+          {
+            "name": ".stack",
+            "page": 0,
+            "origin": 1024,
+            "length": 1016,
+            "memoryRegion": "RAMM1"
+          },
+          {
+            "name": ".const",
+            "page": 0,
+            "origin": 99612,
+            "length": 144,
+            "memoryRegion": "RAMGS4"
+          },
+          {
+            "name": ".data",
+            "page": 0,
+            "origin": 99756,
+            "length": 10,
+            "memoryRegion": "RAMGS4"
+          }
+        ],
+        "usedGsRam": [
+          {
+            "name": "RAMGS4",
+            "origin": 98304,
+            "length": 8192,
+            "used": 1462,
+            "unused": 6730,
+            "attr": "RWIX",
+            "gsIndex": 4,
+            "ownerCoreId": 2
+          }
+        ],
+        "usedFlashBanks": []
+      }
+    ],
+    "ownershipActions": [
+      {
+        "ownerCoreId": 0,
+        "targetCoreId": 2,
+        "targetCoreName": "C28xx_CPU2",
+        "memoryRegion": "RAMGS4",
+        "gsIndex": 4,
+        "page": "DATA",
+        "address": 390212,
+        "value": 16,
+        "typeSize": 32,
+        "reason": "CPU2 map uses RAMGS4; CPU1 must assign this GS RAM block to CPU2 before CPU2 program load."
+      }
+    ],
+    "flashOwnershipActions": []
+  },
+  "elfFreshness": {
+    "allFresh": true,
+    "programs": [
+      {
+        "coreId": 0,
+        "expectedPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+        "fresh": true,
+        "hostFile": {
+          "fileMTime": "2026-07-30T15:41:37.351Z",
+          "fileSize": 75428,
+          "sha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d"
+        },
+        "loadedProgramInfo": {
+          "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+          "coreId": 0,
+          "coreName": "C28xx_CPU1",
+          "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+          "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.map",
+          "loadedAt": "2026-07-30T16:15:51.708Z",
+          "fileMTime": "2026-07-30T15:41:37.351Z",
+          "fileSize": 75428,
+          "sha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+          "symbolsLoaded": true,
+          "warning": "This info is guaranteed only if program was loaded through this MCP."
+        }
+      },
+      {
+        "coreId": 2,
+        "expectedPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+        "fresh": true,
+        "hostFile": {
+          "fileMTime": "2026-07-30T15:41:40.041Z",
+          "fileSize": 46412,
+          "sha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8"
+        },
+        "loadedProgramInfo": {
+          "sessionId": "dbg-a493f20a-40f8-498a-8ed4-ac2454077819",
+          "coreId": 2,
+          "coreName": "C28xx_CPU2",
+          "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+          "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.map",
+          "loadedAt": "2026-07-30T16:15:53.139Z",
+          "fileMTime": "2026-07-30T15:41:40.041Z",
+          "fileSize": 46412,
+          "sha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+          "symbolsLoaded": true,
+          "warning": "This info is guaranteed only if program was loaded through this MCP."
+        }
+      }
+    ]
+  },
+  "runtimeRamOwnership": {
+    "requested": true,
+    "supported": true,
+    "skipped": false,
+    "matched": true,
+    "expectedMask": 16,
+    "actualValue": 16,
+    "reads": [
+      {
+        "address": 390212,
+        "value": 16,
+        "expectedBits": 16
+      }
+    ]
+  },
+  "expressions": [
+    {
+      "label": "ti-ipc-demo-pass",
+      "coreId": 0,
+      "expression": "pass",
+      "expected": 1,
+      "matched": true,
+      "result": {
+        "success": true,
+        "value": "1",
+        "expression": "pass"
+      }
+    }
+  ]
+}

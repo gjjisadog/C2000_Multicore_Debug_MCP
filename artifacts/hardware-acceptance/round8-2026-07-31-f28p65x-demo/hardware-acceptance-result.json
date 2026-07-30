@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "acceptanceId": "round8-2026-07-31-f28p65x-demo",
+  "overallStatus": "PARTIAL_PASS",
+  "evidenceClassification": "HARDWARE_TARGET",
+  "primaryJob": {
+    "jobId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+    "status": "PASSED",
+    "artifactCompleteness": "COMPLETE",
+    "stepsPassed": 3,
+    "stepsFailed": 0
+  },
+  "checks": [
+    {
+      "name": "explicit CPU1/CPU2 connect, load and run",
+      "status": "PASSED"
+    },
+    {
+      "name": "TI IPC demo completion via CPU1 pass == 1",
+      "status": "PASSED"
+    },
+    {
+      "name": "GS RAM ownership mask",
+      "status": "PASSED",
+      "expected": "0x10",
+      "actual": "0x10"
+    },
+    {
+      "name": "CPU1/CPU2 run-pause isolation",
+      "status": "PASSED"
+    },
+    {
+      "name": "CPU2 disconnect leaves CPU1 connected",
+      "status": "PASSED"
+    },
+    {
+      "name": "variable stream 10 ms",
+      "status": "CHARACTERIZED_NOT_RELIABLE",
+      "totalSamples": 123,
+      "missedPollCount": 77,
+      "overrunCount": 66,
+      "droppedSampleCount": 77,
+      "readErrorCount": 0,
+      "meanActualHostIntervalMs": 16.3241
+    },
+    {
+      "name": "variable stream 20 ms",
+      "status": "CHARACTERIZED_NOT_RELIABLE",
+      "totalSamples": 88,
+      "missedPollCount": 12,
+      "overrunCount": 25,
+      "droppedSampleCount": 12,
+      "readErrorCount": 0,
+      "meanActualHostIntervalMs": 22.8382
+    },
+    {
+      "name": "variable stream 100 ms",
+      "status": "PASSED_SHORT_RUN",
+      "totalSamples": 20,
+      "missedPollCount": 0,
+      "overrunCount": 0,
+      "droppedSampleCount": 0,
+      "readErrorCount": 0,
+      "meanActualHostIntervalMs": 100.7899
+    },
+    {
+      "name": "ERAD capability detection CPU1/CPU2",
+      "status": "PASSED_READ_ONLY"
+    },
+    {
+      "name": "Trace regeneration from SQLite",
+      "status": "PASSED_WITH_MISSING_SOURCES",
+      "eventCount": 23
+    },
+    {
+      "name": "Trace regeneration from artifacts",
+      "status": "PASSED_WITH_MISSING_SOURCES",
+      "eventCount": 17
+    },
+    {
+      "name": "DLOG export",
+      "status": "SKIPPED_UNSUPPORTED_DEMO"
+    },
+    {
+      "name": "ERAD profiling",
+      "status": "SKIPPED_NO_MUTATING_OPT_IN"
+    },
+    {
+      "name": "CAN evidence",
+      "status": "SKIPPED_NO_PCAN_OR_SECOND_BOARD"
+    },
+    {
+      "name": "20 cold-start repetitions",
+      "status": "NOT_RUN"
+    },
+    {
+      "name": "30 minute and 2 hour endurance",
+      "status": "NOT_RUN"
+    }
+  ],
+  "limitations": [
+    "Host polling timestamps are not MCU sampling timestamps.",
+    "The 100 ms variable-stream result is a short-run software characterization, not a guaranteed hardware minimum.",
+    "Perfetto traces are incomplete because the TI IPC demo produced no CAN, DLOG, ERAD profile, target-state, or linked variable-stream sources.",
+    "No high-voltage or PWM operation was performed."
+  ]
+}

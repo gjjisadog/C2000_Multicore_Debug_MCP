@@ -58,6 +58,7 @@ export class StepRegistry {
           resetType: "cpu",
           loadPolicy: (step as Record<string, unknown>).loadPolicy,
           loadSequence: (step as Record<string, unknown>).loadSequence,
+          ipcReadyExpressions: (step as Record<string, unknown>).ipcReadyExpressions,
           runSequence: { runCpu1First: true, runCpu2: true, settleMs: 0 },
           timeoutMs: step.timeoutMs ?? 10000, intervalMs: step.intervalMs ?? 100,
           verifyRuntimeRamOwnership: Boolean((step as Record<string, unknown>).verifyRuntimeRamOwnership),

@@ -82,6 +82,16 @@ describe("read-only DLOG export", () => {
     fixture.close();
   });
 
+  it("normalizes decimal C28x addresses returned by real CCS", async () => {
+    const fixture = await createFixture({ decimalAddresses: true });
+    const described = await fixture.service.describe(request());
+    expect((described.descriptor as any).channels).toEqual([
+      expect.objectContaining({ name: "ia", resolvedAddress: "0x2000" }),
+      expect.objectContaining({ name: "flags", resolvedAddress: "0x3000" })
+    ]);
+    fixture.close();
+  });
+
   it("rejects a configured type when C28x sizeof does not match", async () => {
     const fixture = await createFixture({ wrongWidth: true });
     await expect(fixture.service.describe(request())).rejects.toMatchObject({ code: "DlogElementWidthMismatch" });
@@ -224,6 +234,7 @@ interface FixtureOptions {
   alwaysChangeState?: boolean;
   leaseFailureAfter?: number;
   restartDuringSamples?: boolean;
+  decimalAddresses?: boolean;
 }
 
 async function createFixture(options: FixtureOptions = {}) {
@@ -333,10 +344,10 @@ class FakeDlogWorkers {
       return { expression, success: false, error: { code: "SymbolNotFound", message: "injected" } };
     }
     const metadata: Record<string, string> = {
-      "&(g_stDlog)": "0x1800",
-      "&(g_stDlog.afIa)": "0x2000",
+      "&(g_stDlog)": this.options.decimalAddresses ? "6144" : "0x1800",
+      "&(g_stDlog.afIa)": this.options.decimalAddresses ? "8192" : "0x2000",
       "sizeof(g_stDlog.afIa[0])": this.options.wrongWidth ? "1" : "2",
-      "&(g_stDlog.auFlags)": "0x3000",
+      "&(g_stDlog.auFlags)": this.options.decimalAddresses ? "12288" : "0x3000",
       "sizeof(g_stDlog.auFlags[0])": "1"
     };
     if (metadata[expression]) return { expression, success: true, value: metadata[expression] };

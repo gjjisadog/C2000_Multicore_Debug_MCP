@@ -1,0 +1,49 @@
+{
+  "sessionId": "dbg-add9dc2c-de41-44b9-b59a-27fe2cb2bf2f",
+  "cores": [
+    {
+      "coreId": 0,
+      "coreName": "C28xx_CPU1",
+      "name": "C28xx_CPU1",
+      "connected": true,
+      "state": "Halted",
+      "pc": "51810",
+      "loadedProgram": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+      "loadedProgramInfo": {
+        "sessionId": "dbg-add9dc2c-de41-44b9-b59a-27fe2cb2bf2f",
+        "coreId": 0,
+        "coreName": "C28xx_CPU1",
+        "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+        "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.map",
+        "loadedAt": "2026-07-30T16:09:46.487Z",
+        "fileMTime": "2026-07-30T15:41:37.351Z",
+        "fileSize": 75428,
+        "sha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+        "symbolsLoaded": true,
+        "warning": "This info is guaranteed only if program was loaded through this MCP."
+      }
+    },
+    {
+      "coreId": 2,
+      "coreName": "C28xx_CPU2",
+      "name": "C28xx_CPU2",
+      "connected": true,
+      "state": "Halted",
+      "pc": "99247",
+      "loadedProgram": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+      "loadedProgramInfo": {
+        "sessionId": "dbg-add9dc2c-de41-44b9-b59a-27fe2cb2bf2f",
+        "coreId": 2,
+        "coreName": "C28xx_CPU2",
+        "programUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+        "mapUri": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.map",
+        "loadedAt": "2026-07-30T16:09:47.829Z",
+        "fileMTime": "2026-07-30T15:41:40.041Z",
+        "fileSize": 46412,
+        "sha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+        "symbolsLoaded": true,
+        "warning": "This info is guaranteed only if program was loaded through this MCP."
+      }
+    }
+  ]
+}

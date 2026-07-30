@@ -181,7 +181,8 @@ export class DebugDaemon {
             timeoutMs: input.timeoutMs,
             verifyRuntimeRamOwnership: input.verifyRuntimeRamOwnership,
             loadPolicy: input.loadPolicy,
-            loadSequence: input.loadSequence
+            loadSequence: input.loadSequence,
+            ipcReadyExpressions: input.ipcReadyExpressions
           },
           { type: "cleanup" }
         ],

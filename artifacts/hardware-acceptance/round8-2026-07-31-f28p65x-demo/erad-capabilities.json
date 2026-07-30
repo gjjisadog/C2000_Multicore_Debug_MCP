@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "operation": "read-only-capability-detection",
+  "boardId": "f28p65x-demo-cl650002",
+  "sessionId": "dbg-623e768d-660e-4cf4-990c-5f545d6fb1f7",
+  "adapterSessionId": "ccs-1785428719656-38608236e2e38",
+  "workerInstanceId": "worker-2c663e45-1485-46fe-abb3-0334ec0d43b7",
+  "workerGeneration": 2,
+  "cores": [
+    {
+      "coreId": 0,
+      "coreName": "C28xx_CPU1",
+      "capabilities": {
+        "supported": true,
+        "device": "TMS320F28P650DK9",
+        "supportedDevices": [
+          "F28P65x"
+        ],
+        "addressUnitBits": 16,
+        "registerPage": "DATA",
+        "busComparatorCount": 8,
+        "counterCount": 4,
+        "supportsPcRange": true,
+        "supportsCycleCount": true,
+        "supportsEventCount": true,
+        "supportsMaxCycles": true,
+        "supportsMinCycles": false,
+        "supportsClaTaskTiming": false,
+        "supportsInterruptNesting": false,
+        "supportsCrossCoreSynchronization": false,
+        "supportsIpcSingleCycleLatency": false,
+        "ownership": "NO_OWNER",
+        "occupiedBusComparators": [],
+        "occupiedCounters": []
+      }
+    },
+    {
+      "coreId": 2,
+      "coreName": "C28xx_CPU2",
+      "capabilities": {
+        "supported": true,
+        "device": "TMS320F28P650DK9",
+        "supportedDevices": [
+          "F28P65x"
+        ],
+        "addressUnitBits": 16,
+        "registerPage": "DATA",
+        "busComparatorCount": 8,
+        "counterCount": 4,
+        "supportsPcRange": true,
+        "supportsCycleCount": true,
+        "supportsEventCount": true,
+        "supportsMaxCycles": true,
+        "supportsMinCycles": false,
+        "supportsClaTaskTiming": false,
+        "supportsInterruptNesting": false,
+        "supportsCrossCoreSynchronization": false,
+        "supportsIpcSingleCycleLatency": false,
+        "ownership": "NO_OWNER",
+        "occupiedBusComparators": [],
+        "occupiedCounters": []
+      }
+    }
+  ],
+  "profileConfigured": false,
+  "profileStarted": false
+}

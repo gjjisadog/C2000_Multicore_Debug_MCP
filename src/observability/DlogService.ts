@@ -31,6 +31,7 @@ import {
   type DlogDescriptor,
   type DlogStatusSnapshot
 } from "./DlogSchemas.js";
+import { normalizeTargetAddress } from "./targetAddress.js";
 
 const DLOG_BATCH_SIZE = 96;
 const DLOG_BATCH_TIMEOUT_MS = 5000;
@@ -624,9 +625,9 @@ function requireEvaluation(
 }
 
 function parseAddress(value: unknown): string {
-  const match = String(value ?? "").match(/0x[0-9a-f]+/i);
-  if (!match) throw new DebugMcpError("DlogAddressInvalid", "DLOG symbol address is missing or invalid", { value });
-  return match[0].toLowerCase();
+  const normalized = normalizeTargetAddress(value);
+  if (!normalized) throw new DebugMcpError("DlogAddressInvalid", "DLOG symbol address is missing or invalid", { value });
+  return normalized;
 }
 
 function parseInteger(value: unknown): number {

@@ -1,0 +1,554 @@
+{
+  "schemaVersion": 1,
+  "format": "perfetto-trace-event-json",
+  "displayTimeUnit": "ms",
+  "jobId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+  "generatedFrom": [
+    "sqlite"
+  ],
+  "primaryTimeDomain": "host-monotonic",
+  "timeDomains": [
+    {
+      "id": "host-monotonic",
+      "kind": "host-monotonic",
+      "unit": "microseconds-from-first-event",
+      "synchronizedToHost": true,
+      "calibration": null
+    },
+    {
+      "id": "host-wall-clock",
+      "kind": "host-wall-clock",
+      "unit": "ISO-8601",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "pcan-host",
+      "kind": "pcan-host",
+      "unit": "source-defined",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "pcan-hardware",
+      "kind": "pcan-hardware",
+      "unit": "source-defined",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "mcu-counter",
+      "kind": "mcu-counter",
+      "unit": "counter",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "mcu-sample-index",
+      "kind": "mcu-sample-index",
+      "unit": "sample-index",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "erad-cycle",
+      "kind": "erad-cycle",
+      "unit": "cycle",
+      "synchronizedToHost": false,
+      "calibration": null
+    },
+    {
+      "id": "dlog-relative",
+      "kind": "dlog-relative",
+      "unit": "relative-microseconds",
+      "synchronizedToHost": false,
+      "calibration": null
+    }
+  ],
+  "tracks": [
+    {
+      "id": "daemon-job",
+      "name": "Daemon / Job",
+      "pid": 1,
+      "tid": 1,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "scheduler",
+      "name": "Scheduler",
+      "pid": 1,
+      "tid": 2,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "board-permit",
+      "name": "Board Permit",
+      "pid": 1,
+      "tid": 3,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "lease",
+      "name": "Lease",
+      "pid": 1,
+      "tid": 4,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "board-worker",
+      "name": "Board Worker",
+      "pid": 1,
+      "tid": 5,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "cpu1-debug",
+      "name": "CPU1 Debug",
+      "pid": 1,
+      "tid": 6,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "cpu2-debug",
+      "name": "CPU2 Debug",
+      "pid": 1,
+      "tid": 7,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "can-worker",
+      "name": "CAN Worker",
+      "pid": 1,
+      "tid": 8,
+      "timeDomain": "host-monotonic"
+    },
+    {
+      "id": "firmware-can-tx",
+      "name": "Firmware CAN TX",
+      "pid": 2,
+      "tid": 1,
+      "timeDomain": "mcu-counter"
+    },
+    {
+      "id": "pcan-bus-host",
+      "name": "PCAN Bus Evidence / Host Timestamp",
+      "pid": 3,
+      "tid": 1,
+      "timeDomain": "pcan-host"
+    },
+    {
+      "id": "pcan-bus-hardware",
+      "name": "PCAN Bus Evidence / Hardware Timestamp",
+      "pid": 3,
+      "tid": 2,
+      "timeDomain": "pcan-hardware"
+    },
+    {
+      "id": "firmware-can-rx",
+      "name": "Firmware CAN RX",
+      "pid": 4,
+      "tid": 1,
+      "timeDomain": "mcu-counter"
+    },
+    {
+      "id": "variables",
+      "name": "Variable Stream",
+      "pid": 5,
+      "tid": 1,
+      "timeDomain": "mcu-sample-index"
+    },
+    {
+      "id": "erad",
+      "name": "ERAD",
+      "pid": 6,
+      "tid": 1,
+      "timeDomain": "erad-cycle"
+    },
+    {
+      "id": "dlog",
+      "name": "DLOG",
+      "pid": 7,
+      "tid": 1,
+      "timeDomain": "dlog-relative"
+    }
+  ],
+  "traceEvents": [
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 1,
+      "args": {
+        "name": "Daemon / Job",
+        "trackId": "daemon-job",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 2,
+      "args": {
+        "name": "Scheduler",
+        "trackId": "scheduler",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 3,
+      "args": {
+        "name": "Board Permit",
+        "trackId": "board-permit",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 4,
+      "args": {
+        "name": "Lease",
+        "trackId": "lease",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 5,
+      "args": {
+        "name": "Board Worker",
+        "trackId": "board-worker",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 6,
+      "args": {
+        "name": "CPU1 Debug",
+        "trackId": "cpu1-debug",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 7,
+      "args": {
+        "name": "CPU2 Debug",
+        "trackId": "cpu2-debug",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 1,
+      "tid": 8,
+      "args": {
+        "name": "CAN Worker",
+        "trackId": "can-worker",
+        "timeDomain": "host-monotonic"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 2,
+      "tid": 1,
+      "args": {
+        "name": "Firmware CAN TX",
+        "trackId": "firmware-can-tx",
+        "timeDomain": "mcu-counter"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 3,
+      "tid": 1,
+      "args": {
+        "name": "PCAN Bus Evidence / Host Timestamp",
+        "trackId": "pcan-bus-host",
+        "timeDomain": "pcan-host"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 3,
+      "tid": 2,
+      "args": {
+        "name": "PCAN Bus Evidence / Hardware Timestamp",
+        "trackId": "pcan-bus-hardware",
+        "timeDomain": "pcan-hardware"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 4,
+      "tid": 1,
+      "args": {
+        "name": "Firmware CAN RX",
+        "trackId": "firmware-can-rx",
+        "timeDomain": "mcu-counter"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 5,
+      "tid": 1,
+      "args": {
+        "name": "Variable Stream",
+        "trackId": "variables",
+        "timeDomain": "mcu-sample-index"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 6,
+      "tid": 1,
+      "args": {
+        "name": "ERAD",
+        "trackId": "erad",
+        "timeDomain": "erad-cycle"
+      }
+    },
+    {
+      "name": "thread_name",
+      "cat": "__metadata",
+      "ph": "M",
+      "ts": 0,
+      "pid": 7,
+      "tid": 1,
+      "args": {
+        "name": "DLOG",
+        "trackId": "dlog",
+        "timeDomain": "dlog-relative"
+      }
+    },
+    {
+      "name": "JOB_SUBMITTED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 0,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8233847517900",
+        "wallClockTimestamp": "2026-07-30T16:15:46.035Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "job",
+        "sourceId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+        "jobId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+        "boardId": null,
+        "workerGeneration": null,
+        "planName": "round8-f28p65x-ti-ipc-demo",
+        "selectedBoards": [
+          "f28p65x-demo-cl650002"
+        ]
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 7156,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8233854674600",
+        "wallClockTimestamp": "2026-07-30T16:15:46.042Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "READY",
+        "current": "RUNNING"
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 3373054,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8237220572600",
+        "wallClockTimestamp": "2026-07-30T16:15:49.408Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "RUNNING",
+        "current": "READY"
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 3374826,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8237222343900",
+        "wallClockTimestamp": "2026-07-30T16:15:49.410Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "READY",
+        "current": "RUNNING"
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 7519978,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8241367496400",
+        "wallClockTimestamp": "2026-07-30T16:15:53.555Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "RUNNING",
+        "current": "READY"
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 7522269,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8241369787200",
+        "wallClockTimestamp": "2026-07-30T16:15:53.557Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "READY",
+        "current": "RUNNING"
+      }
+    },
+    {
+      "name": "BOARD_STATUS_CHANGED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 8600089,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8242447607600",
+        "wallClockTimestamp": "2026-07-30T16:15:54.635Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "board",
+        "sourceId": "f28p65x-demo-cl650002",
+        "jobId": null,
+        "boardId": "f28p65x-demo-cl650002",
+        "workerGeneration": null,
+        "previous": "RUNNING",
+        "current": "READY"
+      }
+    },
+    {
+      "name": "JOB_FINISHED",
+      "cat": "daemon-job",
+      "ph": "i",
+      "ts": 8601422,
+      "pid": 1,
+      "tid": 1,
+      "s": "t",
+      "args": {
+        "timeDomain": "host-monotonic",
+        "sourceMonotonicTimestampNs": "8242448940000",
+        "wallClockTimestamp": "2026-07-30T16:15:54.636Z",
+        "synchronizedAcrossDevices": false,
+        "sourceType": "job",
+        "sourceId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+        "jobId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+        "boardId": null,
+        "workerGeneration": null,
+        "status": "PASSED"
+      }
+    }
+  ],
+  "missingSources": [
+    "target-state"
+  ],
+  "incompleteSources": [],
+  "completeness": "INCOMPLETE"
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "jobId": "varstream-5b9acd9c-cd54-4b76-8174-d523409e3c83",
+  "jobType": "variable-stream",
+  "targets": [
+    {
+      "boardId": "f28p65x-demo-cl650002",
+      "boardProfile": {
+        "device": "TMS320F28P650DK9",
+        "tags": [
+          "demo",
+          "f28p65x",
+          "isolated-low-risk",
+          "round8"
+        ]
+      },
+      "xds110Serial": "CL650002",
+      "adapterType": "ccs",
+      "workerGeneration": 2,
+      "adapterSessionId": "ccs-1785428719656-38608236e2e38",
+      "sessionId": "dbg-623e768d-660e-4cf4-990c-5f545d6fb1f7",
+      "cores": [
+        {
+          "coreId": 0,
+          "coreName": "C28xx_CPU1"
+        }
+      ],
+      "programs": []
+    }
+  ],
+  "mcpVersion": "0.7.0",
+  "nodeVersion": "v22.17.1",
+  "operatingSystem": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64"
+  },
+  "ccsVersion": null,
+  "configSummary": {
+    "variableStreamSchemaVersion": 1,
+    "samplePeriodMs": 20,
+    "variableCount": 1,
+    "maxSamples": 100,
+    "durationMs": 2000,
+    "maxArtifactBytes": 1048576
+  },
+  "startedAt": "2026-07-30T16:26:03.962Z",
+  "endedAt": "2026-07-30T16:26:05.966Z",
+  "evidenceLevel": "HARDWARE_TARGET",
+  "completeness": {
+    "status": "COMPLETE",
+    "reason": null
+  }
+}

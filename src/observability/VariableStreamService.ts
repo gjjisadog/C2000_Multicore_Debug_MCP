@@ -40,6 +40,7 @@ import {
   type VariableSample,
   type VariableStreamStats
 } from "./VariableStreamSchemas.js";
+import { normalizeTargetAddress } from "./targetAddress.js";
 
 const TERMINAL = new Set<VariableStreamStatus>(["COMPLETED", "STOPPED", "CANCELLED", "INTERRUPTED", "FAILED"]);
 const POLL_TIMEOUT_MS = 1000;
@@ -683,9 +684,11 @@ function requireEvaluation(value: Record<string, unknown> | undefined, expressio
 
 function parseAddress(value: string | undefined): string {
   if (!value) throw new DebugMcpError("VariableAddressMissing", "Variable address was not returned", {});
-  const match = value.match(/0x[0-9a-f]+/i);
-  if (!match) throw new DebugMcpError("VariableAddressInvalid", "Variable address is not hexadecimal", { value });
-  return match[0].toLowerCase();
+  const normalized = normalizeTargetAddress(value);
+  if (!normalized) {
+    throw new DebugMcpError("VariableAddressInvalid", "Variable address is not decimal or hexadecimal", { value });
+  }
+  return normalized;
 }
 
 function parseInteger(value: unknown): number {

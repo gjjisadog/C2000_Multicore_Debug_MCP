@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { StepRegistry } from "../src/jobs/StepRegistry.js";
 import { testPlanSchema } from "../src/jobs/TestPlanSchema.js";
+import { submitMultiBoardIpcAcceptanceSchema } from "../src/mcp/toolSchemas.js";
 import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 
 class RecordingToolInvoker implements C2000ToolInvoker {
@@ -31,7 +32,8 @@ describe("StepRegistry", () => {
         {
           type: "runIpcAcceptance",
           loadPolicy: "if-changed",
-          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 }
+          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+          ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
         }
       ]
     });
@@ -70,8 +72,24 @@ describe("StepRegistry", () => {
         cpu1OutPath: "/firmware/cpu1.out",
         cpu2OutPath: "/firmware/cpu2.out",
         loadPolicy: "if-changed",
-        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 }
+        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+        ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
       })
     });
+  });
+
+  test("durable IPC submission accepts explicit firmware-specific readiness expressions", () => {
+    const parsed = submitMultiBoardIpcAcceptanceSchema.parse({
+      boardIds: ["board-a"],
+      artifacts: {
+        cpu1OutPath: "/firmware/cpu1.out",
+        cpu2OutPath: "/firmware/cpu2.out"
+      },
+      ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
+    });
+
+    expect(parsed.ipcReadyExpressions).toEqual([
+      { label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }
+    ]);
   });
 });

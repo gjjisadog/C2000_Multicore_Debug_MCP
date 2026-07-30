@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "acceptanceId": "round8-2026-07-31-f28p65x-demo",
+  "scope": "F28P65x real-hardware acceptance with TI ipc_ex1_basic",
+  "startedAt": "2026-07-30T16:15:46.036Z",
+  "endedAt": "2026-07-30T16:30:44.904Z",
+  "sourceCommit": "3428109c2e7d498d9e566d0c6f527c7ff78ce907",
+  "sourceTreeState": "source commit plus the two fixes documented in HARDWARE_ACCEPTANCE_REPORT.md",
+  "mcpVersion": "0.7.0",
+  "runtime": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "bundledNodeVersion": "v22.17.1",
+    "systemNodeVersion": "v20.10.0",
+    "ccsRoot": "D:\\ccs21.0\\ccs",
+    "ccsVersion": null,
+    "dsLiteProductVersion": "21.0",
+    "c2000WareVersion": "26.01.00.00",
+    "compilerVersion": "25.11.1.LTS",
+    "xds110Version": "3.0.0.43"
+  },
+  "safetyConfirmation": {
+    "providedBy": "user",
+    "rigIsolated": true,
+    "highVoltageAbsent": true,
+    "powerStageDisabled": true,
+    "pwmPhysicallyInhibited": true,
+    "authorizedWorkload": "TI ipc_ex1_basic"
+  },
+  "target": {
+    "boardId": "f28p65x-demo-cl650002",
+    "boardProfile": "F28P65x TI IPC demo isolated rig",
+    "device": "TMS320F28P650DK9",
+    "probeType": "XDS110",
+    "probeSerial": "CL650002",
+    "ccxmlPath": "examples\\targetConfigs\\F28P650DK9_XDS110_CL650002.ccxml",
+    "ccxmlSha256": "830ba8344129c36ebefc39e255d2284d3892f0680344cf17a80ea90f58bc63ba",
+    "cores": [
+      {
+        "coreId": 0,
+        "coreName": "C28xx_CPU1"
+      },
+      {
+        "coreId": 2,
+        "coreName": "C28xx_CPU2"
+      }
+    ]
+  },
+  "firmware": {
+    "example": "driverlib/f28p65x/examples/c28x_dual/driver/ipc/ipc_ex1_basic",
+    "cpu1": {
+      "outSha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+      "mapSha256": "35d4d60746d9363beee952b5907f80bf03bb16fd9799e23ba5ab1a3df192f5a0"
+    },
+    "cpu2": {
+      "outSha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+      "mapSha256": "13f37ad2923fc2494936ec0b0b8815b21a7d5d66c19479a0c163e4e5e9ae30cf"
+    }
+  },
+  "primaryJobId": "run-4b1a7578-f21f-45cc-b748-9ee6cd8b22e9",
+  "evidenceLevel": "HARDWARE_TARGET",
+  "completeness": {
+    "status": "PARTIAL",
+    "reason": "Core IPC, isolation, slow-variable and read-only ERAD capability checks completed; DLOG, ERAD profiling, CAN, 20 cold-start repetitions and endurance runs were not executed."
+  }
+}
