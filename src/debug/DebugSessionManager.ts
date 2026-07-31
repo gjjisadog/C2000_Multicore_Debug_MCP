@@ -840,15 +840,36 @@ export class DebugSessionManager {
     return this.exclusive(sessionId, async () => this.evaluateManyUnlocked(sessionId, coreId, expressions));
   }
 
-  async evaluateManyWithTimeout(sessionId: string, coreId: CoreId, expressions: string[], timeoutMs: number): Promise<EvaluateResult[]> {
-    return this.exclusive(sessionId, async () => this.evaluateManyUnlocked(sessionId, coreId, expressions, timeoutMs));
+  async evaluateManyWithTimeout(
+    sessionId: string,
+    coreId: CoreId,
+    expressions: string[],
+    timeoutMs: number,
+    options?: { diagnostics?: "full" | "errors-only" }
+  ): Promise<EvaluateResult[]> {
+    return this.exclusive(
+      sessionId,
+      async () => this.evaluateManyUnlocked(sessionId, coreId, expressions, timeoutMs, options)
+    );
   }
 
-  private async evaluateManyUnlocked(sessionId: string, coreId: CoreId, expressions: string[], timeoutMs?: number): Promise<EvaluateResult[]> {
+  private async evaluateManyUnlocked(
+    sessionId: string,
+    coreId: CoreId,
+    expressions: string[],
+    timeoutMs?: number,
+    options?: { diagnostics?: "full" | "errors-only" }
+  ): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
     if (this.adapter.evaluateExpressions) {
       try {
-        return await this.adapter.evaluateExpressions(session.adapterSession, coreId, [...new Set(expressions)], timeoutMs);
+        return await this.adapter.evaluateExpressions(
+          session.adapterSession,
+          coreId,
+          [...new Set(expressions)],
+          timeoutMs,
+          options
+        );
       } catch (error) {
         this.logger.warn("batch expression evaluation failed", { sessionId, coreId, error: toStructuredError(error) });
       }

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "jobId": "varstream-d91c0e45-bcb1-4eda-b38f-4b684a1e038d",
+  "overallStatus": "COMPLETED",
+  "errorCode": null,
+  "failedStep": null,
+  "assertions": [],
+  "evidenceClassification": "HARDWARE_TARGET",
+  "cancelled": false,
+  "timedOut": false,
+  "incompleteReason": null
+}

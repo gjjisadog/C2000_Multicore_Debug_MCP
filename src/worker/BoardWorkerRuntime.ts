@@ -96,7 +96,8 @@ export class BoardWorkerRuntime {
       parsed.sessionId,
       parsed.coreId,
       parsed.expressions,
-      parsed.timeoutMs
+      parsed.timeoutMs,
+      { diagnostics: "errors-only" }
     );
     return {
       success: true,

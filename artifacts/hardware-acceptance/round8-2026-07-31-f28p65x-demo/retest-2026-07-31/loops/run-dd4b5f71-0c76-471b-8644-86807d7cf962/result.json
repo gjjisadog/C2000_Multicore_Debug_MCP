@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "jobId": "run-dd4b5f71-0c76-471b-8644-86807d7cf962",
+  "overallStatus": "PASSED",
+  "errorCode": null,
+  "failedStep": null,
+  "assertions": [
+    {
+      "name": "f28p65x-demo-cl650002:0:launchMulticore",
+      "status": "PASSED"
+    },
+    {
+      "name": "f28p65x-demo-cl650002:1:runIpcAcceptance",
+      "status": "PASSED"
+    },
+    {
+      "name": "f28p65x-demo-cl650002:2:cleanup",
+      "status": "PASSED"
+    }
+  ],
+  "evidenceClassification": "HARDWARE_TARGET",
+  "cancelled": false,
+  "timedOut": false,
+  "incompleteReason": null
+}

@@ -38,6 +38,7 @@ export interface CcsScriptingCommand {
   programUri?: string;
   expression?: string;
   expressions?: string[];
+  diagnostics?: "full" | "errors-only";
   valueExpression?: string;
   page?: string;
   address?: string | number;

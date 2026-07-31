@@ -410,7 +410,12 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
     case "evaluateExpression":
       return { ...base, name: "evaluateExpression", expression: command.expression };
     case "evaluateExpressions":
-      return { ...base, name: "evaluateMany", expressions: command.expressions };
+      return {
+        ...base,
+        name: "evaluateMany",
+        expressions: command.expressions,
+        diagnostics: command.diagnostics ?? "full"
+      };
     case "assignExpression":
       return { ...base, name: "assignExpression", expression: command.expression, valueExpression: command.valueExpression };
     case "resolveAddress":
@@ -845,13 +850,15 @@ function startCoreThread(port, boundCoreId) {
               continue;
             }
             var shouldShutdown = command.name === "shutdown";
-            logDiagnostic("command:start", {
-              boundCoreId: boundCoreId,
-              boundCoreName: boundCoreName,
-              commandCoreId: command.coreId,
-              commandCoreName: command.coreName,
-              commandName: command.name
-            });
+            if (command.diagnostics !== "errors-only") {
+              logDiagnostic("command:start", {
+                boundCoreId: boundCoreId,
+                boundCoreName: boundCoreName,
+                commandCoreId: command.coreId,
+                commandCoreName: command.coreName,
+                commandName: command.name
+              });
+            }
             if (command.name !== "shutdown" && String(command.coreId) !== String(boundCoreId)) {
               logDiagnostic("command:failure", {
                 boundCoreId: boundCoreId,
@@ -897,14 +904,16 @@ function startCoreThread(port, boundCoreId) {
               response.coreName = response.value.coreName;
             }
             writeResponse(output, response);
-            logDiagnostic("command:success", {
-              boundCoreId: boundCoreId,
-              boundCoreName: boundCoreName,
-              commandCoreId: command.coreId,
-              commandCoreName: command.coreName,
-              commandName: command.name,
-              status: response.status
-            });
+            if (command.diagnostics !== "errors-only") {
+              logDiagnostic("command:success", {
+                boundCoreId: boundCoreId,
+                boundCoreName: boundCoreName,
+                commandCoreId: command.coreId,
+                commandCoreName: command.coreName,
+                commandName: command.name,
+                status: response.status
+              });
+            }
             if (shouldShutdown) {
               cleanupPersistentDebugServer();
               java.lang.System.exit(0);

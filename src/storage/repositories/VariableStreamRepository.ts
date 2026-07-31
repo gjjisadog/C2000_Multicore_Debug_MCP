@@ -81,6 +81,13 @@ export class VariableStreamRepository {
     ]);
   }
 
+  appendSampleAndUpdate(record: VariableStreamRecord, sample: VariableSample): void {
+    this.store.transaction(() => {
+      this.appendSample(record.streamId, sample);
+      this.update(record);
+    });
+  }
+
   samples(streamId: string, afterSequence = 0, limit = 100): VariableSample[] {
     return this.store.all<{ sample_json: string }>(
       "SELECT sample_json FROM variable_stream_samples WHERE stream_id = ? AND sequence > ? ORDER BY sequence LIMIT ?",

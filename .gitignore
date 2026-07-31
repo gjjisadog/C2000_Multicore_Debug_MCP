@@ -14,3 +14,6 @@ scripts/run_t05_*.mjs
 
 # Runtime debug evidence bundles
 .c2000-debug-bundles/
+
+# Local hardware demo workspaces
+.hardware-demo-workspace-ipc-ex1/

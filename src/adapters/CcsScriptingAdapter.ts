@@ -168,8 +168,18 @@ export class CcsScriptingAdapter implements DebugAdapter {
     };
   }
 
-  async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[], timeoutMs?: number): Promise<EvaluateResult[]> {
-    const result = await this.execute(session, coreId, { operation: "evaluateExpressions", expressions }, timeoutMs);
+  async evaluateExpressions(
+    session: AdapterSession,
+    coreId: CoreId,
+    expressions: string[],
+    timeoutMs?: number,
+    options?: { diagnostics?: "full" | "errors-only" }
+  ): Promise<EvaluateResult[]> {
+    const result = await this.execute(session, coreId, {
+      operation: "evaluateExpressions",
+      expressions,
+      diagnostics: options?.diagnostics
+    }, timeoutMs);
     return Array.isArray(result.results) ? result.results as EvaluateResult[] : [];
   }
 
@@ -216,7 +226,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "expressions" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">,
+    command: Pick<CcsScriptingCommand, "operation" | "resetType" | "programUri" | "expression" | "expressions" | "diagnostics" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">,
     timeoutOverrideMs?: number
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);

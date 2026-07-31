@@ -154,6 +154,29 @@ describe("CcsScriptingAdapter", () => {
     );
   });
 
+  test("propagates errors-only diagnostics for high-frequency bounded expression batches", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "quiet-batch", ccxmlPath, coreMap });
+
+    await adapter.evaluateExpressions(
+      session,
+      0,
+      ["g_stCtrl.uiState"],
+      1000,
+      { diagnostics: "errors-only" }
+    );
+
+    expect(bridge.commands.at(-1)).toEqual(expect.objectContaining({
+      operation: "evaluateExpressions",
+      coreId: 0,
+      coreName: "C28xx_CPU1",
+      expressions: ["g_stCtrl.uiState"],
+      diagnostics: "errors-only",
+      timeoutMs: 1000
+    }));
+  });
+
   test("reads PC from persistent DSS expression value responses", async () => {
     class PersistentPcBridge extends RecordingBridge {
       override async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {

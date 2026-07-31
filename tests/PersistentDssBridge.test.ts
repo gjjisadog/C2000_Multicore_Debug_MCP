@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   isRetryableXdsLaunchError,
   PersistentDssBridge,
+  persistentServerScriptSource,
   type DssServerHandle,
   type DssServerLauncher,
   xdsRetryDelayMs
@@ -36,6 +37,12 @@ describe("PersistentDssBridge", () => {
   afterEach(async () => {
     for (const socket of acceptedSockets.splice(0)) socket.destroy();
     await Promise.all(startedServers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+  });
+
+  test("keeps failures observable while suppressing success chatter for bounded polling batches", () => {
+    const source = persistentServerScriptSource("C:/ti/json2.js");
+    expect(source).toContain('if (command.diagnostics !== "errors-only")');
+    expect(source).toContain('logDiagnostic("command:failure"');
   });
 
   test("routes commands to the socket assigned to the requested core", async () => {

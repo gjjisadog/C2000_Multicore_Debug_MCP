@@ -41,6 +41,7 @@ import {
   type VariableStreamStats
 } from "./VariableStreamSchemas.js";
 import { normalizeTargetAddress } from "./targetAddress.js";
+import { claimPollSlot } from "./pollSchedule.js";
 
 const TERMINAL = new Set<VariableStreamStatus>(["COMPLETED", "STOPPED", "CANCELLED", "INTERRUPTED", "FAILED"]);
 const POLL_TIMEOUT_MS = 1000;
@@ -242,12 +243,10 @@ export class VariableStreamService {
         }
         const pollingStartNs = process.hrtime.bigint();
         if (pollingStartNs - originNs >= durationNs) break;
-        if (pollingStartNs > nextPollNs + periodNs) {
-          const missed = Number((pollingStartNs - nextPollNs) / periodNs);
-          record.stats.missedPollCount += missed;
-          record.stats.droppedSampleCount += missed;
-          nextPollNs += BigInt(missed) * periodNs;
-        }
+        const slot = claimPollSlot(pollingStartNs, nextPollNs, periodNs);
+        nextPollNs = slot.nextPollNs;
+        record.stats.missedPollCount += slot.missedPollCount;
+        record.stats.droppedSampleCount += slot.missedPollCount;
         const pollingStartedAt = new Date().toISOString();
         const actualInterval = previousPollNs === undefined
           ? null
@@ -300,11 +299,9 @@ export class VariableStreamService {
             maxArtifactBytes: input.maxArtifactBytes
           });
         }
-        this.options.streams.appendSample(record.streamId, sample);
         record.artifactBytes += sampleBytes;
         record.stats.totalSamples += 1;
-        this.options.streams.update(record);
-        nextPollNs += periodNs;
+        this.options.streams.appendSampleAndUpdate(record, sample);
       }
       record.status = control.requestedStatus ?? "COMPLETED";
       record.stopReason = control.reason ?? (record.stats.totalSamples >= input.maxSamples ? "MAX_SAMPLES_REACHED" : "DURATION_REACHED");
@@ -716,12 +713,17 @@ function emptyStats(samplePeriodMs: number): VariableStreamStats {
 function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     if (signal.aborted || milliseconds <= 0) return resolve();
-    const timer = setTimeout(resolve, milliseconds);
-    timer.unref();
-    signal.addEventListener("abort", () => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
       resolve();
-    }, { once: true });
+    };
+    const timer = setTimeout(finish, milliseconds);
+    timer.unref();
+    signal.addEventListener("abort", finish, { once: true });
   });
 }
 

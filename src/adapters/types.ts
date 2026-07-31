@@ -42,7 +42,13 @@ export interface DebugAdapter {
   getState(session: AdapterSession, coreId: CoreId): Promise<TargetState>;
   readPc(session: AdapterSession, coreId: CoreId): Promise<string>;
   evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult>;
-  evaluateExpressions?(session: AdapterSession, coreId: CoreId, expressions: string[], timeoutMs?: number): Promise<EvaluateResult[]>;
+  evaluateExpressions?(
+    session: AdapterSession,
+    coreId: CoreId,
+    expressions: string[],
+    timeoutMs?: number,
+    options?: { diagnostics?: "full" | "errors-only" }
+  ): Promise<EvaluateResult[]>;
   assignExpression(session: AdapterSession, coreId: CoreId, expression: string, value: ExpressionAssignmentValue): Promise<{ success: boolean; value?: string }>;
   resolveAddress(session: AdapterSession, coreId: CoreId, address: string): Promise<ResolveResult>;
 }

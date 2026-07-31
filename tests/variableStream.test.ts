@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AtomicArtifactWriter } from "../src/artifacts/AtomicArtifactWriter.js";
 import type { BoardLeaseContext } from "../src/boards/types.js";
 import type { BoardWorkerSupervisor } from "../src/boards/BoardWorkerSupervisor.js";
@@ -11,6 +11,7 @@ import {
   classifyType
 } from "../src/observability/VariableStreamService.js";
 import { startVariableStreamSchema, VARIABLE_STREAM_INTERNAL_TOOL } from "../src/observability/VariableStreamSchemas.js";
+import { claimPollSlot } from "../src/observability/pollSchedule.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { BoardRepository } from "../src/storage/repositories/BoardRepository.js";
 import { SessionRepository } from "../src/storage/repositories/SessionRepository.js";
@@ -122,6 +123,48 @@ describe("slow variable stream contracts", () => {
     const terminal = await fixture.waitTerminal(started);
     expect(terminal.stats.actualHostIntervalMs.last).toBeGreaterThan(0);
     expect(terminal.stats.actualHostIntervalMs.mean).toBeGreaterThan(0);
+    fixture.close();
+  });
+
+  it("keeps polling deadlines anchored and does not accumulate execution-time drift", () => {
+    const periodNs = 10_000_000n;
+    let nextPollNs = 0n;
+    const actualStarts = [0n, 7_000_000n, 23_000_000n, 31_000_000n, 47_000_000n];
+    const claimed = actualStarts.map(actualStartNs => {
+      const slot = claimPollSlot(actualStartNs, nextPollNs, periodNs);
+      nextPollNs = slot.nextPollNs;
+      return slot;
+    });
+
+    expect(claimed.map(slot => slot.scheduledStartNs)).toEqual([
+      0n, 10_000_000n, 20_000_000n, 30_000_000n, 40_000_000n
+    ]);
+    expect(claimed.map(slot => slot.missedPollCount)).toEqual([0, 0, 0, 0, 0]);
+    expect(nextPollNs).toBe(50_000_000n);
+  });
+
+  it("treats sub-period scheduler jitter separately from genuinely skipped poll slots", () => {
+    expect(claimPollSlot(19_999_999n, 10_000_000n, 10_000_000n)).toMatchObject({
+      scheduledStartNs: 10_000_000n,
+      nextPollNs: 20_000_000n,
+      missedPollCount: 0,
+      schedulingLatenessNs: 9_999_999n
+    });
+    expect(claimPollSlot(20_000_000n, 10_000_000n, 10_000_000n)).toMatchObject({
+      scheduledStartNs: 20_000_000n,
+      nextPollNs: 30_000_000n,
+      missedPollCount: 1,
+      schedulingLatenessNs: 0n
+    });
+  });
+
+  it("commits each sample and its stream checkpoint in one SQLite transaction", async () => {
+    const fixture = await createFixture();
+    const transaction = vi.spyOn(fixture.store, "transaction");
+    const started = await fixture.service.start(startInput({ maxSamples: 3, durationMs: 80 }));
+    const terminal = await fixture.waitTerminal(started);
+    expect(terminal.stats.totalSamples).toBe(3);
+    expect(transaction).toHaveBeenCalledTimes(3);
     fixture.close();
   });
 

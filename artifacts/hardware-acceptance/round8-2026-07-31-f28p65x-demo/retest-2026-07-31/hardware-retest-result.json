@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "acceptanceId": "round8-2026-07-31-f28p65x-demo-retest",
+  "boardId": "f28p65x-demo-cl650002",
+  "probeSerial": "CL650002",
+  "device": "F28P65x",
+  "safetyAuthorization": {
+    "isolated": true,
+    "highVoltagePresent": false,
+    "powerStageEnabled": false,
+    "pwmPhysicallyInhibited": true,
+    "authorizedFirmware": "TI ipc_ex1_basic"
+  },
+  "firmware": {
+    "cpu1OutSha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+    "cpu1MapSha256": "35d4c68595ac81f767b3c35e89b553168448269dcc8a36b83f9dd5710100ed10",
+    "cpu2OutSha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+    "cpu2MapSha256": "13f37f8eeff47ac0fd6a0a24ed396ec1d95a05b6902cb8743600086666c5c83d"
+  },
+  "ipcLoopAcceptance": {
+    "status": "PASSED",
+    "requestedLoops": 20,
+    "passedLoops": 20,
+    "failedLoops": 0,
+    "runMode": "debugger_runs_both",
+    "readyCondition": "CPU1 pass == 1",
+    "runtimeGsOwnershipVerified": true,
+    "evidenceLevel": "HARDWARE_TARGET"
+  },
+  "variableStream": {
+    "10ms": {
+      "status": "NOT_RELIABLE",
+      "samples": 879,
+      "missedPollCount": 121,
+      "overrunCount": 35,
+      "droppedSampleCount": 121,
+      "readErrorCount": 0,
+      "meanHostIntervalMs": 11.3827
+    },
+    "20ms": {
+      "status": "BOUNDED_WITH_OVERRUNS",
+      "samples": 500,
+      "missedPollCount": 0,
+      "overrunCount": 14,
+      "droppedSampleCount": 0,
+      "readErrorCount": 0,
+      "meanHostIntervalMs": 20.00088
+    },
+    "100ms": {
+      "status": "PASSED_SHORT_RUN",
+      "samples": 100,
+      "missedPollCount": 0,
+      "overrunCount": 0,
+      "droppedSampleCount": 0,
+      "readErrorCount": 0,
+      "meanHostIntervalMs": 100.10068
+    }
+  },
+  "endurance30Minutes": {
+    "status": "PASSED",
+    "sessionId": "dbg-cbc5f42c-f080-429e-9c54-f01074499a99",
+    "workerGeneration": 4,
+    "segments": 3,
+    "samples": 1800,
+    "missedPollCount": 0,
+    "overrunCount": 0,
+    "readErrorCount": 0,
+    "droppedSampleCount": 0,
+    "evidenceLevel": "HARDWARE_TARGET"
+  },
+  "endurance120Minutes": {
+    "status": "PASSED",
+    "sessionId": "dbg-08d783ec-db77-43e6-8f45-0a7ed5b2259e",
+    "adapterSessionId": "ccs-1785507504120-3d917c9bb529f",
+    "workerInstanceId": "worker-baddfd97-f6a9-4e2d-aed7-67f86661ff82",
+    "workerGeneration": 5,
+    "startedAt": "2026-07-31T14:19:12.164Z",
+    "endedAt": "2026-07-31T16:19:21.283Z",
+    "segments": 12,
+    "samples": 7200,
+    "missedPollCount": 0,
+    "overrunCount": 0,
+    "readErrorCount": 0,
+    "droppedSampleCount": 0,
+    "evidenceLevel": "HARDWARE_TARGET",
+    "observationNote": "The target ran continuously. Host polling used twelve bounded ten-minute streams with short export/start transitions between streams."
+  },
+  "dlog": {
+    "status": "SKIPPED_UNSUPPORTED_FIRMWARE",
+    "reason": "The authorized TI ipc_ex1_basic demo does not define g_stDlog or an equivalent DLOG buffer contract.",
+    "hardwareVerified": false
+  },
+  "erad": {
+    "status": "BLOCKED_BY_TOOL_PROFILE",
+    "reason": "Read-only ERAD capability inspection is exposed, but configure/start/stop profiling tools are not available in the active safe MCP profile.",
+    "hardwareProfileVerified": false
+  },
+  "diagnosticAttempts": [
+    {
+      "status": "EXPECTED_CONFIGURATION_FAILURE",
+      "reason": "cpu1_boots_cpu2 was incompatible with this demo; debugger_runs_both passed immediately after safe timeout recovery."
+    },
+    {
+      "status": "EXPECTED_FENCING_REJECTION",
+      "reason": "A prior endurance session crossed its lease lifetime and was rejected with BoardLeaseRequired; its samples were not merged into the continuous two-hour result."
+    }
+  ],
+  "archiveValidation": {
+    "jsonDocuments": 78,
+    "jsonlRecords": 11157,
+    "parseErrors": 0,
+    "twoHourVariableSamples": 7200,
+    "sequenceOrMonotonicityIssues": 0,
+    "sensitivePatternHits": 0
+  }
+}

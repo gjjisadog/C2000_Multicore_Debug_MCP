@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "jobId": "run-80c3f36d-661c-46c6-bbde-67fd1d719171",
+  "jobType": "multi-board-ipc-acceptance",
+  "targets": [
+    {
+      "boardId": "f28p65x-demo-cl650002",
+      "boardProfile": {
+        "device": "TMS320F28P650DK9",
+        "tags": [
+          "demo",
+          "f28p65x",
+          "isolated-low-risk",
+          "round8"
+        ]
+      },
+      "xds110Serial": "CL650002",
+      "adapterType": "ccs",
+      "workerGeneration": 4,
+      "adapterSessionId": null,
+      "sessionId": "dbg-ecb18094-6a2b-496c-95e7-d5728978b735",
+      "cores": [
+        {
+          "coreId": 0,
+          "coreName": "C28xx_CPU1"
+        },
+        {
+          "coreId": 2,
+          "coreName": "C28xx_CPU2"
+        }
+      ],
+      "programs": [
+        {
+          "coreId": 0,
+          "coreName": "C28xx_CPU1",
+          "outPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.out",
+          "outSha256": "f649cc246084fbcc1b453cc54d47f6adee7ab4a7a7b76de6595155dcc261a38d",
+          "mapPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x1\\CPU1_RAM\\ipc_ex1_basic_c28x1.map",
+          "mapSha256": "35d4d60746d9363beee952b5907f80bf03bb16fd9799e23ba5ab1a3df192f5a0"
+        },
+        {
+          "coreId": 2,
+          "coreName": "C28xx_CPU2",
+          "outPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.out",
+          "outSha256": "3ea0ac74fb40d9172193bdcdf5a5a54cd9c99d3a4d4973c5278d41f92613c8a8",
+          "mapPath": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\.hardware-demo-workspace-ipc-ex1\\ipc_ex1_basic_c28x2\\CPU2_RAM\\ipc_ex1_basic_c28x2.map",
+          "mapSha256": "13f37ad2923fc2494936ec0b0b8815b21a7d5d66c19479a0c163e4e5e9ae30cf"
+        }
+      ]
+    }
+  ],
+  "mcpVersion": "0.7.0",
+  "nodeVersion": "v22.17.1",
+  "operatingSystem": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64"
+  },
+  "ccsVersion": null,
+  "configSummary": {
+    "planVersion": 1,
+    "priority": "REGRESSION",
+    "parallelism": 1,
+    "failurePolicy": {
+      "continueHealthyBoards": false,
+      "quarantineFailedBoard": false,
+      "collectDebugBundle": true
+    },
+    "recoveryPolicy": "safe_restart_board",
+    "adapterType": "ccs"
+  },
+  "startedAt": "2026-07-31T00:27:31.969Z",
+  "endedAt": "2026-07-31T00:27:38.673Z",
+  "evidenceLevel": "HARDWARE_TARGET",
+  "completeness": {
+    "status": "COMPLETE",
+    "reason": null
+  }
+}
