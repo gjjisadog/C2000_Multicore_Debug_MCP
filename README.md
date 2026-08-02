@@ -378,14 +378,21 @@ committed in `manifest.json` as `evidence:expression-snapshots`, with the
 manifest written last as the artifact commit marker. Assignment, injection,
 wait, capture-summary, and reset/reconnect results are embedded in the same
 manifest under `durableStepResults` (capture arrays remain only in the hashed
-snapshot file to avoid duplicating large windows).
+snapshot file to avoid duplicating large windows). The shared portable-evidence
+sanitizer recursively removes sensitive keys from objects and arbitrarily
+nested arrays, including evaluator error details, without changing the SQLite
+run record.
 
 Resource limits are fail-closed: at most 128 steps, 256 assignments or faults,
-64 read groups, 128 expressions per read, 256 wait conditions, 1,000 samples,
+64 read groups, 128 expressions per read, 256 wait or IPC-ready conditions,
+1,000 samples,
 10,000 expanded evidence values per step, and 20,000 per plan. Labels are at
-most 128 characters and expressions/string values at most 512. Runtime output
-is also capped at 2 MiB per step and 8 MiB per board flow, so unexpectedly
-large target values cannot bypass submission-time cardinality checks.
+most 128 characters and expressions/string values at most 512. Durable
+timeouts and delays are capped at 24 hours; polling intervals and load/reset
+settles are capped at 60 seconds. Runtime output is capped at 2 MiB per step
+and 8 MiB across all boards in one job. Terminal export applies the same
+8 MiB portable-evidence ceiling, so a multi-board run cannot obtain a separate
+budget for each board and then exceed the artifact budget.
 
 The manifest is the publication transaction boundary. Failures before it is
 written restore the previous manifest/snapshot pair. Artifact indexing or

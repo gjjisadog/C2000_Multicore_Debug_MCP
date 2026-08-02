@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { BoardRegistry } from "../src/boards/BoardRegistry.js";
 import { TestJobEngine } from "../src/jobs/TestJobEngine.js";
+import type { JobArtifactSnapshotService } from "../src/artifacts/JobArtifactSnapshotService.js";
 import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { ArtifactRepository } from "../src/storage/repositories/ArtifactRepository.js";
@@ -81,23 +82,152 @@ describe("durable step cleanup and output safety", () => {
     await fixture.engine.stop();
     fixture.store.close();
   });
+
+  test("enforces the aggregate evidence budget across all boards in one job", async () => {
+    const largeValue = "x".repeat(1_500_000);
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ success: true, value: largeValue }] };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    }, ["board-a", "board-b"]);
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "cross-board-evidence-budget",
+      boardIds: ["board-a", "board-b"],
+      parallelism: 2,
+      failurePolicy: { continueHealthyBoards: false, quarantineFailedBoard: false, collectDebugBundle: false },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        ...Array.from({ length: 3 }, (_, index) => ({ type: "captureExpressions", label: `capture-${index}`, reads: [{ coreId: 0, expressions: ["g_x"] }] }))
+      ]
+    }).jobId);
+    const terminal = await waitForTerminal(fixture.runs, jobId);
+    expect(terminal.status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: "FAILED", error: expect.objectContaining({ code: "EvidenceLimitExceeded" }) })
+    ]));
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("allows a legal near-limit multi-board job to finish and export terminal evidence", async () => {
+    const largeValue = "x".repeat(1_300_000);
+    const exported: string[] = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ success: true, value: largeValue }] };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    }, ["board-a", "board-b"], {
+      async exportJob(jobId: string) {
+        exported.push(jobId);
+        return `/artifacts/${jobId}`;
+      }
+    } as JobArtifactSnapshotService);
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "legal-cross-board-evidence-budget",
+      boardIds: ["board-a", "board-b"],
+      parallelism: 2,
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        ...Array.from({ length: 3 }, (_, index) => ({ type: "captureExpressions", label: `capture-${index}`, reads: [{ coreId: 0, expressions: ["g_x"] }] }))
+      ]
+    }).jobId);
+    const terminal = await waitForTerminal(fixture.runs, jobId);
+    expect(terminal.status).toBe("PASSED");
+    expect(exported).toEqual([jobId]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("starts healthy persisted work while isolating an unmigratable legacy run", async () => {
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    persistQueuedRun(fixture, "run-bad-legacy", {
+      planVersion: 1,
+      name: "bad-legacy",
+      boardIds: ["board-a"],
+      steps: [{ type: "unknown-legacy-step", passthrough: true }]
+    });
+    persistQueuedRun(fixture, "run-healthy", {
+      planVersion: 1,
+      name: "healthy",
+      boardIds: ["board-a"],
+      steps: [{ type: "delay", delayMs: 0 }]
+    });
+
+    fixture.engine.start();
+    const bad = await waitForTerminal(fixture.runs, "run-bad-legacy");
+    const healthy = await waitForTerminal(fixture.runs, "run-healthy");
+    expect(bad).toEqual(expect.objectContaining({
+      status: "NEEDS_MANUAL_INTERVENTION",
+      error: expect.objectContaining({ code: "PersistedPlanMigrationFailed" })
+    }));
+    expect(healthy.status).toBe("PASSED");
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
 });
 
 function planWithCleanup() {
   return { planVersion: 1, name: "cleanup-state", boardIds: ["board-a"], steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }] };
 }
 
-async function createFixture(tools: C2000ToolInvoker) {
+async function createFixture(tools: C2000ToolInvoker, boardIds = ["board-a"], artifactSnapshots?: JobArtifactSnapshotService) {
   const root = await mkdtemp(path.join(os.tmpdir(), "c2000-durable-safety-"));
   roots.push(root);
   const store = await SqliteStore.open(path.join(root, "runtime.sqlite"));
   const events = new EventRepository(store);
   const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
-  registry.register({ boardId: "board-a", probeSerial: "XDS-A", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: [] });
-  registry.setWorker("board-a", "worker-a");
+  for (const [index, boardId] of boardIds.entries()) {
+    registry.register({ boardId, probeSerial: `XDS-${index}`, device: "F28P65x", ccxmlPath: `${boardId}.ccxml`, tags: [] });
+    registry.setWorker(boardId, `worker-${index}`);
+  }
   const runs = new TestRunRepository(store);
-  const engine = new TestJobEngine({ registry, runs, events, artifacts: new ArtifactRepository(store), tools, maxParallelBoards: 1 });
+  const engine = new TestJobEngine({ registry, runs, events, artifacts: new ArtifactRepository(store), tools, maxParallelBoards: boardIds.length, artifactSnapshots });
   return { root, store, events, registry, runs, engine };
+}
+
+function persistQueuedRun(fixture: Awaited<ReturnType<typeof createFixture>>, jobId: string, plan: Record<string, unknown>): void {
+  const steps = plan.steps as Array<Record<string, unknown>>;
+  const failurePolicy = { continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: false };
+  fixture.runs.create({
+    jobId,
+    planName: String(plan.name),
+    planVersion: 1,
+    plan,
+    status: "QUEUED",
+    progressCurrent: 0,
+    progressTotal: steps.length,
+    submittedAt: new Date().toISOString(),
+    cancelRequested: false,
+    failurePolicy
+  }, [{
+    jobId,
+    boardId: "board-a",
+    probeSerial: "XDS-0",
+    status: "QUEUED",
+    currentStepIndex: 0
+  }], steps.map((step, stepIndex) => ({
+    stepRunId: `${jobId}-step-${stepIndex}`,
+    jobId,
+    boardId: "board-a",
+    stepIndex,
+    stepType: String(step.type),
+    input: step,
+    status: "PENDING",
+    attempt: 0,
+    idempotencyClass: "READ_ONLY" as const
+  })));
 }
 
 async function waitForTerminal(runs: TestRunRepository, jobId: string) {

@@ -12,6 +12,7 @@ import type { EventRepository } from "../storage/repositories/EventRepository.js
 import type { SessionRepository } from "../storage/repositories/SessionRepository.js";
 import type { TestRunRepository, TestStepRecord } from "../storage/repositories/TestRunRepository.js";
 import type { WorkerRepository } from "../storage/repositories/WorkerRepository.js";
+import { sanitizeEvidence } from "../observability/SensitiveDataFilter.js";
 import { toStructuredError } from "../utils/errors.js";
 import { AtomicArtifactWriter } from "./AtomicArtifactWriter.js";
 import {
@@ -27,7 +28,6 @@ import {
 } from "./ArtifactSchemas.js";
 
 const TERMINAL_STATUSES = new Set(["PASSED", "FAILED", "PARTIAL", "CANCELLED", "NEEDS_MANUAL_INTERVENTION"]);
-const SECRET_KEY = /(token|secret|password|authorization|credential|private.?key|environment|env)/i;
 
 export class JobArtifactSnapshotService {
   private readonly writer: AtomicArtifactWriter;
@@ -203,11 +203,10 @@ export class JobArtifactSnapshotService {
     const plan = parsePersistedTestPlan(run.plan);
     const runBoards = this.options.runs.boards(jobId);
     const steps = this.options.runs.steps(jobId);
-    const expressionSnapshots = expressionSnapshotsFromSteps(steps);
-    const durableStepResults = durableStepResultsFromSteps(steps);
+    const { expressionSnapshots, durableStepResults } = portableDurableEvidenceFromSteps(steps);
     const portableEvidenceBytes = Buffer.byteLength(JSON.stringify({ expressionSnapshots, durableStepResults }), "utf8");
-    if (portableEvidenceBytes > DURABLE_PLAN_LIMITS.maxJobOutputBytes) {
-      throw new Error(`Portable durable evidence exceeds ${DURABLE_PLAN_LIMITS.maxJobOutputBytes} bytes`);
+    if (portableEvidenceBytes > DURABLE_PLAN_LIMITS.maxJobEvidenceBytes) {
+      throw new Error(`Portable durable evidence exceeds ${DURABLE_PLAN_LIMITS.maxJobEvidenceBytes} bytes`);
     }
     const adapterType = this.adapterType;
     const evidenceClassification = adapterType === "mock" ? "MOCK" : adapterType === "ccs" ? "HARDWARE_TARGET" : "UNKNOWN";
@@ -394,15 +393,25 @@ function assertionStatus(step: TestStepRecord): "PASSED" | "FAILED" | "SKIPPED" 
   return "SKIPPED";
 }
 
+export function portableDurableEvidenceFromSteps(steps: TestStepRecord[]): {
+  expressionSnapshots: Record<string, unknown>[];
+  durableStepResults: Record<string, unknown>[];
+} {
+  return {
+    expressionSnapshots: expressionSnapshotsFromSteps(steps),
+    durableStepResults: durableStepResultsFromSteps(steps)
+  };
+}
+
 function expressionSnapshotsFromSteps(steps: TestStepRecord[]): Record<string, unknown>[] {
   return steps.flatMap(step => {
     const snapshots = step.output?.expressionSnapshots;
     if (!Array.isArray(snapshots)) return [];
-    return snapshots.filter(isRecord).map(snapshot => ({
+    return snapshots.filter(isRecord).map(snapshot => sanitize({
+      ...snapshot,
       boardId: step.boardId,
       stepIndex: step.stepIndex,
-      stepType: step.stepType,
-      ...snapshot
+      stepType: step.stepType
     }));
   });
 }
@@ -426,12 +435,7 @@ function durableStepResultsFromSteps(steps: TestStepRecord[]): Record<string, un
 }
 
 function sanitize(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).flatMap(([key, item]) => {
-    if (SECRET_KEY.test(key)) return [];
-    if (Array.isArray(item)) return [[key, item.map(entry => isRecord(entry) ? sanitize(entry) : entry)]];
-    if (isRecord(item)) return [[key, sanitize(item)]];
-    return [[key, item]];
-  }));
+  return sanitizeEvidence(value);
 }
 
 function renderSummary(manifest: ArtifactManifest, result: ArtifactResult): string {

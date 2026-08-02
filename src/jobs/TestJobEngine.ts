@@ -19,7 +19,7 @@ import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
 import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecutionSnapshot } from "./BoardExecutionSemaphore.js";
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
-import type { JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
+import { portableDurableEvidenceFromSteps, type JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
@@ -407,7 +407,7 @@ export class TestJobEngine {
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
-            this.assertStepOutputWithinLimits(jobId, board.boardId, step.stepRunId, step.stepType, output);
+            this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
             if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (plannedStep.type === "cleanup") sessionOpen = false;
             const finishedAt = new Date().toISOString();
@@ -490,19 +490,28 @@ export class TestJobEngine {
     return { success: !failed && !cancelled, cancelled };
   }
 
-  private assertStepOutputWithinLimits(jobId: string, boardId: string, stepRunId: string, stepType: string, output: Record<string, unknown>): void {
+  private assertStepOutputWithinLimits(jobId: string, stepRunId: string, stepType: string, output: Record<string, unknown>): void {
     const outputBytes = jsonBytes(output);
     if (outputBytes > DURABLE_PLAN_LIMITS.maxStepOutputBytes) {
       throw new DebugMcpError("EvidenceLimitExceeded", "Durable step output exceeds the per-step persistence limit", {
         stepType, outputBytes, maxStepOutputBytes: DURABLE_PLAN_LIMITS.maxStepOutputBytes
       });
     }
-    const existingBytes = this.options.runs.steps(jobId, boardId)
+    const existingBytes = this.options.runs.steps(jobId)
       .filter(candidate => candidate.stepRunId !== stepRunId && candidate.output)
       .reduce((total, candidate) => total + jsonBytes(candidate.output!), 0);
-    if (existingBytes + outputBytes > DURABLE_PLAN_LIMITS.maxJobOutputBytes) {
-      throw new DebugMcpError("EvidenceLimitExceeded", "Durable board-flow outputs exceed the aggregate persistence limit", {
-        stepType, existingBytes, outputBytes, maxJobOutputBytes: DURABLE_PLAN_LIMITS.maxJobOutputBytes
+    if (existingBytes + outputBytes > DURABLE_PLAN_LIMITS.maxJobEvidenceBytes) {
+      throw new DebugMcpError("EvidenceLimitExceeded", "Durable job outputs exceed the cross-board aggregate persistence limit", {
+        stepType, existingBytes, outputBytes, maxJobEvidenceBytes: DURABLE_PLAN_LIMITS.maxJobEvidenceBytes
+      });
+    }
+    const candidateSteps = this.options.runs.steps(jobId).map(candidate =>
+      candidate.stepRunId === stepRunId ? { ...candidate, output } : candidate
+    );
+    const portableEvidenceBytes = jsonBytes(portableDurableEvidenceFromSteps(candidateSteps));
+    if (portableEvidenceBytes > DURABLE_PLAN_LIMITS.maxJobEvidenceBytes) {
+      throw new DebugMcpError("EvidenceLimitExceeded", "Durable job evidence would exceed the terminal portable-artifact limit", {
+        stepType, portableEvidenceBytes, maxJobEvidenceBytes: DURABLE_PLAN_LIMITS.maxJobEvidenceBytes
       });
     }
   }

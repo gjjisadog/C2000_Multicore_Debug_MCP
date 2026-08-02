@@ -21,8 +21,11 @@ export const DURABLE_PLAN_LIMITS = {
   maxEvidenceValuesPerPlan: 20000,
   maxExpressionLength: 512,
   maxLabelLength: 128,
+  maxTimeoutMs: 86_400_000,
+  maxIntervalMs: 60_000,
+  maxSettleMs: 60_000,
   maxStepOutputBytes: 2 * 1024 * 1024,
-  maxJobOutputBytes: 8 * 1024 * 1024
+  maxJobEvidenceBytes: 8 * 1024 * 1024
 } as const;
 
 /** Omitted limits mean that a finite campaign records failures without aborting early. */
@@ -35,7 +38,7 @@ const canExecutionSchema = z.object({
   mode: z.enum(["acceptance", "fault_campaign", "matrix", "soak"]).default("acceptance"),
   campaignId: z.string().min(1).optional(),
   iterations: z.number().int().positive().max(10_000).default(1),
-  durationMs: z.number().int().positive().max(86_400_000).optional(),
+  durationMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
   matrixCases: z.array(z.object({ name: z.string().min(1), faults: z.array(z.unknown()).optional(), metadata: z.record(z.unknown()).default({}) })).max(1_000).default([]),
   failFast: z.boolean().default(false),
   health: canHealthPolicySchema,
@@ -87,7 +90,7 @@ const expressionConditionStepSchema = z.object({
 }).strict();
 const loadSequenceStepSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
-  cpu1SettleMs: z.number().int().nonnegative().default(250)
+  cpu1SettleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250)
 }).strict();
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const baseStep = { on: onSchema.optional() };
@@ -110,42 +113,47 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     label: labelSchema.optional(),
     reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads),
     sampleCount: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxSamples).default(1),
-    intervalMs: z.number().int().nonnegative().max(60000).default(0)
+    intervalMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(0)
   }).strict(),
   z.object({
     type: z.literal("waitForExpressions"), ...baseStep,
     conditions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions),
-    timeoutMs: z.number().int().positive().max(86400000),
-    intervalMs: z.number().int().positive().max(60000).default(100)
+    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100)
   }).strict(),
   z.object({
     type: z.literal("resetReconnectCapture"), ...baseStep,
     coreIds: z.array(coreIdSchema).min(1).max(2).refine(values => new Set(values).size === values.length, "coreIds must be unique"),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default("cpu"),
-    settleMs: z.number().int().nonnegative().max(60000).default(250),
+    settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250),
     reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
     loadPolicy: loadPolicySchema.default("if-changed"),
     reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads)
   }).strict(),
   z.object({
     type: z.literal("runIpcAcceptance"), ...baseStep,
-    timeoutMs: z.number().int().positive().optional(), intervalMs: z.number().int().positive().optional(),
+    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional(),
     loadPolicy: loadPolicySchema.optional(), loadSequence: loadSequenceStepSchema.optional(),
-    ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).optional(),
+    ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
   z.object({ type: z.literal("runBootHandoffDiagnosis"), ...baseStep }).strict(),
-  z.object({ type: z.literal("runReloadAndDiagnose"), ...baseStep, timeoutMs: z.number().int().positive().optional(), intervalMs: z.number().int().positive().optional() }).strict(),
+  z.object({
+    type: z.literal("runReloadAndDiagnose"), ...baseStep,
+    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional()
+  }).strict(),
   z.object({ type: z.literal("runFullDebugBundle"), ...baseStep }).strict(),
   z.object({ type: z.literal("cleanup"), ...baseStep }).strict(),
-  z.object({ type: z.literal("delay"), ...baseStep, delayMs: z.number().int().nonnegative() }).strict(),
+  z.object({ type: z.literal("delay"), ...baseStep, delayMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs) }).strict(),
   z.object({ type: z.literal("canAcceptance"), ...baseStep }).strict()
 ]);
 
 export const stepRetryPolicySchema = z.object({
   maxAttempts: z.number().int().positive().default(1),
-  backoffMs: z.number().int().nonnegative().default(0),
-  maxBackoffMs: z.number().int().nonnegative().default(30000),
+  backoffMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(0),
+  maxBackoffMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(30000),
   jitter: z.boolean().default(false),
   retryableErrors: z.array(z.string().min(1).max(128)).max(64).default([])
 });
@@ -317,6 +325,7 @@ function evidenceValueCount(step: TestPlanStep): number {
     case "captureExpressions": return step.sampleCount * step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "waitForExpressions": return step.conditions.length;
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
+    case "runIpcAcceptance": return step.ipcReadyExpressions?.length ?? 0;
     default: return 0;
   }
 }

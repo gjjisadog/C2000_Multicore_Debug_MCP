@@ -272,6 +272,46 @@ describe("standard job artifact snapshot", () => {
     fixture.store.close();
   });
 
+  it("recursively redacts nested expression snapshot errors without mutating the persisted run record", async () => {
+    const fixture = await createFixture();
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    const output = {
+      success: true,
+      expressionSnapshots: [{
+        sampleIndex: 0,
+        evaluated: {
+          results: [{
+            success: false,
+            error: {
+              code: "EvaluateFailed",
+              details: {
+                leaseToken: "do-not-export-lease",
+                credential: "do-not-export-credential",
+                environment: { API_TOKEN: "do-not-export-environment" },
+                nestedArrays: [[{ authorization: "do-not-export-authorization", useful: 7 }]]
+              }
+            }
+          }]
+        }
+      }]
+    };
+    fixture.runs.updateStep({ ...step, output });
+
+    await fixture.service.exportJob(fixture.jobId);
+    const portable = await readFile(path.join(fixture.jobDirectory, "expression-snapshots.json"), "utf8");
+    expect(portable).not.toContain("do-not-export");
+    expect(JSON.parse(portable)).toEqual(expect.objectContaining({
+      snapshots: [expect.objectContaining({ evaluated: expect.objectContaining({ results: [expect.objectContaining({
+        error: expect.objectContaining({ details: expect.objectContaining({ nestedArrays: [[{ useful: 7 }]] }) })
+      })] }) })]
+    }));
+
+    const persisted = fixture.runs.steps(fixture.jobId)[0]!.output!;
+    expect(JSON.stringify(persisted)).toContain("do-not-export-lease");
+    expect(persisted).toEqual(output);
+    fixture.store.close();
+  });
+
   it("never classifies Mock adapter evidence as real hardware", async () => {
     const fixture = await createFixture("PASSED", "mock");
     await fixture.service.exportJob(fixture.jobId);

@@ -42,6 +42,39 @@ describe("StepRegistry", () => {
       { type: "launchMulticore", loadPrograms: false },
       ...Array.from({ length: 3 }, () => ({ type: "captureExpressions", sampleCount: 100, reads: [{ coreId: 0, expressions: Array.from({ length: 70 }, (_, index) => `g_x${index}`) }] }))
     ] }).success).toBe(false);
+
+    const ipc = (overrides: Record<string, unknown>) => ({
+      ...base,
+      steps: [{ type: "launchMulticore", loadPrograms: false }, {
+        type: "runIpcAcceptance",
+        ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: 1 }],
+        ...overrides
+      }]
+    });
+    expect(testPlanSchema.safeParse(ipc({ timeoutMs: 100_000_000 })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ intervalMs: 100_000 })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 100_000 } })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ ipcReadyExpressions: Array.from({ length: DURABLE_PLAN_LIMITS.maxConditions + 1 }, (_, index) => ({ coreId: 0, expression: `g_ready${index}`, expected: 1 })) })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ ipcReadyExpressions: [{ coreId: 0, expression: "x".repeat(DURABLE_PLAN_LIMITS.maxExpressionLength + 1), expected: 1 }] })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ ipcReadyExpressions: [{ label: "x".repeat(DURABLE_PLAN_LIMITS.maxLabelLength + 1), coreId: 0, expression: "g_ready", expected: 1 }] })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({ ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: "x".repeat(DURABLE_PLAN_LIMITS.maxExpressionLength + 1) }] })).success).toBe(false);
+    expect(testPlanSchema.safeParse(ipc({
+      timeoutMs: DURABLE_PLAN_LIMITS.maxTimeoutMs,
+      intervalMs: DURABLE_PLAN_LIMITS.maxIntervalMs,
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: DURABLE_PLAN_LIMITS.maxSettleMs },
+      ipcReadyExpressions: Array.from({ length: DURABLE_PLAN_LIMITS.maxConditions }, (_, index) => ({ coreId: 0, expression: `g_ready${index}`, expected: 1 }))
+    })).success).toBe(true);
+
+    expect(testPlanSchema.safeParse({
+      ...base,
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        ...Array.from({ length: 79 }, (_, stepIndex) => ({
+          type: "runIpcAcceptance",
+          ipcReadyExpressions: Array.from({ length: DURABLE_PLAN_LIMITS.maxConditions }, (_, conditionIndex) => ({ coreId: 0, expression: `g_${stepIndex}_${conditionIndex}`, expected: 1 }))
+        }))
+      ]
+    }).success).toBe(false);
   });
 
   test("durable IPC acceptance creates one connect-only session and forwards staged load parameters", async () => {
