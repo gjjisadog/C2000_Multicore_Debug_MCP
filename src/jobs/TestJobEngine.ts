@@ -400,7 +400,7 @@ export class TestJobEngine {
               signal: activeSignal
             };
             const safetyGuardChecks: Record<string, unknown>[] = [];
-            if (sessionId && guardBeforeStep(plannedStep.type)) {
+            if (sessionOpen && sessionId && guardBeforeStep(plannedStep.type)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
             }
             let output = await this.steps.execute(executionContext);
@@ -413,7 +413,7 @@ export class TestJobEngine {
               }
               throw structuredToolFailure(output, step.stepType);
             }
-            if (typeof output.sessionId === "string") {
+            if (plannedStep.type !== "cleanup" && typeof output.sessionId === "string") {
               if (plannedStep.type !== "launchMulticore" && sessionId && output.sessionId !== sessionId) {
                 throw new DebugMcpError("SessionIdentityMismatch", "Durable step returned a session other than the current fenced board-flow session", {
                   stepType: plannedStep.type,
@@ -426,7 +426,7 @@ export class TestJobEngine {
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
-            if (sessionId && guardAfterStep(plannedStep.type)) {
+            if (sessionOpen && sessionId && guardAfterStep(plannedStep.type)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards({ ...executionContext, sessionId }, sessionId, "after-step"));
             }
             if (safetyGuardChecks.length > 0) {
@@ -436,10 +436,13 @@ export class TestJobEngine {
             this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
             if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (plannedStep.type === "cleanup") {
-              if (sessionOpen && output.closed !== true) {
-                throw new DebugMcpError("WorkflowCleanupFailed", "cleanup did not confirm closure of the active fenced board-flow session", { sessionId, output });
+              if (sessionOpen && sessionId) {
+                assertConfirmedSessionClose(output, sessionId, "Explicit durable cleanup did not confirm closure of the active fenced board-flow session");
               }
               sessionOpen = false;
+              sessionId = undefined;
+              current = { ...current, sessionId: undefined };
+              this.options.runs.updateBoard(current);
             }
             const finishedAt = new Date().toISOString();
             this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0 });
@@ -489,16 +492,18 @@ export class TestJobEngine {
     } finally {
       clearInterval(renew);
       if (sessionId && sessionOpen) {
+        const closingSessionId = sessionId;
         try {
           const cleanup = await this.options.tools.invokeTool("c2000_closeDebugSession", {
-            sessionId,
+            sessionId: closingSessionId,
             __leaseContext: lease.context
           });
-          if (cleanup.success === false) {
-            throw new DebugMcpError("BatchOperationFailed", "Durable job session cleanup returned failure", { cleanup });
-          }
+          assertConfirmedSessionClose(cleanup, closingSessionId, "Durable job finalizer did not confirm closure of the active fenced board-flow session");
           sessionOpen = false;
-          this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLOSED", payload: { sessionId } });
+          sessionId = undefined;
+          current = { ...current, sessionId: undefined };
+          this.options.runs.updateBoard(current);
+          this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLOSED", payload: { sessionId: closingSessionId } });
         } catch (error) {
           failed = true;
           cancelled = false;
@@ -658,6 +663,12 @@ function structuredToolFailure(output: Record<string, unknown>, stepType: string
     }
   }
   return new StructuredToolError({ code: "BatchOperationFailed", message: `Job step ${stepType} returned failure`, details: { output } });
+}
+
+function assertConfirmedSessionClose(output: Record<string, unknown>, expectedSessionId: string, message: string): void {
+  if (output.success === false || output.closed !== true || output.sessionId !== expectedSessionId) {
+    throw new DebugMcpError("WorkflowCleanupFailed", message, { expectedSessionId, output });
+  }
 }
 
 function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {

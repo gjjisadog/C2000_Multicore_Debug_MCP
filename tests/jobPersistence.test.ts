@@ -22,7 +22,6 @@ describe("durable background test jobs", () => {
     directories.push(directory);
     const config = configFor(directory);
     const daemon = new DebugDaemon(config);
-    let sessionId = "";
     try {
       await daemon.start();
       const client = new McpDaemonClient((await discoverDaemon(config)).client);
@@ -39,15 +38,16 @@ describe("durable background test jobs", () => {
         const run = await client.invokeTool("c2000_getTestRun", { jobId: String(submitted.jobId), includeSteps: true });
         return run.status === "PASSED" ? run : undefined;
       });
-      sessionId = String((completed.boards as Array<Record<string, unknown>>)[0]!.sessionId);
-      expect(sessionId).toMatch(/^dbg-/);
+      expect((completed.boards as Array<Record<string, unknown>>)[0]!.sessionId).toBeUndefined();
       await client.close();
     } finally {
       await daemon.stop();
     }
 
     const store = await SqliteStore.open(config.storage!.sqlitePath);
-    expect(new SessionRepository(store).get(sessionId)).toEqual(expect.objectContaining({ status: "CLOSED", closedAt: expect.any(String) }));
+    expect(new SessionRepository(store).listByBoard("board-a")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionId: expect.stringMatching(/^dbg-/), status: "CLOSED", closedAt: expect.any(String) })
+    ]));
     expect(new LeaseRepository(store).activeForBoard("board-a")).toBeUndefined();
     store.close();
   });

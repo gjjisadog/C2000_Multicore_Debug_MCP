@@ -102,6 +102,28 @@ describe("daemon tool router interactive session lifecycle", () => {
     expect(fixture.registry.get("board-a").currentLeaseId).toBeUndefined();
     fixture.store.close();
   });
+
+  test.each([
+    ["closed false", { success: true, sessionId: "dbg-failed", closed: false }],
+    ["missing closed", { success: true, sessionId: "dbg-failed" }],
+    ["identity mismatch", { success: true, sessionId: "dbg-other", closed: true }]
+  ] as const)("keeps daemon session OPEN when close confirmation has %s", async (_label, closeResult) => {
+    const fixture = await makeFixture();
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    await router.invokeTool("c2000_launchAndRunIpcAcceptance", {
+      boardId: "board-a",
+      sessionMode: "interactive",
+      sessionName: "recoverable-close",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2
+    });
+    fixture.workers.invokeBoard = async () => ({ ...closeResult });
+    await expect(router.invokeTool("c2000_closeDebugSession", { sessionId: "dbg-failed" })).resolves.toEqual(closeResult);
+    expect(fixture.sessions.get("dbg-failed")).toEqual(expect.objectContaining({ status: "OPEN" }));
+    expect(fixture.sessions.get("dbg-failed")?.closedAt).toBeUndefined();
+    expect(fixture.registry.leases.active("board-a")).toBeDefined();
+    fixture.store.close();
+  });
 });
 
 async function makeFixture() {

@@ -87,7 +87,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         if (interactive) this.registry.leases.renew(interactive.lease.leaseId, interactive.leaseToken, leaseTtlMs(timeoutMs));
         const invocation = this.withLeaseInput(input, interactive);
         const result = await this.workers.invokeBoard(session.boardId, toolName, invocation, timeoutMs);
-        if (toolName === "c2000_closeDebugSession" && result.success === true) {
+        if (toolName === "c2000_closeDebugSession" && isConfirmedSessionClose(result, sessionId)) {
           this.sessions.close(sessionId);
           this.releaseInteractiveLease(sessionId);
         }
@@ -256,6 +256,10 @@ function randomId(): string {
 
 function leaseTtlMs(commandTimeoutMs: number): number {
   return commandTimeoutMs + 30000;
+}
+
+function isConfirmedSessionClose(result: Record<string, unknown>, expectedSessionId: string): boolean {
+  return result.success !== false && result.closed === true && result.sessionId === expectedSessionId;
 }
 
 function record(value: unknown): Record<string, unknown> {

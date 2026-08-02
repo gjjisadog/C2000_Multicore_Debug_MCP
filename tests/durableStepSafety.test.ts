@@ -314,7 +314,7 @@ describe("durable step cleanup and output safety", () => {
     expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
       error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
     }));
-    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-live");
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
     expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession"]);
     await fixture.engine.stop();
     fixture.store.close();
@@ -346,7 +346,76 @@ describe("durable step cleanup and output safety", () => {
     expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "WorkflowCleanupFailed" }) }));
     expect(fixture.runs.steps(jobId)[2]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "SessionAlreadyOpen" }) }));
     expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession", "c2000_closeDebugSession"]);
-    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-old");
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test.each([
+    ["closed false", { success: true, sessionId: "dbg-current", closed: false }],
+    ["missing closed", { success: true, sessionId: "dbg-current" }],
+    ["identity mismatch", { success: true, sessionId: "dbg-other", closed: true }]
+  ] as const)("quarantines when explicit and final cleanup both return %s", async (_label, closeResult) => {
+    let closeCalls = 0;
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_closeDebugSession") {
+          closeCalls += 1;
+          return { ...closeResult };
+        }
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit(planWithCleanup()).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(closeCalls).toBe(2);
+    expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "WorkflowCleanupFailed" }) }));
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-current");
+    expect(fixture.registry.get("board-a")).toEqual(expect.objectContaining({ status: "QUARANTINED", lastError: expect.objectContaining({ code: "JobSessionCleanupFailed" }) }));
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("clears a confirmed session before guarded relaunch without guarding the closed identity", async () => {
+    const calls: Array<{ toolName: string; sessionId?: string }> = [];
+    let launches = 0;
+    const fixture = await createFixture({
+      async invokeTool(toolName, input) {
+        const values = input as Record<string, unknown>;
+        calls.push({ toolName, ...(typeof values.sessionId === "string" ? { sessionId: values.sessionId } : {}) });
+        if (toolName === "c2000_launchMulticoreDebug") {
+          launches += 1;
+          return { success: true, sessionId: `dbg-${launches}` };
+        }
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ expression: "g_safe", success: true, value: 1 }] };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: values.sessionId, closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "guarded-cleanup-relaunch", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }] },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "cleanup" },
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "cleanup" }
+      ]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
+    expect(calls).toEqual([
+      { toolName: "c2000_launchMulticoreDebug" },
+      { toolName: "c2000_evaluateMany", sessionId: "dbg-1" },
+      { toolName: "c2000_closeDebugSession", sessionId: "dbg-1" },
+      { toolName: "c2000_launchMulticoreDebug" },
+      { toolName: "c2000_evaluateMany", sessionId: "dbg-2" },
+      { toolName: "c2000_closeDebugSession", sessionId: "dbg-2" }
+    ]);
+    expect(fixture.runs.steps(jobId)[1]?.output).toEqual(expect.objectContaining({ sessionId: "dbg-1", closed: true }));
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
+    expect(fixture.registry.get("board-a").status).not.toBe("QUARANTINED");
     await fixture.engine.stop();
     fixture.store.close();
   });
