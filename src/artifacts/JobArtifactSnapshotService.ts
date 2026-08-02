@@ -54,6 +54,9 @@ export class JobArtifactSnapshotService {
     const artifactDirectory = this.jobDirectory(jobId);
     const manifestPath = path.join(artifactDirectory, "manifest.json");
     const previousManifestPath = path.join(artifactDirectory, ".manifest.previous");
+    const expressionSnapshotPath = path.join(artifactDirectory, "expression-snapshots.json");
+    const previousExpressionSnapshotPath = path.join(artifactDirectory, ".expression-snapshots.previous");
+    let previousExpressionSnapshotSaved = false;
     this.options.exports.upsert({
       jobId,
       rootPath: artifactDirectory,
@@ -68,6 +71,11 @@ export class JobArtifactSnapshotService {
         await rm(previousManifestPath, { force: true });
         await rename(manifestPath, previousManifestPath);
       }
+      if (await this.writer.exists(expressionSnapshotPath)) {
+        await rm(previousExpressionSnapshotPath, { force: true });
+        await rename(expressionSnapshotPath, previousExpressionSnapshotPath);
+        previousExpressionSnapshotSaved = true;
+      }
       const snapshot = await this.buildSnapshot(jobId);
       const previousManifest = await readJsonRecord(previousManifestPath);
       if (Array.isArray(previousManifest?.generatedFiles)) {
@@ -75,6 +83,29 @@ export class JobArtifactSnapshotService {
           const parsed = artifactManifestSchema.shape.generatedFiles.unwrap().element.safeParse(value);
           return parsed.success ? [parsed.data] : [];
         });
+      }
+      if (snapshot.expressionSnapshots.length > 0) {
+        await this.writer.writeJson(expressionSnapshotPath, {
+          schemaVersion: ARTIFACT_SCHEMA_VERSION,
+          jobId,
+          snapshots: snapshot.expressionSnapshots
+        });
+        const expressionInfo = await stat(expressionSnapshotPath);
+        const expressionSha = await sha256File(expressionSnapshotPath);
+        if (!expressionSha) throw new Error("Expression snapshot hash is unavailable after atomic publication");
+        snapshot.manifest.generatedFiles = [
+          ...(snapshot.manifest.generatedFiles ?? []).filter(file => file.path !== "expression-snapshots.json"),
+          {
+            path: "expression-snapshots.json",
+            artifactType: "evidence:expression-snapshots",
+            sha256: expressionSha,
+            size: expressionInfo.size,
+            completeness: "COMPLETE"
+          }
+        ];
+      } else {
+        await rm(expressionSnapshotPath, { force: true });
+        snapshot.manifest.generatedFiles = snapshot.manifest.generatedFiles?.filter(file => file.path !== "expression-snapshots.json");
       }
       artifactResultSchema.parse(snapshot.result);
       artifactManifestSchema.parse(snapshot.manifest);
@@ -92,7 +123,19 @@ export class JobArtifactSnapshotService {
       // The manifest is the commit marker and is deliberately published last.
       await this.writer.writeJson(manifestPath, snapshot.manifest);
       await rm(previousManifestPath, { force: true });
+      await rm(previousExpressionSnapshotPath, { force: true });
       await this.registerStandardFiles(jobId, artifactDirectory);
+      if (snapshot.expressionSnapshots.length > 0) {
+        const expressionInfo = await stat(expressionSnapshotPath);
+        this.options.artifacts.upsert({
+          jobId,
+          artifactType: "evidence:expression-snapshots",
+          path: expressionSnapshotPath,
+          sha256: await sha256File(expressionSnapshotPath) ?? "",
+          size: expressionInfo.size,
+          createdAt: run.finishedAt ?? run.submittedAt
+        });
+      }
       this.options.exports.upsert({
         jobId,
         rootPath: artifactDirectory,
@@ -105,6 +148,12 @@ export class JobArtifactSnapshotService {
     } catch (error) {
       if (!await this.writer.exists(manifestPath) && await this.writer.exists(previousManifestPath)) {
         await rename(previousManifestPath, manifestPath).catch(() => undefined);
+      }
+      if (previousExpressionSnapshotSaved) {
+        await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
+        await rename(previousExpressionSnapshotPath, expressionSnapshotPath).catch(() => undefined);
+      } else {
+        await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
       }
       this.options.exports.upsert({
         jobId,
@@ -138,6 +187,7 @@ export class JobArtifactSnapshotService {
     result: ArtifactResult;
     events: ArtifactEvent[];
     targetStates: TargetStateEvent[];
+    expressionSnapshots: Record<string, unknown>[];
   }> {
     const run = this.options.runs.get(jobId)!;
     const plan = testPlanSchema.parse(run.plan);
@@ -202,7 +252,8 @@ export class JobArtifactSnapshotService {
       startedAt: run.startedAt ?? run.submittedAt,
       endedAt: run.finishedAt ?? run.submittedAt,
       evidenceLevel: evidenceClassification,
-      completeness
+      completeness,
+      durableStepResults: durableStepResultsFromSteps(steps)
     };
     const failedStep = steps.find(step => step.status === "FAILED");
     const error = failedStep?.error ?? run.error;
@@ -221,7 +272,8 @@ export class JobArtifactSnapshotService {
       evidenceClassification,
       cancelled,
       timedOut: Boolean(errorCode && /timeout/i.test(errorCode)),
-      incompleteReason
+      incompleteReason,
+      expressionSnapshotCount: expressionSnapshotsFromSteps(steps).length
     };
 
     const sessionByBoard = new Map(targetContext.map(context => [context.board.boardId, context]));
@@ -261,7 +313,7 @@ export class JobArtifactSnapshotService {
         cores: cores.map(core => sanitize(core))
       }];
     });
-    return { manifest, result, events, targetStates };
+    return { manifest, result, events, targetStates, expressionSnapshots: expressionSnapshotsFromSteps(steps) };
   }
 
   private async registerStandardFiles(jobId: string, directory: string): Promise<void> {
@@ -316,6 +368,37 @@ function assertionStatus(step: TestStepRecord): "PASSED" | "FAILED" | "SKIPPED" 
   if (step.status === "PASSED") return "PASSED";
   if (step.status === "FAILED") return "FAILED";
   return "SKIPPED";
+}
+
+function expressionSnapshotsFromSteps(steps: TestStepRecord[]): Record<string, unknown>[] {
+  return steps.flatMap(step => {
+    const snapshots = step.output?.expressionSnapshots;
+    if (!Array.isArray(snapshots)) return [];
+    return snapshots.filter(isRecord).map(snapshot => ({
+      boardId: step.boardId,
+      stepIndex: step.stepIndex,
+      stepType: step.stepType,
+      ...snapshot
+    }));
+  });
+}
+
+function durableStepResultsFromSteps(steps: TestStepRecord[]): Record<string, unknown>[] {
+  const durableTypes = new Set(["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "resetReconnectCapture"]);
+  return steps.filter(step => durableTypes.has(step.stepType)).map(step => {
+    const output = step.output ? sanitize(step.output) : undefined;
+    const { expressionSnapshots: snapshots, ...outputWithoutSnapshots } = output ?? {};
+    return {
+      boardId: step.boardId,
+      stepIndex: step.stepIndex,
+      stepType: step.stepType,
+      status: step.status,
+      attempt: step.attempt,
+      input: sanitize(step.input),
+      ...(output ? { output: { ...outputWithoutSnapshots, ...(Array.isArray(snapshots) ? { expressionSnapshotCount: snapshots.length } : {}) } } : {}),
+      ...(step.error ? { error: sanitize(step.error) } : {})
+    };
+  });
 }
 
 function sanitize(value: Record<string, unknown>): Record<string, unknown> {

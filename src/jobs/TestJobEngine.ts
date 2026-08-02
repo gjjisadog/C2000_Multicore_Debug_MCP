@@ -305,6 +305,7 @@ export class TestJobEngine {
       return { success: false, cancelled: false };
     }
     let sessionId = current.sessionId;
+    let sessionOpen = Boolean(sessionId);
     let failed = false;
     let cancelled = false;
     let renewalFailures = 0;
@@ -381,12 +382,14 @@ export class TestJobEngine {
               step: plannedStep,
               signal: activeSignal
             });
-            if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (typeof output.sessionId === "string") {
               sessionId = output.sessionId;
+              sessionOpen = plannedStep.type !== "cleanup";
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
+            if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
+            if (plannedStep.type === "cleanup") sessionOpen = false;
             const finishedAt = new Date().toISOString();
             this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0 });
             this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt, output });
@@ -423,6 +426,23 @@ export class TestJobEngine {
       lastError = { ...toStructuredError(error) };
     } finally {
       clearInterval(renew);
+      if (sessionId && sessionOpen) {
+        try {
+          const cleanup = await this.options.tools.invokeTool("c2000_closeDebugSession", {
+            sessionId,
+            __leaseContext: lease.context
+          });
+          if (cleanup.success === false) {
+            throw new DebugMcpError("BatchOperationFailed", "Durable job session cleanup returned failure", { cleanup });
+          }
+          sessionOpen = false;
+          this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLOSED", payload: { sessionId } });
+        } catch (error) {
+          failed = true;
+          lastError = { ...toStructuredError(error) };
+          this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLEANUP_FAILED", payload: { sessionId, error: lastError } });
+        }
+      }
       if (!groupLease) {
         try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* lease expiry will be reconciled */ }
       }

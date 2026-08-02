@@ -6,6 +6,9 @@ import type { C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { discoverDaemon } from "../src/proxy/DaemonDiscovery.js";
 import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
+import { SqliteStore } from "../src/storage/SqliteStore.js";
+import { SessionRepository } from "../src/storage/repositories/SessionRepository.js";
+import { LeaseRepository } from "../src/storage/repositories/LeaseRepository.js";
 
 const directories: string[] = [];
 
@@ -14,6 +17,41 @@ afterEach(async () => {
 });
 
 describe("durable background test jobs", () => {
+  test("closes the current job session before releasing its board lease even without an explicit cleanup step", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-cleanup-"));
+    directories.push(directory);
+    const config = configFor(directory);
+    const daemon = new DebugDaemon(config);
+    let sessionId = "";
+    try {
+      await daemon.start();
+      const client = new McpDaemonClient((await discoverDaemon(config)).client);
+      const submitted = await client.invokeTool("c2000_submitTestPlan", {
+        plan: {
+          planVersion: 1,
+          name: "implicit-finally-cleanup",
+          boardIds: ["board-a"],
+          steps: [{ type: "launchMulticore", loadPrograms: false }],
+          failurePolicy: { continueHealthyBoards: false, quarantineFailedBoard: true, collectDebugBundle: false }
+        }
+      });
+      const completed = await waitFor(async () => {
+        const run = await client.invokeTool("c2000_getTestRun", { jobId: String(submitted.jobId), includeSteps: true });
+        return run.status === "PASSED" ? run : undefined;
+      });
+      sessionId = String((completed.boards as Array<Record<string, unknown>>)[0]!.sessionId);
+      expect(sessionId).toMatch(/^dbg-/);
+      await client.close();
+    } finally {
+      await daemon.stop();
+    }
+
+    const store = await SqliteStore.open(config.storage!.sqlitePath);
+    expect(new SessionRepository(store).get(sessionId)).toEqual(expect.objectContaining({ status: "CLOSED", closedAt: expect.any(String) }));
+    expect(new LeaseRepository(store).activeForBoard("board-a")).toBeUndefined();
+    store.close();
+  });
+
   test("a submitted job continues after proxy client close and is readable through the same jobId", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-test-"));
     directories.push(directory);

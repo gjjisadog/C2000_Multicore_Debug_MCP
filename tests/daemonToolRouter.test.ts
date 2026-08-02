@@ -23,6 +23,22 @@ afterEach(async () => {
 });
 
 describe("daemon tool router interactive session lifecycle", () => {
+  test("does not persist a launch session that the worker already cleaned up", async () => {
+    const fixture = await makeFixture();
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    fixture.workers.invokeBoard = async () => ({ success: false, sessionId: "dbg-cleaned", cleanedUp: true });
+
+    const result = await router.invokeTool("c2000_launchMulticoreDebug", {
+      boardId: "board-a",
+      cores: [{ coreId: 0, coreName: "C28xx_CPU1", load: false }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({ success: false, sessionId: "dbg-cleaned", cleanedUp: true }));
+    expect(fixture.sessions.get("dbg-cleaned")).toBeUndefined();
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    fixture.store.close();
+  });
+
   test("persists a failed interactive acceptance session so close releases its lease", async () => {
     const fixture = await makeFixture();
     const router = new DaemonToolRouter(

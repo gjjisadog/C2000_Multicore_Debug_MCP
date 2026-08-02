@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "../src/jobs/JobSemantics.js";
-import { testPlanSchema } from "../src/jobs/TestPlanSchema.js";
+import { idempotencyForStep, testPlanSchema } from "../src/jobs/TestPlanSchema.js";
+import { TestReconciler } from "../src/jobs/TestReconciler.js";
 
 describe("job step semantics", () => {
   test("implements explicit on conditions and safe defaults", () => {
@@ -30,5 +31,28 @@ describe("job step semantics", () => {
       steps: [{ type: "preflight" }]
     });
     expect(retryPolicyFor(plan, "preflight")).toEqual({ maxAttempts: 3, backoffMs: 500, maxBackoffMs: 5000, jitter: true, retryableErrors: ["RpcRequestTimeout"] });
+  });
+
+  test("never retries or restart-replays interrupted durable writes and reset recovery", () => {
+    expect(idempotencyForStep("assignExpressions")).toBe("NON_IDEMPOTENT");
+    expect(idempotencyForStep("injectFaults")).toBe("NON_IDEMPOTENT");
+    expect(idempotencyForStep("resetReconnectCapture")).toBe("NON_IDEMPOTENT");
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "no-blind-replay",
+      boardIds: ["board-a"],
+      artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out" },
+      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "injectFaults", faults: [{ coreId: 0, expression: "g_fault", value: 1 }] }],
+      recoveryPolicy: "safe_restart_board"
+    });
+    expect(new TestReconciler().reconcile(plan, {
+      boardId: "board-a",
+      sessionId: "stale-session",
+      interruptedStepType: "injectFaults",
+      interruptedIdempotencyClass: "NON_IDEMPOTENT"
+    })).toEqual(expect.objectContaining({
+      decision: "MANUAL_REQUIRED",
+      evidence: expect.objectContaining({ debugSessionRestored: false, hardwareStateReconciled: false, persistedSessionIsNotTrusted: true })
+    }));
   });
 });

@@ -43,6 +43,79 @@ describe("standard job artifact snapshot", () => {
     fixture.store.close();
   });
 
+  it("atomically publishes custom expression snapshots and commits their hash in the manifest", async () => {
+    const fixture = await createFixture();
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.runs.updateStep({
+      ...step,
+      output: {
+        success: true,
+        expressionSnapshots: [{
+          label: "hybrid-a-e",
+          sampleIndex: 0,
+          capturedAt: "2026-07-29T00:00:01.500Z",
+          captures: [{ coreId: 0, expressions: ["g_safe"], evaluated: { success: true, results: [{ value: 1 }] } }]
+        }]
+      }
+    });
+
+    await fixture.service.exportJob(fixture.jobId);
+    const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
+    const result = artifactResultSchema.parse(await readJson(path.join(fixture.jobDirectory, "result.json")));
+    const snapshots = await readJson(path.join(fixture.jobDirectory, "expression-snapshots.json")) as Record<string, unknown>;
+    expect(result.expressionSnapshotCount).toBe(1);
+    expect(snapshots.snapshots).toEqual([expect.objectContaining({ boardId: "board-a", stepIndex: 0, label: "hybrid-a-e" })]);
+    expect(manifest.generatedFiles).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: "expression-snapshots.json",
+      artifactType: "evidence:expression-snapshots",
+      completeness: "COMPLETE",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+    })]));
+    expect((await readdir(fixture.jobDirectory)).some(file => file.endsWith(".tmp"))).toBe(false);
+    fixture.store.close();
+  });
+
+  it("commits durable mutation results in the manifest without duplicating capture windows", async () => {
+    const fixture = await createFixture();
+    fixture.store.run("UPDATE test_steps SET step_type = ?, input_json = ?, output_json = ? WHERE job_id = ?", [
+      "assignExpressions",
+      JSON.stringify({ type: "assignExpressions", assignments: [{ coreId: 0, expression: "g_cmd", value: 1, verify: true }] }),
+      JSON.stringify({ success: true, results: [{ coreId: 0, coreName: "C28xx_CPU1", success: true, readback: 1 }] }),
+      fixture.jobId
+    ]);
+    await fixture.service.exportJob(fixture.jobId);
+    const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
+    expect(manifest.durableStepResults).toEqual([expect.objectContaining({
+      boardId: "board-a",
+      stepType: "assignExpressions",
+      status: "PASSED",
+      input: expect.objectContaining({ assignments: [expect.objectContaining({ coreId: 0 })] }),
+      output: expect.objectContaining({ results: [expect.objectContaining({ coreId: 0, readback: 1 })] })
+    })]);
+    fixture.store.close();
+  });
+
+  it("restores the previous expression snapshot together with its manifest when commit publication fails", async () => {
+    const fixture = await createFixture();
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.runs.updateStep({ ...step, output: { success: true, expressionSnapshots: [{ capturedAt: "2026-07-29T00:00:01.500Z", sampleIndex: 0, captures: [{ coreId: 0, value: 1 }] }] } });
+    await fixture.service.exportJob(fixture.jobId);
+    const manifestPath = path.join(fixture.jobDirectory, "manifest.json");
+    const snapshotsPath = path.join(fixture.jobDirectory, "expression-snapshots.json");
+    const before = { manifest: await readFile(manifestPath, "utf8"), snapshots: await readFile(snapshotsPath, "utf8") };
+    fixture.runs.updateStep({ ...step, output: { success: true, expressionSnapshots: [{ capturedAt: "2026-07-29T00:00:01.600Z", sampleIndex: 0, captures: [{ coreId: 0, value: 2 }] }] } });
+    class FailingManifestWriter extends AtomicArtifactWriter {
+      override async writeText(filePath: string, content: string): Promise<void> {
+        if (filePath.endsWith("manifest.json")) throw new Error("injected manifest commit failure");
+        return super.writeText(filePath, content);
+      }
+    }
+    await expect(fixture.makeService(new FailingManifestWriter()).exportJob(fixture.jobId)).rejects.toThrow("injected manifest commit failure");
+    expect(await readFile(manifestPath, "utf8")).toBe(before.manifest);
+    expect(await readFile(snapshotsPath, "utf8")).toBe(before.snapshots);
+    fixture.store.close();
+  });
+
   it("persists strictly increasing event sequence", async () => {
     const fixture = await createFixture();
     fixture.events.append({ level: "info", sourceType: "job", sourceId: fixture.jobId, jobId: fixture.jobId, boardId: "board-a", eventType: "SECOND", payload: {} });

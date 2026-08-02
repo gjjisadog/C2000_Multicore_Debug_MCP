@@ -14,6 +14,14 @@ class RecordingToolInvoker implements C2000ToolInvoker {
 }
 
 describe("StepRegistry", () => {
+  test("durable step schema fails closed on unknown fields and missing or unsupported core identity", () => {
+    const base = { planVersion: 1, name: "strict", boardIds: ["board-a"], steps: [] as unknown[] };
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "assignExpressions", assignments: [{ expression: "g_x", value: 1 }] }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadProgrms: false }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore" }, { type: "captureExpressions", reads: [{ coreId: 1, expressions: ["g_x"] }] }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "captureExpressions", reads: [{ coreId: 0, expressions: ["g_x"] }] }] }).success).toBe(false);
+  });
+
   test("durable IPC acceptance creates one connect-only session and forwards staged load parameters", async () => {
     const invoker = new RecordingToolInvoker();
     const registry = new StepRegistry(invoker);
@@ -48,6 +56,8 @@ describe("StepRegistry", () => {
       toolName: "c2000_launchMulticoreDebug",
       input: expect.objectContaining({
         boardId: "board-a",
+        loadPrograms: false,
+        loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 250 },
         cores: [
           expect.objectContaining({ coreId: 0, connect: true, load: false, haltAtEntry: true }),
           expect.objectContaining({ coreId: 2, connect: true, load: false, haltAtEntry: true })
@@ -76,6 +86,42 @@ describe("StepRegistry", () => {
         ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
       })
     });
+  });
+
+  test("executes mutation, capture, wait, and reset recovery in one fenced current-session sequence", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "hybrid-safety-a-e",
+      boardIds: ["board-a"],
+      artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out" },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "assignExpressions", assignments: [{ coreId: 0, expression: "g_cmd", value: 1 }] },
+        { type: "injectFaults", faults: [{ label: "ocp", coreId: 2, expression: "g_fault", value: true }] },
+        { type: "captureExpressions", label: "window", reads: [{ coreId: 0, expressions: ["g_state"] }], sampleCount: 2, intervalMs: 0 },
+        { type: "waitForExpressions", conditions: [{ coreId: 2, expression: "g_safe", expected: 1 }], timeoutMs: 500 },
+        { type: "resetReconnectCapture", coreIds: [0, 2], reload: "symbols", reads: [{ coreId: 0, expressions: ["g_state"] }, { coreId: 2, expressions: ["g_safe"] }] }
+      ]
+    });
+    const leaseContext = {
+      leaseId: "lease-a", leaseToken: "secret", fencingToken: 7, leaseGeneration: 3,
+      ownerJobId: "job-a", boardId: "board-a", probeSerial: "XDS-A", workerInstanceId: "worker-a"
+    };
+    for (const step of plan.steps.slice(1)) {
+      await registry.execute({ jobId: "job-a", boardId: "board-a", sessionId: "dbg-current", leaseContext, plan, step });
+    }
+    expect(invoker.calls.map(call => call.toolName)).toEqual([
+      "c2000_assignExpressions", "c2000_injectFaults",
+      "c2000_evaluateMany", "c2000_evaluateMany", "c2000_waitForExpressionSet",
+      "c2000_resetCores", "c2000_connectCores", "c2000_loadSymbols", "c2000_loadSymbols",
+      "c2000_evaluateMany", "c2000_evaluateMany"
+    ]);
+    expect(invoker.calls.every(call => call.input.sessionId === "dbg-current")).toBe(true);
+    expect(invoker.calls.every(call => call.input.__leaseContext === leaseContext)).toBe(true);
+    expect(invoker.calls.find(call => call.toolName === "c2000_resetCores")?.input).toEqual(expect.objectContaining({ coreIds: [0, 2], resetType: "cpu" }));
+    expect(invoker.calls.filter(call => call.toolName === "c2000_loadSymbols").map(call => call.input.coreId)).toEqual([0, 2]);
   });
 
   test("durable IPC submission accepts explicit firmware-specific readiness expressions", () => {

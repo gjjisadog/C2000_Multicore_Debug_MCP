@@ -1047,7 +1047,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       let failureContext: ToolResult = {};
       try {
         const parsed = launchMulticoreDebugSchema.parse(input);
-        const programDiscovery = parsed.programDiscovery?.enabled
+        const programDiscovery = parsed.loadPrograms && parsed.programDiscovery?.enabled
           ? await discoverAcceptancePrograms({
             cpu1Program: parsed.programDiscovery.cpu1Program ?? process.env.C2000_CPU1_OUT,
             cpu2Program: parsed.programDiscovery.cpu2Program ?? process.env.C2000_CPU2_OUT,
@@ -1058,12 +1058,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         if (programDiscovery) {
           failureContext = { programDiscovery };
         }
-        const cores = programDiscovery
+        const requestedCores = programDiscovery
           ? parsed.cores.map(core => ({
             ...core,
             programUri: core.programUri ?? discoveredProgramForCore(core.coreId, programDiscovery)
           }))
           : parsed.cores;
+        const cores = requestedCores.map(core => parsed.loadPrograms ? core : { ...core, load: false });
         for (const core of cores) {
           if (core.load && !core.programUri) {
             throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
@@ -1094,7 +1095,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         createdSessionId = created.sessionId;
         // CPU1 first so GS ownership writes for CPU2 always see a connected owner core.
         const orderedCores = orderCoresCpu1First(cores);
+        let cpu1RanBeforeCpu2Load = false;
         for (const core of orderedCores) {
+          if (core.load && isCpuCore(core, "cpu2") && parsed.loadSequence.mode === "cpu1-run-before-cpu2") {
+            const loadedCpu1 = orderedCores.find(candidate => candidate.load && isCpuCore(candidate, "cpu1"));
+            if (!loadedCpu1) {
+              throw new DebugMcpError("LaunchProgramMissing", "cpu1-run-before-cpu2 requires a load-enabled CPU1 core");
+            }
+            await manager.runCore(created.sessionId, loadedCpu1.coreId);
+            cpu1RanBeforeCpu2Load = true;
+            await sleepCore(parsed.loadSequence.cpu1SettleMs);
+          }
           if (core.connect) {
             await manager.connectTarget(created.sessionId, core.coreId);
           }
@@ -1112,6 +1123,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           if (core.haltAtEntry) {
             await manager.haltCore(created.sessionId, core.coreId);
           }
+        }
+        if (cpu1RanBeforeCpu2Load) {
+          const cpu1 = orderedCores.find(candidate => candidate.load && isCpuCore(candidate, "cpu1"));
+          if (cpu1?.haltAtEntry) await manager.haltCore(created.sessionId, cpu1.coreId);
         }
         const snapshot = await manager.getMulticoreSnapshot(created.sessionId);
         failureContext = { sessionId: created.sessionId, snapshot };
@@ -1176,6 +1191,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           replacementTool: "c2000_launchMulticoreDebugWithActions",
           snapshot,
           autoCloseOnComplete: parsed.autoCloseOnComplete,
+          loadPrograms: parsed.loadPrograms,
+          loadSequence: parsed.loadSequence,
           ...(programDiscovery ? { programDiscovery } : {}),
           ...(Object.keys(postLaunchActions).length > 0 ? { postLaunchActions } : {}),
           ...(Object.keys(postLaunchChecks).length > 0 ? { postLaunchChecks } : {})

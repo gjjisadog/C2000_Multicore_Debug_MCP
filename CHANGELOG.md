@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add strict fenced durable steps for expression assignment, fault injection,
+  bounded expression capture, expression waits, and explicit reset/reconnect/
+  reload/capture safety recovery. Non-idempotent steps are never blindly
+  retried or restart-replayed.
+- Atomically export custom expression snapshots with a SHA-256 manifest entry,
+  and close every job-owned debug session before releasing its board lease.
+- Make durable multicore launch honor `loadPrograms: false`, forward and apply
+  the explicit CPU1-before-CPU2 `loadSequence`, and avoid resurrecting worker-
+  cleaned failed sessions as `OPEN` daemon records.
 - Add Round 8 F28P65x hardware-acceptance result/event/manifest schemas and
   atomic `HARDWARE_ACCEPTANCE_REPORT.md` generation.
 - Add fail-closed general, PCAN, two-board, and supported-Node runtime gates

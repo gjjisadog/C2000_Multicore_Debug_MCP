@@ -55,6 +55,7 @@ export const artifactManifestSchema = z.object({
     status: artifactCompletenessSchema,
     reason: z.string().min(1).nullable()
   }),
+  durableStepResults: z.array(z.record(z.unknown())).optional(),
   generatedFiles: z.array(z.object({
     path: z.string().min(1),
     artifactType: z.string().min(1),
@@ -84,7 +85,8 @@ export const artifactResultSchema = z.object({
   evidenceClassification: evidenceClassificationSchema,
   cancelled: z.boolean(),
   timedOut: z.boolean(),
-  incompleteReason: z.string().min(1).nullable()
+  incompleteReason: z.string().min(1).nullable(),
+  expressionSnapshotCount: z.number().int().nonnegative().optional()
 });
 
 export const artifactEventSchema = z.object({

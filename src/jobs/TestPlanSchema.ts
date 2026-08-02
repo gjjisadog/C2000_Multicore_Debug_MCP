@@ -32,6 +32,11 @@ const canExecutionSchema = z.object({
 export const jobStepTypeSchema = z.enum([
   "preflight",
   "launchMulticore",
+  "assignExpressions",
+  "injectFaults",
+  "captureExpressions",
+  "waitForExpressions",
+  "resetReconnectCapture",
   "runIpcAcceptance",
   "runBootHandoffDiagnosis",
   "runReloadAndDiagnose",
@@ -41,13 +46,83 @@ export const jobStepTypeSchema = z.enum([
   "canAcceptance"
 ]);
 
-export const testPlanStepSchema = z.object({
-  type: jobStepTypeSchema,
-  timeoutMs: z.number().int().positive().optional(),
-  intervalMs: z.number().int().positive().optional(),
-  delayMs: z.number().int().nonnegative().optional(),
-  on: z.enum(["always", "failure", "success"]).optional()
-}).passthrough();
+const onSchema = z.enum(["always", "failure", "success"]);
+const coreIdSchema = z.number().int().refine(value => value === 0 || value === 2, "F28P65x durable steps require coreId 0 (CPU1) or 2 (CPU2)");
+const expressionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const expressionAssignmentStepSchema = z.object({
+  coreId: coreIdSchema,
+  expression: z.string().min(1),
+  value: expressionValueSchema,
+  verify: z.boolean().default(true)
+}).strict();
+const expressionFaultStepSchema = expressionAssignmentStepSchema.extend({ label: z.string().min(1).optional() }).strict();
+const expressionReadStepSchema = z.object({
+  label: z.string().min(1).optional(),
+  coreId: coreIdSchema,
+  expressions: z.array(z.string().min(1)).min(1)
+}).strict();
+const expressionConditionStepSchema = z.object({
+  label: z.string().min(1).optional(),
+  coreId: coreIdSchema,
+  expression: z.string().min(1),
+  expected: expressionValueSchema
+}).strict();
+const loadSequenceStepSchema = z.object({
+  mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
+  cpu1SettleMs: z.number().int().nonnegative().default(250)
+}).strict();
+const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
+const baseStep = { on: onSchema.optional() };
+
+/**
+ * Durable plans are an RPC/SQLite contract, so every step is strict and
+ * discriminated. Unknown or misspelled target-control fields fail closed.
+ */
+export const testPlanStepSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("preflight"), ...baseStep }).strict(),
+  z.object({
+    type: z.literal("launchMulticore"), ...baseStep,
+    loadPrograms: z.boolean().default(true),
+    loadSequence: loadSequenceStepSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 })
+  }).strict(),
+  z.object({ type: z.literal("assignExpressions"), ...baseStep, assignments: z.array(expressionAssignmentStepSchema).min(1) }).strict(),
+  z.object({ type: z.literal("injectFaults"), ...baseStep, faults: z.array(expressionFaultStepSchema).min(1) }).strict(),
+  z.object({
+    type: z.literal("captureExpressions"), ...baseStep,
+    label: z.string().min(1).optional(),
+    reads: z.array(expressionReadStepSchema).min(1),
+    sampleCount: z.number().int().positive().max(10000).default(1),
+    intervalMs: z.number().int().nonnegative().default(0)
+  }).strict(),
+  z.object({
+    type: z.literal("waitForExpressions"), ...baseStep,
+    conditions: z.array(expressionConditionStepSchema).min(1),
+    timeoutMs: z.number().int().positive(),
+    intervalMs: z.number().int().positive().default(100)
+  }).strict(),
+  z.object({
+    type: z.literal("resetReconnectCapture"), ...baseStep,
+    coreIds: z.array(coreIdSchema).min(1).refine(values => new Set(values).size === values.length, "coreIds must be unique"),
+    resetType: z.enum(["cpu", "system", "restart", "default"]).default("cpu"),
+    settleMs: z.number().int().nonnegative().default(250),
+    reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
+    loadPolicy: loadPolicySchema.default("if-changed"),
+    reads: z.array(expressionReadStepSchema).min(1)
+  }).strict(),
+  z.object({
+    type: z.literal("runIpcAcceptance"), ...baseStep,
+    timeoutMs: z.number().int().positive().optional(), intervalMs: z.number().int().positive().optional(),
+    loadPolicy: loadPolicySchema.optional(), loadSequence: loadSequenceStepSchema.optional(),
+    ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).optional(),
+    verifyRuntimeRamOwnership: z.boolean().optional()
+  }).strict(),
+  z.object({ type: z.literal("runBootHandoffDiagnosis"), ...baseStep }).strict(),
+  z.object({ type: z.literal("runReloadAndDiagnose"), ...baseStep, timeoutMs: z.number().int().positive().optional(), intervalMs: z.number().int().positive().optional() }).strict(),
+  z.object({ type: z.literal("runFullDebugBundle"), ...baseStep }).strict(),
+  z.object({ type: z.literal("cleanup"), ...baseStep }).strict(),
+  z.object({ type: z.literal("delay"), ...baseStep, delayMs: z.number().int().nonnegative() }).strict(),
+  z.object({ type: z.literal("canAcceptance"), ...baseStep }).strict()
+]);
 
 export const stepRetryPolicySchema = z.object({
   maxAttempts: z.number().int().positive().default(1),
@@ -88,13 +163,36 @@ export const testPlanSchema = z.object({
     collectDebugBundle: z.boolean().default(true)
   }).default({ continueHealthyBoards: true, quarantineFailedBoard: true, collectDebugBundle: true }),
   recoveryPolicy: z.enum(["safe_restart_board", "manual_intervention_required"]).default("safe_restart_board")
-}).superRefine((plan, context) => {
+}).strict().superRefine((plan, context) => {
   if (!plan.boardIds && !plan.boardSelector?.boardIds && !plan.boardSelector?.tags) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "plan must select boards by boardIds or boardSelector" });
   }
   const hasCanStep = plan.steps.some(step => step.type === "canAcceptance");
   if (hasCanStep && !plan.can) context.addIssue({ code: z.ZodIssueCode.custom, message: "canAcceptance step requires plan.can.profile" });
   if (plan.can && !hasCanStep) context.addIssue({ code: z.ZodIssueCode.custom, message: "plan.can requires a canAcceptance step" });
+  let hasCurrentFlowSession = false;
+  for (const [stepIndex, step] of plan.steps.entries()) {
+    if (step.type === "launchMulticore") {
+      hasCurrentFlowSession = true;
+      if (!step.loadPrograms && step.loadSequence.mode !== "cpu1-then-cpu2") {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence"], message: "loadSequence cannot request CPU1 pre-run when loadPrograms=false" });
+      }
+      continue;
+    }
+    if (["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "resetReconnectCapture", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle"].includes(step.type) && !hasCurrentFlowSession) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} requires an earlier launchMulticore step in the same durable board flow` });
+    }
+    if (step.type === "resetReconnectCapture") {
+      const reconnected = new Set(step.coreIds);
+      for (const [readIndex, read] of step.reads.entries()) {
+        if (!reconnected.has(read.coreId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "reads", readIndex, "coreId"], message: "capture coreId must be included in resetReconnectCapture.coreIds" });
+      }
+      if (step.reload !== "none" && !plan.artifacts && !plan.artifactsByBoard && !plan.artifactsByRole) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "reload"], message: "resetReconnectCapture reload requires explicit plan artifacts" });
+      }
+    }
+    if (step.type === "cleanup") hasCurrentFlowSession = false;
+  }
   if (plan.artifactsByBoard && plan.boardIds) {
     const selected = new Set(plan.boardIds);
     for (const boardId of Object.keys(plan.artifactsByBoard)) {
@@ -151,11 +249,17 @@ export function idempotencyForStep(type: TestPlanStep["type"]): "READ_ONLY" | "R
     case "preflight":
     case "runFullDebugBundle":
     case "delay":
+    case "captureExpressions":
+    case "waitForExpressions":
       return "READ_ONLY";
     case "canAcceptance":
       return "RECONCILABLE";
     case "cleanup":
       return "SAFE_RETRY";
+    case "assignExpressions":
+    case "injectFaults":
+    case "resetReconnectCapture":
+      return "NON_IDEMPOTENT";
     case "launchMulticore":
     case "runIpcAcceptance":
     case "runBootHandoffDiagnosis":

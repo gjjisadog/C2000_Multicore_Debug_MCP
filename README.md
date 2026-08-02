@@ -336,6 +336,44 @@ Use the daemon/job surface for multi-board work:
   `NEEDS_MANUAL_INTERVENTION` instead of being replayed. Reconcile events carry
   these explicit capability flags as evidence.
 
+Durable safety regression plans use a strict discriminated step schema. An
+unknown field, a missing `coreId`, or a core other than F28P65x CPU1 `0` and
+CPU2 `2` is rejected before the job is persisted. Session-scoped steps must
+follow `launchMulticore` in the same board flow; they never attach to a session
+left by an earlier daemon generation.
+
+Supported target-oriented durable steps are:
+
+- `launchMulticore`: `loadPrograms` is explicit and defaults to `true`.
+  `false` creates a connect-only session and never supplies a program path or
+  sets a core's `load` flag. `loadSequence` accepts `cpu1-then-cpu2` or the
+  explicit `cpu1-run-before-cpu2` RAM-ownership sequence.
+- `assignExpressions`: `{ assignments: [{ coreId, expression, value, verify }] }`.
+- `injectFaults`: `{ faults: [{ label?, coreId, expression, value, verify }] }`.
+- `captureExpressions`: `{ label?, reads: [{ label?, coreId, expressions }],
+  sampleCount, intervalMs }` for a bounded evaluation window.
+- `waitForExpressions`: `{ conditions: [{ label?, coreId, expression,
+  expected }], timeoutMs, intervalMs }`.
+- `resetReconnectCapture`: `{ coreIds, resetType, settleMs, reload,
+  loadPolicy, reads }`, where `reload` is `none`, `symbols`, or `programs`.
+  It performs one explicit reset → reconnect → optional reload → capture
+  sequence; symbol reload uses `c2000_loadSymbols` and never programs Flash.
+
+Expression assignment, fault injection, and reset/reconnect are
+non-idempotent checkpoints. An interruption is routed to manual intervention,
+not retried or restarted from the beginning. Every sub-operation carries the
+job's current lease secret, fencing token/generation, worker identity,
+`sessionId`, and explicit `coreId`. Job finalization closes the current session
+before releasing the lease even when a plan omits `cleanup` or fails midway.
+
+Passed capture outputs are persisted in SQLite step results. Terminal export
+atomically publishes `expression-snapshots.json`; its SHA-256 and size are
+committed in `manifest.json` as `evidence:expression-snapshots`, with the
+manifest written last as the artifact commit marker. Assignment, injection,
+wait, capture-summary, and reset/reconnect results are embedded in the same
+manifest under `durableStepResults` (capture arrays remain only in the hashed
+snapshot file to avoid duplicating large windows).
+
 To use real multiple boards, add unique `boardId`, `probeSerial`, `ccxmlPath`,
 and tags in `boards[]`, or register them through `c2000_registerBoard`; do not
 leave probe allocation to CCS UI focus. Board-bound launch tools fail fast with

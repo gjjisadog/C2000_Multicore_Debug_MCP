@@ -2447,6 +2447,48 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("launchMulticoreDebug honors explicit CPU1 pre-run load sequence", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-sequence-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    const adapter = new WorkflowRecordingAdapter();
+    const handlers = createHandlers(adapter);
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "cpu1-pre-run",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", programUri: cpu1Out, connect: true, load: true, haltAtEntry: true },
+        { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", programUri: cpu2Out, connect: true, load: true, haltAtEntry: true }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({ success: true, loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 } }));
+    expect(adapter.events).toEqual([
+      "connect:0", "load:0:cpu1.out", "halt:0", "run:0",
+      "connect:2", "load:2:cpu2.out", "halt:2", "halt:0"
+    ]);
+  });
+
+  test("launchMulticoreDebug honors top-level loadPrograms=false without discovering or loading images", async () => {
+    const adapter = new WorkflowRecordingAdapter();
+    const handlers = createHandlers(adapter);
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "connect-only",
+      loadPrograms: false,
+      programDiscovery: { enabled: true, searchRoots: ["/must/not/be/read"] },
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", connect: true, load: true, haltAtEntry: true },
+        { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", connect: true, load: true, haltAtEntry: true }
+      ]
+    });
+    expect(result).toEqual(expect.objectContaining({ success: true, loadPrograms: false }));
+    expect(result.programDiscovery).toBeUndefined();
+    expect(adapter.events).toEqual(["connect:0", "halt:0", "connect:2", "halt:2"]);
+  });
+
   test("launchMulticoreDebug rejects incomplete discovery before creating a target session", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-discovery-missing-"));
     const cpu1Out = path.join(tempDir, "cpu1.out");

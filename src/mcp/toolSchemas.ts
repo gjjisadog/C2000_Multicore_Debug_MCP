@@ -460,6 +460,7 @@ export const launchMulticoreDebugSchema = z.object({
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
   allowAutoProbeAllocation: z.boolean().default(false),
+  loadPrograms: z.boolean().default(true),
   programDiscovery: z.object({
     enabled: z.boolean().default(false),
     cpu1Program: z.string().min(1).optional(),
@@ -467,6 +468,10 @@ export const launchMulticoreDebugSchema = z.object({
     searchRoots: z.array(z.string().min(1)).optional(),
     maxDepth: z.number().int().nonnegative().optional()
   }).optional(),
+  loadSequence: z.object({
+    mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
+    cpu1SettleMs: z.number().int().nonnegative().default(250)
+  }).default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   cores: z.array(launchCoreSchema).min(1),
   postLaunchActions: z.object({
     assignExpressions: z.array(expressionAssignmentSchema).min(1).optional(),

@@ -23,6 +23,21 @@ Before any board-bound work:
    `outputDir` under `allowedWriteRoots`.
 5. Submit one durable job and retain its `jobId`.
 
+For Hybrid30K A–E safety regressions, prefer strict durable steps over client-
+side tool sequences: `assignExpressions`, `injectFaults`,
+`captureExpressions`, `waitForExpressions`, and
+`resetReconnectCapture`. Every expression entry must name `coreId` 0 or 2.
+Put them after `launchMulticore` in the same plan. Use
+`launchMulticore.loadPrograms: false` for a connect-only launch, or declare its
+`loadSequence` explicitly when CPU1 must run before CPU2 RAM load.
+
+Never configure retry or automatic recovery for `assignExpressions`,
+`injectFaults`, or `resetReconnectCapture`; the daemon classifies them as
+non-idempotent and requires manual intervention after interruption. A reset
+reconnect step must explicitly choose `reload: none`, `symbols`, or `programs`.
+Choose `symbols` for resident Flash. Consume custom expression evidence from
+the job's atomic `expression-snapshots.json` and its manifest hash.
+
 Do not manually restart or re-port the daemon to repair a stale MCP proxy.
 The proxy rediscovers a restarted daemon after connection/authentication
 failure. A request timeout is not automatically retried because the target

@@ -109,6 +109,14 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       const interactive = supplied ? undefined : await this.acquireInteractiveLease(boardId, leaseTtlMs(timeoutMs));
       try {
         const result = await this.workers.invokeBoard(boardId, toolName, this.withLeaseInput(input, interactive), timeoutMs);
+        if (result.cleanedUp === true && typeof result.sessionId === "string") {
+          // A workflow may return the failed session identity as evidence after
+          // successfully disposing it in the worker. Never resurrect that
+          // closed session as OPEN in durable daemon state.
+          this.sessions.close(result.sessionId);
+          if (interactive) this.releaseLease(interactive);
+          return result;
+        }
         const sessionPersisted = this.persistCreatedSession(boardId, input, result);
         if (interactive && sessionPersisted && typeof result.sessionId === "string") {
           this.interactiveLeases.set(result.sessionId, interactive);
