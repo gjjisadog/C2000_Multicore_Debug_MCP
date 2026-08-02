@@ -24,6 +24,8 @@ export const DURABLE_PLAN_LIMITS = {
   maxTimeoutMs: 86_400_000,
   maxIntervalMs: 60_000,
   maxSettleMs: 60_000,
+  maxAttempts: 10,
+  maxRetryPolicyEntries: 14,
   maxStepOutputBytes: 2 * 1024 * 1024,
   maxJobEvidenceBytes: 8 * 1024 * 1024
 } as const;
@@ -151,11 +153,28 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
 ]);
 
 export const stepRetryPolicySchema = z.object({
-  maxAttempts: z.number().int().positive().default(1),
+  maxAttempts: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxAttempts).default(1),
   backoffMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(0),
   maxBackoffMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(30000),
   jitter: z.boolean().default(false),
   retryableErrors: z.array(z.string().min(1).max(128)).max(64).default([])
+}).strict();
+
+const durableStepTypes = new Set(jobStepTypeSchema.options);
+const retryPolicySchema = z.record(z.union([
+  // Preserve the legacy shorthand: zero means one total attempt (no retry).
+  z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxAttempts),
+  stepRetryPolicySchema
+])).superRefine((policy, context) => {
+  const keys = Object.keys(policy);
+  if (keys.length > DURABLE_PLAN_LIMITS.maxRetryPolicyEntries) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: `retryPolicy has ${keys.length} entries; maximum is ${DURABLE_PLAN_LIMITS.maxRetryPolicyEntries}` });
+  }
+  for (const key of keys) {
+    if (!durableStepTypes.has(key as z.infer<typeof jobStepTypeSchema>)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: `retryPolicy key must be a declared durable step type: ${key}` });
+    }
+  }
 });
 
 export const testPlanSchema = z.object({
@@ -182,7 +201,7 @@ export const testPlanSchema = z.object({
     execution: canExecutionSchema.default({ mode: "acceptance", iterations: 1, matrixCases: [], failFast: false, health: {}, resetOrRejoinRequested: false })
   }).optional(),
   steps: z.array(testPlanStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxSteps),
-  retryPolicy: z.record(z.union([z.number().int().nonnegative(), stepRetryPolicySchema])).default({}),
+  retryPolicy: retryPolicySchema.default({}),
   failurePolicy: z.object({
     continueHealthyBoards: z.boolean().default(true),
     quarantineFailedBoard: z.boolean().default(true),

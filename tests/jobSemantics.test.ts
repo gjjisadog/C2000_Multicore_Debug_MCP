@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "../src/jobs/JobSemantics.js";
-import { idempotencyForStep, testPlanSchema } from "../src/jobs/TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, idempotencyForStep, testPlanSchema } from "../src/jobs/TestPlanSchema.js";
 import { TestReconciler } from "../src/jobs/TestReconciler.js";
 
 describe("job step semantics", () => {
@@ -31,6 +31,19 @@ describe("job step semantics", () => {
       steps: [{ type: "preflight" }]
     });
     expect(retryPolicyFor(plan, "preflight")).toEqual({ maxAttempts: 3, backoffMs: 500, maxBackoffMs: 5000, jitter: true, retryableErrors: ["RpcRequestTimeout"] });
+  });
+
+  test("keeps legacy zero shorthand as one attempt and bounds reconcilable retries", () => {
+    const noRetryPlan = testPlanSchema.parse({
+      planVersion: 1, name: "legacy-zero", boardIds: ["board-a"],
+      retryPolicy: { preflight: 0 }, steps: [{ type: "preflight" }]
+    });
+    expect(retryPolicyFor(noRetryPlan, "preflight").maxAttempts).toBe(1);
+
+    const policy = { maxAttempts: DURABLE_PLAN_LIMITS.maxAttempts, backoffMs: 0, maxBackoffMs: 0, jitter: false, retryableErrors: [] };
+    expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: DURABLE_PLAN_LIMITS.maxAttempts - 1, policy, errorCode: "RpcRequestTimeout" })).toMatchObject({ retry: true, requiresReconcile: true });
+    expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: DURABLE_PLAN_LIMITS.maxAttempts, policy, errorCode: "RpcRequestTimeout" })).toMatchObject({ retry: false, reason: "MAX_ATTEMPTS" });
+    expect(decideRetry({ step: { idempotencyClass: "NON_IDEMPOTENT" }, attempt: 1, policy, errorCode: "RpcRequestTimeout" })).toMatchObject({ retry: false, reason: "NON_IDEMPOTENT" });
   });
 
   test("never retries or restart-replays interrupted durable writes and reset recovery", () => {

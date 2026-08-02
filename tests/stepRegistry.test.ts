@@ -77,6 +77,29 @@ describe("StepRegistry", () => {
     }).success).toBe(false);
   });
 
+  test("bounds retry attempts and allows only declared durable step policy keys", () => {
+    const base = { planVersion: 1, name: "retry-limits", boardIds: ["board-a"], steps: [{ type: "preflight" }] };
+    expect(testPlanSchema.safeParse({ ...base, retryPolicy: { preflight: 1_000_000_000 } }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, retryPolicy: { preflight: { maxAttempts: 1_000_000_000 } } }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, retryPolicy: { typoStep: 2 } }).success).toBe(false);
+    expect(testPlanSchema.safeParse({
+      ...base,
+      retryPolicy: Object.fromEntries(Array.from({ length: DURABLE_PLAN_LIMITS.maxRetryPolicyEntries + 1 }, (_, index) => [`unknown-${index}`, 1]))
+    }).success).toBe(false);
+
+    const numericBoundary = testPlanSchema.parse({ ...base, retryPolicy: { preflight: DURABLE_PLAN_LIMITS.maxAttempts } });
+    const structuredBoundary = testPlanSchema.parse({ ...base, retryPolicy: { preflight: { maxAttempts: DURABLE_PLAN_LIMITS.maxAttempts } } });
+    expect(numericBoundary.retryPolicy.preflight).toBe(DURABLE_PLAN_LIMITS.maxAttempts);
+    expect(structuredBoundary.retryPolicy.preflight).toEqual(expect.objectContaining({ maxAttempts: DURABLE_PLAN_LIMITS.maxAttempts }));
+
+    const compatible = testPlanSchema.parse({
+      ...base,
+      steps: [{ type: "preflight" }, { type: "delay", delayMs: 0 }],
+      retryPolicy: { preflight: 0, delay: { maxAttempts: 1 } }
+    });
+    expect(compatible.retryPolicy).toEqual(expect.objectContaining({ preflight: 0, delay: expect.objectContaining({ maxAttempts: 1 }) }));
+  });
+
   test("durable IPC acceptance creates one connect-only session and forwards staged load parameters", async () => {
     const invoker = new RecordingToolInvoker();
     const registry = new StepRegistry(invoker);

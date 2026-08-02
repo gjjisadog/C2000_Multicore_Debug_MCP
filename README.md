@@ -394,6 +394,15 @@ and 8 MiB across all boards in one job. Terminal export applies the same
 8 MiB portable-evidence ceiling, so a multi-board run cannot obtain a separate
 budget for each board and then exceed the artifact budget.
 
+Retry policies accept only declared durable step-type keys, with at most one
+entry per step type (14 entries total). `maxAttempts` is the total attempt
+count, including the first execution, and is capped at 10 in both numeric and
+structured forms. Structured `maxAttempts: 1` means no retry. For compatibility,
+the legacy numeric shorthand `0` also means one total attempt; it never creates
+an unbounded or zero-execution loop. NON_IDEMPOTENT steps still never retry,
+regardless of their configured policy, while RECONCILABLE steps must reconcile
+before each retry and cannot exceed the same attempt cap.
+
 The manifest is the publication transaction boundary. Failures before it is
 written restore the previous manifest/snapshot pair. Artifact indexing or
 hash/stat registration failures after publication retain the committed files
