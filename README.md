@@ -357,9 +357,10 @@ Supported target-oriented durable steps are:
   explicit `cpu1-run-before-cpu2` RAM-ownership sequence. A second launch is
   rejected while the board flow still owns an active session; a default or
   `on: always` cleanup must return the same session identity with `closed: true`
-  before another launch. A success flag without that confirmation leaves the
-  daemon session OPEN for recovery and makes durable finalization quarantine
-  the ownership-uncertain board before releasing its lease.
+  before another launch. Missing or non-true success, missing closure, or an
+  identity mismatch leaves the daemon session OPEN for recovery and makes
+  durable finalization quarantine the ownership-uncertain board before
+  releasing its lease.
 - `assignExpressions`: `{ assignments: [{ coreId, expression, value, verify }] }`.
 - `injectFaults`: `{ faults: [{ label?, coreId, expression, value, verify }] }`.
 - `captureExpressions`: `{ label?, reads: [{ label?, coreId, expressions }],

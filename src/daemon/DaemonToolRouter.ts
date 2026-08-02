@@ -259,7 +259,7 @@ function leaseTtlMs(commandTimeoutMs: number): number {
 }
 
 function isConfirmedSessionClose(result: Record<string, unknown>, expectedSessionId: string): boolean {
-  return result.success !== false && result.closed === true && result.sessionId === expectedSessionId;
+  return result.success === true && result.closed === true && result.sessionId === expectedSessionId;
 }
 
 function record(value: unknown): Record<string, unknown> {

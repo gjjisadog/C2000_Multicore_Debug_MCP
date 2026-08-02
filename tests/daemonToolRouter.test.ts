@@ -106,6 +106,7 @@ describe("daemon tool router interactive session lifecycle", () => {
   test.each([
     ["closed false", { success: true, sessionId: "dbg-failed", closed: false }],
     ["missing closed", { success: true, sessionId: "dbg-failed" }],
+    ["missing success", { sessionId: "dbg-failed", closed: true }],
     ["identity mismatch", { success: true, sessionId: "dbg-other", closed: true }]
   ] as const)("keeps daemon session OPEN when close confirmation has %s", async (_label, closeResult) => {
     const fixture = await makeFixture();

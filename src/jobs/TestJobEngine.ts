@@ -666,7 +666,7 @@ function structuredToolFailure(output: Record<string, unknown>, stepType: string
 }
 
 function assertConfirmedSessionClose(output: Record<string, unknown>, expectedSessionId: string, message: string): void {
-  if (output.success === false || output.closed !== true || output.sessionId !== expectedSessionId) {
+  if (output.success !== true || output.closed !== true || output.sessionId !== expectedSessionId) {
     throw new DebugMcpError("WorkflowCleanupFailed", message, { expectedSessionId, output });
   }
 }

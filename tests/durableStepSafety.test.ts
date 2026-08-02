@@ -354,6 +354,7 @@ describe("durable step cleanup and output safety", () => {
   test.each([
     ["closed false", { success: true, sessionId: "dbg-current", closed: false }],
     ["missing closed", { success: true, sessionId: "dbg-current" }],
+    ["missing success", { sessionId: "dbg-current", closed: true }],
     ["identity mismatch", { success: true, sessionId: "dbg-other", closed: true }]
   ] as const)("quarantines when explicit and final cleanup both return %s", async (_label, closeResult) => {
     let closeCalls = 0;
