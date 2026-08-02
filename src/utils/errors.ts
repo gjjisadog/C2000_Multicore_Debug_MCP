@@ -124,6 +124,8 @@ export type DebugErrorCode =
   | "SessionBoardMismatch"
   | "SessionInvalidated"
   | "SessionIdentityMismatch"
+  | "SessionAlreadyOpen"
+  | "ResetCoreScopeInvalid"
   | "WorkerGenerationChanged"
   | "LeaseGenerationChanged"
   | "VariableStreamAlreadyActive"

@@ -384,6 +384,9 @@ export class TestJobEngine {
           const running = { ...step, status: "RUNNING", attempt, startedAt: attemptStartedAt } as TestStepRecord;
           this.options.runs.updateStep(running);
           try {
+            if (plannedStep.type === "launchMulticore" && sessionOpen) {
+              throw new DebugMcpError("SessionAlreadyOpen", "launchMulticore cannot replace the active fenced board-flow session", { sessionId });
+            }
             const activeSignal = condition === "always" || (cancelled && condition === "failure") ? undefined : this.abortControllers.get(jobId)?.signal;
             const executionContext = {
               jobId,
@@ -432,7 +435,12 @@ export class TestJobEngine {
             }
             this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
             if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
-            if (plannedStep.type === "cleanup") sessionOpen = false;
+            if (plannedStep.type === "cleanup") {
+              if (sessionOpen && output.closed !== true) {
+                throw new DebugMcpError("WorkflowCleanupFailed", "cleanup did not confirm closure of the active fenced board-flow session", { sessionId, output });
+              }
+              sessionOpen = false;
+            }
             const finishedAt = new Date().toISOString();
             this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0 });
             this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt, output });

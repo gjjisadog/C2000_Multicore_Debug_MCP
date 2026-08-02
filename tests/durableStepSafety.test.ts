@@ -232,7 +232,8 @@ describe("durable step cleanup and output safety", () => {
           success: true,
           results: (record.expressions as string[]).map(expression => ({ expression, success: true, value: expression === "g_safe" ? 1 : 3 }))
         };
-        if (["c2000_connectCores", "c2000_closeDebugSession"].includes(toolName)) return { success: true, sessionId: "dbg-current", results: [] };
+        if (toolName === "c2000_connectCores") return { success: true, sessionId: "dbg-current", results: [] };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
         throw new Error(`unexpected tool ${toolName}`);
       }
     });
@@ -315,6 +316,37 @@ describe("durable step cleanup and output safety", () => {
     }));
     expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-live");
     expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession"]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("does not orphan an active session when cleanup is unconfirmed before another launch", async () => {
+    const calls: string[] = [];
+    let closeCalls = 0;
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-old" };
+        if (toolName === "c2000_closeDebugSession") {
+          closeCalls += 1;
+          return { success: true, sessionId: "dbg-old", closed: closeCalls > 1 };
+        }
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "no-orphaned-session", boardIds: ["board-a"],
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "cleanup" },
+        { type: "launchMulticore", on: "always", loadPrograms: false }
+      ]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "WorkflowCleanupFailed" }) }));
+    expect(fixture.runs.steps(jobId)[2]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "SessionAlreadyOpen" }) }));
+    expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession", "c2000_closeDebugSession"]);
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-old");
     await fixture.engine.stop();
     fixture.store.close();
   });

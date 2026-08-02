@@ -354,7 +354,9 @@ Supported target-oriented durable steps are:
 - `launchMulticore`: `loadPrograms` is explicit and defaults to `true`.
   `false` creates a connect-only session and never supplies a program path or
   sets a core's `load` flag. `loadSequence` accepts `cpu1-then-cpu2` or the
-  explicit `cpu1-run-before-cpu2` RAM-ownership sequence.
+  explicit `cpu1-run-before-cpu2` RAM-ownership sequence. A second launch is
+  rejected while the board flow still owns an active session; a default or
+  `on: always` cleanup must confirm `closed: true` before another launch.
 - `assignExpressions`: `{ assignments: [{ coreId, expression, value, verify }] }`.
 - `injectFaults`: `{ faults: [{ label?, coreId, expression, value, verify }] }`.
 - `captureExpressions`: `{ label?, reads: [{ label?, coreId, expressions }],
@@ -374,9 +376,12 @@ Supported target-oriented durable steps are:
   `value-change`; an already-set latch is not accepted. Safety guards continue
   at their configured cadence while the target remains readable, pause only
   across the observed disconnect, and resume immediately after reconnect. The
-  step can load symbols only, requires every `resetCauseReads` result to be
-  readable, and optionally runs CPU1 before CPU2. It never calls reset, program
-  load, or a PC write. Timeout fails closed as `TargetResetNotObserved`.
+  step can load symbols only, requires all reset evidence and cause reads to
+  stay within `coreIds`, requires every `resetCauseReads` result to be readable,
+  and optionally runs CPU1 before CPU2. Guarded post-reconnect runs check the
+  guard immediately after each run and throughout CPU1 settle. It never calls
+  reset, program load, or a PC write. Timeout fails closed as
+  `TargetResetNotObserved`.
 - `restorePrograms`: an `on: always` isolation step with explicit CPU1/CPU2
   `{ coreId, outPath, mapPath, outSha256, mapSha256 }`. Before target access it
   validates every path against `allowedReadRoots` and every SHA-256. It then

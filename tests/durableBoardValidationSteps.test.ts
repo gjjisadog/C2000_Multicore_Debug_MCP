@@ -43,11 +43,69 @@ describe("durable board-validation safety steps", () => {
     expect(testPlanSchema.safeParse({ ...base, safetyGuards: { conditions: [{ coreId: 0, expression: "safe", expected: 1 }], intervalMs: 1 }, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "delay", delayMs: 10_000 }] }).success).toBe(false);
     expect(testPlanSchema.safeParse({ ...base, safetyGuards: { conditions: [{ coreId: 0, expression: "safe", expected: 1 }] }, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "runCores", coreIds: [0] }] }).success).toBe(false);
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "restorePrograms", artifacts: {} }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }, { type: "launchMulticore", loadPrograms: false }] }).success).toBe(true);
+    expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup", on: "failure" }, { type: "launchMulticore", loadPrograms: false }] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, reloadSymbols: false, resetEvidence: [{ freshness: "value-change", coreId: 0, expression: "resetEpoch0" }, { freshness: "value-change", coreId: 2, expression: "resetEpoch2" }], resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }] }
+    ] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, reloadSymbols: false, resetCauseReads: [{ coreId: 0, expressions: ["resetCause0"] }, { coreId: 2, expressions: ["resetCause2"] }] }
+    ] }).success).toBe(false);
     expect(() => parsePersistedTestPlan({
       ...base,
       safetyGuards: { conditions: [{ coreId: 0, expression: "safe", operator: "not-equal", expected: 1 }] },
       steps: [{ type: "launchMulticore", loadPrograms: false }]
     })).toThrow();
+  });
+
+  test("counts reset-evidence baseline plus every current poll at the per-step boundary", () => {
+    const resetEvidence = Array.from({ length: 128 }, (_, index) => ({
+      freshness: "value-change" as const,
+      coreId: 0,
+      expression: `resetEpoch${index}`
+    }));
+    const build = (timeoutMs: number) => ({
+      planVersion: 1, name: `evidence-boundary-${timeoutMs}`, boardIds: ["board-a"],
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs, intervalMs: 1, reloadSymbols: false, resetEvidence, resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }] }
+      ]
+    });
+    expect(testPlanSchema.safeParse(build(78)).success).toBe(false);
+    expect(testPlanSchema.safeParse(build(77)).success).toBe(true);
+  });
+
+  test("counts post-reconnect run boundaries and every guarded settle poll", () => {
+    const conditions = Array.from({ length: 128 }, (_, index) => ({ coreId: 0, expression: `safe${index}`, expected: 1 }));
+    const build = (cpu1SettleMs: number) => ({
+      planVersion: 1, name: `guarded-settle-boundary-${cpu1SettleMs}`, boardIds: ["board-a"],
+      safetyGuards: { conditions, intervalMs: 1 },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 75, intervalMs: 1, reloadSymbols: false,
+          resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }],
+          runAfterReconnect: { runCpu1: true, cpu1SettleMs, runCpu2: false }
+        }
+      ]
+    });
+    expect(testPlanSchema.safeParse(build(0)).success).toBe(true);
+    expect(testPlanSchema.safeParse(build(1)).success).toBe(false);
+  });
+
+  test("defensively rejects reconnect reads outside the requested core scope", async () => {
+    const invoker = new ScriptedInvoker(() => ({ success: true }));
+    const plan = parsePlan([
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, intervalMs: 1, reloadSymbols: false, resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }] }
+    ]);
+    const step = plan.steps[1]! as Extract<TestPlan["steps"][number], { type: "reconnectAfterTargetReset" }>;
+    (step.resetCauseReads[0] as { coreId: number }).coreId = 2;
+    await expect(new StepRegistry(invoker).execute(context(plan, step))).rejects.toMatchObject({ code: "ResetCoreScopeInvalid" });
+    expect(invoker.calls).toEqual([]);
   });
 
   test("runs and halts explicit cores through the same fenced session", async () => {
@@ -103,6 +161,71 @@ describe("durable board-validation safety steps", () => {
     expect(invoker.calls.map(call => call.toolName)).not.toEqual(expect.arrayContaining(["c2000_resetCores", "c2000_loadPrograms", "c2000_loadProgram"]));
     expect(invoker.calls.every(call => call.input.__leaseContext === leaseContext)).toBe(true);
     expect(invoker.calls.filter(call => call.toolName === "c2000_runCores").map(call => call.input.coreIds)).toEqual([[0], [2]]);
+  });
+
+  test("guards immediately after each post-reconnect run and throughout CPU1 settle", async () => {
+    let snapshots = 0;
+    const invoker = new ScriptedInvoker((toolName, input) => {
+      if (toolName === "c2000_getMulticoreSnapshot") {
+        snapshots += 1;
+        return { success: true, cores: [{ coreId: 0, connected: snapshots === 1, state: snapshots === 1 ? "Halted" : "Disconnected" }, { coreId: 2, connected: true, state: "Halted" }] };
+      }
+      if (toolName === "c2000_evaluateMany") return { success: true, results: (input.expressions as string[]).map(expression => ({ expression, success: true, value: expression === "g_safe" ? 1 : 3 })) };
+      return { success: true, sessionId: input.sessionId, results: [] };
+    });
+    const plan = testPlanSchema.parse({
+      planVersion: 1, name: "guarded-post-reset-run", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }], intervalMs: 1 },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "reconnectAfterTargetReset", coreIds: [0, 2], timeoutMs: 10, intervalMs: 1, reloadSymbols: false,
+          resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }],
+          runAfterReconnect: { runCpu1: true, cpu1SettleMs: 3, runCpu2: true }
+        }
+      ]
+    });
+    const result = await new StepRegistry(invoker).execute(context(plan, plan.steps[1]!));
+    expect(result.settleGuardPollIterations).toEqual(expect.any(Number));
+    expect(result.settleGuardPollIterations as number).toBeGreaterThan(0);
+    const names = invoker.calls.map(call => call.toolName);
+    const runIndexes = names.flatMap((name, index) => name === "c2000_runCores" ? [index] : []);
+    expect(runIndexes).toHaveLength(2);
+    expect(names[runIndexes[0]! + 1]).toBe("c2000_evaluateMany");
+    expect(names[runIndexes[1]! + 1]).toBe("c2000_evaluateMany");
+    expect(names.slice(runIndexes[0]! + 2, runIndexes[1])).toContain("c2000_evaluateMany");
+  });
+
+  test("halts and blocks CPU2 when a guard fails during post-reconnect CPU1 settle", async () => {
+    let snapshots = 0;
+    let guardReads = 0;
+    const invoker = new ScriptedInvoker((toolName, input) => {
+      if (toolName === "c2000_getMulticoreSnapshot") {
+        snapshots += 1;
+        return { success: true, cores: [{ coreId: 0, connected: snapshots === 1, state: snapshots === 1 ? "Halted" : "Disconnected" }, { coreId: 2, connected: true, state: "Halted" }] };
+      }
+      if (toolName === "c2000_evaluateMany") return {
+        success: true,
+        results: (input.expressions as string[]).map(expression => ({ expression, success: true, value: expression === "g_safe" ? (++guardReads < 4 ? 1 : 0) : 3 }))
+      };
+      if (toolName === "c2000_haltCores") return { success: true, results: [0, 2].map(coreId => ({ coreId, success: true })) };
+      return { success: true, sessionId: input.sessionId, results: [] };
+    });
+    const plan = testPlanSchema.parse({
+      planVersion: 1, name: "guarded-post-reset-run-failure", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }], intervalMs: 1 },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "reconnectAfterTargetReset", coreIds: [0, 2], timeoutMs: 10, intervalMs: 1, reloadSymbols: false,
+          resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }],
+          runAfterReconnect: { runCpu1: true, cpu1SettleMs: 3, runCpu2: true }
+        }
+      ]
+    });
+    await expect(new StepRegistry(invoker).execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "SafetyGuardViolation" });
+    expect(invoker.calls.filter(call => call.toolName === "c2000_runCores").map(call => call.input.coreIds)).toEqual([[0]]);
+    expect(invoker.calls.filter(call => call.toolName === "c2000_haltCores")).toHaveLength(1);
   });
 
   test("fails closed when no real disconnect or matching reset evidence is observed", async () => {

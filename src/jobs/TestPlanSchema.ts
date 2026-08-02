@@ -286,6 +286,9 @@ export const testPlanSchema = z.object({
   let hasCurrentFlowSession = false;
   for (const [stepIndex, step] of plan.steps.entries()) {
     if (step.type === "launchMulticore") {
+      if (hasCurrentFlowSession) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: "launchMulticore cannot replace an active durable board-flow session; cleanup must close it first" });
+      }
       hasCurrentFlowSession = true;
       if (!step.loadPrograms && step.loadSequence.mode !== "cpu1-then-cpu2") {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence"], message: "loadSequence cannot request CPU1 pre-run when loadPrograms=false" });
@@ -304,6 +307,21 @@ export const testPlanSchema = z.object({
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "reload"], message: "resetReconnectCapture reload requires explicit plan artifacts" });
       }
     }
+    if (step.type === "reconnectAfterTargetReset") {
+      const reconnected = new Set(step.coreIds);
+      for (const [evidenceIndex, evidence] of (step.resetEvidence ?? []).entries()) {
+        if (!reconnected.has(evidence.coreId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "resetEvidence", evidenceIndex, "coreId"], message: "resetEvidence coreId must be included in reconnectAfterTargetReset.coreIds" });
+      }
+      for (const [readIndex, read] of step.resetCauseReads.entries()) {
+        if (!reconnected.has(read.coreId)) context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "resetCauseReads", readIndex, "coreId"], message: "resetCauseReads coreId must be included in reconnectAfterTargetReset.coreIds" });
+      }
+      if (step.runAfterReconnect && !reconnected.has(0)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "runAfterReconnect"], message: "runAfterReconnect requires CPU1 coreId 0 in reconnectAfterTargetReset.coreIds" });
+      }
+      if (step.runAfterReconnect?.runCpu2 && !reconnected.has(2)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "runAfterReconnect", "runCpu2"], message: "runAfterReconnect.runCpu2 requires CPU2 coreId 2 in reconnectAfterTargetReset.coreIds" });
+      }
+    }
     const evidenceValues = evidenceValueCount(step, plan.safetyGuards?.intervalMs);
     const guardedEvidenceValues = evidenceValues + guardEvidenceValueCount(plan, step);
     if (guardedEvidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep) {
@@ -315,7 +333,7 @@ export const testPlanSchema = z.object({
     if (plan.safetyGuards && step.type === "runCores" && step.monitorMs === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "monitorMs"], message: "guarded runCores requires a positive bounded monitorMs" });
     }
-    if (step.type === "cleanup") hasCurrentFlowSession = false;
+    if (step.type === "cleanup" && (step.on === undefined || step.on === "always")) hasCurrentFlowSession = false;
   }
   const totalEvidenceIncludingGuards = plan.steps.reduce((total, step) => total + evidenceValueCount(step, plan.safetyGuards?.intervalMs) + guardEvidenceValueCount(plan, step), 0);
   if (totalEvidenceIncludingGuards > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan) {
@@ -425,7 +443,7 @@ function evidenceValueCount(step: TestPlanStep, guardIntervalMs?: number): numbe
     case "captureExpressions": return step.sampleCount * step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "waitForExpressions": return step.conditions.length;
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
-    case "reconnectAfterTargetReset": return (Math.ceil(step.timeoutMs / Math.min(step.intervalMs, guardIntervalMs ?? step.intervalMs)) * (step.resetEvidence?.length ?? 0))
+    case "reconnectAfterTargetReset": return ((reconnectPollCount(step, guardIntervalMs) + 1) * (step.resetEvidence?.length ?? 0))
       + step.resetCauseReads.reduce((total, read) => total + read.expressions.length, 0);
     case "runIpcAcceptance": return step.ipcReadyExpressions?.length ?? 0;
     default: return 0;
@@ -439,8 +457,19 @@ function guardEvidenceValueCount(plan: Pick<TestPlan, "safetyGuards">, step: Tes
   if (step.type === "delay") monitoredPolls = Math.ceil(step.delayMs / plan.safetyGuards!.intervalMs);
   if (step.type === "waitForExpressions") monitoredPolls = Math.ceil(step.timeoutMs / step.intervalMs);
   if (step.type === "runCores") monitoredPolls = Math.ceil(step.monitorMs / step.intervalMs);
-  if (step.type === "reconnectAfterTargetReset") monitoredPolls = Math.ceil(step.timeoutMs / Math.min(step.intervalMs, plan.safetyGuards!.intervalMs));
+  if (step.type === "reconnectAfterTargetReset") {
+    const reconnectPolls = reconnectPollCount(step, plan.safetyGuards!.intervalMs);
+    const resetBoundaryChecks = step.resetEvidence ? 3 : 2;
+    const runChecks = step.runAfterReconnect
+      ? 1 + Math.ceil(step.runAfterReconnect.cpu1SettleMs / plan.safetyGuards!.intervalMs) + (step.runAfterReconnect.runCpu2 ? 1 : 0)
+      : 0;
+    return (reconnectPolls + resetBoundaryChecks + runChecks) * guardCount;
+  }
   return (2 + monitoredPolls) * guardCount;
+}
+
+function reconnectPollCount(step: Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>, guardIntervalMs?: number): number {
+  return Math.ceil(step.timeoutMs / Math.min(step.intervalMs, guardIntervalMs ?? step.intervalMs));
 }
 
 function migrateLegacyStep(value: unknown): Record<string, unknown> {

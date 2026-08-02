@@ -233,6 +233,7 @@ export class StepRegistry {
     sessionId: string,
     step: Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>
   ): Promise<Record<string, unknown>> {
+    assertReconnectCoreScope(step);
     const symbolPaths = step.reloadSymbols
       ? await Promise.all(step.coreIds.map(async coreId => [coreId, await this.validateReadPath(programForCore(resolveArtifactsForBoard(context.plan, context.boardId), coreId))] as const))
       : [];
@@ -299,14 +300,28 @@ export class StepRegistry {
     }
     const capture = await this.captureRequiredExpressions(context, sessionId, step.resetCauseReads, "reset-cause", "ResetCauseReadFailed");
     const run: Record<string, unknown>[] = [];
+    let settleGuardPollIterations = 0;
     if (step.runAfterReconnect) {
       run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [0] })));
-      await abortableDelay(step.runAfterReconnect.cpu1SettleMs, context.signal);
+      if (context.plan.safetyGuards) {
+        retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "post-reconnect-cpu1-run"));
+        const settleDeadline = Date.now() + step.runAfterReconnect.cpu1SettleMs;
+        while (Date.now() < settleDeadline) {
+          await abortableDelay(Math.min(context.plan.safetyGuards.intervalMs, Math.max(0, settleDeadline - Date.now())), context.signal);
+          settleGuardPollIterations += 1;
+          retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "reconnect-cpu1-settle-monitor"));
+        }
+      } else {
+        await abortableDelay(step.runAfterReconnect.cpu1SettleMs, context.signal);
+      }
       if (step.runAfterReconnect.runCpu2) {
         run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [2] })));
+        if (context.plan.safetyGuards) {
+          retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "post-reconnect-cpu2-run"));
+        }
       }
     }
-    return { success: true, sessionId, resetObservation: observed, baselineSnapshot, baselineEvidence, pollIterations, reconnect, symbols, ...capture, run, safetyGuardChecks };
+    return { success: true, sessionId, resetObservation: observed, baselineSnapshot, baselineEvidence, pollIterations, reconnect, symbols, ...capture, run, settleGuardPollIterations, safetyGuardChecks };
   }
 
   private async restorePrograms(
@@ -551,6 +566,23 @@ function snapshotDisconnectedCoreIds(snapshot: Record<string, unknown>, expected
     const core = cores.find(candidate => candidate.coreId === coreId);
     return core?.connected === false || core?.state === "Disconnected";
   });
+}
+
+function assertReconnectCoreScope(step: Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>): void {
+  const coreIds = new Set<number>(step.coreIds);
+  const invalidEvidence = (step.resetEvidence ?? []).filter(evidence => !coreIds.has(evidence.coreId));
+  const invalidReads = step.resetCauseReads.filter(read => !coreIds.has(read.coreId));
+  const invalidRunCoreIds = step.runAfterReconnect
+    ? [0, ...(step.runAfterReconnect.runCpu2 ? [2] : [])].filter(coreId => !coreIds.has(coreId))
+    : [];
+  if (invalidEvidence.length > 0 || invalidReads.length > 0 || invalidRunCoreIds.length > 0) {
+    throw new DebugMcpError("ResetCoreScopeInvalid", "Reset evidence, cause reads, and post-reconnect runs must stay within reconnectAfterTargetReset.coreIds", {
+      coreIds: step.coreIds,
+      invalidEvidence,
+      invalidReads,
+      invalidRunCoreIds
+    });
+  }
 }
 
 function snapshotUnreadableCoreIds(snapshot: Record<string, unknown>, expectedCoreIds: readonly number[]): number[] {
