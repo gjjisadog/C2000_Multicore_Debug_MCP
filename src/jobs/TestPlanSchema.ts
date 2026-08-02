@@ -25,7 +25,9 @@ export const DURABLE_PLAN_LIMITS = {
   maxIntervalMs: 60_000,
   maxSettleMs: 60_000,
   maxAttempts: 10,
-  maxRetryPolicyEntries: 14,
+  maxRetryPolicyEntries: 18,
+  maxGuardPolls: 10_000,
+  maxGuardEvidenceSnapshots: 100,
   maxStepOutputBytes: 2 * 1024 * 1024,
   maxJobEvidenceBytes: 8 * 1024 * 1024
 } as const;
@@ -57,6 +59,10 @@ export const jobStepTypeSchema = z.enum([
   "injectFaults",
   "captureExpressions",
   "waitForExpressions",
+  "runCores",
+  "haltCores",
+  "reconnectAfterTargetReset",
+  "restorePrograms",
   "resetReconnectCapture",
   "runIpcAcceptance",
   "runBootHandoffDiagnosis",
@@ -89,6 +95,16 @@ const expressionConditionStepSchema = z.object({
   coreId: coreIdSchema,
   expression: expressionSchema,
   expected: expressionValueSchema
+}).strict();
+const safetyConditionStepSchema = expressionConditionStepSchema.extend({ operator: z.literal("eq").default("eq") }).strict();
+const coreIdsSchema = z.array(coreIdSchema).min(1).max(2)
+  .refine(values => new Set(values).size === values.length, "coreIds must be unique");
+const restoreArtifactSchema = (coreId: 0 | 2) => z.object({
+  coreId: z.literal(coreId),
+  outPath: z.string().min(1).max(4096),
+  mapPath: z.string().min(1).max(4096),
+  outSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  mapSha256: z.string().regex(/^[a-f0-9]{64}$/i)
 }).strict();
 const loadSequenceStepSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
@@ -124,8 +140,33 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100)
   }).strict(),
   z.object({
+    type: z.literal("runCores"), ...baseStep,
+    coreIds: coreIdsSchema,
+    monitorMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(0),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100)
+  }).strict(),
+  z.object({ type: z.literal("haltCores"), ...baseStep, coreIds: coreIdsSchema }).strict(),
+  z.object({
+    type: z.literal("reconnectAfterTargetReset"), ...baseStep,
+    coreIds: coreIdsSchema,
+    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100),
+    resetEvidence: z.array(safetyConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
+    resetCauseReads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads),
+    reloadSymbols: z.boolean().default(true),
+    runAfterReconnect: z.object({
+      runCpu1: z.literal(true),
+      cpu1SettleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(0),
+      runCpu2: z.boolean().default(false)
+    }).strict().optional()
+  }).strict(),
+  z.object({
+    type: z.literal("restorePrograms"), on: z.literal("always"),
+    artifacts: z.object({ cpu1: restoreArtifactSchema(0), cpu2: restoreArtifactSchema(2) }).strict()
+  }).strict(),
+  z.object({
     type: z.literal("resetReconnectCapture"), ...baseStep,
-    coreIds: z.array(coreIdSchema).min(1).max(2).refine(values => new Set(values).size === values.length, "coreIds must be unique"),
+    coreIds: coreIdsSchema,
     resetType: z.enum(["cpu", "system", "restart", "default"]).default("cpu"),
     settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250),
     reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
@@ -200,6 +241,11 @@ export const testPlanSchema = z.object({
     profile: canAcceptanceProfileSchema,
     execution: canExecutionSchema.default({ mode: "acceptance", iterations: 1, matrixCases: [], failFast: false, health: {}, resetOrRejoinRequested: false })
   }).optional(),
+  safetyGuards: z.object({
+    conditions: z.array(safetyConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions),
+    haltCoreIds: coreIdsSchema.default([0, 2]),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100)
+  }).strict().optional(),
   steps: z.array(testPlanStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxSteps),
   retryPolicy: retryPolicySchema.default({}),
   failurePolicy: z.object({
@@ -211,6 +257,9 @@ export const testPlanSchema = z.object({
 }).strict().superRefine((plan, context) => {
   if (!plan.boardIds && !plan.boardSelector?.boardIds && !plan.boardSelector?.tags) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: "plan must select boards by boardIds or boardSelector" });
+  }
+  if (plan.safetyGuards && !plan.steps.some(step => step.type === "launchMulticore")) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["safetyGuards"], message: "safetyGuards require a launchMulticore step because guards are evaluated only in the current board-flow session" });
   }
   const hasCanStep = plan.steps.some(step => step.type === "canAcceptance");
   if (hasCanStep && !plan.can) context.addIssue({ code: z.ZodIssueCode.custom, message: "canAcceptance step requires plan.can.profile" });
@@ -224,7 +273,7 @@ export const testPlanSchema = z.object({
       }
       continue;
     }
-    if (["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "resetReconnectCapture", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle"].includes(step.type) && !hasCurrentFlowSession) {
+    if (["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle"].includes(step.type) && !hasCurrentFlowSession) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} requires an earlier launchMulticore step in the same durable board flow` });
     }
     if (step.type === "resetReconnectCapture") {
@@ -237,14 +286,21 @@ export const testPlanSchema = z.object({
       }
     }
     const evidenceValues = evidenceValueCount(step);
-    if (evidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `step expands to ${evidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep}` });
+    const guardedEvidenceValues = evidenceValues + guardEvidenceValueCount(plan, step);
+    if (guardedEvidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `step expands to ${guardedEvidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep}` });
+    }
+    if (step.type === "reconnectAfterTargetReset" && Math.ceil(step.timeoutMs / step.intervalMs) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `reconnect polling exceeds ${DURABLE_PLAN_LIMITS.maxGuardPolls} bounded iterations` });
+    }
+    if (plan.safetyGuards && step.type === "runCores" && step.monitorMs === 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "monitorMs"], message: "guarded runCores requires a positive bounded monitorMs" });
     }
     if (step.type === "cleanup") hasCurrentFlowSession = false;
   }
-  const totalEvidenceValues = plan.steps.reduce((total, step) => total + evidenceValueCount(step), 0);
-  if (totalEvidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: `plan expands to ${totalEvidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan}` });
+  const totalEvidenceIncludingGuards = plan.steps.reduce((total, step) => total + evidenceValueCount(step) + guardEvidenceValueCount(plan, step), 0);
+  if (totalEvidenceIncludingGuards > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: `plan expands to ${totalEvidenceIncludingGuards} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan}` });
   }
   if (plan.artifactsByBoard && plan.boardIds) {
     const selected = new Set(plan.boardIds);
@@ -269,11 +325,12 @@ export type TestArtifacts = z.infer<typeof testArtifactsSchema>;
 
 const LEGACY_STEP_TYPES = new Set(["preflight", "launchMulticore", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle", "cleanup", "delay", "canAcceptance"]);
 
-/** Parse trusted SQLite plans written by the pre-strict v1 schema. New target-control steps never use this compatibility path. */
+/** Parse trusted SQLite plans written by the pre-strict v1 schema. New target-control steps and safety guards never use this compatibility path. */
 export function parsePersistedTestPlan(input: unknown): TestPlan {
   const strict = testPlanSchema.safeParse(input);
   if (strict.success) return strict.data;
   if (!isRecord(input) || input.planVersion !== 1 || !Array.isArray(input.steps)) return testPlanSchema.parse(input);
+  if ("safetyGuards" in input) return testPlanSchema.parse(input);
   if (!input.steps.every(step => isRecord(step) && typeof step.type === "string" && LEGACY_STEP_TYPES.has(step.type))) {
     return testPlanSchema.parse(input);
   }
@@ -327,8 +384,13 @@ export function idempotencyForStep(type: TestPlanStep["type"]): "READ_ONLY" | "R
       return "SAFE_RETRY";
     case "assignExpressions":
     case "injectFaults":
+    case "runCores":
+    case "reconnectAfterTargetReset":
+    case "restorePrograms":
     case "resetReconnectCapture":
       return "NON_IDEMPOTENT";
+    case "haltCores":
+      return "SAFE_RETRY";
     case "launchMulticore":
     case "runIpcAcceptance":
     case "runBootHandoffDiagnosis":
@@ -344,9 +406,21 @@ function evidenceValueCount(step: TestPlanStep): number {
     case "captureExpressions": return step.sampleCount * step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "waitForExpressions": return step.conditions.length;
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
+    case "reconnectAfterTargetReset": return (Math.ceil(step.timeoutMs / step.intervalMs) * (step.resetEvidence?.length ?? 0))
+      + step.resetCauseReads.reduce((total, read) => total + read.expressions.length, 0);
     case "runIpcAcceptance": return step.ipcReadyExpressions?.length ?? 0;
     default: return 0;
   }
+}
+
+function guardEvidenceValueCount(plan: Pick<TestPlan, "safetyGuards">, step: TestPlanStep): number {
+  const guardCount = plan.safetyGuards?.conditions.length ?? 0;
+  if (guardCount === 0 || step.type === "cleanup" || step.type === "restorePrograms") return 0;
+  let monitoredPolls = 0;
+  if (step.type === "delay") monitoredPolls = Math.ceil(step.delayMs / plan.safetyGuards!.intervalMs);
+  if (step.type === "waitForExpressions") monitoredPolls = Math.ceil(step.timeoutMs / step.intervalMs);
+  if (step.type === "runCores") monitoredPolls = Math.ceil(step.monitorMs / step.intervalMs);
+  return (2 + monitoredPolls) * guardCount;
 }
 
 function migrateLegacyStep(value: unknown): Record<string, unknown> {

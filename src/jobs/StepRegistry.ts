@@ -2,7 +2,10 @@ import type { C2000ToolInvoker } from "../mcp/tools.js";
 import { DURABLE_PLAN_LIMITS, resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import type { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import type { BoardLeaseContext } from "../boards/types.js";
-import { DebugMcpError } from "../utils/errors.js";
+import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { assertAllowedReadPath, type FilesystemPolicy } from "../security/pathPolicy.js";
+import { sha256File } from "../utils/fileHash.js";
+import { valuesEqual } from "../utils/expressionMatch.js";
 
 export interface StepExecutionContext {
   jobId: string;
@@ -18,7 +21,11 @@ export interface StepExecutionContext {
 }
 
 export class StepRegistry {
-  constructor(private readonly tools: C2000ToolInvoker, private readonly canAcceptance?: CanAcceptanceService) {}
+  constructor(
+    private readonly tools: C2000ToolInvoker,
+    private readonly canAcceptance?: CanAcceptanceService,
+    private readonly filesystem?: FilesystemPolicy
+  ) {}
 
   async execute(context: StepExecutionContext): Promise<Record<string, unknown>> {
     const { plan, step, boardId, sessionId } = context;
@@ -26,8 +33,7 @@ export class StepRegistry {
     const artifacts = resolveArtifactsForBoard(plan, boardId);
     switch (step.type) {
       case "delay":
-        await abortableDelay(step.delayMs ?? 0, context.signal);
-        return { delayedMs: step.delayMs ?? 0 };
+        return this.executeDelay(context, step.delayMs ?? 0);
       case "canAcceptance":
         if (!this.canAcceptance) throw new Error("CAN acceptance is unavailable in this runtime");
         return this.canAcceptance.execute(context);
@@ -60,12 +66,40 @@ export class StepRegistry {
       case "captureExpressions":
         return this.captureExpressions(context, requiredSessionId(sessionId), step.reads, step.sampleCount, step.intervalMs, step.label);
       case "waitForExpressions":
-        return this.tools.invokeTool("c2000_waitForExpressionSet", fenced(context, requiredSession({
-          sessionId,
-          conditions: step.conditions,
-          timeoutMs: step.timeoutMs,
-          intervalMs: step.intervalMs
-        })));
+        return plan.safetyGuards
+          ? this.waitForExpressionsWithGuards(context, requiredSessionId(sessionId), step.conditions, step.timeoutMs, step.intervalMs)
+          : this.tools.invokeTool("c2000_waitForExpressionSet", fenced(context, requiredSession({
+            sessionId,
+            conditions: step.conditions,
+            timeoutMs: step.timeoutMs,
+            intervalMs: step.intervalMs
+          })));
+      case "runCores": {
+        const activeSessionId = requiredSessionId(sessionId);
+        const run = await this.invokeRequired("c2000_runCores", fenced(context, { sessionId: activeSessionId, coreIds: step.coreIds }));
+        const safetyGuardChecks: Record<string, unknown>[] = [];
+        let safetyGuardPollIterations = 0;
+        if (step.monitorMs > 0) {
+          const deadline = Date.now() + step.monitorMs;
+          while (Date.now() < deadline) {
+            await abortableDelay(Math.min(step.intervalMs, Math.max(0, deadline - Date.now())), context.signal);
+            if (plan.safetyGuards) {
+              safetyGuardPollIterations += 1;
+              retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, activeSessionId, "run-monitor"));
+            }
+          }
+        }
+        return { success: true, sessionId: activeSessionId, run, monitorMs: step.monitorMs, safetyGuardPollIterations, safetyGuardChecks };
+      }
+      case "haltCores": {
+        const activeSessionId = requiredSessionId(sessionId);
+        const halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId: activeSessionId, coreIds: step.coreIds }));
+        return { success: true, sessionId: activeSessionId, halt };
+      }
+      case "reconnectAfterTargetReset":
+        return this.reconnectAfterTargetReset(context, requiredSessionId(sessionId), step);
+      case "restorePrograms":
+        return this.restorePrograms(context, requiredSessionId(sessionId), step);
       case "resetReconnectCapture": {
         const activeSessionId = requiredSessionId(sessionId);
         const reset = await this.invokeRequired("c2000_resetCores", fenced(context, {
@@ -122,6 +156,220 @@ export class StepRegistry {
       case "cleanup":
         return sessionId ? this.tools.invokeTool("c2000_closeDebugSession", fenced(context, { sessionId })) : { success: true, skipped: true };
     }
+  }
+
+  async assertSafetyGuards(context: StepExecutionContext, sessionId: string, phase: string): Promise<Record<string, unknown>> {
+    const guards = context.plan.safetyGuards;
+    if (!guards) return { phase, skipped: true };
+    let evidence: Record<string, unknown>;
+    try {
+      const evaluated = await this.evaluateConditions(context, sessionId, guards.conditions);
+      evidence = { phase, checkedAt: new Date().toISOString(), ...evaluated };
+      if (evaluated.matched) return evidence;
+    } catch (error) {
+      evidence = { phase, checkedAt: new Date().toISOString(), matched: false, evaluationError: toStructuredError(error) };
+    }
+    let halt: Record<string, unknown>;
+    try {
+      halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: guards.haltCoreIds }));
+    } catch (error) {
+      halt = { success: false, error: toStructuredError(error) };
+    }
+    throw new DebugMcpError("SafetyGuardViolation", "A durable safety guard did not match or could not be evaluated; fenced halt was issued before failing the job", {
+      sessionId,
+      evidence,
+      haltCoreIds: guards.haltCoreIds,
+      halt
+    });
+  }
+
+  private async executeDelay(context: StepExecutionContext, delayMs: number): Promise<Record<string, unknown>> {
+    const sessionId = context.sessionId;
+    const guards = context.plan.safetyGuards;
+    if (!sessionId || !guards || delayMs === 0) {
+      await abortableDelay(delayMs, context.signal);
+      return { delayedMs: delayMs, safetyGuardChecks: [] };
+    }
+    const safetyGuardChecks: Record<string, unknown>[] = [];
+    let safetyGuardPollIterations = 0;
+    const deadline = Date.now() + delayMs;
+    while (Date.now() < deadline) {
+      await abortableDelay(Math.min(guards.intervalMs, Math.max(0, deadline - Date.now())), context.signal);
+      safetyGuardPollIterations += 1;
+      retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "delay-monitor"));
+    }
+    return { delayedMs: delayMs, safetyGuardPollIterations, safetyGuardChecks };
+  }
+
+  private async waitForExpressionsWithGuards(
+    context: StepExecutionContext,
+    sessionId: string,
+    conditions: Array<{ label?: string; coreId: number; expression: string; expected: string | number | boolean }>,
+    timeoutMs: number,
+    intervalMs: number
+  ): Promise<Record<string, unknown>> {
+    const deadline = Date.now() + timeoutMs;
+    let pollIterations = 0;
+    let lastConditions: Record<string, unknown>[] = [];
+    const safetyGuardChecks: Record<string, unknown>[] = [];
+    while (Date.now() <= deadline) {
+      pollIterations += 1;
+      const evaluated = await this.evaluateConditions(context, sessionId, conditions);
+      lastConditions = evaluated.conditions;
+      retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "wait-monitor"));
+      if (evaluated.matched) {
+        return { success: true, sessionId, matched: true, timedOut: false, pollIterations, conditions: lastConditions, safetyGuardChecks };
+      }
+      if (Date.now() >= deadline) break;
+      await abortableDelay(Math.min(intervalMs, Math.max(0, deadline - Date.now())), context.signal);
+    }
+    throw new DebugMcpError("ExpressionWaitTimeout", "Durable expression wait timed out while safety guards remained active", {
+      sessionId, timeoutMs, intervalMs, pollIterations, conditions: lastConditions, safetyGuardChecks
+    });
+  }
+
+  private async reconnectAfterTargetReset(
+    context: StepExecutionContext,
+    sessionId: string,
+    step: Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>
+  ): Promise<Record<string, unknown>> {
+    const symbolPaths = step.reloadSymbols
+      ? await Promise.all(step.coreIds.map(async coreId => [coreId, await this.validateReadPath(programForCore(resolveArtifactsForBoard(context.plan, context.boardId), coreId))] as const))
+      : [];
+    const deadline = Date.now() + step.timeoutMs;
+    let pollIterations = 0;
+    let lastSnapshot: Record<string, unknown> | undefined;
+    let resetEvidence: Record<string, unknown> | undefined;
+    let observed: Record<string, unknown> | undefined;
+    while (Date.now() <= deadline) {
+      pollIterations += 1;
+      lastSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
+      const disconnectedCoreIds = snapshotDisconnectedCoreIds(lastSnapshot, step.coreIds);
+      if (disconnectedCoreIds.length > 0) {
+        observed = { mode: "target-disconnected", disconnectedCoreIds, observedAt: new Date().toISOString() };
+        break;
+      }
+      if (step.resetEvidence) {
+        resetEvidence = await this.evaluateConditions(context, sessionId, step.resetEvidence);
+        if (resetEvidence.matched === true) {
+          observed = { mode: "explicit-reset-expression", observedAt: new Date().toISOString(), resetEvidence };
+          break;
+        }
+      }
+      if (Date.now() >= deadline) break;
+      await abortableDelay(Math.min(step.intervalMs, Math.max(0, deadline - Date.now())), context.signal);
+    }
+    if (!observed) {
+      throw new DebugMcpError("TargetResetNotObserved", "No target disconnect or matching explicit reset evidence was observed before reconnect timeout", {
+        sessionId, coreIds: step.coreIds, timeoutMs: step.timeoutMs, pollIterations, lastSnapshot, resetEvidence
+      });
+    }
+    const reconnect = await this.invokeRequired("c2000_connectCores", fenced(context, { sessionId, coreIds: step.coreIds }));
+    const symbols: Record<string, unknown>[] = [];
+    for (const [coreId, programUri] of symbolPaths) {
+      symbols.push(await this.invokeRequired("c2000_loadSymbols", fenced(context, { sessionId, coreId, programUri })));
+    }
+    const capture = await this.captureExpressions(context, sessionId, step.resetCauseReads, 1, 0, "reset-cause");
+    const run: Record<string, unknown>[] = [];
+    if (step.runAfterReconnect) {
+      run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [0] })));
+      await abortableDelay(step.runAfterReconnect.cpu1SettleMs, context.signal);
+      if (step.runAfterReconnect.runCpu2) {
+        run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [2] })));
+      }
+    }
+    return { success: true, sessionId, resetObservation: observed, pollIterations, reconnect, symbols, ...capture, run };
+  }
+
+  private async restorePrograms(
+    context: StepExecutionContext,
+    sessionId: string,
+    step: Extract<TestPlanStep, { type: "restorePrograms" }>
+  ): Promise<Record<string, unknown>> {
+    const artifacts = await Promise.all([step.artifacts.cpu1, step.artifacts.cpu2].map(async artifact => {
+      const outPath = await this.validateReadPath(artifact.outPath);
+      const mapPath = await this.validateReadPath(artifact.mapPath);
+      const [outSha256, mapSha256] = await Promise.all([sha256File(outPath), sha256File(mapPath)]);
+      if (outSha256.toLowerCase() !== artifact.outSha256.toLowerCase() || mapSha256.toLowerCase() !== artifact.mapSha256.toLowerCase()) {
+        throw new DebugMcpError("ArtifactHashMismatch", "Restore artifact hash does not match the explicit durable plan", {
+          coreId: artifact.coreId, outPath, mapPath, expectedOutSha256: artifact.outSha256, actualOutSha256: outSha256,
+          expectedMapSha256: artifact.mapSha256, actualMapSha256: mapSha256
+        });
+      }
+      return { ...artifact, outPath, mapPath, outSha256, mapSha256 };
+    }));
+    let initialHalt: Record<string, unknown> | undefined;
+    let load: Record<string, unknown> | undefined;
+    try {
+      initialHalt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+      load = await this.invokeRequired("c2000_loadPrograms", fenced(context, {
+        sessionId,
+        programs: artifacts.map(artifact => ({
+          coreId: artifact.coreId,
+          programUri: artifact.outPath,
+          mapUri: artifact.mapPath,
+          ramOwnershipPolicy: "require-map",
+          loadPolicy: "always"
+        }))
+      }));
+      verifyRestoredProgramResults(load, artifacts);
+      const postLoadHashes = await Promise.all(artifacts.map(async artifact => ({
+        coreId: artifact.coreId,
+        outSha256: await sha256File(artifact.outPath),
+        mapSha256: await sha256File(artifact.mapPath)
+      })));
+      for (const hashes of postLoadHashes) {
+        const expected = artifacts.find(artifact => artifact.coreId === hashes.coreId)!;
+        if (hashes.outSha256.toLowerCase() !== expected.outSha256.toLowerCase() || hashes.mapSha256.toLowerCase() !== expected.mapSha256.toLowerCase()) {
+          throw new DebugMcpError("ArtifactHashMismatch", "Restore artifacts changed during the target load operation", { expected, actual: hashes });
+        }
+      }
+      const finalHalt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+      return { success: true, sessionId, verifiedArtifacts: artifacts, postLoadHashes, initialHalt, load, finalHalt, finalState: "Halted", ranCores: false, wroteProgramCounter: false };
+    } catch (error) {
+      let isolation: Record<string, unknown>;
+      try {
+        isolation = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+      } catch (isolationError) {
+        isolation = { success: false, error: toStructuredError(isolationError) };
+      }
+      throw new DebugMcpError("RestoreProgramsFailed", "Program restore failed; fenced halt isolation was attempted and no core was run", {
+        sessionId, initialHalt, load, isolation, cause: toStructuredError(error), ranCores: false, wroteProgramCounter: false
+      });
+    }
+  }
+
+  private async evaluateConditions(
+    context: StepExecutionContext,
+    sessionId: string,
+    conditions: Array<{ label?: string; coreId: number; expression: string; operator?: "eq"; expected: string | number | boolean }>
+  ): Promise<{ matched: boolean; conditions: Record<string, unknown>[] }> {
+    const byCore = new Map<number, Record<string, unknown>[]>();
+    for (const coreId of [...new Set(conditions.map(condition => condition.coreId))]) {
+      const expressions = [...new Set(conditions.filter(condition => condition.coreId === coreId).map(condition => condition.expression))];
+      const evaluated = await this.invokeRequired("c2000_evaluateMany", fenced(context, { sessionId, coreId, expressions }));
+      byCore.set(coreId, Array.isArray(evaluated.results) ? evaluated.results.filter(isRecord) : []);
+    }
+    const results = conditions.map(condition => {
+      const result = byCore.get(condition.coreId)?.find(item => item.expression === condition.expression);
+      return {
+        ...(condition.label ? { label: condition.label } : {}),
+        coreId: condition.coreId,
+        expression: condition.expression,
+        operator: condition.operator ?? "eq",
+        expected: condition.expected,
+        matched: result?.success === true && valuesEqual(result.value, condition.expected),
+        result
+      };
+    });
+    return { matched: results.every(result => result.matched), conditions: results };
+  }
+
+  private async validateReadPath(candidate: string): Promise<string> {
+    if (!this.filesystem) {
+      throw new DebugMcpError("PathOutsideAllowedReadRoots", "Durable artifact access requires an explicit allowed-read-roots policy", { path: candidate, allowedRoots: [] });
+    }
+    return assertAllowedReadPath(candidate, this.filesystem);
   }
 
   private async captureExpressions(
@@ -220,4 +468,38 @@ function jsonSize(value: unknown): number {
   } catch {
     throw new DebugMcpError("EvidenceSerializationFailed", "Expression capture result is not JSON serializable");
   }
+}
+
+function snapshotDisconnectedCoreIds(snapshot: Record<string, unknown>, expectedCoreIds: readonly number[]): number[] {
+  const cores = Array.isArray(snapshot.cores) ? snapshot.cores.filter(isRecord) : [];
+  return expectedCoreIds.filter(coreId => {
+    const core = cores.find(candidate => candidate.coreId === coreId);
+    return core?.connected === false || core?.state === "Disconnected";
+  });
+}
+
+function verifyRestoredProgramResults(
+  load: Record<string, unknown>,
+  artifacts: Array<{ coreId: 0 | 2; outSha256: string }>
+): void {
+  const results = Array.isArray(load.results) ? load.results.filter(isRecord) : [];
+  for (const artifact of artifacts) {
+    const result = results.find(candidate => candidate.coreId === artifact.coreId);
+    if (!result || result.success !== true || result.loaded !== true || typeof result.sha256 !== "string" || result.sha256.toLowerCase() !== artifact.outSha256.toLowerCase()) {
+      throw new DebugMcpError("ArtifactHashMismatch", "Loaded program evidence did not confirm the requested core and SHA-256", {
+        coreId: artifact.coreId,
+        expectedOutSha256: artifact.outSha256,
+        result
+      });
+    }
+  }
+}
+
+function retainGuardEvidence(target: Record<string, unknown>[], evidence: Record<string, unknown>): void {
+  if (target.length < DURABLE_PLAN_LIMITS.maxGuardEvidenceSnapshots) target.push(evidence);
+  else target[target.length - 1] = evidence;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

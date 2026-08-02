@@ -176,6 +176,105 @@ describe("durable step cleanup and output safety", () => {
     await fixture.engine.stop();
     fixture.store.close();
   });
+
+  test("fails the job and performs a fenced halt on the first safety-guard mismatch", async () => {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    let guardReads = 0;
+    const fixture = await createFixture({
+      async invokeTool(toolName, input) {
+        const record = input as Record<string, unknown>;
+        calls.push({ toolName, input: record });
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_evaluateMany") {
+          guardReads += 1;
+          return { success: true, results: [{ expression: "g_safe", success: true, value: guardReads < 3 ? 1 : 0 }] };
+        }
+        if (toolName === "c2000_haltCores") return { success: true, sessionId: "dbg-current", results: [{ coreId: 0, success: true }, { coreId: 2, success: true }] };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "guard-fail-closed", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", operator: "eq", expected: 1 }], haltCoreIds: [0, 2], intervalMs: 1 },
+      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "delay", delayMs: 2 }, { type: "cleanup" }]
+    }).jobId);
+    const terminal = await waitForTerminal(fixture.runs, jobId);
+    expect(terminal.status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({ status: "PASSED" }));
+    expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({ status: "FAILED", error: expect.objectContaining({ code: "SafetyGuardViolation" }) }));
+    const halt = calls.find(call => call.toolName === "c2000_haltCores")!;
+    expect(halt.input).toEqual(expect.objectContaining({
+      sessionId: "dbg-current",
+      coreIds: [0, 2],
+      __leaseContext: expect.objectContaining({ leaseId: expect.any(String), leaseToken: expect.any(String), fencingToken: expect.any(Number), leaseGeneration: expect.any(Number) })
+    }));
+    expect(calls.map(call => call.toolName)).toEqual([
+      "c2000_launchMulticoreDebug", "c2000_evaluateMany", "c2000_evaluateMany", "c2000_evaluateMany", "c2000_haltCores", "c2000_closeDebugSession"
+    ]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("does not evaluate guards before reconnecting an observed disconnected target", async () => {
+    const calls: string[] = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName, input) {
+        calls.push(toolName);
+        const record = input as Record<string, unknown>;
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_getMulticoreSnapshot") return { success: true, sessionId: "dbg-current", cores: [{ coreId: 0, connected: false, state: "Disconnected" }] };
+        if (toolName === "c2000_evaluateMany") return {
+          success: true,
+          results: (record.expressions as string[]).map(expression => ({ expression, success: true, value: expression === "g_safe" ? 1 : 3 }))
+        };
+        if (["c2000_connectCores", "c2000_closeDebugSession"].includes(toolName)) return { success: true, sessionId: "dbg-current", results: [] };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "guarded-external-reset", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }], haltCoreIds: [0], intervalMs: 1 },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, intervalMs: 1, reloadSymbols: false, resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }] },
+        { type: "cleanup" }
+      ]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
+    expect(calls).toEqual([
+      "c2000_launchMulticoreDebug", "c2000_evaluateMany",
+      "c2000_getMulticoreSnapshot", "c2000_connectCores", "c2000_evaluateMany",
+      "c2000_evaluateMany", "c2000_closeDebugSession"
+    ]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("quarantines the board when a safety-guard halt cannot be confirmed", async () => {
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ expression: "g_safe", success: true, value: 0 }] };
+        if (toolName === "c2000_haltCores") return { success: false, error: { code: "TargetHaltFailed" } };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "guard-halt-failed", boardIds: ["board-a"],
+      retryPolicy: { launchMulticore: 3 },
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }], haltCoreIds: [0, 2] },
+      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.stepAttempts(jobId).filter(attempt => attempt.status === "FAILED")).toEqual([
+      expect.objectContaining({ attemptIndex: 1, retryDecision: expect.objectContaining({ retry: false, reason: "SAFETY_GUARD_VIOLATION" }) })
+    ]);
+    expect(fixture.registry.get("board-a")).toEqual(expect.objectContaining({ status: "QUARANTINED", lastError: expect.objectContaining({ code: "DurableSafetyIsolationFailed" }) }));
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
 });
 
 function planWithCleanup() {

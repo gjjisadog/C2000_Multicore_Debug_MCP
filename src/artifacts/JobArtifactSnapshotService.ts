@@ -417,7 +417,10 @@ function expressionSnapshotsFromSteps(steps: TestStepRecord[]): Record<string, u
 }
 
 function durableStepResultsFromSteps(steps: TestStepRecord[]): Record<string, unknown>[] {
-  const durableTypes = new Set(["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "resetReconnectCapture"]);
+  const durableTypes = new Set([
+    "launchMulticore", "assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions",
+    "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture", "delay"
+  ]);
   return steps.filter(step => durableTypes.has(step.stepType)).map(step => {
     const output = step.output ? sanitize(step.output) : undefined;
     const { expressionSnapshots: snapshots, ...outputWithoutSnapshots } = output ?? {};

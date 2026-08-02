@@ -25,18 +25,40 @@ Before any board-bound work:
 
 For Hybrid30K A–E safety regressions, prefer strict durable steps over client-
 side tool sequences: `assignExpressions`, `injectFaults`,
-`captureExpressions`, `waitForExpressions`, and
-`resetReconnectCapture`. Every expression entry must name `coreId` 0 or 2.
+`captureExpressions`, `waitForExpressions`, `runCores`, `haltCores`,
+`reconnectAfterTargetReset`, `restorePrograms`, and `resetReconnectCapture`.
+Every expression entry must name `coreId` 0 or 2.
 Put them after `launchMulticore` in the same plan. Use
 `launchMulticore.loadPrograms: false` for a connect-only launch, or declare its
 `loadSequence` explicitly when CPU1 must run before CPU2 RAM load.
 
 Never configure retry or automatic recovery for `assignExpressions`,
-`injectFaults`, or `resetReconnectCapture`; the daemon classifies them as
-non-idempotent and requires manual intervention after interruption. A reset
+`injectFaults`, `runCores`, `reconnectAfterTargetReset`, `restorePrograms`, or
+`resetReconnectCapture`; the daemon classifies them as non-idempotent and
+requires manual intervention after interruption. `haltCores` is safe to retry.
+A reset
 reconnect step must explicitly choose `reload: none`, `symbols`, or `programs`.
 Choose `symbols` for resident Flash. Consume custom expression evidence from
 the job's atomic `expression-snapshots.json` and its manifest hash.
+
+Use `reconnectAfterTargetReset` only for a reset initiated outside the durable
+job. It must observe `Disconnected` through the adapter or match an explicit,
+firmware-defined reset-cause latch expression. `Halted` state or a changed PC
+alone is not reset evidence. This step reconnects the same session, optionally
+loads symbols, and may run CPU1 before CPU2; it must never reset, program Flash,
+or write PC.
+
+Plan `safetyGuards` are explicit `{ coreId, expression, operator: "eq",
+expected }` conditions. The daemon checks them only after the current session
+exists, serializes their polling with all other worker commands, and on the
+first mismatch uses the same fenced lease to halt the declared cores and fail
+the job without retry. An unreadable guard also halts and fails; an unconfirmed
+halt quarantines the board. Guard evaluation pauses only while
+`reconnectAfterTargetReset` is proving/recovering an expected disconnect and
+resumes after reconnect. Use `restorePrograms` only as an `on: always`
+isolation step. Supply
+both CPU1 and CPU2 out/map SHA-256 values; the daemon validates allowed roots
+and hashes before halt → map-aware load → halt. It never runs or writes PC.
 
 Do not manually restart or re-port the daemon to repair a stale MCP proxy.
 The proxy rediscovers a restarted daemon after connection/authentication

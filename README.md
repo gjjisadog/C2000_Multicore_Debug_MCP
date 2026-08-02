@@ -345,8 +345,9 @@ left by an earlier daemon generation.
 Recovery has a separate compatibility parser for plans already persisted by
 the former permissive v1 schema. It accepts only the nine original step types,
 normalizes a missing legacy `delayMs` to zero, and discards old passthrough
-noise before strict validation. New assignment, injection, capture, wait, and
-reset/reconnect steps never use that compatibility path.
+noise before strict validation. New target-control steps and plans containing
+`safetyGuards` never use that compatibility path, so migration cannot silently
+remove a guard or make a non-replayable step replayable.
 
 Supported target-oriented durable steps are:
 
@@ -360,14 +361,32 @@ Supported target-oriented durable steps are:
   sampleCount, intervalMs }` for a bounded evaluation window.
 - `waitForExpressions`: `{ conditions: [{ label?, coreId, expression,
   expected }], timeoutMs, intervalMs }`.
+- `runCores`: `{ coreIds, monitorMs, intervalMs }`. It is non-idempotent:
+  interruption is never retried or replayed. `monitorMs` provides a bounded
+  window for plan safety guards while the selected cores run, and must be
+  positive whenever the plan declares guards.
+- `haltCores`: `{ coreIds }`. Repeating a halt is safe, so this step is the
+  only new execution-control step classified `SAFE_RETRY`.
+- `reconnectAfterTargetReset`: waits for an adapter-observed `Disconnected`
+  core or matching explicit `resetEvidence` expressions before it reconnects
+  the named cores in the same session. It can load symbols only, captures
+  `resetCauseReads`, and optionally runs CPU1 before CPU2. It never calls reset,
+  program load, or a PC write. A merely halted core or changed PC is not reset
+  evidence, and timeout fails closed as `TargetResetNotObserved`.
+- `restorePrograms`: an `on: always` isolation step with explicit CPU1/CPU2
+  `{ coreId, outPath, mapPath, outSha256, mapSha256 }`. Before target access it
+  validates every path against `allowedReadRoots` and every SHA-256. It then
+  performs halt → `loadPrograms` with map-required GS ownership → halt, and
+  never runs a core or writes PC. Failure triggers another fenced halt attempt.
 - `resetReconnectCapture`: `{ coreIds, resetType, settleMs, reload,
   loadPolicy, reads }`, where `reload` is `none`, `symbols`, or `programs`.
   It performs one explicit reset → reconnect → optional reload → capture
   sequence; symbol reload uses `c2000_loadSymbols` and never programs Flash.
 
-Expression assignment, fault injection, and reset/reconnect are
-non-idempotent checkpoints. An interruption is routed to manual intervention,
-not retried or restarted from the beginning. Every sub-operation carries the
+Expression assignment, fault injection, run, externally observed reset
+reconnect, program restore, and reset/reconnect are non-idempotent checkpoints.
+An interruption is routed to manual intervention, not retried or restarted
+from the beginning. Every sub-operation carries the
 job's current lease secret, fencing token/generation, worker identity,
 `sessionId`, and explicit `coreId`. Job finalization closes the current session
 before releasing the lease even when a plan omits `cleanup` or fails midway.
@@ -383,6 +402,20 @@ sanitizer recursively removes sensitive keys from objects and arbitrarily
 nested arrays, including evaluator error details, without changing the SQLite
 run record.
 
+Optional plan-level `safetyGuards` declare bounded `eq` conditions with an
+explicit `coreId`, expression, and expected value, plus the cores to halt.
+Guards start only after `launchMulticore` establishes the current session. The
+engine checks them before and after target steps; guarded wait, delay, and run
+monitor windows poll them serially through the board worker. No guard read runs
+concurrently with another target command. The first mismatch issues a fenced
+`haltCores` using the job's current lease, records the evaluation and halt
+evidence, and fails the job without retry; an unreadable guard is treated the
+same way. If the halt cannot be confirmed, the board is quarantined before its
+lease is released. `restorePrograms` and `cleanup` remain executable as
+`always` isolation paths after that failure. Guard evaluation is deliberately
+skipped before `reconnectAfterTargetReset`, when disconnection is expected,
+and resumes immediately after reconnect/capture completes.
+
 Resource limits are fail-closed: at most 128 steps, 256 assignments or faults,
 64 read groups, 128 expressions per read, 256 wait or IPC-ready conditions,
 1,000 samples,
@@ -395,13 +428,19 @@ and 8 MiB across all boards in one job. Terminal export applies the same
 budget for each board and then exceed the artifact budget.
 
 Retry policies accept only declared durable step-type keys, with at most one
-entry per step type (14 entries total). `maxAttempts` is the total attempt
+entry per step type (18 entries total). `maxAttempts` is the total attempt
 count, including the first execution, and is capped at 10 in both numeric and
 structured forms. Structured `maxAttempts: 1` means no retry. For compatibility,
 the legacy numeric shorthand `0` also means one total attempt; it never creates
 an unbounded or zero-execution loop. NON_IDEMPOTENT steps still never retry,
 regardless of their configured policy, while RECONCILABLE steps must reconcile
 before each retry and cannot exceed the same attempt cap.
+
+For the A sequence that needs CPU1 initialized before a CPU2 RAM image is
+loaded, `launchMulticore.loadSequence.mode: cpu1-run-before-cpu2` already has
+the precise server-side ordering CPU1 load/halt → CPU1 run/settle → CPU2
+load/halt → CPU1 halt. It leaves both cores halted and does not rely on CCS UI
+focus or an active-target selection.
 
 The manifest is the publication transaction boundary. Failures before it is
 written restore the previous manifest/snapshot pair. Artifact indexing or

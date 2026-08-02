@@ -5,7 +5,7 @@ import { EventRepository } from "../storage/repositories/EventRepository.js";
 import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import { TestRunRepository, type TestRunBoardRecord, type TestRunRecord, type TestStepRecord } from "../storage/repositories/TestRunRepository.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
-import { DURABLE_PLAN_LIMITS, idempotencyForStep, materializeArtifactsByBoard, parsePersistedTestPlan, testPlanSchema, type TestPlan } from "./TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, idempotencyForStep, materializeArtifactsByBoard, parsePersistedTestPlan, testPlanSchema, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import { StepRegistry } from "./StepRegistry.js";
 import { TestScheduler } from "./TestScheduler.js";
 import { TestReconciler } from "./TestReconciler.js";
@@ -20,6 +20,7 @@ import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecution
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
 import { portableDurableEvidenceFromSteps, type JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
+import type { FilesystemPolicy } from "../security/pathPolicy.js";
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
@@ -50,6 +51,7 @@ export class TestJobEngine {
     groupReconcileDecisions?: BoardGroupReconcileDecisionRepository;
     artifactSnapshots?: JobArtifactSnapshotService;
     failureBundles?: { collectForJob(jobId: string, reason?: string): Promise<void> };
+    filesystem?: FilesystemPolicy;
   }) {
     this.scheduler = new TestScheduler(Math.max(1, options.maxActiveJobs ?? 16));
     this.boardPermits = new BoardExecutionSemaphore(Math.max(1, options.maxParallelBoards), {
@@ -57,7 +59,7 @@ export class TestJobEngine {
       starvationTimeoutMs: options.starvationTimeoutMs,
       onStarvation: waiter => options.events.append({ level: "warn", sourceType: "scheduler", sourceId: waiter.jobId, jobId: waiter.jobId, eventType: "BOARD_PERMIT_STARVATION", payload: waiter })
     });
-    this.steps = new StepRegistry(options.tools, options.canAcceptance);
+    this.steps = new StepRegistry(options.tools, options.canAcceptance, options.filesystem);
   }
 
   start(): void {
@@ -383,7 +385,7 @@ export class TestJobEngine {
           this.options.runs.updateStep(running);
           try {
             const activeSignal = condition === "always" || (cancelled && condition === "failure") ? undefined : this.abortControllers.get(jobId)?.signal;
-            const output = await this.steps.execute({
+            const executionContext = {
               jobId,
               boardId: board.boardId,
               sessionId,
@@ -393,7 +395,12 @@ export class TestJobEngine {
               plan,
               step: plannedStep,
               signal: activeSignal
-            });
+            };
+            const safetyGuardChecks: Record<string, unknown>[] = [];
+            if (sessionId && guardBeforeStep(plannedStep.type)) {
+              safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
+            }
+            let output = await this.steps.execute(executionContext);
             if (typeof output.sessionId === "string") {
               if (plannedStep.type !== "launchMulticore" && sessionId && output.sessionId !== sessionId) {
                 throw new DebugMcpError("SessionIdentityMismatch", "Durable step returned a session other than the current fenced board-flow session", {
@@ -407,6 +414,13 @@ export class TestJobEngine {
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
+            if (sessionId && guardAfterStep(plannedStep.type)) {
+              safetyGuardChecks.push(await this.steps.assertSafetyGuards({ ...executionContext, sessionId }, sessionId, "after-step"));
+            }
+            if (safetyGuardChecks.length > 0) {
+              const internalChecks = Array.isArray(output.safetyGuardChecks) ? output.safetyGuardChecks : [];
+              output = { ...output, safetyGuardChecks: [...safetyGuardChecks, ...internalChecks] };
+            }
             this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
             if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (plannedStep.type === "cleanup") sessionOpen = false;
@@ -417,6 +431,17 @@ export class TestJobEngine {
           } catch (error) {
             const structured = { ...toStructuredError(error) };
             if (isAbortError(error)) cancelled = true;
+            if (failedSafetyIsolation(structured)) {
+              try {
+                this.options.registry.transition(board.boardId, "QUARANTINED", {
+                  code: "DurableSafetyIsolationFailed",
+                  message: "A durable safety halt could not be confirmed while the fenced lease was held",
+                  jobId,
+                  stepType: step.stepType,
+                  error: structured
+                });
+              } catch { /* original fenced halt failure remains authoritative */ }
+            }
             const retryDecision = decideRetry({ step, attempt, policy, errorCode: structured.code });
             let reconcileEvidence: Record<string, unknown> | undefined;
             if (retryDecision.retry && retryDecision.requiresReconcile) {
@@ -582,6 +607,23 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, work: (item: 
 function isAbortError(error: unknown): boolean {
   return (error instanceof DOMException && error.name === "AbortError")
     || (error instanceof Error && error.name === "AbortError");
+}
+
+function guardBeforeStep(stepType: TestPlanStep["type"]): boolean {
+  return guardAfterStep(stepType) && stepType !== "reconnectAfterTargetReset";
+}
+
+function guardAfterStep(stepType: TestPlanStep["type"]): boolean {
+  return stepType !== "cleanup" && stepType !== "restorePrograms";
+}
+
+function failedSafetyIsolation(error: Record<string, unknown>): boolean {
+  const details = error.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return false;
+  const isolation = error.code === "SafetyGuardViolation"
+    ? (details as Record<string, unknown>).halt
+    : error.code === "RestoreProgramsFailed" ? (details as Record<string, unknown>).isolation : undefined;
+  return Boolean(isolation && typeof isolation === "object" && !Array.isArray(isolation) && (isolation as Record<string, unknown>).success !== true);
 }
 
 function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {

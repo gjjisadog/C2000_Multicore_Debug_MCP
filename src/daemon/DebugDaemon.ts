@@ -302,7 +302,8 @@ export class DebugDaemon {
       groupBarriers,
       groupReconcileDecisions,
       artifactSnapshots,
-      failureBundles
+      failureBundles,
+      filesystem: this.config.filesystem
     });
     const rpcServer = new DaemonRpcServer({
       authToken: this.authToken,
