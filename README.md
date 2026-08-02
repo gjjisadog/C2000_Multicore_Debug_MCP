@@ -342,6 +342,12 @@ CPU2 `2` is rejected before the job is persisted. Session-scoped steps must
 follow `launchMulticore` in the same board flow; they never attach to a session
 left by an earlier daemon generation.
 
+Recovery has a separate compatibility parser for plans already persisted by
+the former permissive v1 schema. It accepts only the nine original step types,
+normalizes a missing legacy `delayMs` to zero, and discards old passthrough
+noise before strict validation. New assignment, injection, capture, wait, and
+reset/reconnect steps never use that compatibility path.
+
 Supported target-oriented durable steps are:
 
 - `launchMulticore`: `loadPrograms` is explicit and defaults to `true`.
@@ -373,6 +379,20 @@ manifest written last as the artifact commit marker. Assignment, injection,
 wait, capture-summary, and reset/reconnect results are embedded in the same
 manifest under `durableStepResults` (capture arrays remain only in the hashed
 snapshot file to avoid duplicating large windows).
+
+Resource limits are fail-closed: at most 128 steps, 256 assignments or faults,
+64 read groups, 128 expressions per read, 256 wait conditions, 1,000 samples,
+10,000 expanded evidence values per step, and 20,000 per plan. Labels are at
+most 128 characters and expressions/string values at most 512. Runtime output
+is also capped at 2 MiB per step and 8 MiB per board flow, so unexpectedly
+large target values cannot bypass submission-time cardinality checks.
+
+The manifest is the publication transaction boundary. Failures before it is
+written restore the previous manifest/snapshot pair. Artifact indexing or
+hash/stat registration failures after publication retain the committed files
+and their valid references while marking the export index `FAILED` for later
+recovery. If explicit cleanup and the engine's fenced final cleanup both fail,
+the job fails and the board is quarantined before its lease is released.
 
 To use real multiple boards, add unique `boardId`, `probeSerial`, `ccxmlPath`,
 and tags in `boards[]`, or register them through `c2000_registerBoard`; do not

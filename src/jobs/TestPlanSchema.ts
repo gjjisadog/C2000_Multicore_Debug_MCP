@@ -2,12 +2,28 @@ import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 
 export const testArtifactsSchema = z.object({
-  cpu1OutPath: z.string().min(1),
-  cpu2OutPath: z.string().min(1),
-  cpu1MapPath: z.string().min(1).optional(),
-  cpu2MapPath: z.string().min(1).optional(),
-  outputDir: z.string().min(1).optional()
+  cpu1OutPath: z.string().min(1).max(4096),
+  cpu2OutPath: z.string().min(1).max(4096),
+  cpu1MapPath: z.string().min(1).max(4096).optional(),
+  cpu2MapPath: z.string().min(1).max(4096).optional(),
+  outputDir: z.string().min(1).max(4096).optional()
 });
+
+export const DURABLE_PLAN_LIMITS = {
+  maxSteps: 128,
+  maxAssignments: 256,
+  maxFaults: 256,
+  maxReads: 64,
+  maxExpressionsPerRead: 128,
+  maxConditions: 256,
+  maxSamples: 1000,
+  maxEvidenceValuesPerStep: 10000,
+  maxEvidenceValuesPerPlan: 20000,
+  maxExpressionLength: 512,
+  maxLabelLength: 128,
+  maxStepOutputBytes: 2 * 1024 * 1024,
+  maxJobOutputBytes: 8 * 1024 * 1024
+} as const;
 
 /** Omitted limits mean that a finite campaign records failures without aborting early. */
 export const canHealthPolicySchema = z.object({
@@ -48,23 +64,25 @@ export const jobStepTypeSchema = z.enum([
 
 const onSchema = z.enum(["always", "failure", "success"]);
 const coreIdSchema = z.number().int().refine(value => value === 0 || value === 2, "F28P65x durable steps require coreId 0 (CPU1) or 2 (CPU2)");
-const expressionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const expressionValueSchema = z.union([z.string().max(DURABLE_PLAN_LIMITS.maxExpressionLength), z.number(), z.boolean()]);
+const expressionSchema = z.string().min(1).max(DURABLE_PLAN_LIMITS.maxExpressionLength);
+const labelSchema = z.string().min(1).max(DURABLE_PLAN_LIMITS.maxLabelLength);
 const expressionAssignmentStepSchema = z.object({
   coreId: coreIdSchema,
-  expression: z.string().min(1),
+  expression: expressionSchema,
   value: expressionValueSchema,
   verify: z.boolean().default(true)
 }).strict();
-const expressionFaultStepSchema = expressionAssignmentStepSchema.extend({ label: z.string().min(1).optional() }).strict();
+const expressionFaultStepSchema = expressionAssignmentStepSchema.extend({ label: labelSchema.optional() }).strict();
 const expressionReadStepSchema = z.object({
-  label: z.string().min(1).optional(),
+  label: labelSchema.optional(),
   coreId: coreIdSchema,
-  expressions: z.array(z.string().min(1)).min(1)
+  expressions: z.array(expressionSchema).min(1).max(DURABLE_PLAN_LIMITS.maxExpressionsPerRead)
 }).strict();
 const expressionConditionStepSchema = z.object({
-  label: z.string().min(1).optional(),
+  label: labelSchema.optional(),
   coreId: coreIdSchema,
-  expression: z.string().min(1),
+  expression: expressionSchema,
   expected: expressionValueSchema
 }).strict();
 const loadSequenceStepSchema = z.object({
@@ -85,29 +103,29 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     loadPrograms: z.boolean().default(true),
     loadSequence: loadSequenceStepSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 })
   }).strict(),
-  z.object({ type: z.literal("assignExpressions"), ...baseStep, assignments: z.array(expressionAssignmentStepSchema).min(1) }).strict(),
-  z.object({ type: z.literal("injectFaults"), ...baseStep, faults: z.array(expressionFaultStepSchema).min(1) }).strict(),
+  z.object({ type: z.literal("assignExpressions"), ...baseStep, assignments: z.array(expressionAssignmentStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxAssignments) }).strict(),
+  z.object({ type: z.literal("injectFaults"), ...baseStep, faults: z.array(expressionFaultStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxFaults) }).strict(),
   z.object({
     type: z.literal("captureExpressions"), ...baseStep,
-    label: z.string().min(1).optional(),
-    reads: z.array(expressionReadStepSchema).min(1),
-    sampleCount: z.number().int().positive().max(10000).default(1),
-    intervalMs: z.number().int().nonnegative().default(0)
+    label: labelSchema.optional(),
+    reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads),
+    sampleCount: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxSamples).default(1),
+    intervalMs: z.number().int().nonnegative().max(60000).default(0)
   }).strict(),
   z.object({
     type: z.literal("waitForExpressions"), ...baseStep,
-    conditions: z.array(expressionConditionStepSchema).min(1),
-    timeoutMs: z.number().int().positive(),
-    intervalMs: z.number().int().positive().default(100)
+    conditions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions),
+    timeoutMs: z.number().int().positive().max(86400000),
+    intervalMs: z.number().int().positive().max(60000).default(100)
   }).strict(),
   z.object({
     type: z.literal("resetReconnectCapture"), ...baseStep,
-    coreIds: z.array(coreIdSchema).min(1).refine(values => new Set(values).size === values.length, "coreIds must be unique"),
+    coreIds: z.array(coreIdSchema).min(1).max(2).refine(values => new Set(values).size === values.length, "coreIds must be unique"),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default("cpu"),
-    settleMs: z.number().int().nonnegative().default(250),
+    settleMs: z.number().int().nonnegative().max(60000).default(250),
     reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
     loadPolicy: loadPolicySchema.default("if-changed"),
-    reads: z.array(expressionReadStepSchema).min(1)
+    reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads)
   }).strict(),
   z.object({
     type: z.literal("runIpcAcceptance"), ...baseStep,
@@ -129,19 +147,19 @@ export const stepRetryPolicySchema = z.object({
   backoffMs: z.number().int().nonnegative().default(0),
   maxBackoffMs: z.number().int().nonnegative().default(30000),
   jitter: z.boolean().default(false),
-  retryableErrors: z.array(z.string().min(1)).default([])
+  retryableErrors: z.array(z.string().min(1).max(128)).max(64).default([])
 });
 
 export const testPlanSchema = z.object({
   planVersion: z.literal(1),
-  name: z.string().min(1),
+  name: z.string().min(1).max(128),
   boardSelector: z.object({
-    boardIds: z.array(z.string().min(1)).min(1).optional(),
-    tags: z.array(z.string().min(1)).min(1).optional(),
-    count: z.number().int().positive().optional()
+    boardIds: z.array(z.string().min(1).max(128)).min(1).max(8).optional(),
+    tags: z.array(z.string().min(1).max(128)).min(1).max(32).optional(),
+    count: z.number().int().positive().max(8).optional()
   }).optional(),
-  boardIds: z.array(z.string().min(1)).min(1).optional(),
-  parallelism: z.number().int().positive().optional(),
+  boardIds: z.array(z.string().min(1).max(128)).min(1).max(8).optional(),
+  parallelism: z.number().int().positive().max(8).optional(),
   priority: z.enum(["SAFETY_RECOVERY", "INTERACTIVE_DEBUG", "ACCEPTANCE", "REGRESSION", "SOAK"]).default("REGRESSION"),
   /** Legacy/default firmware used when no more-specific board or role artifact is supplied. */
   artifacts: testArtifactsSchema.optional(),
@@ -155,7 +173,7 @@ export const testPlanSchema = z.object({
     profile: canAcceptanceProfileSchema,
     execution: canExecutionSchema.default({ mode: "acceptance", iterations: 1, matrixCases: [], failFast: false, health: {}, resetOrRejoinRequested: false })
   }).optional(),
-  steps: z.array(testPlanStepSchema).min(1),
+  steps: z.array(testPlanStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxSteps),
   retryPolicy: z.record(z.union([z.number().int().nonnegative(), stepRetryPolicySchema])).default({}),
   failurePolicy: z.object({
     continueHealthyBoards: z.boolean().default(true),
@@ -191,7 +209,15 @@ export const testPlanSchema = z.object({
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "reload"], message: "resetReconnectCapture reload requires explicit plan artifacts" });
       }
     }
+    const evidenceValues = evidenceValueCount(step);
+    if (evidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `step expands to ${evidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep}` });
+    }
     if (step.type === "cleanup") hasCurrentFlowSession = false;
+  }
+  const totalEvidenceValues = plan.steps.reduce((total, step) => total + evidenceValueCount(step), 0);
+  if (totalEvidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: `plan expands to ${totalEvidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan}` });
   }
   if (plan.artifactsByBoard && plan.boardIds) {
     const selected = new Set(plan.boardIds);
@@ -213,6 +239,22 @@ export const testPlanSchema = z.object({
 export type TestPlan = z.infer<typeof testPlanSchema>;
 export type TestPlanStep = z.infer<typeof testPlanStepSchema>;
 export type TestArtifacts = z.infer<typeof testArtifactsSchema>;
+
+const LEGACY_STEP_TYPES = new Set(["preflight", "launchMulticore", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle", "cleanup", "delay", "canAcceptance"]);
+
+/** Parse trusted SQLite plans written by the pre-strict v1 schema. New target-control steps never use this compatibility path. */
+export function parsePersistedTestPlan(input: unknown): TestPlan {
+  const strict = testPlanSchema.safeParse(input);
+  if (strict.success) return strict.data;
+  if (!isRecord(input) || input.planVersion !== 1 || !Array.isArray(input.steps)) return testPlanSchema.parse(input);
+  if (!input.steps.every(step => isRecord(step) && typeof step.type === "string" && LEGACY_STEP_TYPES.has(step.type))) {
+    return testPlanSchema.parse(input);
+  }
+  const topLevelKeys = ["planVersion", "name", "boardSelector", "boardIds", "parallelism", "priority", "artifacts", "artifactsByBoard", "artifactsByRole", "can", "steps", "retryPolicy", "failurePolicy", "recoveryPolicy"];
+  const migrated = Object.fromEntries(topLevelKeys.flatMap(key => key in input ? [[key, input[key]]] : [])) as Record<string, unknown>;
+  migrated.steps = input.steps.map(migrateLegacyStep);
+  return testPlanSchema.parse(migrated);
+}
 
 /**
  * Select the firmware for one board. A concrete board assignment wins over a
@@ -266,4 +308,43 @@ export function idempotencyForStep(type: TestPlanStep["type"]): "READ_ONLY" | "R
     case "runReloadAndDiagnose":
       return "RECONCILABLE";
   }
+}
+
+function evidenceValueCount(step: TestPlanStep): number {
+  switch (step.type) {
+    case "assignExpressions": return step.assignments.length;
+    case "injectFaults": return step.faults.length;
+    case "captureExpressions": return step.sampleCount * step.reads.reduce((total, read) => total + read.expressions.length, 0);
+    case "waitForExpressions": return step.conditions.length;
+    case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
+    default: return 0;
+  }
+}
+
+function migrateLegacyStep(value: unknown): Record<string, unknown> {
+  const step = value as Record<string, unknown>;
+  const migrated: Record<string, unknown> = { type: step.type };
+  if (step.on === "always" || step.on === "failure" || step.on === "success") migrated.on = step.on;
+  switch (step.type) {
+    case "launchMulticore":
+      if (typeof step.loadPrograms === "boolean") migrated.loadPrograms = step.loadPrograms;
+      if (isRecord(step.loadSequence)) migrated.loadSequence = step.loadSequence;
+      break;
+    case "runIpcAcceptance":
+      for (const key of ["timeoutMs", "intervalMs", "loadPolicy", "loadSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+        if (key in step) migrated[key] = step[key];
+      }
+      break;
+    case "runReloadAndDiagnose":
+      for (const key of ["timeoutMs", "intervalMs"]) if (key in step) migrated[key] = step[key];
+      break;
+    case "delay":
+      migrated.delayMs = typeof step.delayMs === "number" && Number.isFinite(step.delayMs) && step.delayMs >= 0 ? step.delayMs : 0;
+      break;
+  }
+  return migrated;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

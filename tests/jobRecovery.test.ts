@@ -13,7 +13,7 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
 
 describe("daemon job recovery", () => {
-  test("marks a running safe-restart job RECOVERING on stop and restarts it from a whole-board boundary", async () => {
+  test("migrates a legacy v1 RECOVERING plan and restarts without trusting its old session", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-recovery-"));
     directories.push(directory);
     const config = configFor(directory);
@@ -36,7 +36,14 @@ describe("daemon job recovery", () => {
     await first.close().catch(() => undefined);
 
     const store = await SqliteStore.open(config.storage!.sqlitePath);
-    expect(new TestRunRepository(store).get(jobId)?.status).toBe("RECOVERING");
+    const runs = new TestRunRepository(store);
+    const recovering = runs.get(jobId)!;
+    expect(recovering.status).toBe("RECOVERING");
+    store.run("UPDATE test_runs SET plan_json = ? WHERE job_id = ?", [JSON.stringify({
+      ...recovering.plan,
+      steps: [{ type: "delay", legacyPassthroughField: "written-by-pre-strict-v1" }]
+    }), jobId]);
+    store.run("UPDATE test_steps SET input_json = ? WHERE job_id = ?", [JSON.stringify({ type: "delay", legacyPassthroughField: true }), jobId]);
     store.close();
 
     const secondDaemon = new DebugDaemon(config);

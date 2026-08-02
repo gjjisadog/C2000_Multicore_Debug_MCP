@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { StepRegistry } from "../src/jobs/StepRegistry.js";
-import { testPlanSchema } from "../src/jobs/TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, parsePersistedTestPlan, testPlanSchema } from "../src/jobs/TestPlanSchema.js";
 import { submitMultiBoardIpcAcceptanceSchema } from "../src/mcp/toolSchemas.js";
 import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 
@@ -20,6 +20,28 @@ describe("StepRegistry", () => {
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore", loadProgrms: false }] }).success).toBe(false);
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "launchMulticore" }, { type: "captureExpressions", reads: [{ coreId: 1, expressions: ["g_x"] }] }] }).success).toBe(false);
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "captureExpressions", reads: [{ coreId: 0, expressions: ["g_x"] }] }] }).success).toBe(false);
+    expect(() => parsePersistedTestPlan({ ...base, steps: [{ type: "assignExpressions", assignments: [{ coreId: 0, expression: "g_x", value: 1 }], misspelled: true }] })).toThrow();
+  });
+
+  test("rejects collection, string, and expanded evidence budgets at the schema boundary", () => {
+    const base = { planVersion: 1, name: "limits", boardIds: ["board-a"] };
+    expect(testPlanSchema.safeParse({ ...base, steps: Array.from({ length: DURABLE_PLAN_LIMITS.maxSteps + 1 }, () => ({ type: "preflight" })) }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "assignExpressions", assignments: Array.from({ length: DURABLE_PLAN_LIMITS.maxAssignments + 1 }, () => ({ coreId: 0, expression: "g_x", value: 1 })) }
+    ] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "captureExpressions", reads: [{ coreId: 0, expressions: ["x".repeat(DURABLE_PLAN_LIMITS.maxExpressionLength + 1)] }] }
+    ] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "captureExpressions", sampleCount: 100, reads: [{ coreId: 0, expressions: Array.from({ length: 101 }, (_, index) => `g_x${index}`) }] }
+    ] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [
+      { type: "launchMulticore", loadPrograms: false },
+      ...Array.from({ length: 3 }, () => ({ type: "captureExpressions", sampleCount: 100, reads: [{ coreId: 0, expressions: Array.from({ length: 70 }, (_, index) => `g_x${index}`) }] }))
+    ] }).success).toBe(false);
   });
 
   test("durable IPC acceptance creates one connect-only session and forwards staged load parameters", async () => {

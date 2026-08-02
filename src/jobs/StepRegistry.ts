@@ -1,5 +1,5 @@
 import type { C2000ToolInvoker } from "../mcp/tools.js";
-import { resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import type { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import type { BoardLeaseContext } from "../boards/types.js";
 import { DebugMcpError } from "../utils/errors.js";
@@ -133,6 +133,7 @@ export class StepRegistry {
     label?: string
   ): Promise<Record<string, unknown>> {
     const expressionSnapshots: Record<string, unknown>[] = [];
+    let capturedBytes = 0;
     for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex += 1) {
       context.signal?.throwIfAborted();
       const capturedAt = new Date().toISOString();
@@ -143,7 +144,17 @@ export class StepRegistry {
           coreId: read.coreId,
           expressions: read.expressions
         }));
-        captures.push({ ...(read.label ? { label: read.label } : {}), coreId: read.coreId, expressions: read.expressions, evaluated });
+        const capture = { ...(read.label ? { label: read.label } : {}), coreId: read.coreId, expressions: read.expressions, evaluated };
+        capturedBytes += jsonSize(capture);
+        if (capturedBytes > DURABLE_PLAN_LIMITS.maxStepOutputBytes) {
+          throw new DebugMcpError("EvidenceLimitExceeded", "Expression capture exceeded the durable step output limit", {
+            capturedBytes,
+            maxStepOutputBytes: DURABLE_PLAN_LIMITS.maxStepOutputBytes,
+            sampleIndex,
+            coreId: read.coreId
+          });
+        }
+        captures.push(capture);
       }
       expressionSnapshots.push({ ...(label ? { label } : {}), sampleIndex, capturedAt, captures });
       if (sampleIndex + 1 < sampleCount) await abortableDelay(intervalMs, context.signal);
@@ -201,4 +212,12 @@ function programForCore(artifacts: ReturnType<typeof resolveArtifactsForBoard>, 
 
 function mapForCore(artifacts: ReturnType<typeof resolveArtifactsForBoard>, coreId: number): string | undefined {
   return coreId === 0 ? artifacts?.cpu1MapPath : coreId === 2 ? artifacts?.cpu2MapPath : undefined;
+}
+
+function jsonSize(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    throw new DebugMcpError("EvidenceSerializationFailed", "Expression capture result is not JSON serializable");
+  }
 }

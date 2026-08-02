@@ -11,6 +11,12 @@
 - Make durable multicore launch honor `loadPrograms: false`, forward and apply
   the explicit CPU1-before-CPU2 `loadSequence`, and avoid resurrecting worker-
   cleaned failed sessions as `OPEN` daemon records.
+- Preserve manifest-referenced snapshots across post-commit artifact-index
+  failures, retry structured cleanup failures before lease release, and
+  quarantine boards whose session ownership cannot be safely closed.
+- Add a legacy persisted-v1 recovery migration without weakening strict new
+  target-control steps, plus cardinality, string, expanded-evidence, and
+  runtime output-size limits for durable plans.
 - Add Round 8 F28P65x hardware-acceptance result/event/manifest schemas and
   atomic `HARDWARE_ACCEPTANCE_REPORT.md` generation.
 - Add fail-closed general, PCAN, two-board, and supported-Node runtime gates

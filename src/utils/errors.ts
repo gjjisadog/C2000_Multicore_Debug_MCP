@@ -108,6 +108,8 @@ export type DebugErrorCode =
   | "DssSchedulerConflict"
   | "BatchExpressionFailed"
   | "EvidenceCaptureFailed"
+  | "EvidenceLimitExceeded"
+  | "EvidenceSerializationFailed"
   | "LoadVerificationFailed"
   | "ProgramUnchanged"
   | "WorkflowCleanupFailed"

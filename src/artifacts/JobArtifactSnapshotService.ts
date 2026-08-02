@@ -3,7 +3,7 @@ import { readFile, rename, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { C2000McpConfig } from "../config/config.schema.js";
-import { resolveArtifactsForBoard, testPlanSchema } from "../jobs/TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, parsePersistedTestPlan, resolveArtifactsForBoard } from "../jobs/TestPlanSchema.js";
 import { SERVER_VERSION } from "../runtimeInfo.js";
 import type { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import type { ArtifactExportRepository } from "../storage/repositories/ArtifactExportRepository.js";
@@ -43,6 +43,7 @@ export class JobArtifactSnapshotService {
     artifacts: ArtifactRepository;
     exports: ArtifactExportRepository;
     writer?: AtomicArtifactWriter;
+    postCommitFileMetadata?: (filePath: string) => Promise<{ size: number; sha256: string }>;
   }) {
     this.writer = options.writer ?? new AtomicArtifactWriter();
   }
@@ -57,6 +58,7 @@ export class JobArtifactSnapshotService {
     const expressionSnapshotPath = path.join(artifactDirectory, "expression-snapshots.json");
     const previousExpressionSnapshotPath = path.join(artifactDirectory, ".expression-snapshots.previous");
     let previousExpressionSnapshotSaved = false;
+    let manifestPublished = false;
     this.options.exports.upsert({
       jobId,
       rootPath: artifactDirectory,
@@ -122,16 +124,17 @@ export class JobArtifactSnapshotService {
       await this.writer.writeText(path.join(artifactDirectory, "summary.md"), renderSummary(snapshot.manifest, snapshot.result));
       // The manifest is the commit marker and is deliberately published last.
       await this.writer.writeJson(manifestPath, snapshot.manifest);
+      manifestPublished = true;
       await rm(previousManifestPath, { force: true });
       await rm(previousExpressionSnapshotPath, { force: true });
       await this.registerStandardFiles(jobId, artifactDirectory);
       if (snapshot.expressionSnapshots.length > 0) {
-        const expressionInfo = await stat(expressionSnapshotPath);
+        const expressionInfo = await this.postCommitFileMetadata(expressionSnapshotPath);
         this.options.artifacts.upsert({
           jobId,
           artifactType: "evidence:expression-snapshots",
           path: expressionSnapshotPath,
-          sha256: await sha256File(expressionSnapshotPath) ?? "",
+          sha256: expressionInfo.sha256,
           size: expressionInfo.size,
           createdAt: run.finishedAt ?? run.submittedAt
         });
@@ -146,14 +149,21 @@ export class JobArtifactSnapshotService {
       });
       return artifactDirectory;
     } catch (error) {
-      if (!await this.writer.exists(manifestPath) && await this.writer.exists(previousManifestPath)) {
-        await rename(previousManifestPath, manifestPath).catch(() => undefined);
-      }
-      if (previousExpressionSnapshotSaved) {
-        await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
-        await rename(previousExpressionSnapshotPath, expressionSnapshotPath).catch(() => undefined);
+      if (!manifestPublished) {
+        if (!await this.writer.exists(manifestPath) && await this.writer.exists(previousManifestPath)) {
+          await rename(previousManifestPath, manifestPath).catch(() => undefined);
+        }
+        if (previousExpressionSnapshotSaved) {
+          await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
+          await rename(previousExpressionSnapshotPath, expressionSnapshotPath).catch(() => undefined);
+        } else {
+          await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
+        }
       } else {
-        await rm(expressionSnapshotPath, { force: true }).catch(() => undefined);
+        // The manifest is the publication commit. Index/registration failures
+        // after this point must never roll back a file referenced by it.
+        await rm(previousManifestPath, { force: true }).catch(() => undefined);
+        await rm(previousExpressionSnapshotPath, { force: true }).catch(() => undefined);
       }
       this.options.exports.upsert({
         jobId,
@@ -190,9 +200,15 @@ export class JobArtifactSnapshotService {
     expressionSnapshots: Record<string, unknown>[];
   }> {
     const run = this.options.runs.get(jobId)!;
-    const plan = testPlanSchema.parse(run.plan);
+    const plan = parsePersistedTestPlan(run.plan);
     const runBoards = this.options.runs.boards(jobId);
     const steps = this.options.runs.steps(jobId);
+    const expressionSnapshots = expressionSnapshotsFromSteps(steps);
+    const durableStepResults = durableStepResultsFromSteps(steps);
+    const portableEvidenceBytes = Buffer.byteLength(JSON.stringify({ expressionSnapshots, durableStepResults }), "utf8");
+    if (portableEvidenceBytes > DURABLE_PLAN_LIMITS.maxJobOutputBytes) {
+      throw new Error(`Portable durable evidence exceeds ${DURABLE_PLAN_LIMITS.maxJobOutputBytes} bytes`);
+    }
     const adapterType = this.adapterType;
     const evidenceClassification = adapterType === "mock" ? "MOCK" : adapterType === "ccs" ? "HARDWARE_TARGET" : "UNKNOWN";
     const targetContext = await Promise.all(runBoards.map(async runBoard => {
@@ -253,7 +269,7 @@ export class JobArtifactSnapshotService {
       endedAt: run.finishedAt ?? run.submittedAt,
       evidenceLevel: evidenceClassification,
       completeness,
-      durableStepResults: durableStepResultsFromSteps(steps)
+      durableStepResults
     };
     const failedStep = steps.find(step => step.status === "FAILED");
     const error = failedStep?.error ?? run.error;
@@ -273,7 +289,7 @@ export class JobArtifactSnapshotService {
       cancelled,
       timedOut: Boolean(errorCode && /timeout/i.test(errorCode)),
       incompleteReason,
-      expressionSnapshotCount: expressionSnapshotsFromSteps(steps).length
+      expressionSnapshotCount: expressionSnapshots.length
     };
 
     const sessionByBoard = new Map(targetContext.map(context => [context.board.boardId, context]));
@@ -313,19 +329,19 @@ export class JobArtifactSnapshotService {
         cores: cores.map(core => sanitize(core))
       }];
     });
-    return { manifest, result, events, targetStates, expressionSnapshots: expressionSnapshotsFromSteps(steps) };
+    return { manifest, result, events, targetStates, expressionSnapshots };
   }
 
   private async registerStandardFiles(jobId: string, directory: string): Promise<void> {
     for (const fileName of ["manifest.json", "result.json", "events.jsonl", "target-state.jsonl", "summary.md"]) {
       const filePath = path.join(directory, fileName);
       if (!await this.writer.exists(filePath)) continue;
-      const info = await stat(filePath);
+      const info = await this.postCommitFileMetadata(filePath);
       this.options.artifacts.upsert({
         jobId,
         artifactType: `standard:${fileName}`,
         path: filePath,
-        sha256: await sha256File(filePath) ?? "",
+        sha256: info.sha256,
         size: info.size,
         createdAt: this.options.runs.get(jobId)?.finishedAt ?? new Date().toISOString()
       });
@@ -334,6 +350,14 @@ export class JobArtifactSnapshotService {
 
   private get adapterType(): "mock" | "ccs" | "auto" {
     return this.options.config.adapter === "auto" ? this.options.config.ccs.scriptingMode : this.options.config.adapter;
+  }
+
+  private async postCommitFileMetadata(filePath: string): Promise<{ size: number; sha256: string }> {
+    if (this.options.postCommitFileMetadata) return this.options.postCommitFileMetadata(filePath);
+    const info = await stat(filePath);
+    const sha256 = await sha256File(filePath);
+    if (!sha256) throw new Error(`Committed artifact hash is unavailable: ${filePath}`);
+    return { size: info.size, sha256 };
   }
 }
 

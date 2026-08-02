@@ -5,7 +5,7 @@ import { EventRepository } from "../storage/repositories/EventRepository.js";
 import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import { TestRunRepository, type TestRunBoardRecord, type TestRunRecord, type TestStepRecord } from "../storage/repositories/TestRunRepository.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
-import { idempotencyForStep, materializeArtifactsByBoard, testPlanSchema, type TestPlan } from "./TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, idempotencyForStep, materializeArtifactsByBoard, parsePersistedTestPlan, testPlanSchema, type TestPlan } from "./TestPlanSchema.js";
 import { StepRegistry } from "./StepRegistry.js";
 import { TestScheduler } from "./TestScheduler.js";
 import { TestReconciler } from "./TestReconciler.js";
@@ -62,8 +62,20 @@ export class TestJobEngine {
 
   start(): void {
     for (const run of this.options.runs.listUnfinished()) {
+      let plan: TestPlan;
+      try {
+        plan = parsePersistedTestPlan(run.plan);
+      } catch (error) {
+        const structured = { ...toStructuredError(error) };
+        this.options.runs.updateStatus(run.jobId, "NEEDS_MANUAL_INTERVENTION", {
+          finishedAt: new Date().toISOString(),
+          error: { code: "PersistedPlanMigrationFailed", message: "Persisted plan could not be migrated safely", details: { cause: structured } }
+        });
+        this.options.events.append({ level: "error", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_PERSISTED_PLAN_MIGRATION_FAILED", payload: { error: structured } });
+        void this.exportTerminalEvidence(run.jobId, "NEEDS_MANUAL_INTERVENTION");
+        continue;
+      }
       if (run.status === "RECOVERING") {
-        const plan = testPlanSchema.parse(run.plan);
         const groupDecision = plan.can && this.options.boardGroups && this.options.groupBarriers
           ? this.reconcileCanGroup(run.jobId, plan)
           : undefined;
@@ -220,7 +232,7 @@ export class TestJobEngine {
     if (this.stopping) return;
     const run = this.options.runs.get(jobId);
     if (!run) return;
-    const plan = testPlanSchema.parse(run.plan);
+    const plan = parsePersistedTestPlan(run.plan);
     const abortController = new AbortController();
     this.abortControllers.set(jobId, abortController);
     if (run.cancelRequested) abortController.abort(new DOMException(`Test run ${jobId} cancelled`, "AbortError"));
@@ -383,11 +395,19 @@ export class TestJobEngine {
               signal: activeSignal
             });
             if (typeof output.sessionId === "string") {
+              if (plannedStep.type !== "launchMulticore" && sessionId && output.sessionId !== sessionId) {
+                throw new DebugMcpError("SessionIdentityMismatch", "Durable step returned a session other than the current fenced board-flow session", {
+                  stepType: plannedStep.type,
+                  expectedSessionId: sessionId,
+                  returnedSessionId: output.sessionId
+                });
+              }
               sessionId = output.sessionId;
-              sessionOpen = plannedStep.type !== "cleanup";
+              if (plannedStep.type === "launchMulticore" && output.cleanedUp !== true) sessionOpen = true;
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
+            this.assertStepOutputWithinLimits(jobId, board.boardId, step.stepRunId, step.stepType, output);
             if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (plannedStep.type === "cleanup") sessionOpen = false;
             const finishedAt = new Date().toISOString();
@@ -439,7 +459,23 @@ export class TestJobEngine {
           this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLOSED", payload: { sessionId } });
         } catch (error) {
           failed = true;
+          cancelled = false;
           lastError = { ...toStructuredError(error) };
+          try {
+            this.options.registry.transition(board.boardId, "QUARANTINED", {
+              code: "JobSessionCleanupFailed",
+              message: "Job session could not be closed while its fenced lease was still held; board ownership requires operator recovery",
+              jobId,
+              sessionId,
+              cleanupError: lastError
+            });
+          } catch (quarantineError) {
+            lastError = {
+              code: "JobSessionCleanupAndQuarantineFailed",
+              message: "Session cleanup failed and board quarantine could not be persisted",
+              details: { sessionId, cleanupError: lastError, quarantineError: toStructuredError(quarantineError) }
+            };
+          }
           this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLEANUP_FAILED", payload: { sessionId, error: lastError } });
         }
       }
@@ -452,6 +488,23 @@ export class TestJobEngine {
       if (!groupPermit) permit.release();
     }
     return { success: !failed && !cancelled, cancelled };
+  }
+
+  private assertStepOutputWithinLimits(jobId: string, boardId: string, stepRunId: string, stepType: string, output: Record<string, unknown>): void {
+    const outputBytes = jsonBytes(output);
+    if (outputBytes > DURABLE_PLAN_LIMITS.maxStepOutputBytes) {
+      throw new DebugMcpError("EvidenceLimitExceeded", "Durable step output exceeds the per-step persistence limit", {
+        stepType, outputBytes, maxStepOutputBytes: DURABLE_PLAN_LIMITS.maxStepOutputBytes
+      });
+    }
+    const existingBytes = this.options.runs.steps(jobId, boardId)
+      .filter(candidate => candidate.stepRunId !== stepRunId && candidate.output)
+      .reduce((total, candidate) => total + jsonBytes(candidate.output!), 0);
+    if (existingBytes + outputBytes > DURABLE_PLAN_LIMITS.maxJobOutputBytes) {
+      throw new DebugMcpError("EvidenceLimitExceeded", "Durable board-flow outputs exceed the aggregate persistence limit", {
+        stepType, existingBytes, outputBytes, maxJobOutputBytes: DURABLE_PLAN_LIMITS.maxJobOutputBytes
+      });
+    }
   }
 
   private async reconcileBeforeRetry(sessionId: string | undefined, leaseContext: LeasedBoard["context"]): Promise<Record<string, unknown>> {
@@ -491,6 +544,14 @@ export class TestJobEngine {
       this.options.boardGroups!.transition(group.groupId, "RECOVERING", { reason: decision.reason });
     }
     return decision;
+  }
+}
+
+function jsonBytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch (error) {
+    throw new DebugMcpError("EvidenceSerializationFailed", "Durable step output is not JSON serializable", { error: toStructuredError(error) });
   }
 }
 

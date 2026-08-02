@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -113,6 +114,38 @@ describe("standard job artifact snapshot", () => {
     await expect(fixture.makeService(new FailingManifestWriter()).exportJob(fixture.jobId)).rejects.toThrow("injected manifest commit failure");
     expect(await readFile(manifestPath, "utf8")).toBe(before.manifest);
     expect(await readFile(snapshotsPath, "utf8")).toBe(before.snapshots);
+    fixture.store.close();
+  });
+
+  it("preserves a committed manifest and referenced snapshot when post-commit artifact registration fails", async () => {
+    const fixture = await createFixture();
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.runs.updateStep({ ...step, output: { success: true, expressionSnapshots: [{ capturedAt: "2026-07-29T00:00:01.500Z", sampleIndex: 0, captures: [{ coreId: 0, value: 1 }] }] } });
+    fixture.artifacts.upsert = () => { throw new Error("injected artifact repository failure"); };
+
+    await expect(fixture.service.exportJob(fixture.jobId)).rejects.toThrow("injected artifact repository failure");
+
+    const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
+    const declaration = manifest.generatedFiles?.find(file => file.path === "expression-snapshots.json");
+    const snapshotBytes = await readFile(path.join(fixture.jobDirectory, "expression-snapshots.json"));
+    expect(declaration).toEqual(expect.objectContaining({ sha256: createHash("sha256").update(snapshotBytes).digest("hex"), size: snapshotBytes.byteLength }));
+    expect(fixture.exports.get(fixture.jobId)).toEqual(expect.objectContaining({ status: "FAILED", completeness: "ARTIFACT_FAILED" }));
+    fixture.store.close();
+  });
+
+  it("preserves committed snapshot references when post-commit stat/hash metadata collection fails", async () => {
+    const fixture = await createFixture();
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.runs.updateStep({ ...step, output: { success: true, expressionSnapshots: [{ capturedAt: "2026-07-29T00:00:01.500Z", sampleIndex: 0, captures: [{ coreId: 0, value: 1 }] }] } });
+    const failing = fixture.makeService(undefined, async () => { throw new Error("injected post-commit stat/hash failure"); });
+
+    await expect(failing.exportJob(fixture.jobId)).rejects.toThrow("injected post-commit stat/hash failure");
+
+    const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
+    const declaration = manifest.generatedFiles?.find(file => file.path === "expression-snapshots.json");
+    const snapshotBytes = await readFile(path.join(fixture.jobDirectory, "expression-snapshots.json"));
+    expect(declaration?.sha256).toBe(createHash("sha256").update(snapshotBytes).digest("hex"));
+    expect(fixture.exports.get(fixture.jobId)).toEqual(expect.objectContaining({ status: "FAILED" }));
     fixture.store.close();
   });
 
@@ -392,7 +425,7 @@ async function createFixture(status = "PASSED", adapter: "mock" | "ccs" = "ccs")
   events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: "board-a", workerInstanceId: "worker-a", workerGeneration: 3, eventType: "JOB_FINISHED", timestamp: finishedAt, payload: { status } });
   const config = testConfig(adapter);
   const rootDirectory = path.join(root, "artifacts");
-  const makeService = (writer?: AtomicArtifactWriter) => new JobArtifactSnapshotService({
+  const makeService = (writer?: AtomicArtifactWriter, postCommitFileMetadata?: (filePath: string) => Promise<{ size: number; sha256: string }>) => new JobArtifactSnapshotService({
     rootDirectory,
     config,
     runs,
@@ -402,13 +435,15 @@ async function createFixture(status = "PASSED", adapter: "mock" | "ccs" = "ccs")
     events,
     artifacts,
     exports,
-    writer
+    writer,
+    postCommitFileMetadata
   });
   return {
     root,
     store,
     runs,
     events,
+    artifacts,
     exports,
     jobId,
     jobDirectory: path.join(rootDirectory, jobId),
