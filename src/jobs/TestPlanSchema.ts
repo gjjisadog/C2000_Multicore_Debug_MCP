@@ -97,6 +97,25 @@ const expressionConditionStepSchema = z.object({
   expected: expressionValueSchema
 }).strict();
 const safetyConditionStepSchema = expressionConditionStepSchema.extend({ operator: z.literal("eq").default("eq") }).strict();
+const resetEvidenceStepSchema = z.discriminatedUnion("freshness", [
+  expressionConditionStepSchema.extend({
+    freshness: z.literal("transition-to-expected"),
+    operator: z.literal("eq").default("eq")
+  }).strict(),
+  z.object({
+    freshness: z.literal("monotonic-increase"),
+    label: labelSchema.optional(),
+    coreId: coreIdSchema,
+    expression: expressionSchema,
+    minimumDelta: z.number().positive().default(1)
+  }).strict(),
+  z.object({
+    freshness: z.literal("value-change"),
+    label: labelSchema.optional(),
+    coreId: coreIdSchema,
+    expression: expressionSchema
+  }).strict()
+]);
 const coreIdsSchema = z.array(coreIdSchema).min(1).max(2)
   .refine(values => new Set(values).size === values.length, "coreIds must be unique");
 const restoreArtifactSchema = (coreId: 0 | 2) => z.object({
@@ -151,7 +170,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     coreIds: coreIdsSchema,
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs),
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100),
-    resetEvidence: z.array(safetyConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
+    resetEvidence: z.array(resetEvidenceStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     resetCauseReads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads),
     reloadSymbols: z.boolean().default(true),
     runAfterReconnect: z.object({
@@ -285,12 +304,12 @@ export const testPlanSchema = z.object({
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "reload"], message: "resetReconnectCapture reload requires explicit plan artifacts" });
       }
     }
-    const evidenceValues = evidenceValueCount(step);
+    const evidenceValues = evidenceValueCount(step, plan.safetyGuards?.intervalMs);
     const guardedEvidenceValues = evidenceValues + guardEvidenceValueCount(plan, step);
     if (guardedEvidenceValues > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `step expands to ${guardedEvidenceValues} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerStep}` });
     }
-    if (step.type === "reconnectAfterTargetReset" && Math.ceil(step.timeoutMs / step.intervalMs) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
+    if (step.type === "reconnectAfterTargetReset" && Math.ceil(step.timeoutMs / Math.min(step.intervalMs, plan.safetyGuards?.intervalMs ?? step.intervalMs)) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `reconnect polling exceeds ${DURABLE_PLAN_LIMITS.maxGuardPolls} bounded iterations` });
     }
     if (plan.safetyGuards && step.type === "runCores" && step.monitorMs === 0) {
@@ -298,7 +317,7 @@ export const testPlanSchema = z.object({
     }
     if (step.type === "cleanup") hasCurrentFlowSession = false;
   }
-  const totalEvidenceIncludingGuards = plan.steps.reduce((total, step) => total + evidenceValueCount(step) + guardEvidenceValueCount(plan, step), 0);
+  const totalEvidenceIncludingGuards = plan.steps.reduce((total, step) => total + evidenceValueCount(step, plan.safetyGuards?.intervalMs) + guardEvidenceValueCount(plan, step), 0);
   if (totalEvidenceIncludingGuards > DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps"], message: `plan expands to ${totalEvidenceIncludingGuards} evidence values; maximum is ${DURABLE_PLAN_LIMITS.maxEvidenceValuesPerPlan}` });
   }
@@ -399,14 +418,14 @@ export function idempotencyForStep(type: TestPlanStep["type"]): "READ_ONLY" | "R
   }
 }
 
-function evidenceValueCount(step: TestPlanStep): number {
+function evidenceValueCount(step: TestPlanStep, guardIntervalMs?: number): number {
   switch (step.type) {
     case "assignExpressions": return step.assignments.length;
     case "injectFaults": return step.faults.length;
     case "captureExpressions": return step.sampleCount * step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "waitForExpressions": return step.conditions.length;
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
-    case "reconnectAfterTargetReset": return (Math.ceil(step.timeoutMs / step.intervalMs) * (step.resetEvidence?.length ?? 0))
+    case "reconnectAfterTargetReset": return (Math.ceil(step.timeoutMs / Math.min(step.intervalMs, guardIntervalMs ?? step.intervalMs)) * (step.resetEvidence?.length ?? 0))
       + step.resetCauseReads.reduce((total, read) => total + read.expressions.length, 0);
     case "runIpcAcceptance": return step.ipcReadyExpressions?.length ?? 0;
     default: return 0;
@@ -420,6 +439,7 @@ function guardEvidenceValueCount(plan: Pick<TestPlan, "safetyGuards">, step: Tes
   if (step.type === "delay") monitoredPolls = Math.ceil(step.delayMs / plan.safetyGuards!.intervalMs);
   if (step.type === "waitForExpressions") monitoredPolls = Math.ceil(step.timeoutMs / step.intervalMs);
   if (step.type === "runCores") monitoredPolls = Math.ceil(step.monitorMs / step.intervalMs);
+  if (step.type === "reconnectAfterTargetReset") monitoredPolls = Math.ceil(step.timeoutMs / Math.min(step.intervalMs, plan.safetyGuards!.intervalMs));
   return (2 + monitoredPolls) * guardCount;
 }
 

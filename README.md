@@ -367,17 +367,22 @@ Supported target-oriented durable steps are:
   positive whenever the plan declares guards.
 - `haltCores`: `{ coreIds }`. Repeating a halt is safe, so this step is the
   only new execution-control step classified `SAFE_RETRY`.
-- `reconnectAfterTargetReset`: waits for an adapter-observed `Disconnected`
-  core or matching explicit `resetEvidence` expressions before it reconnects
-  the named cores in the same session. It can load symbols only, captures
-  `resetCauseReads`, and optionally runs CPU1 before CPU2. It never calls reset,
-  program load, or a PC write. A merely halted core or changed PC is not reset
-  evidence, and timeout fails closed as `TargetResetNotObserved`.
+- `reconnectAfterTargetReset`: records a connected baseline, then waits for an
+  adapter-observed `Disconnected` requested core, an explicit target-read
+  inaccessibility transition, or fresh firmware `resetEvidence`. Evidence must
+  declare `freshness` as `transition-to-expected`, `monotonic-increase`, or
+  `value-change`; an already-set latch is not accepted. Safety guards continue
+  at their configured cadence while the target remains readable, pause only
+  across the observed disconnect, and resume immediately after reconnect. The
+  step can load symbols only, requires every `resetCauseReads` result to be
+  readable, and optionally runs CPU1 before CPU2. It never calls reset, program
+  load, or a PC write. Timeout fails closed as `TargetResetNotObserved`.
 - `restorePrograms`: an `on: always` isolation step with explicit CPU1/CPU2
   `{ coreId, outPath, mapPath, outSha256, mapSha256 }`. Before target access it
   validates every path against `allowedReadRoots` and every SHA-256. It then
   performs halt → `loadPrograms` with map-required GS ownership → halt, and
-  never runs a core or writes PC. Failure triggers another fenced halt attempt.
+  never runs a core or writes PC. Any failure, including path/hash preflight,
+  triggers a fenced halt attempt; an unconfirmed halt quarantines the board.
 - `resetReconnectCapture`: `{ coreIds, resetType, settleMs, reload,
   loadPolicy, reads }`, where `reload` is `none`, `symbols`, or `programs`.
   It performs one explicit reset → reconnect → optional reload → capture

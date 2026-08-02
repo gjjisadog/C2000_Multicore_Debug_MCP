@@ -216,14 +216,18 @@ describe("durable step cleanup and output safety", () => {
     fixture.store.close();
   });
 
-  test("does not evaluate guards before reconnecting an observed disconnected target", async () => {
+  test("keeps guards active while reset target is readable, pauses on disconnect, and resumes after reconnect", async () => {
     const calls: string[] = [];
+    let snapshots = 0;
     const fixture = await createFixture({
       async invokeTool(toolName, input) {
         calls.push(toolName);
         const record = input as Record<string, unknown>;
         if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
-        if (toolName === "c2000_getMulticoreSnapshot") return { success: true, sessionId: "dbg-current", cores: [{ coreId: 0, connected: false, state: "Disconnected" }] };
+        if (toolName === "c2000_getMulticoreSnapshot") {
+          snapshots += 1;
+          return { success: true, sessionId: "dbg-current", cores: [{ coreId: 0, connected: snapshots < 3, state: snapshots < 3 ? "Halted" : "Disconnected" }] };
+        }
         if (toolName === "c2000_evaluateMany") return {
           success: true,
           results: (record.expressions as string[]).map(expression => ({ expression, success: true, value: expression === "g_safe" ? 1 : 3 }))
@@ -244,9 +248,109 @@ describe("durable step cleanup and output safety", () => {
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
     expect(calls).toEqual([
       "c2000_launchMulticoreDebug", "c2000_evaluateMany",
-      "c2000_getMulticoreSnapshot", "c2000_connectCores", "c2000_evaluateMany",
+      "c2000_getMulticoreSnapshot", "c2000_evaluateMany",
+      "c2000_getMulticoreSnapshot", "c2000_evaluateMany", "c2000_getMulticoreSnapshot",
+      "c2000_connectCores", "c2000_evaluateMany", "c2000_evaluateMany",
       "c2000_evaluateMany", "c2000_closeDebugSession"
     ]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("preserves failed launch errors without adopting a cleaned session", async () => {
+    const calls: string[] = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        if (toolName === "c2000_launchMulticoreDebug") return {
+          success: false,
+          sessionId: "dbg-cleaned",
+          cleanedUp: true,
+          error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+        };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "cleaned-launch-failure",
+      boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }] },
+      steps: [{ type: "launchMulticore", loadPrograms: false }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
+      error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+    }));
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
+    expect(fixture.registry.get("board-a").status).not.toBe("QUARANTINED");
+    expect(calls).toEqual(["c2000_launchMulticoreDebug"]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("adopts and closes a still-live session from a structured launch failure", async () => {
+    const calls: string[] = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        if (toolName === "c2000_launchMulticoreDebug") return {
+          success: false,
+          sessionId: "dbg-live",
+          cleanedUp: false,
+          error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+        };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-live", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "live-launch-failure", boardIds: ["board-a"],
+      safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }] },
+      steps: [{ type: "launchMulticore", loadPrograms: false }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
+      error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+    }));
+    expect(fixture.runs.boards(jobId)[0]?.sessionId).toBe("dbg-live");
+    expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession"]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("quarantines when restore preflight fails and fenced halt cannot be confirmed", async () => {
+    const calls: string[] = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_haltCores") return {
+          success: true,
+          results: [{ coreId: 0, success: true }, { coreId: 2, success: false, error: { code: "TargetHaltFailed", message: "halt unavailable" } }]
+        };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const digest = "0".repeat(64);
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "restore-preflight-isolation", boardIds: ["board-a"],
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "restorePrograms", on: "always",
+          artifacts: {
+            cpu1: { coreId: 0, outPath: "/missing/cpu1.out", mapPath: "/missing/cpu1.map", outSha256: digest, mapSha256: digest },
+            cpu2: { coreId: 2, outPath: "/missing/cpu2.out", mapPath: "/missing/cpu2.map", outSha256: digest, mapSha256: digest }
+          }
+        }
+      ]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: "RestoreProgramsFailed" }) }));
+    expect(fixture.registry.get("board-a")).toEqual(expect.objectContaining({ status: "QUARANTINED" }));
+    expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_haltCores", "c2000_closeDebugSession"]);
     await fixture.engine.stop();
     fixture.store.close();
   });

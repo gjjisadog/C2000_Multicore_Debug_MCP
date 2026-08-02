@@ -4,7 +4,7 @@ import { BoardRegistry } from "../boards/BoardRegistry.js";
 import { EventRepository } from "../storage/repositories/EventRepository.js";
 import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import { TestRunRepository, type TestRunBoardRecord, type TestRunRecord, type TestStepRecord } from "../storage/repositories/TestRunRepository.js";
-import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { DebugMcpError, StructuredToolError, toStructuredError } from "../utils/errors.js";
 import { DURABLE_PLAN_LIMITS, idempotencyForStep, materializeArtifactsByBoard, parsePersistedTestPlan, testPlanSchema, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import { StepRegistry } from "./StepRegistry.js";
 import { TestScheduler } from "./TestScheduler.js";
@@ -401,6 +401,15 @@ export class TestJobEngine {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
             }
             let output = await this.steps.execute(executionContext);
+            if (plannedStep.type === "launchMulticore" && output.success === false) {
+              if (output.cleanedUp !== true && typeof output.sessionId === "string") {
+                sessionId = output.sessionId;
+                sessionOpen = true;
+                current = { ...current, sessionId };
+                this.options.runs.updateBoard(current);
+              }
+              throw structuredToolFailure(output, step.stepType);
+            }
             if (typeof output.sessionId === "string") {
               if (plannedStep.type !== "launchMulticore" && sessionId && output.sessionId !== sessionId) {
                 throw new DebugMcpError("SessionIdentityMismatch", "Durable step returned a session other than the current fenced board-flow session", {
@@ -624,6 +633,23 @@ function failedSafetyIsolation(error: Record<string, unknown>): boolean {
     ? (details as Record<string, unknown>).halt
     : error.code === "RestoreProgramsFailed" ? (details as Record<string, unknown>).isolation : undefined;
   return Boolean(isolation && typeof isolation === "object" && !Array.isArray(isolation) && (isolation as Record<string, unknown>).success !== true);
+}
+
+function structuredToolFailure(output: Record<string, unknown>, stepType: string): StructuredToolError {
+  const error = output.error;
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.code === "string") {
+      return new StructuredToolError({
+        code: record.code,
+        message: typeof record.message === "string" ? record.message : `Job step ${stepType} failed (${record.code})`,
+        ...(record.details && typeof record.details === "object" && !Array.isArray(record.details)
+          ? { details: record.details as Record<string, unknown> }
+          : {})
+      });
+    }
+  }
+  return new StructuredToolError({ code: "BatchOperationFailed", message: `Job step ${stepType} returned failure`, details: { output } });
 }
 
 function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {

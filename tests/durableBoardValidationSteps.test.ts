@@ -72,8 +72,12 @@ describe("durable board-validation safety steps", () => {
     const cpu1OutPath = path.join(root, "cpu1.out");
     const cpu2OutPath = path.join(root, "cpu2.out");
     await Promise.all([writeFile(cpu1OutPath, "cpu1"), writeFile(cpu2OutPath, "cpu2")]);
+    let snapshots = 0;
     const invoker = new ScriptedInvoker((toolName, input) => {
-      if (toolName === "c2000_getMulticoreSnapshot") return { success: true, sessionId: input.sessionId, cores: [{ coreId: 0, connected: false, state: "Disconnected" }, { coreId: 2, connected: true, state: "Halted" }] };
+      if (toolName === "c2000_getMulticoreSnapshot") {
+        snapshots += 1;
+        return { success: true, sessionId: input.sessionId, cores: [{ coreId: 0, connected: snapshots === 1, state: snapshots === 1 ? "Halted" : "Disconnected" }, { coreId: 2, connected: true, state: "Halted" }] };
+      }
       if (toolName === "c2000_evaluateMany") return { success: true, sessionId: input.sessionId, results: (input.expressions as string[]).map(expression => ({ expression, success: true, value: 3 })) };
       return { success: true, sessionId: input.sessionId, results: [] };
     });
@@ -93,7 +97,7 @@ describe("durable board-validation safety steps", () => {
     const result = await registry.execute(context(plan, plan.steps[1]!));
     expect(result).toEqual(expect.objectContaining({ success: true, resetObservation: expect.objectContaining({ mode: "target-disconnected" }) }));
     expect(invoker.calls.map(call => call.toolName)).toEqual([
-      "c2000_getMulticoreSnapshot", "c2000_connectCores", "c2000_loadSymbols", "c2000_loadSymbols",
+      "c2000_getMulticoreSnapshot", "c2000_getMulticoreSnapshot", "c2000_connectCores", "c2000_loadSymbols", "c2000_loadSymbols",
       "c2000_evaluateMany", "c2000_runCores", "c2000_runCores"
     ]);
     expect(invoker.calls.map(call => call.toolName)).not.toEqual(expect.arrayContaining(["c2000_resetCores", "c2000_loadPrograms", "c2000_loadProgram"]));
@@ -112,7 +116,7 @@ describe("durable board-validation safety steps", () => {
       { type: "launchMulticore", loadPrograms: false },
       {
         type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 2, intervalMs: 1, reloadSymbols: false,
-        resetEvidence: [{ coreId: 0, expression: "resetCause", expected: 3 }],
+        resetEvidence: [{ freshness: "transition-to-expected", coreId: 0, expression: "resetCause", expected: 3 }],
         resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }]
       }
     ]);
@@ -121,11 +125,16 @@ describe("durable board-validation safety steps", () => {
   });
 
   test("accepts explicit firmware reset-cause evidence when the adapter never reports disconnect", async () => {
+    let resetEvidenceReads = 0;
     const invoker = new ScriptedInvoker((toolName, input) => {
       if (toolName === "c2000_getMulticoreSnapshot") return { success: true, sessionId: input.sessionId, cores: [{ coreId: 0, connected: true, state: "Halted" }] };
       if (toolName === "c2000_evaluateMany") {
         const expressions = input.expressions as string[];
-        return { success: true, results: expressions.map(expression => ({ expression, success: true, value: expression === "resetLatch" ? 5 : 9 })) };
+        return { success: true, results: expressions.map(expression => ({
+          expression,
+          success: true,
+          value: expression === "resetLatch" ? ++resetEvidenceReads + 3 : 9
+        })) };
       }
       return { success: true, sessionId: input.sessionId, results: [] };
     });
@@ -134,7 +143,7 @@ describe("durable board-validation safety steps", () => {
       { type: "launchMulticore", loadPrograms: false },
       {
         type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, intervalMs: 1, reloadSymbols: false,
-        resetEvidence: [{ coreId: 0, expression: "resetLatch", operator: "eq", expected: 5 }],
+        resetEvidence: [{ freshness: "transition-to-expected", coreId: 0, expression: "resetLatch", operator: "eq", expected: 5 }],
         resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }]
       }
     ]);
@@ -142,8 +151,51 @@ describe("durable board-validation safety steps", () => {
       resetObservation: expect.objectContaining({ mode: "explicit-reset-expression" })
     }));
     expect(invoker.calls.map(call => call.toolName)).toEqual([
-      "c2000_getMulticoreSnapshot", "c2000_evaluateMany", "c2000_connectCores", "c2000_evaluateMany"
+      "c2000_getMulticoreSnapshot", "c2000_evaluateMany", "c2000_getMulticoreSnapshot", "c2000_evaluateMany", "c2000_connectCores", "c2000_evaluateMany"
     ]);
+  });
+
+  test("rejects a stale reset latch and unreadable reset evidence", async () => {
+    const plan = parsePlan([
+      { type: "launchMulticore", loadPrograms: false },
+      {
+        type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 2, intervalMs: 1, reloadSymbols: false,
+        resetEvidence: [{ freshness: "transition-to-expected", coreId: 0, expression: "resetLatch", expected: 5 }],
+        resetCauseReads: [{ coreId: 0, expressions: ["resetCause"] }]
+      }
+    ]);
+    const stale = new ScriptedInvoker((toolName, input) => toolName === "c2000_getMulticoreSnapshot"
+      ? { success: true, cores: [{ coreId: 0, connected: true, state: "Halted" }, { coreId: 2, connected: false, state: "Disconnected" }] }
+      : { success: true, results: (input.expressions as string[]).map(expression => ({ expression, success: true, value: 5 })) });
+    await expect(new StepRegistry(stale).execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "TargetResetNotObserved" });
+
+    const unreadable = new ScriptedInvoker((toolName) => toolName === "c2000_getMulticoreSnapshot"
+      ? { success: true, cores: [{ coreId: 0, connected: true, state: "Halted" }] }
+      : { success: true, results: [{ expression: "resetLatch", success: false, error: { code: "ExpressionEvaluateFailed" } }] });
+    await expect(new StepRegistry(unreadable).execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "ResetEvidenceReadFailed" });
+  });
+
+  test.each(["all", "partial"] as const)("fails reset-cause capture when %s expression reads fail", async failureMode => {
+    let snapshots = 0;
+    const invoker = new ScriptedInvoker((toolName, input) => {
+      if (toolName === "c2000_getMulticoreSnapshot") {
+        snapshots += 1;
+        return { success: true, cores: [{ coreId: 0, connected: snapshots === 1, state: snapshots === 1 ? "Halted" : "Disconnected" }] };
+      }
+      if (toolName === "c2000_evaluateMany") {
+        if (failureMode === "all") return { success: false, error: { code: "ExpressionEvaluateFailed", message: "target unavailable" } };
+        return { success: true, results: [
+          { expression: "causeA", success: true, value: 1 },
+          { expression: "causeB", success: false, error: { code: "ExpressionEvaluateFailed" } }
+        ] };
+      }
+      return { success: true, sessionId: input.sessionId };
+    });
+    const plan = parsePlan([
+      { type: "launchMulticore", loadPrograms: false },
+      { type: "reconnectAfterTargetReset", coreIds: [0], timeoutMs: 10, intervalMs: 1, reloadSymbols: false, resetCauseReads: [{ coreId: 0, expressions: ["causeA", "causeB"] }] }
+    ]);
+    await expect(new StepRegistry(invoker).execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "ResetCauseReadFailed" });
   });
 
   test("restores verified per-core programs as halt-load-halt without running or writing PC", async () => {
@@ -162,6 +214,7 @@ describe("durable board-validation safety steps", () => {
         success: true, sessionId: input.sessionId,
         results: [{ coreId: 0, success: true, loaded: true, sha256: hashes.cpu1Out }, { coreId: 2, success: true, loaded: true, sha256: hashes.cpu2Out }]
       };
+      if (toolName === "c2000_haltCores") return { success: true, sessionId: input.sessionId, results: [0, 2].map(coreId => ({ coreId, success: true })) };
       return { success: true, sessionId: input.sessionId, results: [] };
     });
     const registry = new StepRegistry(invoker, undefined, { allowedReadRoots: [root], allowedWriteRoots: [] });
@@ -177,13 +230,13 @@ describe("durable board-validation safety steps", () => {
 
     const failingInvoker = new ScriptedInvoker((toolName, input) => toolName === "c2000_loadPrograms"
       ? { success: false, sessionId: input.sessionId, error: { code: "ProgramLoadFailed" } }
-      : { success: true, sessionId: input.sessionId, results: [] });
+      : { success: true, sessionId: input.sessionId, results: [0, 2].map(coreId => ({ coreId, success: true })) });
     const failingRegistry = new StepRegistry(failingInvoker, undefined, { allowedReadRoots: [root], allowedWriteRoots: [] });
     await expect(failingRegistry.execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "RestoreProgramsFailed" });
     expect(failingInvoker.calls.map(call => call.toolName)).toEqual(["c2000_haltCores", "c2000_loadPrograms", "c2000_haltCores"]);
   });
 
-  test("rejects restore hash mismatch before touching the target", async () => {
+  test("isolates restore hash, path-root, and missing-file preflight failures without loading", async () => {
     const root = await temporaryRoot();
     const files = {
       cpu1OutPath: path.join(root, "cpu1.out"), cpu1MapPath: path.join(root, "cpu1.map"),
@@ -191,11 +244,11 @@ describe("durable board-validation safety steps", () => {
     };
     await Promise.all(Object.values(files).map(file => writeFile(file, "actual")));
     const wrong = "0".repeat(64);
-    const invoker = new ScriptedInvoker(() => ({ success: true }));
+    const invoker = new ScriptedInvoker((_toolName, input) => ({ success: true, sessionId: input.sessionId, results: [0, 2].map(coreId => ({ coreId, success: true })) }));
     const registry = new StepRegistry(invoker, undefined, { allowedReadRoots: [root], allowedWriteRoots: [] });
     const plan = restorePlan(files, { cpu1Out: wrong, cpu1Map: wrong, cpu2Out: wrong, cpu2Map: wrong });
-    await expect(registry.execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "ArtifactHashMismatch" });
-    expect(invoker.calls).toEqual([]);
+    await expect(registry.execute(context(plan, plan.steps[1]!))).rejects.toMatchObject({ code: "RestoreProgramsFailed", details: { cause: { code: "ArtifactHashMismatch" }, isolation: { success: true } } });
+    expect(invoker.calls.map(call => call.toolName)).toEqual(["c2000_haltCores"]);
 
     const actual = {
       cpu1Out: await sha256File(files.cpu1OutPath), cpu1Map: await sha256File(files.cpu1MapPath),
@@ -204,14 +257,19 @@ describe("durable board-validation safety steps", () => {
     const otherRoot = await temporaryRoot();
     const outsideRegistry = new StepRegistry(invoker, undefined, { allowedReadRoots: [otherRoot], allowedWriteRoots: [] });
     const outsidePlan = restorePlan(files, actual);
-    await expect(outsideRegistry.execute(context(outsidePlan, outsidePlan.steps[1]!))).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
-    expect(invoker.calls).toEqual([]);
+    await expect(outsideRegistry.execute(context(outsidePlan, outsidePlan.steps[1]!))).rejects.toMatchObject({ code: "RestoreProgramsFailed", details: { cause: { code: "PathOutsideAllowedReadRoots" }, isolation: { success: true } } });
+
+    const missingFiles = { ...files, cpu1OutPath: path.join(root, "missing.out") };
+    const missingPlan = restorePlan(missingFiles, actual);
+    await expect(registry.execute(context(missingPlan, missingPlan.steps[1]!))).rejects.toMatchObject({ code: "RestoreProgramsFailed" });
+    expect(invoker.calls.map(call => call.toolName)).toEqual(["c2000_haltCores", "c2000_haltCores", "c2000_haltCores"]);
+    expect(invoker.calls.map(call => call.toolName)).not.toContain("c2000_loadPrograms");
   });
 
   test("halts with the same fencing lease on first guard mismatch", async () => {
     const invoker = new ScriptedInvoker((toolName, input) => toolName === "c2000_evaluateMany"
       ? { success: true, results: [{ expression: "g_safe", success: true, value: 0 }] }
-      : { success: true, sessionId: input.sessionId, results: [] });
+      : { success: true, sessionId: input.sessionId, results: [0, 2].map(coreId => ({ coreId, success: true })) });
     const registry = new StepRegistry(invoker);
     const plan = testPlanSchema.parse({
       planVersion: 1, name: "guarded", boardIds: ["board-a"],
@@ -224,7 +282,7 @@ describe("durable board-validation safety steps", () => {
 
     const unreadable = new ScriptedInvoker((toolName, input) => toolName === "c2000_evaluateMany"
       ? { success: false, error: { code: "ExpressionEvaluateFailed" } }
-      : { success: true, sessionId: input.sessionId, results: [] });
+      : { success: true, sessionId: input.sessionId, results: [0, 2].map(coreId => ({ coreId, success: true })) });
     const unreadableRegistry = new StepRegistry(unreadable);
     await expect(unreadableRegistry.assertSafetyGuards(context(plan, plan.steps[1]!), "dbg-current", "wait-monitor")).rejects.toMatchObject({ code: "SafetyGuardViolation" });
     expect(unreadable.calls.map(call => call.toolName)).toEqual(["c2000_evaluateMany", "c2000_haltCores"]);

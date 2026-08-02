@@ -113,6 +113,9 @@ export type DebugErrorCode =
   | "SafetyGuardViolation"
   | "ExpressionWaitTimeout"
   | "TargetResetNotObserved"
+  | "TargetResetBaselineInvalid"
+  | "ResetEvidenceReadFailed"
+  | "ResetCauseReadFailed"
   | "ArtifactHashMismatch"
   | "RestoreProgramsFailed"
   | "LoadVerificationFailed"
@@ -192,9 +195,24 @@ export class DebugMcpError extends Error {
   }
 }
 
+export class StructuredToolError extends Error {
+  readonly code: string;
+  readonly details?: Record<string, unknown>;
+
+  constructor(error: StructuredError) {
+    super(error.message);
+    this.name = error.code;
+    this.code = error.code;
+    this.details = error.details;
+  }
+}
+
 export function toStructuredError(error: unknown): StructuredError {
   if (error instanceof DebugMcpError) {
     return { code: error.code, message: error.message, details: error.details };
+  }
+  if (error instanceof StructuredToolError) {
+    return { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) };
   }
   if (error instanceof Error) {
     return { code: "UnknownError", message: error.message };

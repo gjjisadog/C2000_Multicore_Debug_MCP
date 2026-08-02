@@ -171,7 +171,7 @@ export class StepRegistry {
     }
     let halt: Record<string, unknown>;
     try {
-      halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: guards.haltCoreIds }));
+      halt = await this.invokeConfirmedHalt(context, sessionId, guards.haltCoreIds);
     } catch (error) {
       halt = { success: false, error: toStructuredError(error) };
     }
@@ -236,40 +236,68 @@ export class StepRegistry {
     const symbolPaths = step.reloadSymbols
       ? await Promise.all(step.coreIds.map(async coreId => [coreId, await this.validateReadPath(programForCore(resolveArtifactsForBoard(context.plan, context.boardId), coreId))] as const))
       : [];
+    const baselineSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
+    assertConnectedSnapshotBaseline(baselineSnapshot, step.coreIds);
+    const safetyGuardChecks: Record<string, unknown>[] = [];
+    if (context.plan.safetyGuards) {
+      retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "reset-wait-baseline"));
+    }
+    const baselineEvidence = step.resetEvidence
+      ? await this.readResetEvidence(context, sessionId, step.resetEvidence, "baseline")
+      : undefined;
+    const pollIntervalMs = Math.min(step.intervalMs, context.plan.safetyGuards?.intervalMs ?? step.intervalMs);
     const deadline = Date.now() + step.timeoutMs;
     let pollIterations = 0;
-    let lastSnapshot: Record<string, unknown> | undefined;
+    let lastSnapshot: Record<string, unknown> | undefined = baselineSnapshot;
     let resetEvidence: Record<string, unknown> | undefined;
     let observed: Record<string, unknown> | undefined;
     while (Date.now() <= deadline) {
+      await abortableDelay(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), context.signal);
       pollIterations += 1;
-      lastSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
+      try {
+        lastSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
+      } catch (error) {
+        if (!isTargetReadInaccessible(error)) throw error;
+        observed = { mode: "target-state-unreadable", observedAt: new Date().toISOString(), error: toStructuredError(error) };
+        break;
+      }
       const disconnectedCoreIds = snapshotDisconnectedCoreIds(lastSnapshot, step.coreIds);
       if (disconnectedCoreIds.length > 0) {
         observed = { mode: "target-disconnected", disconnectedCoreIds, observedAt: new Date().toISOString() };
         break;
       }
+      const unreadableCoreIds = snapshotUnreadableCoreIds(lastSnapshot, step.coreIds);
+      if (unreadableCoreIds.length > 0) {
+        observed = { mode: "target-state-unreadable", unreadableCoreIds, observedAt: new Date().toISOString(), snapshot: lastSnapshot };
+        break;
+      }
+      if (context.plan.safetyGuards) {
+        retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "reset-wait-monitor"));
+      }
       if (step.resetEvidence) {
-        resetEvidence = await this.evaluateConditions(context, sessionId, step.resetEvidence);
+        const currentEvidence = await this.readResetEvidence(context, sessionId, step.resetEvidence, "poll");
+        resetEvidence = compareFreshResetEvidence(step.resetEvidence, baselineEvidence!, currentEvidence);
         if (resetEvidence.matched === true) {
           observed = { mode: "explicit-reset-expression", observedAt: new Date().toISOString(), resetEvidence };
           break;
         }
       }
       if (Date.now() >= deadline) break;
-      await abortableDelay(Math.min(step.intervalMs, Math.max(0, deadline - Date.now())), context.signal);
     }
     if (!observed) {
       throw new DebugMcpError("TargetResetNotObserved", "No target disconnect or matching explicit reset evidence was observed before reconnect timeout", {
-        sessionId, coreIds: step.coreIds, timeoutMs: step.timeoutMs, pollIterations, lastSnapshot, resetEvidence
+        sessionId, coreIds: step.coreIds, timeoutMs: step.timeoutMs, pollIterations, baselineSnapshot, baselineEvidence, lastSnapshot, resetEvidence, safetyGuardChecks
       });
     }
     const reconnect = await this.invokeRequired("c2000_connectCores", fenced(context, { sessionId, coreIds: step.coreIds }));
+    if (context.plan.safetyGuards) {
+      retainGuardEvidence(safetyGuardChecks, await this.assertSafetyGuards(context, sessionId, "post-reset-reconnect"));
+    }
     const symbols: Record<string, unknown>[] = [];
     for (const [coreId, programUri] of symbolPaths) {
       symbols.push(await this.invokeRequired("c2000_loadSymbols", fenced(context, { sessionId, coreId, programUri })));
     }
-    const capture = await this.captureExpressions(context, sessionId, step.resetCauseReads, 1, 0, "reset-cause");
+    const capture = await this.captureRequiredExpressions(context, sessionId, step.resetCauseReads, "reset-cause", "ResetCauseReadFailed");
     const run: Record<string, unknown>[] = [];
     if (step.runAfterReconnect) {
       run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [0] })));
@@ -278,7 +306,7 @@ export class StepRegistry {
         run.push(await this.invokeRequired("c2000_runCores", fenced(context, { sessionId, coreIds: [2] })));
       }
     }
-    return { success: true, sessionId, resetObservation: observed, pollIterations, reconnect, symbols, ...capture, run };
+    return { success: true, sessionId, resetObservation: observed, baselineSnapshot, baselineEvidence, pollIterations, reconnect, symbols, ...capture, run, safetyGuardChecks };
   }
 
   private async restorePrograms(
@@ -286,22 +314,23 @@ export class StepRegistry {
     sessionId: string,
     step: Extract<TestPlanStep, { type: "restorePrograms" }>
   ): Promise<Record<string, unknown>> {
-    const artifacts = await Promise.all([step.artifacts.cpu1, step.artifacts.cpu2].map(async artifact => {
-      const outPath = await this.validateReadPath(artifact.outPath);
-      const mapPath = await this.validateReadPath(artifact.mapPath);
-      const [outSha256, mapSha256] = await Promise.all([sha256File(outPath), sha256File(mapPath)]);
-      if (outSha256.toLowerCase() !== artifact.outSha256.toLowerCase() || mapSha256.toLowerCase() !== artifact.mapSha256.toLowerCase()) {
-        throw new DebugMcpError("ArtifactHashMismatch", "Restore artifact hash does not match the explicit durable plan", {
-          coreId: artifact.coreId, outPath, mapPath, expectedOutSha256: artifact.outSha256, actualOutSha256: outSha256,
-          expectedMapSha256: artifact.mapSha256, actualMapSha256: mapSha256
-        });
-      }
-      return { ...artifact, outPath, mapPath, outSha256, mapSha256 };
-    }));
+    let artifacts: Array<{ coreId: 0 | 2; outPath: string; mapPath: string; outSha256: string; mapSha256: string }> | undefined;
     let initialHalt: Record<string, unknown> | undefined;
     let load: Record<string, unknown> | undefined;
     try {
-      initialHalt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+      artifacts = await Promise.all([step.artifacts.cpu1, step.artifacts.cpu2].map(async artifact => {
+        const outPath = await this.validateReadPath(artifact.outPath);
+        const mapPath = await this.validateReadPath(artifact.mapPath);
+        const [outSha256, mapSha256] = await Promise.all([sha256File(outPath), sha256File(mapPath)]);
+        if (outSha256.toLowerCase() !== artifact.outSha256.toLowerCase() || mapSha256.toLowerCase() !== artifact.mapSha256.toLowerCase()) {
+          throw new DebugMcpError("ArtifactHashMismatch", "Restore artifact hash does not match the explicit durable plan", {
+            coreId: artifact.coreId, outPath, mapPath, expectedOutSha256: artifact.outSha256, actualOutSha256: outSha256,
+            expectedMapSha256: artifact.mapSha256, actualMapSha256: mapSha256
+          });
+        }
+        return { ...artifact, outPath, mapPath, outSha256, mapSha256 };
+      }));
+      initialHalt = await this.invokeConfirmedHalt(context, sessionId, [0, 2]);
       load = await this.invokeRequired("c2000_loadPrograms", fenced(context, {
         sessionId,
         programs: artifacts.map(artifact => ({
@@ -324,19 +353,55 @@ export class StepRegistry {
           throw new DebugMcpError("ArtifactHashMismatch", "Restore artifacts changed during the target load operation", { expected, actual: hashes });
         }
       }
-      const finalHalt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+      const finalHalt = await this.invokeConfirmedHalt(context, sessionId, [0, 2]);
       return { success: true, sessionId, verifiedArtifacts: artifacts, postLoadHashes, initialHalt, load, finalHalt, finalState: "Halted", ranCores: false, wroteProgramCounter: false };
     } catch (error) {
       let isolation: Record<string, unknown>;
       try {
-        isolation = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [0, 2] }));
+        isolation = await this.invokeConfirmedHalt(context, sessionId, [0, 2]);
       } catch (isolationError) {
         isolation = { success: false, error: toStructuredError(isolationError) };
       }
       throw new DebugMcpError("RestoreProgramsFailed", "Program restore failed; fenced halt isolation was attempted and no core was run", {
-        sessionId, initialHalt, load, isolation, cause: toStructuredError(error), ranCores: false, wroteProgramCounter: false
+        sessionId, initialHalt, load, isolation, cause: toStructuredError(error), preflightCompleted: Boolean(artifacts), ranCores: false, wroteProgramCounter: false
       });
     }
+  }
+
+  private async readResetEvidence(
+    context: StepExecutionContext,
+    sessionId: string,
+    evidence: NonNullable<Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>["resetEvidence"]>,
+    phase: "baseline" | "poll"
+  ): Promise<Record<string, unknown>> {
+    const reads = [...new Set(evidence.map(item => item.coreId))].map(coreId => ({
+      coreId,
+      expressions: [...new Set(evidence.filter(item => item.coreId === coreId).map(item => item.expression))]
+    }));
+    const captured = await this.captureRequiredExpressions(context, sessionId, reads, `reset-evidence-${phase}`, "ResetEvidenceReadFailed");
+    return { phase, capturedAt: new Date().toISOString(), values: flattenCapturedValues(captured.expressionSnapshots) };
+  }
+
+  private async captureRequiredExpressions(
+    context: StepExecutionContext,
+    sessionId: string,
+    reads: Array<{ label?: string; coreId: number; expressions: string[] }>,
+    label: string,
+    errorCode: "ResetEvidenceReadFailed" | "ResetCauseReadFailed"
+  ): Promise<Record<string, unknown>> {
+    let capture: Record<string, unknown>;
+    try {
+      capture = await this.captureExpressions(context, sessionId, reads, 1, 0, label);
+    } catch (error) {
+      throw new DebugMcpError(errorCode, `${label} requires every requested expression to be readable`, {
+        sessionId, cause: toStructuredError(error)
+      });
+    }
+    const failures = requiredCaptureFailures(capture.expressionSnapshots, reads);
+    if (failures.length > 0) {
+      throw new DebugMcpError(errorCode, `${label} requires every requested expression to be readable`, { sessionId, failures, capture });
+    }
+    return capture;
   }
 
   private async evaluateConditions(
@@ -417,6 +482,16 @@ export class StepRegistry {
     }
     return result;
   }
+
+  private async invokeConfirmedHalt(context: StepExecutionContext, sessionId: string, coreIds: readonly number[]): Promise<Record<string, unknown>> {
+    const halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [...coreIds] }));
+    const results = Array.isArray(halt.results) ? halt.results.filter(isRecord) : [];
+    const unconfirmedCoreIds = coreIds.filter(coreId => !results.some(result => result.coreId === coreId && result.success === true));
+    if (unconfirmedCoreIds.length > 0) {
+      throw new DebugMcpError("TargetHaltFailed", "Fenced halt did not confirm every requested core", { sessionId, coreIds, unconfirmedCoreIds, halt });
+    }
+    return halt;
+  }
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -476,6 +551,91 @@ function snapshotDisconnectedCoreIds(snapshot: Record<string, unknown>, expected
     const core = cores.find(candidate => candidate.coreId === coreId);
     return core?.connected === false || core?.state === "Disconnected";
   });
+}
+
+function snapshotUnreadableCoreIds(snapshot: Record<string, unknown>, expectedCoreIds: readonly number[]): number[] {
+  const cores = Array.isArray(snapshot.cores) ? snapshot.cores.filter(isRecord) : [];
+  return expectedCoreIds.filter(coreId => {
+    const core = cores.find(candidate => candidate.coreId === coreId);
+    return !core || core.connected !== true;
+  });
+}
+
+function assertConnectedSnapshotBaseline(snapshot: Record<string, unknown>, expectedCoreIds: readonly number[]): void {
+  const cores = Array.isArray(snapshot.cores) ? snapshot.cores.filter(isRecord) : [];
+  const invalidCoreIds = expectedCoreIds.filter(coreId => {
+    const core = cores.find(candidate => candidate.coreId === coreId);
+    return !core || core.connected !== true || core.state === "Disconnected";
+  });
+  if (invalidCoreIds.length > 0) {
+    throw new DebugMcpError("TargetResetBaselineInvalid", "Reset observation requires a connected, readable baseline for every requested core", {
+      expectedCoreIds, invalidCoreIds, snapshot
+    });
+  }
+}
+
+function isTargetReadInaccessible(error: unknown): boolean {
+  const inaccessibleCodes = new Set(["CoreNotConnected", "SessionClosed", "PersistentChannelDisconnected"]);
+  const visit = (value: unknown): boolean => {
+    if (!isRecord(value)) return false;
+    if (typeof value.code === "string" && inaccessibleCodes.has(value.code)) return true;
+    return Object.values(value).some(visit);
+  };
+  return visit(toStructuredError(error));
+}
+
+function requiredCaptureFailures(
+  snapshots: unknown,
+  reads: Array<{ coreId: number; expressions: string[] }>
+): Record<string, unknown>[] {
+  const snapshot = Array.isArray(snapshots) && isRecord(snapshots[0]) ? snapshots[0] : undefined;
+  const captures = snapshot && Array.isArray(snapshot.captures) ? snapshot.captures.filter(isRecord) : [];
+  const failures: Record<string, unknown>[] = [];
+  for (const read of reads) {
+    const capture = captures.find(candidate => candidate.coreId === read.coreId);
+    const evaluated = capture && isRecord(capture.evaluated) ? capture.evaluated : undefined;
+    const results = evaluated && Array.isArray(evaluated.results) ? evaluated.results.filter(isRecord) : [];
+    for (const expression of read.expressions) {
+      const result = results.find(candidate => candidate.expression === expression);
+      if (!result || result.success !== true || !Object.prototype.hasOwnProperty.call(result, "value")) {
+        failures.push({ coreId: read.coreId, expression, result });
+      }
+    }
+  }
+  return failures;
+}
+
+function flattenCapturedValues(snapshots: unknown): Record<string, unknown>[] {
+  const snapshot = Array.isArray(snapshots) && isRecord(snapshots[0]) ? snapshots[0] : undefined;
+  const captures = snapshot && Array.isArray(snapshot.captures) ? snapshot.captures.filter(isRecord) : [];
+  return captures.flatMap(capture => {
+    const evaluated = isRecord(capture.evaluated) ? capture.evaluated : undefined;
+    const results = evaluated && Array.isArray(evaluated.results) ? evaluated.results.filter(isRecord) : [];
+    return results.map(result => ({ coreId: capture.coreId, expression: result.expression, value: result.value }));
+  });
+}
+
+function compareFreshResetEvidence(
+  evidence: NonNullable<Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>["resetEvidence"]>,
+  baseline: Record<string, unknown>,
+  current: Record<string, unknown>
+): Record<string, unknown> {
+  const baselineValues = Array.isArray(baseline.values) ? baseline.values.filter(isRecord) : [];
+  const currentValues = Array.isArray(current.values) ? current.values.filter(isRecord) : [];
+  const conditions = evidence.map(item => {
+    const baselineValue = baselineValues.find(value => value.coreId === item.coreId && value.expression === item.expression)?.value;
+    const currentValue = currentValues.find(value => value.coreId === item.coreId && value.expression === item.expression)?.value;
+    let matched = false;
+    if (item.freshness === "transition-to-expected") {
+      matched = !valuesEqual(baselineValue, item.expected) && valuesEqual(currentValue, item.expected);
+    } else if (item.freshness === "monotonic-increase") {
+      matched = typeof baselineValue === "number" && typeof currentValue === "number" && currentValue >= baselineValue + item.minimumDelta;
+    } else {
+      matched = !valuesEqual(currentValue, baselineValue);
+    }
+    return { ...item, baselineValue, currentValue, matched };
+  });
+  return { matched: conditions.every(condition => condition.matched), conditions };
 }
 
 function verifyRestoredProgramResults(
