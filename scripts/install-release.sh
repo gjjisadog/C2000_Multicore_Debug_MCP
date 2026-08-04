@@ -11,14 +11,14 @@ case "$(uname -m)" in
 esac
 
 command -v node >/dev/null 2>&1 || {
-  echo "Node.js was not found. Install Node.js 22.12+ LTS (recommended) or 20.19+ LTS." >&2
+  echo "Node.js was not found. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS." >&2
   exit 1
 }
 if ! node -e '
   const [major, minor] = process.versions.node.split(".").map(Number);
-  process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) ? 0 : 1);
+  process.exit((major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major === 24 ? 0 : 1);
 '; then
-  echo "Node.js $(node -p 'process.versions.node') is unsupported. Install Node.js 22.12+ LTS (recommended) or 20.19+ LTS." >&2
+  echo "Node.js $(node -p 'process.versions.node') is unsupported. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS." >&2
   exit 1
 fi
 

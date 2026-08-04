@@ -5,7 +5,7 @@ describe("installer bootstrap scripts", () => {
   test("Windows release bootstrap fails fast and verifies the private release asset", async () => {
     const source = await readFile("scripts/install-release.ps1", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");
-    expect(source).toContain("Node.js 22.12+ LTS");
+    expect(source).toContain("24.x");
     expect(source).toContain("process.versions.modules");
     expect(source).toContain("install-offline.ps1");
     expect(source).not.toContain("npm.cmd exec");
@@ -40,15 +40,17 @@ describe("installer bootstrap scripts", () => {
     const source = await readFile("scripts/install-release.sh", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");
     expect(source).toContain("major === 22 && minor >= 12");
+    expect(source).toContain("major === 24");
     expect(source).toContain("SHA256SUMS-${target}.json");
     expect(source).toContain("createHash(\"sha256\")");
     expect(source).toContain("trap 'rm -rf \"$download_directory\"' EXIT");
   });
 
-  test("release automation publishes both supported Windows ABIs in one offline bundle", async () => {
+  test("release automation publishes all supported Windows ABIs in one offline bundle", async () => {
     const source = await readFile(".github/workflows/release.yml", "utf8");
     expect(source).toContain("target: win32-x64-abi115");
     expect(source).toContain("target: win32-x64-abi127");
+    expect(source).toContain("target: win32-x64-abi137");
     expect(source).toContain("offline-bundle-win32-x64.zip");
     expect(source).toContain("scripts/install-offline.ps1");
   });

@@ -57,11 +57,11 @@ describe("one-command installer", () => {
     })).toThrow(/ABI 127.*ABI 115/);
   });
 
-  test("accepts only the Node LTS versions covered by installer CI and native dependencies", () => {
-    for (const version of ["v20.19.0", "20.20.1", "v22.12.0", "v22.17.1"]) {
+  test("accepts the supported Node LTS versions covered by installer CI and native dependencies", () => {
+    for (const version of ["v20.19.0", "20.20.1", "v22.12.0", "v22.17.1", "v24.0.0", "v24.6.0"]) {
       expect(() => validateNodeVersion(version)).not.toThrow();
     }
-    for (const version of ["v20.10.0", "v21.7.3", "v22.11.0", "v23.11.1", "v24.0.0"]) {
+    for (const version of ["v20.10.0", "v21.7.3", "v22.11.0", "v23.11.1", "v25.0.0"]) {
       expect(() => validateNodeVersion(version)).toThrow(/Node\.js .* is unsupported/);
     }
     expect(() => validateNodeVersion("not-a-version")).toThrow(/Could not parse/);

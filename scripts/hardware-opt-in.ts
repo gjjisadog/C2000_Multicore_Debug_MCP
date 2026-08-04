@@ -22,13 +22,13 @@ export function requireHardwareOptIn(options: {
 
 export function requireSupportedHardwareRuntime(operation: string): void {
   const [major = 0, minor = 0] = process.versions.node.split(".").map(Number);
-  const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12);
+  const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major === 24;
   if (supported) return;
   process.stdout.write(`${JSON.stringify({
     status: "INCONCLUSIVE",
     evidenceLevel: "HOST_COMMAND_EVIDENCE",
     operation,
-    reason: `Unsupported Node.js ${process.version}; hardware access requires Node 20.19+ or 22.12+`,
+    reason: `Unsupported Node.js ${process.version}; hardware access requires Node 20.19+, 22.12+, or 24.x`,
     targetAccessAttempted: false,
     pcanOpened: false,
     mockResultPromoted: false

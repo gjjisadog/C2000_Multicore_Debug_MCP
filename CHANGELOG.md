@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Extend the supported Node.js runtime contract to Node 24.x, upgrade
+  `better-sqlite3` to the Node 24-compatible 12.x line, and publish the Node
+  24 Windows ABI 137 package alongside the existing Node 20/22 packages.
 - Add strict fenced durable steps for expression assignment, fault injection,
   bounded expression capture, expression waits, and explicit reset/reconnect/
   reload/capture safety recovery. Non-idempotent steps are never blindly
@@ -45,10 +48,6 @@
   builds outside the repository `dist` directory to avoid live MCP file locks,
   installs through the bundled setup entrypoint, and always removes staging
   files.
-- Align the supported runtime contract and documentation with tested Node
-  20.19+ and Node 22.12+ releases; recommend Node 22 and stop advertising Node
-  24 while the Windows native dependency bundle requires an unavailable
-  prebuilt binding or an extra ClangCL toolchain.
 - Add `c2000_registerBoard` for validated, persisted XDS110 registration and
   isolated worker startup without manual daemon config editing.
 - Route safe/action launch wrappers through the same daemon worker and lease

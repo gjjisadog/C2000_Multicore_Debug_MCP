@@ -21,15 +21,18 @@ jobs:
           - os: windows-latest
             target: win32-x64-abi127
             node: "22.12"
+          - os: windows-latest
+            target: win32-x64-abi137
+            node: "24"
           - os: ubuntu-latest
             target: linux-x64
-            node: "22.12"
+            node: "24"
           - os: macos-14
             target: darwin-arm64
-            node: "22.12"
+            node: "24"
           - os: macos-15-intel
             target: darwin-x64
-            node: "22.12"
+            node: "24"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +75,7 @@ jobs:
           Get-ChildItem release-assets -Recurse -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz" | Copy-Item -Destination $bundle
           Get-ChildItem release-assets -Recurse -File -Filter "SHA256SUMS-win32-x64-abi*.json" | Copy-Item -Destination $bundle
           $abis = Get-ChildItem $bundle -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz"
-          if ($abis.Count -ne 2) { throw "Expected Node 20 and Node 22 Windows packages in the offline bundle." }
+          if ($abis.Count -ne 3) { throw "Expected Node 20, Node 22, and Node 24 Windows packages in the offline bundle." }
           Compress-Archive -Path "$bundle/*" -DestinationPath "offline-bundle-win32-x64.zip"
       - uses: softprops/action-gh-release@v2
         with:

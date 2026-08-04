@@ -130,12 +130,11 @@ export function validateNodeVersion(nodeVersion: string): void {
   }
   const major = Number(match[1]);
   const minor = Number(match[2]);
-  const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12);
+  const supported = (major === 20 && minor >= 19) || (major === 22 && minor >= 12) || major === 24;
   if (!supported) {
     throw new Error(
       `Node.js ${match[1]}.${match[2]}.${match[3]} is unsupported. `
-      + "Use Node.js 22.12+ LTS (recommended) or Node.js 20.19+ LTS. "
-      + "Node.js 24 is not supported by the current published native dependency bundle."
+      + "Use Node.js 22.12+ LTS (recommended), Node.js 24.x, or Node.js 20.19+ LTS."
     );
   }
 }

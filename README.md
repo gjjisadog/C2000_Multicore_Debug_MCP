@@ -189,9 +189,8 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ### One-command install (Windows and macOS)
 
-Prerequisites: Node.js 22.12+ LTS (recommended) or Node.js 20.19+ LTS; an
+Prerequisites: Node.js 22.12+ LTS (recommended), Node.js 24.x, or Node.js 20.19+ LTS; an
 authenticated GitHub CLI (`gh auth status --hostname github.com`); and Codex.
-Node.js 24 is not currently supported by the published native dependency bundle.
 This repository is private, so anonymous release URLs do not work. The
 bootstrap fails before downloading when the Node version or GitHub
 authentication is invalid, selects the runtime for the active Node ABI, verifies
@@ -221,8 +220,8 @@ used.
 
 On a connected machine, download `offline-bundle-win32-x64.zip` from the
 release and transfer it to the offline machine. The bundle contains the native
-runtimes for Node 20 ABI 115 and Node 22 ABI 127, their SHA-256 metadata, and
-the installer. Extract it and run:
+runtimes for Node 20 ABI 115, Node 22 ABI 127, and Node 24 ABI 137, their
+SHA-256 metadata, and the installer. Extract it and run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-offline.ps1
@@ -239,8 +238,8 @@ explicitly:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-offline.ps1 `
-  -PackagePath .\c2000-multicore-mcp-0.7.0-win32-x64-abi127.tgz `
-  -ChecksumPath .\SHA256SUMS-win32-x64-abi127.json
+  -PackagePath .\c2000-multicore-mcp-0.7.0-win32-x64-abi137.tgz `
+  -ChecksumPath .\SHA256SUMS-win32-x64-abi137.json
 ```
 
 Useful options:
