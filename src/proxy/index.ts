@@ -4,6 +4,8 @@ import { registerC2000Tools } from "../mcp/tools.js";
 import { ensureDaemon } from "../daemon/DaemonBootstrap.js";
 import { McpDaemonClient } from "./McpDaemonClient.js";
 import { SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
+import path from "node:path";
+import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 
 export interface C2000McpProxyRuntime {
   server: McpServer;
@@ -25,7 +27,19 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
     client,
     {},
     config.toolProfile,
-    config.filesystem
+    withAdditionalReadRoots(config.filesystem ?? {
+      allowedReadRoots: [process.cwd()],
+      allowedWriteRoots: []
+    }, {
+      roots: [
+        config.ccs.installPath,
+        config.ccs.c2000WarePath,
+        ...(config.programSearchRoots ?? []),
+        ...(config.boards ?? []).map(board => path.dirname(board.ccxmlPath)),
+        ...(config.debugProbe?.probes ?? []).map(probe => path.dirname(probe.ccxmlPath))
+      ],
+      files: [config.ccs.ccxmlPath]
+    })
   );
   return {
     server,

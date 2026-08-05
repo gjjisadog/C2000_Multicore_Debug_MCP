@@ -2343,6 +2343,7 @@ describe("tool handlers", () => {
 
     const result = await handlers.launchMulticoreDebug({
       sessionName: "advanced-launch",
+      autoCloseOnComplete: false,
       cores: [
         { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", programUri: cpu1Out, connect: true, load: true, haltAtEntry: true },
         { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", programUri: cpu2Out, connect: true, load: true, haltAtEntry: true }
@@ -2384,13 +2385,12 @@ describe("tool handlers", () => {
     }));
   });
 
-  test("launchMulticoreDebug arms activity-aware idle cleanup after successful checks when requested", async () => {
+  test("launchMulticoreDebug arms activity-aware idle cleanup by default", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
 
     const result = await handlers.launchMulticoreDebug({
       sessionName: "auto-close-successful-launch",
-      autoCloseOnComplete: true,
       autoCloseIdleTimeoutMs: 1000,
       cores: [
         { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", connect: true, load: false, haltAtEntry: true }

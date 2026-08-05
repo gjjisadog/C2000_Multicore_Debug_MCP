@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { assertAllowedReadPath, assertAllowedWritePath, validateToolPaths } from "../src/security/pathPolicy.js";
+import { assertAllowedReadPath, assertAllowedWritePath, validateToolPaths, withAdditionalReadRoots } from "../src/security/pathPolicy.js";
 
 describe("filesystem path policy", () => {
   test("allows configured reads and writes and rejects escapes", async () => {
@@ -43,6 +43,30 @@ describe("filesystem path policy", () => {
 
     await expect(validateToolPaths({
       cores: [{ coreId: 2, load: true, programUri, mapUri }]
+    }, policy)).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
+  });
+
+  test("allows configured toolchain and firmware roots while rejecting unrelated paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "c2000-path-configured-root-"));
+    const toolchainRoot = await mkdtemp(path.join(os.tmpdir(), "c2000-path-toolchain-"));
+    const firmwareRoot = await mkdtemp(path.join(os.tmpdir(), "c2000-path-firmware-"));
+    const ccxmlPath = path.join(toolchainRoot, "targetConfigs", "board.ccxml");
+    await mkdir(path.dirname(ccxmlPath), { recursive: true });
+    await writeFile(ccxmlPath, "<configurations />");
+
+    const policy = withAdditionalReadRoots(
+      { allowedReadRoots: [root], allowedWriteRoots: [] },
+      { roots: [toolchainRoot, firmwareRoot], files: [ccxmlPath] }
+    );
+
+    await expect(validateToolPaths({
+      ccsInstallPath: toolchainRoot,
+      ccxmlPath,
+      searchRoots: [firmwareRoot]
+    }, policy)).resolves.toBeUndefined();
+
+    await expect(validateToolPaths({
+      searchRoots: [path.join(os.tmpdir(), "c2000-path-unrelated")]
     }, policy)).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
   });
 });

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CcsScriptingAdapter } from "./adapters/CcsScriptingAdapter.js";
 import {
@@ -27,6 +28,7 @@ import { buildServerHealth, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js
 import { DebugMcpError } from "./utils/errors.js";
 import { Logger } from "./utils/logger.js";
 import { normalizeWorkspacePath } from "./utils/pathUtils.js";
+import { withAdditionalReadRoots } from "./security/pathPolicy.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -105,6 +107,19 @@ function buildRuntime(
     c2000WarePath: config.ccs.c2000WarePath,
     ccxmlPath: config.ccs.ccxmlPath
   };
+  const filesystem = withAdditionalReadRoots(config.filesystem ?? {
+    allowedReadRoots: [process.cwd()],
+    allowedWriteRoots: []
+  }, {
+    roots: [
+      effectiveInstallPath,
+      config.ccs.c2000WarePath,
+      ...(config.programSearchRoots ?? []),
+      ...(config.boards ?? []).map(board => path.dirname(board.ccxmlPath)),
+      ...(debugProbe.probes ?? []).map(probe => path.dirname(probe.ccxmlPath))
+    ],
+    files: [config.ccs.ccxmlPath]
+  });
   const getServerHealth = () => buildServerHealth(config, startedAt, registeredToolNames);
   const adapter = createAdapterFromMode(adapterResolution.mode, config, effectiveInstallPath, workspacePath, runtimeIdentity);
   const manager = new DebugSessionManager(
@@ -125,6 +140,7 @@ function buildRuntime(
   );
   const toolInvoker = createC2000ToolInvoker(manager, {
     ...toolHandlerDeps,
+    programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,
     getToolContracts: () => getToolContracts(config.toolProfile),
     getToolSurfaceGuide,
     getToolProfile: () => ({
@@ -135,7 +151,7 @@ function buildRuntime(
     getServerHealth,
     tiEnvironment
   });
-  registerC2000Tools(server, toolInvoker, {}, config.toolProfile, config.filesystem, tiEnvironment, { getServerHealth });
+  registerC2000Tools(server, toolInvoker, {}, config.toolProfile, filesystem, tiEnvironment, { getServerHealth });
 
   let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
   return {

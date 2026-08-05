@@ -1,4 +1,7 @@
 import net from "node:net";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
   isRetryableXdsLaunchError,
@@ -641,7 +644,86 @@ describe("PersistentDssBridge", () => {
     expect(receivedByPort.get(cpu2.port) ?? []).toHaveLength(0);
     expect(disposed).toBe(true);
   });
+
+  test("terminates the session-owned DSS process group and its descendants", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-dss-process-group-"));
+    const dssScriptPath = path.join(tempDir, "fake-dss.sh");
+    const adapterSessionId = "ccs-session-process-group";
+    await writeFile(dssScriptPath, [
+      "#!/bin/sh",
+      "set -eu",
+      "child_pid_file=\"$0.child.pid\"",
+      "sleep 60 &",
+      "child_pid=$!",
+      "printf '%s\\n' \"$child_pid\" > \"$child_pid_file\"",
+      "printf 'C2000_DSS_SERVER_READY\\n'",
+      "trap 'kill \"$child_pid\" 2>/dev/null || true; exit 0' TERM INT EXIT",
+      "wait \"$child_pid\""
+    ].join("\n"), "utf8");
+    await chmod(dssScriptPath, 0o755);
+
+    const bridge = new PersistentDssBridge({
+      ccsInstallPath: tempDir,
+      dssScriptPath,
+      startupMs: 1000,
+      timeoutMs: 100,
+      shutdownRequestMs: 20,
+      processExitMs: 100
+    });
+    try {
+      await bridge.createSession({
+        adapterSessionId,
+        sessionName: "process-group-test",
+        ccxmlPath: path.join(tempDir, "target.ccxml"),
+        coreMap: [coreMap[0]]
+      });
+
+      const diagnostics = bridge.ownedProcesses()[0];
+      expect(diagnostics.processGroupId).toBe(diagnostics.pid);
+      const childPid = Number(await waitForTextFile(`${dssScriptPath}.child.pid`));
+      expect(childPid).toBeGreaterThan(0);
+
+      await bridge.disposeSession(adapterSessionId);
+      await waitForProcessExit(childPid);
+      expect(bridge.ownedProcesses()).toEqual([]);
+    } finally {
+      await bridge.disposeAllSessions();
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
+
+async function waitForTextFile(filePath: string, timeoutMs = 1000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      return (await readFile(filePath, "utf8")).trim();
+    } catch {
+      await delay(10);
+    }
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 1500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await delay(10);
+  }
+  throw new Error(`Process ${pid} did not exit`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function startJsonLineServer(
   respond: (command: any) => unknown,

@@ -131,6 +131,7 @@ export class PersistentDssBridge implements CcsScriptingBridge {
       const diagnostics = session.handle.diagnostics?.() ?? {};
       return {
         pid: diagnostics.pid,
+        processGroupId: diagnostics.processGroupId,
         ppid: diagnostics.ppid,
         processStartTime: diagnostics.processStartTime,
         executable: diagnostics.executable,
@@ -210,11 +211,16 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       stdio: ["ignore", "pipe", "pipe"],
       env: launch.env,
       cwd: launch.cwd,
-      windowsHide: true
+      windowsHide: true,
+      // On POSIX, keep the complete DSS launcher tree in a session-owned
+      // process group.  dss.sh normally starts Java/DSLite descendants; a
+      // direct child.kill() would leave those descendants attached to the
+      // probe after the logical session closes.
+      detached: process.platform !== "win32"
     });
     const killChildOnParentExit = () => {
-      if (!hasExited(child)) {
-        child.kill("SIGKILL");
+      if (child.pid !== undefined) {
+        void terminateProcessTree(child, true);
       }
     };
     process.once("exit", killChildOnParentExit);
@@ -233,6 +239,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       authToken,
       diagnostics: () => ({
         pid: child.pid,
+        processGroupId: processGroupId(child),
         ppid: process.pid,
         processStartTime,
         createdAt: processStartTime,
@@ -261,6 +268,10 @@ class DefaultDssServerLauncher implements DssServerLauncher {
           }
         } finally {
           process.removeListener("exit", killChildOnParentExit);
+          // The launcher wrapper can exit before a DSS/Java descendant does.
+          // A final group-scoped force cleanup closes that gap without using a
+          // global process-name kill.
+          await terminateProcessTree(child, true).catch(() => undefined);
           await rm(tempDir, { recursive: true, force: true });
         }
       }
@@ -269,10 +280,10 @@ class DefaultDssServerLauncher implements DssServerLauncher {
 }
 
 async function terminateProcessTree(child: ChildProcess, force = false): Promise<void> {
-  if (hasExited(child)) {
-    return;
-  }
   if (process.platform === "win32" && child.pid !== undefined) {
+    if (hasExited(child)) {
+      return;
+    }
     try {
       await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", ...(force ? ["/F"] : [])], {
         timeout: 5000,
@@ -282,8 +293,36 @@ async function terminateProcessTree(child: ChildProcess, force = false): Promise
     } catch {
       // Fall through to Node's direct child termination if taskkill cannot run.
     }
+    child.kill(force ? "SIGKILL" : "SIGTERM");
+    return;
   }
-  child.kill(force ? "SIGKILL" : undefined);
+
+  // detached:true makes the direct child the process-group leader.  Use a
+  // negative PID so descendants are terminated as one session-owned unit,
+  // even when the launcher wrapper has already exited.  If the group is
+  // already gone, there is nothing left to clean; otherwise fall back to the
+  // direct child for unusual runtimes that do not expose process groups.
+  if (child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+      return;
+    } catch (error) {
+      if (isMissingProcessError(error)) {
+        return;
+      }
+    }
+  }
+  if (!hasExited(child)) {
+    child.kill(force ? "SIGKILL" : "SIGTERM");
+  }
+}
+
+function processGroupId(child: ChildProcess): number | undefined {
+  return process.platform === "win32" ? undefined : child.pid;
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ESRCH";
 }
 
 export function isRetryableXdsLaunchError(error: unknown): boolean {

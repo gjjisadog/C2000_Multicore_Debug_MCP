@@ -165,6 +165,7 @@ export function createInstalledConfig(workspace: string, runtimeDirectory: strin
       allowedReadRoots: [workspace],
       allowedWriteRoots: [runtimeDirectory]
     },
+    programSearchRoots: [workspace],
     debugProbe: {
       queueDir: path.join(runtimeDirectory, "debug-probe-queue"),
       queueTimeoutMs: 600000,

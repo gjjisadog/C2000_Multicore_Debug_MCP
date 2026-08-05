@@ -39,6 +39,14 @@ describe("DSS generated scripts", () => {
     ]);
   });
 
+  test("launches the x86_64 DSS tool through Rosetta on Apple Silicon", () => {
+    const dssScriptPath = "/Applications/ti/ccs2100/ccs/ccs_base/scripting/bin/dss.sh";
+    const launch = resolveDssLaunch(dssScriptPath, "/Applications/ti/ccs2100/ccs", "darwin", "arm64");
+
+    expect(launch.command).toBe("arch");
+    expect(launch.args).toEqual(["-x86_64", dssScriptPath]);
+  });
+
   test("starts a Windows batch launcher with spaced script and config paths", async () => {
     if (process.platform !== "win32") {
       return;

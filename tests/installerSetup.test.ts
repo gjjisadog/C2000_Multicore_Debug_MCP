@@ -87,10 +87,12 @@ describe("one-command installer", () => {
     const runtime = path.resolve("runtime");
     const config = createInstalledConfig(workspace, runtime) as {
       filesystem: { allowedReadRoots: string[] };
+      programSearchRoots: string[];
       daemon: { runtimeDir: string };
       storage: { sqlitePath: string };
     };
     expect(config.filesystem.allowedReadRoots).toEqual([workspace]);
+    expect(config.programSearchRoots).toEqual([workspace]);
     expect(config.daemon.runtimeDir).toBe(runtime);
     expect(config.storage.sqlitePath).toBe(path.join(runtime, "c2000-debugd.sqlite"));
   });

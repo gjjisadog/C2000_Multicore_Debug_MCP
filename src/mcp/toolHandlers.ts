@@ -130,6 +130,7 @@ export interface ToolHandlerDeps {
   getServerHealth?: () => ToolResult;
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
+  programSearchRoots?: string[];
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -172,6 +173,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getServerHealth = deps.getServerHealth ?? (() => ({ status: "ready" }));
   const daemonRoutingConfigured = Boolean(deps.getDaemonHealth && deps.listBoards);
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
+  const configuredProgramSearchRoots = deps.programSearchRoots;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
@@ -313,7 +315,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await discoverAcceptancePrograms({
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
-          searchRoots: input.searchRoots ?? programSearchRoots(),
+          searchRoots: input.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
           maxDepth: input.maxDepth
         }));
       } catch (error) {
@@ -330,7 +332,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const programDiscovery = await discoverAcceptancePrograms({
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
-          searchRoots: input.searchRoots ?? programSearchRoots(),
+          searchRoots: input.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
           maxDepth: input.maxDepth
         });
         const probeWaitStartedAt = Date.now();
@@ -1051,7 +1053,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           ? await discoverAcceptancePrograms({
             cpu1Program: parsed.programDiscovery.cpu1Program ?? process.env.C2000_CPU1_OUT,
             cpu2Program: parsed.programDiscovery.cpu2Program ?? process.env.C2000_CPU2_OUT,
-            searchRoots: parsed.programDiscovery.searchRoots ?? programSearchRoots(),
+            searchRoots: parsed.programDiscovery.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
             maxDepth: parsed.programDiscovery.maxDepth
           })
           : undefined;
@@ -1482,10 +1484,13 @@ function findXmlElementAttributes(
   return undefined;
 }
 
-function programSearchRoots(): string[] {
+function programSearchRoots(configuredRoots: string[] | undefined): string[] {
   const configured = process.env.C2000_PROGRAM_SEARCH_ROOTS;
   if (configured) {
     return configured.split(path.delimiter).filter(Boolean);
+  }
+  if (configuredRoots && configuredRoots.length > 0) {
+    return configuredRoots;
   }
   return [path.join(os.homedir(), "workspace_ccstheia")];
 }

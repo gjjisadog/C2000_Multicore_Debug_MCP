@@ -36,6 +36,8 @@ export const c2000McpConfigSchema = z.object({
     name: z.string().default("F28P65x"),
     coreMap: z.array(coreConfigSchema).min(1)
   }),
+  /** Optional roots used by host-only CPU1/CPU2 .out discovery. */
+  programSearchRoots: z.array(z.string().min(1)).optional(),
   diagnostics: z.object({
     cpu1BootExpressions: z.array(z.string().min(1)).optional(),
     cpu2BootExpressions: z.array(z.string().min(1)).optional()

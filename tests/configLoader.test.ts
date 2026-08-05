@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
+import path from "node:path";
 import { loadConfig } from "../src/config/config.loader.js";
 import type { TiEnvironmentResolution } from "../src/config/tiPaths.js";
 
@@ -81,5 +82,21 @@ describe("loadConfig", () => {
       c2000WarePath: "/env/C2000Ware",
       ccxmlPath: "/env/target.ccxml"
     });
+  });
+
+  test("loads firmware program search roots from the environment", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    process.env.C2000_PROGRAM_SEARCH_ROOTS = ["/firmware/one", "/firmware/two"].join(path.delimiter);
+
+    const config = await loadConfig(undefined, {
+      resolveTiEnvironment: async () => ({
+        ccs: { path: undefined, source: "unresolved", valid: false },
+        c2000Ware: { path: undefined, source: "unresolved", valid: false },
+        ccxml: { path: undefined, source: "unresolved", valid: false },
+        attempts: []
+      })
+    });
+
+    expect(config.programSearchRoots).toEqual(["/firmware/one", "/firmware/two"]);
   });
 });

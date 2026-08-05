@@ -4,6 +4,28 @@ import { DebugMcpError, type DebugErrorCode } from "../utils/errors.js";
 
 export interface FilesystemPolicy { allowedReadRoots: string[]; allowedWriteRoots: string[] }
 
+/**
+ * Add paths that came from the trusted runtime configuration to the read
+ * policy. Per-call paths are still checked against the resulting allowlist by
+ * validateToolPaths; this helper does not broaden access based on tool input.
+ */
+export function withAdditionalReadRoots(
+  policy: FilesystemPolicy | undefined,
+  options: { roots?: Array<string | undefined>; files?: Array<string | undefined> }
+): FilesystemPolicy {
+  const readRoots = new Set(policy?.allowedReadRoots ?? []);
+  for (const root of options.roots ?? []) {
+    if (typeof root === "string" && root.length > 0) readRoots.add(root);
+  }
+  for (const file of options.files ?? []) {
+    if (typeof file === "string" && file.length > 0) readRoots.add(path.dirname(file));
+  }
+  return {
+    allowedReadRoots: [...readRoots],
+    allowedWriteRoots: [...(policy?.allowedWriteRoots ?? [])]
+  };
+}
+
 export async function assertAllowedReadPath(candidate: string, policy: FilesystemPolicy): Promise<string> {
   return assertAllowedPath(candidate, policy.allowedReadRoots, "PathOutsideAllowedReadRoots", true);
 }

@@ -455,7 +455,7 @@ export const launchMulticoreDebugSchema = z.object({
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
-  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseOnComplete: z.boolean().default(true),
   autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
@@ -504,7 +504,7 @@ const multiBoardLaunchEntrySchema = z.object({
   sessionName: z.string().min(1).optional(),
   targetConfigurationName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1),
-  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseOnComplete: z.boolean().default(true),
   autoCloseIdleTimeoutMs: z.number().int().positive().default(60000),
   cores: z.array(launchCoreSchema).min(1)
 });

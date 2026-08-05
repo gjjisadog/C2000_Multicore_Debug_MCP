@@ -14,6 +14,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     adapter: "auto",
     ccs: { scriptingMode: "auto" },
     target: { name: "F28P65x", coreMap: defaultF28P65xCoreMap },
+    programSearchRoots: [],
     diagnostics: {},
     logging: { level: "info" },
     toolProfile: "safe",
@@ -61,6 +62,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
   if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_ALLOWED_WRITE_ROOTS) filesystem.allowedWriteRoots = process.env.C2000_MCP_ALLOWED_WRITE_ROOTS.split(path.delimiter).filter(Boolean);
+  if (process.env.C2000_PROGRAM_SEARCH_ROOTS) config.programSearchRoots = process.env.C2000_PROGRAM_SEARCH_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_PROBE_QUEUE_DIR) debugProbe.queueDir = process.env.C2000_MCP_PROBE_QUEUE_DIR;
   if (process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS) debugProbe.queueTimeoutMs = Number.parseInt(process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS, 10);
   if (process.env.C2000_MCP_PROBE_RECOVERY_POLICY) debugProbe.recoveryPolicy = process.env.C2000_MCP_PROBE_RECOVERY_POLICY;
