@@ -22,6 +22,45 @@ afterEach(async () => {
 });
 
 describe("board worker supervisor", () => {
+  test("coalesces concurrent worker startup into one live route", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-start-race-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    let releaseStart!: () => void;
+    let workerCreated!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    const created = new Promise<void>(resolve => { workerCreated = resolve; });
+    let starts = 0;
+    const supervisor = new BoardWorkerSupervisor({
+      config: configFor(directory),
+      daemonInstanceId: "daemon-test",
+      registry,
+      workers: new WorkerRepository(store),
+      events,
+      factory: options => {
+        starts += 1;
+        workerCreated();
+        return new FakeWorker(options, false, startGate);
+      }
+    });
+    try {
+      const first = supervisor.startBoard("board-a");
+      await created;
+      const second = supervisor.startBoard("board-a");
+      expect(starts).toBe(1);
+      releaseStart();
+      const [firstWorker, secondWorker] = await Promise.all([first, second]);
+      expect(firstWorker.workerInstanceId).toBe(secondWorker.workerInstanceId);
+      expect(supervisor.currentWorker("board-a")?.workerInstanceId).toBe(firstWorker.workerInstanceId);
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("command timeout restarts only the affected board worker", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-supervisor-"));
     directories.push(directory);
@@ -47,8 +86,8 @@ describe("board worker supervisor", () => {
     });
     try {
       await supervisor.startAll();
-      const leaseA = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", ttlMs: 1000 });
-      const leaseB = registry.leases.acquire({ boardId: "board-b", ownerJobId: "job-b", ttlMs: 1000 });
+      const leaseA = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", workerInstanceId: registry.get("board-a").currentWorkerInstanceId!, ttlMs: 1000 });
+      const leaseB = registry.leases.acquire({ boardId: "board-b", ownerJobId: "job-b", workerInstanceId: registry.get("board-b").currentWorkerInstanceId!, ttlMs: 1000 });
       await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", { __leaseContext: leaseA.context }, 5)).rejects.toMatchObject({ code: "WorkerCommandTimeout" });
       expect(starts.get("board-a")).toBe(2);
       expect(starts.get("board-b")).toBe(1);
@@ -76,6 +115,45 @@ describe("board worker supervisor", () => {
       store.close();
     }
   });
+
+  test("reports a stale lease route before invoking the worker", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-lease-route-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    const clients: FakeWorker[] = [];
+    const supervisor = new BoardWorkerSupervisor({
+      config: configFor(directory),
+      daemonInstanceId: "daemon-test",
+      registry,
+      workers: new WorkerRepository(store),
+      events,
+      factory: options => {
+        const client = new FakeWorker(options, false);
+        clients.push(client);
+        return client;
+      }
+    });
+    try {
+      await supervisor.startAll();
+      const lease = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-stale", workerInstanceId: "worker-stale", ttlMs: 1000 });
+      await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", { __leaseContext: lease.context })).rejects.toMatchObject({
+        code: "LeaseWorkerMismatch",
+        details: expect.objectContaining({
+          stage: "lease-fence",
+          targetAccessAttempted: false,
+          expectedWorkerInstanceId: clients[0]?.workerInstanceId,
+          receivedWorkerInstanceId: "worker-stale"
+        })
+      });
+      expect(clients[0]?.invocationCount).toBe(0);
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
 });
 
 class FakeWorker implements BoardWorkerClient {
@@ -89,17 +167,21 @@ class FakeWorker implements BoardWorkerClient {
   stopped = false;
   readonly invokedTimeouts: number[] = [];
 
-  constructor(options: BoardWorkerLaunchOptions, private readonly shouldTimeout: boolean) {
+  invocationCount = 0;
+
+  constructor(options: BoardWorkerLaunchOptions, private readonly shouldTimeout: boolean, private readonly startGate?: Promise<void>) {
     this.workerInstanceId = options.workerInstanceId;
     this.boardId = options.boardId;
     this.probeSerial = options.probeSerial;
   }
 
   async start(): Promise<void> {
+    await this.startGate;
     this.lastHeartbeatAt = Date.now();
   }
 
   async invokeTool(_toolName: string, _input: unknown, _timeoutMs: number): Promise<Record<string, unknown>> {
+    this.invocationCount += 1;
     this.invokedTimeouts.push(_timeoutMs);
     if (this.shouldTimeout) {
       throw new DebugMcpError("WorkerCommandTimeout", "simulated stuck command", { boardId: this.boardId });

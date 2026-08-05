@@ -49,6 +49,18 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         boardId
       });
     }
+    const worker = this.workers.currentWorker(boardId);
+    if (!worker || worker.workerInstanceId !== interactive.context.workerInstanceId) {
+      throw new DebugMcpError("LeaseWorkerMismatch", "Interactive lease does not bind the current board worker", {
+        sessionId,
+        boardId,
+        expectedWorkerInstanceId: worker?.workerInstanceId,
+        receivedWorkerInstanceId: interactive.context.workerInstanceId,
+        expectedWorkerGeneration: worker?.workerGeneration,
+        stage: "interactive-lease",
+        targetAccessAttempted: false
+      });
+    }
     this.registry.leases.renew(interactive.lease.leaseId, interactive.leaseToken, ttlMs);
     return interactive.context;
   }
@@ -133,7 +145,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
   }
 
   private async acquireInteractiveLease(boardId: string, ttlMs = 60000): Promise<LeasedBoard> {
-    const worker = await this.workers.startBoard(boardId);
+    const worker = await this.workers.ensureWorker(boardId);
     return this.registry.leases.acquire({
       boardId,
       ownerJobId: `interactive-${randomId()}`,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { BoardRegistry } from "../src/boards/BoardRegistry.js";
 import { TestJobEngine } from "../src/jobs/TestJobEngine.js";
+import type { BoardWorkerRoute } from "../src/boards/BoardWorkerSupervisor.js";
 import type { JobArtifactSnapshotService } from "../src/artifacts/JobArtifactSnapshotService.js";
 import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
@@ -481,13 +482,77 @@ describe("durable step cleanup and output safety", () => {
     await fixture.engine.stop();
     fixture.store.close();
   });
+
+  test("binds a durable lease to the live worker route instead of the persisted board route", async () => {
+    const calls: Array<{ toolName: string; workerInstanceId?: string }> = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName, input) {
+        const leaseContext = input && typeof input === "object" && !Array.isArray(input)
+          ? (input as Record<string, unknown>).__leaseContext as Record<string, unknown> | undefined
+          : undefined;
+        calls.push({ toolName, workerInstanceId: typeof leaseContext?.workerInstanceId === "string" ? leaseContext.workerInstanceId : undefined });
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-live-route" };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-live-route", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    }, ["board-a"], undefined, async (): Promise<BoardWorkerRoute> => ({ workerInstanceId: "worker-live", workerGeneration: 7 }));
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "live-route-lease", boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
+    expect(calls).toEqual([{ toolName: "c2000_launchMulticoreDebug", workerInstanceId: "worker-live" }, { toolName: "c2000_closeDebugSession", workerInstanceId: "worker-live" }]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
+  test("fails before target access when the worker route changes after lease acquisition", async () => {
+    const calls: string[] = [];
+    let routeCalls = 0;
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        throw new Error(`target access should not occur: ${toolName}`);
+      }
+    }, ["board-a"], undefined, async (): Promise<BoardWorkerRoute> => {
+      routeCalls += 1;
+      return routeCalls <= 2
+        ? { workerInstanceId: "worker-before", workerGeneration: 1 }
+        : { workerInstanceId: "worker-after", workerGeneration: 2 };
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1, name: "route-change-before-target", boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
+      status: "FAILED",
+      error: expect.objectContaining({
+        code: "LeaseWorkerMismatch",
+        details: expect.objectContaining({
+          stage: "pre-step",
+          targetAccessAttempted: false,
+          expectedWorkerInstanceId: "worker-after",
+          receivedWorkerInstanceId: "worker-before"
+        })
+      })
+    }));
+    expect(calls).toEqual([]);
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
 });
 
 function planWithCleanup() {
   return { planVersion: 1, name: "cleanup-state", boardIds: ["board-a"], steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }] };
 }
 
-async function createFixture(tools: C2000ToolInvoker, boardIds = ["board-a"], artifactSnapshots?: JobArtifactSnapshotService) {
+async function createFixture(
+  tools: C2000ToolInvoker,
+  boardIds = ["board-a"],
+  artifactSnapshots?: JobArtifactSnapshotService,
+  ensureBoardWorker?: (boardId: string) => Promise<BoardWorkerRoute>
+) {
   const root = await mkdtemp(path.join(os.tmpdir(), "c2000-durable-safety-"));
   roots.push(root);
   const store = await SqliteStore.open(path.join(root, "runtime.sqlite"));
@@ -498,7 +563,12 @@ async function createFixture(tools: C2000ToolInvoker, boardIds = ["board-a"], ar
     registry.setWorker(boardId, `worker-${index}`);
   }
   const runs = new TestRunRepository(store);
-  const engine = new TestJobEngine({ registry, runs, events, artifacts: new ArtifactRepository(store), tools, maxParallelBoards: boardIds.length, artifactSnapshots });
+  const workerRouteResolver = ensureBoardWorker ?? (async (boardId: string): Promise<BoardWorkerRoute> => {
+    const workerInstanceId = registry.get(boardId).currentWorkerInstanceId;
+    if (!workerInstanceId) throw new Error(`fixture worker route missing for ${boardId}`);
+    return { workerInstanceId, workerGeneration: 1 };
+  });
+  const engine = new TestJobEngine({ registry, runs, events, artifacts: new ArtifactRepository(store), tools, ensureBoardWorker: workerRouteResolver, maxParallelBoards: boardIds.length, artifactSnapshots });
   return { root, store, events, registry, runs, engine };
 }
 

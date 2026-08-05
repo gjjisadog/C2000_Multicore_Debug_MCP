@@ -91,6 +91,25 @@ Every board-bound command must carry a current lease context containing
 context. After repeated renewal failure, stop target commands and recover from
 persisted metadata only; never claim the old DSS session was restored.
 
+Durable worker routing is a separate invariant from the persisted board row:
+
+- Before acquiring a durable lease, require the daemon supervisor to resolve
+  the live `workerInstanceId` and bind that exact identity into the lease.
+  `listBoards.currentWorkerInstanceId` is diagnostic state, not a substitute
+  for the live supervisor route.
+- Before every target-bound durable step, re-check that the live worker still
+  matches the lease. `LeaseWorkerMismatch` or `WorkerIdentityMismatch` is a
+  fencing/infrastructure failure: stop, inspect `c2000_getTestRun` evidence,
+  and do not retry the old context or hide the failure with a new target call.
+- Treat `c2000_getAcceptanceReadiness` and XDSDFU output as host/probe
+  readiness only. They do not prove DebugServer target access or a valid
+  session; preserve the exact failing stage and `targetAccessAttempted` value.
+- `c2000_submitTestPlan` only queues work. Poll `c2000_getTestRun` until a
+  terminal status and retain the error, event, and artifact evidence.
+- If multiple calls are needed after a launch, keep the debug session alive
+  for that sequence (`autoCloseOnComplete: false`); otherwise request the
+  snapshot/diagnosis inside the same workflow or durable job before auto-close.
+
 PCAN rules:
 
 - Mock is simulation evidence only.

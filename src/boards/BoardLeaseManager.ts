@@ -19,7 +19,7 @@ export class BoardLeaseManager {
     private readonly leases: LeaseRepository
   ) {}
 
-  acquire(options: { boardId: string; ownerJobId?: string; workerInstanceId?: string; ttlMs: number }): LeasedBoard {
+  acquire(options: { boardId: string; ownerJobId?: string; workerInstanceId: string; ttlMs: number }): LeasedBoard {
     return this.store.transaction(() => {
       const now = new Date();
       const prepared = this.prepare(options, now);
@@ -31,7 +31,7 @@ export class BoardLeaseManager {
   acquireGroup(options: {
     boardIds: string[];
     ownerJobId: string;
-    workerInstanceIds?: Record<string, string>;
+    workerInstanceIds: Record<string, string>;
     ttlMs: number;
   }): LeasedBoard[] {
     if (options.boardIds.length === 0 || new Set(options.boardIds).size !== options.boardIds.length) {
@@ -43,7 +43,7 @@ export class BoardLeaseManager {
       const prepared = [...options.boardIds].sort().map(boardId => this.prepare({
         boardId,
         ownerJobId: options.ownerJobId,
-        workerInstanceId: options.workerInstanceIds?.[boardId],
+        workerInstanceId: options.workerInstanceIds[boardId]!,
         ttlMs: options.ttlMs
       }, now, false));
       for (const item of prepared) {
@@ -146,7 +146,13 @@ export class BoardLeaseManager {
       if (existing.leaseGeneration !== context.leaseGeneration) throw new DebugMcpError("LeaseFencingRejected", "Board lease generation is stale", { leaseId: context.leaseId });
       if (existing.ownerJobId !== context.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "Board lease owner does not match", { leaseId: context.leaseId });
       if (existing.boardId !== context.boardId || existing.probeSerial !== context.probeSerial) throw new DebugMcpError("LeaseBoardMismatch", "Board lease identity does not match", { leaseId: context.leaseId });
-      if (existing.workerInstanceId !== context.workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "Board lease worker does not match", { leaseId: context.leaseId });
+      if (existing.workerInstanceId !== context.workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "Board lease worker does not match", {
+        leaseId: context.leaseId,
+        expectedWorkerInstanceId: existing.workerInstanceId,
+        receivedWorkerInstanceId: context.workerInstanceId,
+        stage: "lease-validate",
+        targetAccessAttempted: false
+      });
       this.leases.validate(existing.leaseId, new Date().toISOString());
       const { leaseTokenHash: _token, ...lease } = existing;
       return lease;
@@ -162,7 +168,7 @@ export class BoardLeaseManager {
   }
 
   private prepare(
-    options: { boardId: string; ownerJobId?: string; workerInstanceId?: string; ttlMs: number },
+    options: { boardId: string; ownerJobId?: string; workerInstanceId: string; ttlMs: number },
     now: Date,
     releaseExpired = true
   ): { board: ReturnType<BoardRepository["require"]>; ownerJobId: string; workerInstanceId: string; expiredLeaseId?: string } {
@@ -177,8 +183,13 @@ export class BoardLeaseManager {
       });
     }
     if (!options.ownerJobId) throw new DebugMcpError("LeaseOwnerMismatch", "A board lease requires an explicit owner", { boardId: board.boardId });
-    const workerInstanceId = options.workerInstanceId ?? board.currentWorkerInstanceId;
-    if (!workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "A board lease requires an active worker identity", { boardId: board.boardId });
+    const workerInstanceId = options.workerInstanceId;
+    if (!workerInstanceId) throw new DebugMcpError("LeaseWorkerMismatch", "A board lease requires the live supervisor worker identity", {
+      boardId: board.boardId,
+      stage: "lease-acquire",
+      targetAccessAttempted: false,
+      routeSource: "live-supervisor-required"
+    });
     if (existing && releaseExpired) this.leases.release(existing.leaseId, now.toISOString());
     return { board, ownerJobId: options.ownerJobId, workerInstanceId, ...(existing ? { expiredLeaseId: existing.leaseId } : {}) };
   }

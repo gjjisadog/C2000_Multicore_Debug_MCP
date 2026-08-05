@@ -14,19 +14,19 @@ afterEach(async () => Promise.all(directories.splice(0).map(directory => rm(dire
 describe("atomic board group leases", () => {
   test("acquires both boards and advances fencing generations", async () => {
     const fixture = await makeFixture();
-    const first = fixture.registry.leases.acquireGroup({ boardIds: ["board-b", "board-a"], ownerJobId: "job-1", ttlMs: 1000 });
+    const first = fixture.registry.leases.acquireGroup({ boardIds: ["board-b", "board-a"], ownerJobId: "job-1", workerInstanceIds: fixture.workerInstanceIds, ttlMs: 1000 });
     expect(first.map(item => item.lease.boardId)).toEqual(["board-a", "board-b"]);
     expect(first.map(item => item.context.fencingToken)).toEqual([1, 1]);
     first.forEach(item => fixture.registry.leases.release(item.lease.leaseId, item.leaseToken));
-    const second = fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-b"], ownerJobId: "job-2", ttlMs: 1000 });
+    const second = fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-b"], ownerJobId: "job-2", workerInstanceIds: fixture.workerInstanceIds, ttlMs: 1000 });
     expect(second.map(item => item.context.fencingToken)).toEqual([2, 2]);
     fixture.store.close();
   });
 
   test("rolls back the whole group when the second board is occupied", async () => {
     const fixture = await makeFixture();
-    fixture.registry.leases.acquire({ boardId: "board-b", ownerJobId: "blocker", ttlMs: 1000 });
-    expect(() => fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-b"], ownerJobId: "pair", ttlMs: 1000 })).toThrowError(expect.objectContaining({ code: "BoardLeased" }));
+    fixture.registry.leases.acquire({ boardId: "board-b", ownerJobId: "blocker", workerInstanceId: fixture.workerInstanceIds["board-b"]!, ttlMs: 1000 });
+    expect(() => fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-b"], ownerJobId: "pair", workerInstanceIds: fixture.workerInstanceIds, ttlMs: 1000 })).toThrowError(expect.objectContaining({ code: "BoardLeased" }));
     expect(fixture.registry.leases.active("board-a")).toBeUndefined();
     expect(fixture.registry.get("board-a").currentLeaseId).toBeUndefined();
     expect(fixture.registry.leases.active("board-b")?.ownerJobId).toBe("blocker");
@@ -50,5 +50,5 @@ async function makeFixture() {
     registry.register({ boardId, probeSerial: `XDS-${boardId}`, device: "F28P65x", ccxmlPath: `${boardId}.ccxml`, tags: [] });
     registry.setWorker(boardId, `worker-${boardId}`);
   }
-  return { store, registry };
+  return { store, registry, workerInstanceIds: { "board-a": "worker-board-a", "board-b": "worker-board-b" } };
 }

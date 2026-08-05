@@ -182,6 +182,22 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     ...body,
     error: toStructuredError(error)
   });
+  const failAtStage = (error: unknown, stage: string, body: ToolResult = {}): ToolResult => {
+    const structured = toStructuredError(error);
+    return {
+      success: false,
+      timestamp: new Date().toISOString(),
+      ...body,
+      error: {
+        ...structured,
+        details: {
+          ...(structured.details ?? {}),
+          stage,
+          targetAccessAttempted: false
+        }
+      }
+    };
+  };
   const okBatch = (label: string, body: ToolResult): ToolResult => {
     const failed = Array.isArray(body.results)
       ? (body.results as Array<Record<string, any>>).filter(item => item.success === false)
@@ -324,11 +340,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     },
 
     async getAcceptanceReadiness(input: z.input<typeof acceptanceReadinessSchema>) {
+      let readinessStage = "input-validation";
       try {
         const waitForProbeMs = input.waitForProbeMs ?? 0;
         const probePollIntervalMs = input.probePollIntervalMs ?? 250;
         const ccxmlPath = input.ccxmlPath ?? process.env.C2000_MCP_CCXML_PATH;
         const allowExistingDebugProcesses = input.allowExistingDebugProcesses ?? process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
+        readinessStage = "program-discovery";
         const programDiscovery = await discoverAcceptancePrograms({
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
@@ -336,11 +354,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           maxDepth: input.maxDepth
         });
         const probeWaitStartedAt = Date.now();
+        readinessStage = "hardware-preflight";
         let preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath ?? deps.tiEnvironment?.ccsInstallPath });
         let probeWaitAttempts = 1;
         while (waitForProbeMs > 0
           && Date.now() - probeWaitStartedAt < waitForProbeMs
           && !preflightReady(preflight, allowExistingDebugProcesses)) {
+          readinessStage = "hardware-preflight-wait";
           const remainingMs = waitForProbeMs - (Date.now() - probeWaitStartedAt);
           await sleepCore(Math.min(probePollIntervalMs, Math.max(1, remainingMs)));
           preflight = await hardwarePreflight({ ccsInstallPath: input.ccsInstallPath ?? deps.tiEnvironment?.ccsInstallPath });
@@ -352,17 +372,21 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           attempts: probeWaitAttempts,
           released: preflightReady(preflight, allowExistingDebugProcesses)
         };
+        readinessStage = "debug-boundary";
         const debugBoundary = getDebugBoundary();
         const uiIndependenceEvidence = buildUiIndependenceEvidence(debugBoundary);
         const acceptanceEvidence = buildAcceptanceEvidencePlan();
+        readinessStage = "artifact-pair-validation";
         const cpu1Program = discoveredProgramForCore(0, programDiscovery);
         const cpu2Program = discoveredProgramForCore(2, programDiscovery);
         const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, "F28P65x");
         const debugProcessOwners = formatDebugProcessOwners(preflight);
         const hasDebugProcessOwners = preflight.debugProcessDetails.length > 0 || preflight.debugProcesses.length > 0;
+        readinessStage = "daemon-health";
         const daemonHealth: ToolResult | undefined = daemonRoutingConfigured
           ? await Promise.resolve(getDaemonHealth()) as ToolResult
           : undefined;
+        readinessStage = "board-route";
         const boardListing = daemonRoutingConfigured ? await Promise.resolve(listBoards({})) : undefined;
         const registeredBoards = Array.isArray(boardListing?.boards) ? boardListing.boards as ToolResult[] : [];
         const enumeratedProbeSerials = new Set(
@@ -407,6 +431,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
                 : undefined
           }
           : { applicable: false, ok: true, reason: "Readiness is running without the c2000-debugd board router." };
+        readinessStage = "host-readiness-checks";
         const checks = {
           ccxml: await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required"),
           cpu1Program: await hostFileCheck(cpu1Program, "CPU1 .out program was not discovered"),
@@ -465,7 +490,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           })
         });
       } catch (error) {
-        return fail(error);
+        return failAtStage(error, readinessStage);
       }
     },
 

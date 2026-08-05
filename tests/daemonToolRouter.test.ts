@@ -151,10 +151,16 @@ async function makeFixture() {
       throw new Error("unexpected local route");
     },
   };
-  const workers = {
-    async startBoard() {
-      return { workerInstanceId: "worker-1" };
-    },
+    const workers = {
+      async startBoard() {
+        return { workerInstanceId: "worker-1" };
+      },
+      async ensureWorker() {
+        return { workerInstanceId: "worker-1", workerGeneration: 1 };
+      },
+      currentWorker() {
+        return { workerInstanceId: "worker-1", workerGeneration: 1 };
+      },
     commandTimeoutMs() {
       return 1000;
     },

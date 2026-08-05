@@ -18,6 +18,7 @@ import { BoardGroupReconcileDecisionRepository } from "../storage/repositories/B
 import { CanGroupReconciler } from "../can/CanGroupReconciler.js";
 import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecutionSnapshot } from "./BoardExecutionSemaphore.js";
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
+import type { BoardWorkerRoute } from "../boards/BoardWorkerSupervisor.js";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
 import { portableDurableEvidenceFromSteps, type JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
@@ -39,6 +40,8 @@ export class TestJobEngine {
     events: EventRepository;
     artifacts: ArtifactRepository;
     tools: C2000ToolInvoker;
+    /** Resolve the live supervisor route before a durable lease is acquired or a target step runs. */
+    ensureBoardWorker: (boardId: string) => Promise<BoardWorkerRoute>;
     maxActiveJobs?: number;
     maxParallelBoards: number;
     agingThresholdMs?: number;
@@ -246,11 +249,7 @@ export class TestJobEngine {
     try {
       if (plan.can) {
         groupPermits = await this.boardPermits.acquireGroup(boards.map(board => board.boardId), jobId, plan.priority === "REGRESSION" ? "ACCEPTANCE" : plan.priority);
-        groupLeases = this.options.registry.leases.acquireGroup({
-          boardIds: boards.map(board => board.boardId),
-          ownerJobId: jobId,
-          ttlMs: 30000
-        });
+        groupLeases = await this.acquireGroupLeases(jobId, boards.map(board => board.boardId));
       }
       const permitsByBoard = new Map(groupPermits?.map(permit => [permit.boardId, permit]));
       const leasesByBoard = new Map(groupLeases?.map(lease => [lease.lease.boardId, lease]));
@@ -303,6 +302,98 @@ export class TestJobEngine {
     }
   }
 
+  /**
+   * Bind a durable lease to the worker selected by the live supervisor. The
+   * persisted board row is only a record of state; it is not a routing source.
+   * A single pre-command retry is safe because no target command has been
+   * submitted and the first lease is released before a new context is made.
+   */
+  private async acquireBoardLease(jobId: string, boardId: string): Promise<LeasedBoard> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const route = await this.options.ensureBoardWorker(boardId);
+      let lease: LeasedBoard | undefined;
+      try {
+        lease = this.options.registry.leases.acquire({
+          boardId,
+          ownerJobId: jobId,
+          workerInstanceId: route.workerInstanceId,
+          ttlMs: 30000
+        });
+        const verifiedRoute = await this.options.ensureBoardWorker(boardId);
+        if (verifiedRoute.workerInstanceId !== route.workerInstanceId) {
+          throw leaseWorkerRouteMismatch(boardId, verifiedRoute, route, "lease-acquire");
+        }
+        return lease;
+      } catch (error) {
+        if (lease) this.releaseLease(lease);
+        if (attempt === 0 && isWorkerRouteMismatch(error)) continue;
+        throw error;
+      }
+    }
+    throw new DebugMcpError("LeaseWorkerMismatch", "Live worker route changed while acquiring the board lease", {
+      boardId,
+      stage: "lease-acquire",
+      targetAccessAttempted: false
+    });
+  }
+
+  /** Acquire a CAN group lease from one consistent live route snapshot. */
+  private async acquireGroupLeases(jobId: string, boardIds: string[]): Promise<LeasedBoard[]> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const routes = await this.resolveWorkerRoutes(boardIds);
+      let leases: LeasedBoard[] | undefined;
+      try {
+        leases = this.options.registry.leases.acquireGroup({
+          boardIds,
+          ownerJobId: jobId,
+          workerInstanceIds: Object.fromEntries([...routes].map(([boardId, route]) => [boardId, route.workerInstanceId])),
+          ttlMs: 30000
+        });
+        const verifiedRoutes = await this.resolveWorkerRoutes(boardIds);
+        for (const boardId of boardIds) {
+          const route = routes.get(boardId)!;
+          const verifiedRoute = verifiedRoutes.get(boardId)!;
+          if (verifiedRoute.workerInstanceId !== route.workerInstanceId) {
+            throw leaseWorkerRouteMismatch(boardId, verifiedRoute, route, "lease-acquire");
+          }
+        }
+        return leases;
+      } catch (error) {
+        for (const lease of leases ?? []) this.releaseLease(lease);
+        if (attempt === 0 && isWorkerRouteMismatch(error)) continue;
+        throw error;
+      }
+    }
+    throw new DebugMcpError("LeaseWorkerMismatch", "Live worker routes changed while acquiring the CAN board group lease", {
+      boardIds,
+      stage: "lease-acquire",
+      targetAccessAttempted: false
+    });
+  }
+
+  private async resolveWorkerRoutes(boardIds: string[]): Promise<Map<string, BoardWorkerRoute>> {
+    const entries = await Promise.all(boardIds.map(async boardId => [boardId, await this.options.ensureBoardWorker(boardId)] as const));
+    return new Map(entries);
+  }
+
+  private async assertCurrentWorkerRoute(boardId: string, lease: LeasedBoard): Promise<void> {
+    const route = await this.options.ensureBoardWorker(boardId);
+    if (route.workerInstanceId !== lease.context.workerInstanceId) {
+      throw leaseWorkerRouteMismatch(boardId, route, {
+        workerInstanceId: lease.context.workerInstanceId,
+        workerGeneration: undefined
+      }, "pre-step");
+    }
+  }
+
+  private releaseLease(lease: LeasedBoard): void {
+    try {
+      this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken);
+    } catch {
+      // Expiry/recovery remains authoritative if the lease was already fenced.
+    }
+  }
+
   private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit, groupLease?: LeasedBoard): Promise<{ success: boolean; cancelled: boolean }> {
     const permit = groupPermit ?? await this.boardPermits.acquire(board.boardId, jobId);
     const boardStart = new Date().toISOString();
@@ -310,7 +401,7 @@ export class TestJobEngine {
     this.options.runs.updateBoard(current);
     let lease = groupLease;
     try {
-      lease ??= this.options.registry.leases.acquire({ boardId: board.boardId, ownerJobId: jobId, ttlMs: 30000 });
+      lease ??= await this.acquireBoardLease(jobId, board.boardId);
     } catch (error) {
       const leaseError = { ...toStructuredError(error) };
       this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError });
@@ -384,6 +475,9 @@ export class TestJobEngine {
           const running = { ...step, status: "RUNNING", attempt, startedAt: attemptStartedAt } as TestStepRecord;
           this.options.runs.updateStep(running);
           try {
+            if (stepRequiresLiveWorkerRoute(plannedStep.type)) {
+              await this.assertCurrentWorkerRoute(board.boardId, lease);
+            }
             if (plannedStep.type === "launchMulticore" && sessionOpen) {
               throw new DebugMcpError("SessionAlreadyOpen", "launchMulticore cannot replace the active fenced board-flow session", { sessionId });
             }
@@ -637,6 +731,33 @@ function guardBeforeStep(stepType: TestPlanStep["type"]): boolean {
 
 function guardAfterStep(stepType: TestPlanStep["type"]): boolean {
   return stepType !== "cleanup" && stepType !== "restorePrograms";
+}
+
+function stepRequiresLiveWorkerRoute(stepType: TestPlanStep["type"]): boolean {
+  return stepType !== "preflight" && stepType !== "delay";
+}
+
+function leaseWorkerRouteMismatch(
+  boardId: string,
+  expected: BoardWorkerRoute,
+  received: { workerInstanceId: string; workerGeneration?: number },
+  stage: "lease-acquire" | "pre-step"
+): DebugMcpError {
+  return new DebugMcpError("LeaseWorkerMismatch", "Durable lease is not bound to the live worker route", {
+    boardId,
+    expectedWorkerInstanceId: expected.workerInstanceId,
+    receivedWorkerInstanceId: received.workerInstanceId,
+    expectedWorkerGeneration: expected.workerGeneration,
+    ...(received.workerGeneration === undefined ? {} : { receivedWorkerGeneration: received.workerGeneration }),
+    stage,
+    targetAccessAttempted: false
+  });
+}
+
+function isWorkerRouteMismatch(error: unknown): boolean {
+  return error instanceof DebugMcpError
+    && error.code === "LeaseWorkerMismatch"
+    && error.details.stage === "lease-acquire";
 }
 
 function failedSafetyIsolation(error: Record<string, unknown>): boolean {

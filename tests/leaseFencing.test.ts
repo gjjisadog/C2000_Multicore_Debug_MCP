@@ -38,11 +38,14 @@ describe("lease fencing", () => {
     const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
     registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
     registry.setWorker("board-a", "worker-1");
-    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", ttlMs: 1000 });
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", workerInstanceId: "worker-1", ttlMs: 1000 });
 
     expect(() => registry.leases.validate({ ...leased.context, ownerJobId: "job-b" })).toThrowError(expect.objectContaining({ code: "LeaseOwnerMismatch" }));
     expect(() => registry.leases.validate({ ...leased.context, boardId: "board-b" })).toThrowError(expect.objectContaining({ code: "LeaseBoardMismatch" }));
-    expect(() => registry.leases.validate({ ...leased.context, workerInstanceId: "worker-2" })).toThrowError(expect.objectContaining({ code: "LeaseWorkerMismatch" }));
+    expect(() => registry.leases.validate({ ...leased.context, workerInstanceId: "worker-2" })).toThrowError(expect.objectContaining({
+      code: "LeaseWorkerMismatch",
+      details: expect.objectContaining({ stage: "lease-validate", targetAccessAttempted: false, expectedWorkerInstanceId: "worker-1", receivedWorkerInstanceId: "worker-2" })
+    }));
     expect(() => registry.leases.validate({ ...leased.context, leaseToken: "wrong" })).toThrowError(expect.objectContaining({ code: "LeaseFencingRejected" }));
     store.close();
   });
@@ -54,7 +57,7 @@ describe("lease fencing", () => {
     const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
     registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
     registry.setWorker("board-a", "worker-1");
-    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", ttlMs: 1000 });
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", workerInstanceId: "worker-1", ttlMs: 1000 });
 
     expect(registry.leases.invalidateForWorkerRestart("board-a", "worker-2", "test")).toBe(false);
     expect(registry.leases.active("board-a")?.leaseId).toBe(leased.lease.leaseId);

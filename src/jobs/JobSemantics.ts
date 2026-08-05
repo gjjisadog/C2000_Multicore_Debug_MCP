@@ -33,6 +33,17 @@ export function decideRetry(input: {
   errorCode: string;
 }): { retry: boolean; reason: string; backoffMs: number; requiresReconcile: boolean } {
   if (input.errorCode === "SafetyGuardViolation") return { retry: false, reason: "SAFETY_GUARD_VIOLATION", backoffMs: 0, requiresReconcile: false };
+  if (new Set([
+    "LeaseExpired",
+    "LeaseInvalidated",
+    "LeaseFencingRejected",
+    "LeaseGenerationChanged",
+    "LeaseWorkerMismatch",
+    "WorkerGenerationChanged",
+    "WorkerIdentityMismatch"
+  ]).has(input.errorCode)) {
+    return { retry: false, reason: "STALE_WORKER_OR_LEASE_CONTEXT", backoffMs: 0, requiresReconcile: false };
+  }
   if (input.step.idempotencyClass === "NON_IDEMPOTENT") return { retry: false, reason: "NON_IDEMPOTENT", backoffMs: 0, requiresReconcile: false };
   if (input.attempt >= input.policy.maxAttempts) return { retry: false, reason: "MAX_ATTEMPTS", backoffMs: 0, requiresReconcile: false };
   if (input.policy.retryableErrors.length > 0 && !input.policy.retryableErrors.includes(input.errorCode)) {

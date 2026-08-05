@@ -16,9 +16,15 @@ interface ManagedWorker {
   restartTimes: number[];
 }
 
+export interface BoardWorkerRoute {
+  workerInstanceId: string;
+  workerGeneration: number;
+}
+
 /** Supervises independently restarted workers; no board may restart another board's worker. */
 export class BoardWorkerSupervisor {
   private readonly workers = new Map<string, ManagedWorker>();
+  private readonly startPromises = new Map<string, Promise<BoardWorkerClient>>();
   private readonly factory: BoardWorkerFactory;
   private watchdog?: NodeJS.Timeout;
   private lowPriorityPreemptor?: (boardId: string, toolName: string) => Promise<void>;
@@ -47,6 +53,34 @@ export class BoardWorkerSupervisor {
   async startBoard(boardId: string): Promise<BoardWorkerClient> {
     const existing = this.workers.get(boardId)?.client;
     if (existing) return existing;
+    const pending = this.startPromises.get(boardId);
+    if (pending) return pending;
+    const starting = this.startBoardInternal(boardId);
+    this.startPromises.set(boardId, starting);
+    try {
+      return await starting;
+    } finally {
+      if (this.startPromises.get(boardId) === starting) this.startPromises.delete(boardId);
+    }
+  }
+
+  async ensureWorker(boardId: string): Promise<BoardWorkerRoute> {
+    const client = await this.startBoard(boardId);
+    const route = this.currentWorker(boardId);
+    if (!route || route.workerInstanceId !== client.workerInstanceId) {
+      throw new DebugMcpError("WorkerIdentityMismatch", "Board worker route changed during startup", {
+        boardId,
+        expectedWorkerInstanceId: client.workerInstanceId,
+        receivedWorkerInstanceId: route?.workerInstanceId,
+        expectedWorkerGeneration: route?.workerGeneration,
+        stage: "worker-start",
+        targetAccessAttempted: false
+      });
+    }
+    return route;
+  }
+
+  private async startBoardInternal(boardId: string): Promise<BoardWorkerClient> {
     const board = this.options.registry.get(boardId);
     if (this.requiresCcxmlProbeValidation) {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
@@ -114,10 +148,14 @@ export class BoardWorkerSupervisor {
     if (!leaseContext) throw new DebugMcpError("BoardLeaseRequired", "Board-bound worker command requires a lease fencing context", { boardId, toolName });
     this.options.registry.leases.validate(leaseContext);
     if (leaseContext.boardId !== boardId || leaseContext.workerInstanceId !== worker.workerInstanceId) {
+      const route = this.currentWorker(boardId);
       throw new DebugMcpError("LeaseWorkerMismatch", "Lease context does not match the selected worker route", {
         boardId,
         expectedWorkerInstanceId: worker.workerInstanceId,
-        receivedWorkerInstanceId: leaseContext.workerInstanceId
+        receivedWorkerInstanceId: leaseContext.workerInstanceId,
+        expectedWorkerGeneration: route?.workerGeneration,
+        stage: "lease-fence",
+        targetAccessAttempted: false
       });
     }
     this.options.registry.transition(boardId, "RUNNING");

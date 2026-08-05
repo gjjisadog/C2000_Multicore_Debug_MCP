@@ -275,6 +275,7 @@ export class DebugDaemon {
       events,
       artifacts,
       tools: toolRouter,
+      ensureBoardWorker: boardId => workerSupervisor.ensureWorker(boardId),
       maxActiveJobs: this.config.scheduler?.maxActiveJobs ?? 16,
       maxParallelBoards: this.config.scheduler?.maxParallelBoards ?? 4,
       agingThresholdMs: this.config.scheduler?.agingThresholdMs ?? 30000,

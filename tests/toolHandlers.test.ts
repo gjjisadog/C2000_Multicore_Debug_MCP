@@ -1492,6 +1492,22 @@ describe("tool handlers", () => {
     expect(adapter.createSessionCount).toBe(0);
   });
 
+  test("getAcceptanceReadiness reports the host-only failure stage", async () => {
+    const handlers = createToolHandlers(new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry()), {
+      discoverAcceptancePrograms: async () => {
+        throw new Error("program discovery failed");
+      }
+    });
+
+    await expect(handlers.getAcceptanceReadiness({})).resolves.toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "UnknownError",
+        details: expect.objectContaining({ stage: "program-discovery", targetAccessAttempted: false })
+      })
+    }));
+  });
+
   test("getAcceptanceReadiness reports ready when host files, XDS110, and ownership checks pass", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-ready-"));
     const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");

@@ -73,6 +73,25 @@ If a board worker is unhealthy, call `c2000_recoverBoard` with its default
 `dryRun: true` first. A non-dry run can restart only the daemon-owned worker;
 never use it as authority to kill an external CCS or DebugServer process.
 
+## Durable Worker/Lease Routing
+
+The persisted `currentWorkerInstanceId` on a board is diagnostic state, not a
+durable job routing source. Before a durable lease is acquired, the daemon must
+resolve the live supervisor route and bind that exact `workerInstanceId` into
+the lease. Before every target-bound durable step, it must verify that the
+route still matches the lease. A `LeaseWorkerMismatch` or
+`WorkerIdentityMismatch` is a fail-closed infrastructure result: inspect the
+job's terminal error, events, and artifacts, and never retry an old lease
+context or issue a replacement target command just to mask the mismatch.
+
+Keep host-only readiness separate from target access. XDSDFU enumeration,
+program discovery, and `c2000_getAcceptanceReadiness` do not prove a
+DebugServer session or target connectivity. Readiness failures should retain
+the exact stage and `targetAccessAttempted: false`; a durable job must be
+polled with `c2000_getTestRun` after the queued response until it reaches a
+terminal status. When a workflow needs follow-up calls after launch, disable
+auto-close or include those calls in the same workflow/job.
+
 For CAN, `profile.adapter: "mock"` is simulation only. It may prove the job
 engine, pairing, barriers, matching, fault injection, and evidence persistence,
 but never physical wiring or firmware CAN operation. Hardware mode fails closed
