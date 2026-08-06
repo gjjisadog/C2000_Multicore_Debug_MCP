@@ -45,7 +45,7 @@ describe("resolveTiEnvironment", () => {
   test("discovers and selects the newest valid CCS and C2000Ware under the user home", async () => {
     const homeDir = await mkdtemp(path.join(tmpdir(), "c2000-paths-discovery-"));
     await createCcs(homeDir, "ccs2050");
-    const newestCcs = await createCcs(homeDir, "ccs2100");
+    const newestCcs = await createCcs(homeDir, "ccs21.0");
     await createC2000Ware(homeDir, "C2000Ware_6_00_01_00", "6.00.01.00");
     const newestWare = await createC2000Ware(homeDir, "C2000Ware_26_01_00_00", "26.01.00.00");
 

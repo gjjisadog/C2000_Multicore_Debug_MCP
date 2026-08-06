@@ -76,11 +76,19 @@ describe("adapter resolution", () => {
     }));
   });
 
-  test("sync auto path defaults to mock without filesystem probe", () => {
-    expect(resolveAdapterModeSync(baseConfig({ adapter: "auto" }))).toEqual(
+  test("sync auto path selects ccs when the DSS launcher exists", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-sync-with-dss-"));
+    const dssDir = path.join(tempDir, "ccs_base", "scripting", "bin");
+    await mkdir(dssDir, { recursive: true });
+    await writeFile(path.join(dssDir, process.platform === "win32" ? "dss.bat" : "dss.sh"), "#!/bin/sh\n");
+
+    expect(resolveAdapterModeSync(baseConfig({
+      adapter: "auto",
+      ccs: { scriptingMode: "auto", installPath: tempDir }
+    }))).toEqual(
       expect.objectContaining({
-        mode: "mock",
-        reason: expect.stringContaining("synchronous construction")
+        mode: "ccs",
+        reason: expect.stringContaining("DSS launcher found")
       })
     );
   });

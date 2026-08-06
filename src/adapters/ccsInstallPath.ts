@@ -1,5 +1,5 @@
 import { access, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -14,7 +14,10 @@ export interface CcsInstallResolution {
 /** Well-known roots where TI CCS is commonly installed. */
 export function defaultCcsSearchRoots(platform: NodeJS.Platform = process.platform): string[] {
   if (platform === "win32") {
-    return ["C:\\ti", "D:\\ti", path.join(os.homedir(), "ti")];
+    // CCS is often installed on a data drive as `D:\\ccs21.0\\ccs`, rather
+    // than under the TI SDK root. Keep the root scan shallow; discovery only
+    // inspects directories whose names start with `ccs`.
+    return ["C:\\ti", "D:\\ti", "C:\\", "D:\\", path.join(os.homedir(), "ti")];
   }
   if (platform === "darwin") {
     return ["/Applications/ti", path.join(os.homedir(), "ti")];
@@ -40,9 +43,11 @@ export function isCcsInstallPath(installPath: string, platform: NodeJS.Platform 
  */
 export function scoreCcsInstallPath(installPath: string): number {
   const normalized = installPath.replace(/\\/g, "/");
-  const match = /ccs[_-]?(\d{3,4})/i.exec(normalized);
+  const match = /(?:^|\/)ccs[_-]?(\d{2})(?:[._-]?(\d{1,2}))?/i.exec(normalized);
   if (match) {
-    return Number.parseInt(match[1], 10);
+    const major = Number.parseInt(match[1], 10);
+    const minor = match[2] ? Number.parseInt(match[2], 10) : 0;
+    return major * 100 + minor;
   }
   if (/\/ccs$/i.test(normalized) || /\\ccs$/i.test(installPath)) {
     return 1;
@@ -175,20 +180,19 @@ export function resolveCcsInstallPathSync(options: {
       candidates.push(path.resolve(root));
     }
     try {
-      // readdirSync would be better but keep deps light with exists heuristics for common layouts.
-      const common = [
-        path.join(root, "ccs2100", "ccs"),
-        path.join(root, "ccs2000", "ccs"),
-        path.join(root, "ccs1281", "ccs"),
-        path.join(root, "ccs1271", "ccs"),
-        path.join(root, "ccs1260", "ccs"),
-        path.join(root, "ccs1200", "ccs"),
-        path.join(root, "ccs", "ccs"),
-        path.join(root, "ccs")
-      ];
-      for (const candidate of common) {
-        if (isCcsInstallPath(candidate, platform)) {
-          candidates.push(path.resolve(candidate));
+      // Mirror async discovery instead of relying on a short hard-coded
+      // version list. This also handles names such as `ccs21.0`.
+      const entries = readdirSync(root, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !/^ccs/i.test(entry.name)) {
+          continue;
+        }
+        const productDir = path.join(root, entry.name);
+        const nestedCcs = path.join(productDir, "ccs");
+        if (isCcsInstallPath(nestedCcs, platform)) {
+          candidates.push(path.resolve(nestedCcs));
+        } else if (isCcsInstallPath(productDir, platform)) {
+          candidates.push(path.resolve(productDir));
         }
       }
     } catch {

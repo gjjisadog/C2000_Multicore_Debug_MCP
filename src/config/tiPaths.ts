@@ -67,11 +67,15 @@ export async function resolveTiEnvironment(options: ResolveTiEnvironmentOptions 
 }
 
 async function discoverCcsCandidates(homeDir: string, applicationRoots: string[]): Promise<string[]> {
-  const roots = [path.join(homeDir, "ti"), ...applicationRoots];
+  const roots = [
+    path.join(homeDir, "ti"),
+    ...applicationRoots,
+    ...(process.platform === "win32" ? ["C:\\ti", "D:\\ti", "C:\\", "D:\\"] : [])
+  ];
   const candidates: string[] = [];
   for (const root of roots) {
     for (const entry of await directories(root)) {
-      if (/^ccs\d+$/i.test(entry)) candidates.push(path.join(root, entry, "ccs"));
+      if (/^ccs(?:\d+(?:[._-]\d+)*)?$/i.test(entry)) candidates.push(path.join(root, entry, "ccs"));
     }
   }
   return candidates;
@@ -103,6 +107,12 @@ async function selectCcs(candidates: Candidate[], attempts: TiPathAttempt[]): Pr
     const version = ccsVersion(candidate.path);
     attempts.push({ kind: "ccs", ...candidate, valid: exists, reason: exists ? "Validated CCS DSLite anchor" : "Missing CCS DSLite anchor", version });
     if (anchor) valid.push({ ...candidate, version, anchor });
+  }
+  // An explicit path is an operator decision. If it is invalid, fail closed
+  // instead of silently switching to a different installed CCS version.
+  const explicit = candidates.find(candidate => candidate.source === "explicit");
+  if (explicit && !valid.some(candidate => candidate.source === "explicit")) {
+    return unresolved();
   }
   const selected = choose(valid);
   return selected ? { path: selected.path, version: selected.version, source: selected.source, valid: true, anchor: selected.anchor } : unresolved();
@@ -162,8 +172,8 @@ function compareVersions(left: string, right: string): number {
 }
 
 function ccsVersion(ccsPath: string): string {
-  const match = ccsPath.match(/ccs(\d{2})(\d{2})/i);
-  return match ? `${Number(match[1])}.${Number(match[2])}.0` : "0.0.0";
+  const match = ccsPath.match(/(?:^|[/\\])ccs[_-]?(\d{2})(?:[._-]?(\d{1,2}))?/i);
+  return match ? `${Number(match[1])}.${Number(match[2] ?? 0)}.0` : "0.0.0";
 }
 
 async function readSdk(sdkPath: string): Promise<{ version: string } | undefined> {

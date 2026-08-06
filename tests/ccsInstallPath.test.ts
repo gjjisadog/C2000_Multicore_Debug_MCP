@@ -14,6 +14,9 @@ describe("ccs install path discovery", () => {
     expect(scoreCcsInstallPath("/Applications/ti/ccs2100/ccs")).toBeGreaterThan(
       scoreCcsInstallPath("/Applications/ti/ccs1281/ccs")
     );
+    expect(scoreCcsInstallPath("/Applications/ti/ccs21.0/ccs")).toBeGreaterThan(
+      scoreCcsInstallPath("/Applications/ti/ccs1281/ccs")
+    );
     const sorted = sortCcsInstallCandidates([
       "/Applications/ti/ccs1281/ccs",
       "/Applications/ti/ccs2100/ccs",
@@ -25,7 +28,7 @@ describe("ccs install path discovery", () => {
   test("discovers nested ccs product trees under a search root", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "c2000-ccs-root-"));
     const oldInstall = path.join(root, "ccs1281", "ccs");
-    const newInstall = path.join(root, "ccs2100", "ccs");
+    const newInstall = path.join(root, "ccs21.0", "ccs");
     for (const install of [oldInstall, newInstall]) {
       const bin = path.join(install, "ccs_base", "scripting", "bin");
       await mkdir(bin, { recursive: true });

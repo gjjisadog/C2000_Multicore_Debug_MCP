@@ -1,4 +1,5 @@
 import type { C2000McpConfig } from "../config/config.schema.js";
+import { existsSync } from "node:fs";
 import { isCcsDssAvailable } from "./CcsScriptingBridge.js";
 import { resolveCcsInstallPath, resolveCcsInstallPathSync } from "./ccsInstallPath.js";
 
@@ -68,10 +69,20 @@ export function resolveAdapterModeSync(config: C2000McpConfig): AdapterResolutio
       ccsInstallSource: install.source
     };
   }
+  const available = existsSync(install.dssLauncherPath);
+  if (available) {
+    return {
+      mode: "ccs",
+      requested,
+      reason: `auto: DSS launcher found (${install.reason})`,
+      ccsInstallPath: install.installPath,
+      ccsInstallSource: install.source
+    };
+  }
   return {
     mode: "mock",
     requested,
-    reason: "auto: synchronous construction without DSS probe; defaulting to mock (use async server bootstrap for auto detect)",
+    reason: `auto: DSS launcher not found (${install.reason}); falling back to mock`,
     ccsInstallPath: install.installPath,
     ccsInstallSource: install.source
   };
