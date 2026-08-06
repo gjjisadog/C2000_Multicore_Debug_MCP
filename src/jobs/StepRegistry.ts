@@ -484,6 +484,16 @@ export class StepRegistry {
         }
         captures.push(capture);
       }
+      const failures = captureFailuresForReads(captures, reads);
+      if (failures.length > 0) {
+        throw new DebugMcpError("ExpressionCaptureFailed", "Expression capture requires every requested expression to be readable", {
+          sessionId,
+          label,
+          sampleIndex,
+          failures,
+          requestedExpressionCount: reads.reduce((total, read) => total + read.expressions.length, 0)
+        });
+      }
       expressionSnapshots.push({ ...(label ? { label } : {}), sampleIndex, capturedAt, captures });
       if (sampleIndex + 1 < sampleCount) await abortableDelay(intervalMs, context.signal);
     }
@@ -622,9 +632,16 @@ function requiredCaptureFailures(
 ): Record<string, unknown>[] {
   const snapshot = Array.isArray(snapshots) && isRecord(snapshots[0]) ? snapshots[0] : undefined;
   const captures = snapshot && Array.isArray(snapshot.captures) ? snapshot.captures.filter(isRecord) : [];
+  return captureFailuresForReads(captures, reads);
+}
+
+function captureFailuresForReads(
+  captures: Array<Record<string, unknown>>,
+  reads: Array<{ coreId: number; expressions: string[] }>
+): Record<string, unknown>[] {
   const failures: Record<string, unknown>[] = [];
-  for (const read of reads) {
-    const capture = captures.find(candidate => candidate.coreId === read.coreId);
+  for (const [readIndex, read] of reads.entries()) {
+    const capture = captures[readIndex];
     const evaluated = capture && isRecord(capture.evaluated) ? capture.evaluated : undefined;
     const results = evaluated && Array.isArray(evaluated.results) ? evaluated.results.filter(isRecord) : [];
     for (const expression of read.expressions) {

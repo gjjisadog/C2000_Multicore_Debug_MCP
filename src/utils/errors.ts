@@ -107,6 +107,7 @@ export type DebugErrorCode =
   | "DssCommandRejected"
   | "DssSchedulerConflict"
   | "BatchExpressionFailed"
+  | "ExpressionCaptureFailed"
   | "EvidenceCaptureFailed"
   | "EvidenceLimitExceeded"
   | "EvidenceSerializationFailed"

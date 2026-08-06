@@ -6,9 +6,24 @@ import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 
 class RecordingToolInvoker implements C2000ToolInvoker {
   readonly calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+  readonly failedExpressions = new Set<string>();
 
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
-    this.calls.push({ toolName, input: input as Record<string, unknown> });
+    const record = input as Record<string, unknown>;
+    this.calls.push({ toolName, input: record });
+    if (toolName === "c2000_evaluateMany") {
+      const expressions = Array.isArray(record.expressions)
+        ? record.expressions.filter((expression): expression is string => typeof expression === "string")
+        : [];
+      return {
+        success: true,
+        sessionId: "dbg-job",
+        coreId: record.coreId,
+        results: expressions.map(expression => this.failedExpressions.has(expression)
+          ? { expression, success: false, error: { code: "ExpressionEvaluationFailed", message: "simulated unreadable expression" } }
+          : { expression, success: true, value: "1" })
+      };
+    }
     return { success: true, sessionId: "dbg-job" };
   }
 }
@@ -200,6 +215,39 @@ describe("StepRegistry", () => {
     expect(invoker.calls.every(call => call.input.__leaseContext === leaseContext)).toBe(true);
     expect(invoker.calls.find(call => call.toolName === "c2000_resetCores")?.input).toEqual(expect.objectContaining({ coreIds: [0, 2], resetType: "cpu" }));
     expect(invoker.calls.filter(call => call.toolName === "c2000_loadSymbols").map(call => call.input.coreId)).toEqual([0, 2]);
+  });
+
+  test("fails closed when one captured expression is unreadable", async () => {
+    const invoker = new RecordingToolInvoker();
+    invoker.failedExpressions.add("g_unreadable");
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "capture-fail-closed",
+      boardIds: ["board-a"],
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "captureExpressions", reads: [{ coreId: 0, expressions: ["g_ok", "g_unreadable"] }] }
+      ]
+    });
+
+    await expect(registry.execute({
+      jobId: "job-a",
+      boardId: "board-a",
+      sessionId: "dbg-job",
+      leaseContext: {
+        leaseId: "lease-a", leaseToken: "secret", fencingToken: 7, leaseGeneration: 3,
+        ownerJobId: "job-a", boardId: "board-a", probeSerial: "XDS-A", workerInstanceId: "worker-a"
+      },
+      plan,
+      step: plan.steps[1]!
+    })).rejects.toMatchObject({
+      code: "ExpressionCaptureFailed",
+      details: {
+        sampleIndex: 0,
+        failures: [expect.objectContaining({ coreId: 0, expression: "g_unreadable" })]
+      }
+    });
   });
 
   test("durable IPC submission accepts explicit firmware-specific readiness expressions", () => {

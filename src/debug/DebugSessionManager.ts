@@ -861,32 +861,76 @@ export class DebugSessionManager {
     options?: { diagnostics?: "full" | "errors-only" }
   ): Promise<EvaluateResult[]> {
     const { session } = this.requireCore(sessionId, coreId);
-    if (this.adapter.evaluateExpressions) {
+    const uniqueExpressions = [...new Set(expressions)];
+    const results = new Map<string, EvaluateResult>();
+    const evaluatorExpressions: string[] = [];
+    const readMemory = this.adapter.readMemory?.bind(this.adapter);
+    for (const expression of uniqueExpressions) {
+      const rawMemory = parseRawMemoryExpression(expression);
+      if (!rawMemory || !readMemory) {
+        evaluatorExpressions.push(expression);
+        continue;
+      }
       try {
-        return await this.adapter.evaluateExpressions(
+        const value = await readMemory(
           session.adapterSession,
           coreId,
-          [...new Set(expressions)],
+          "DATA",
+          rawMemory.address,
+          rawMemory.typeSize
+        );
+        results.set(expression, {
+          expression,
+          success: true,
+          value: String(normalizeRawMemoryValue(value, rawMemory.typeSize)),
+          type: rawMemory.typeName,
+          address: rawMemory.addressText
+        });
+      } catch (error) {
+        const structured = toStructuredError(error);
+        results.set(expression, { expression, success: false, error: structured });
+        this.logger.warn("raw memory expression read failed", { sessionId, coreId, expression, error: structured });
+      }
+    }
+
+    if (evaluatorExpressions.length > 0 && this.adapter.evaluateExpressions) {
+      try {
+        const evaluated = await this.adapter.evaluateExpressions(
+          session.adapterSession,
+          coreId,
+          evaluatorExpressions,
           timeoutMs,
           options
         );
+        for (const result of evaluated) {
+          if (typeof result.expression === "string") results.set(result.expression, result);
+        }
       } catch (error) {
         this.logger.warn("batch expression evaluation failed", { sessionId, coreId, error: toStructuredError(error) });
       }
     }
-    const results: EvaluateResult[] = [];
-    for (const expression of expressions) {
+
+    for (const expression of evaluatorExpressions) {
+      if (results.has(expression)) continue;
       try {
         const result = await this.adapter.evaluateExpression(session.adapterSession, coreId, expression);
-        results.push(result);
+        results.set(expression, result);
         this.logger.debug("expression evaluated", { sessionId, coreId, expression, result });
       } catch (error) {
         const structured = toStructuredError(error);
-        results.push({ expression, success: false, error: structured });
+        results.set(expression, { expression, success: false, error: structured });
         this.logger.warn("expression evaluation failed", { sessionId, coreId, expression, error: structured });
       }
     }
-    return results;
+    return uniqueExpressions.map(expression => results.get(expression) ?? {
+      expression,
+      success: false,
+      error: {
+        code: "ExpressionEvaluateFailed",
+        message: "Expression evaluator returned no result",
+        details: { sessionId, coreId, expression }
+      }
+    });
   }
 
   async assignExpression(
@@ -1374,4 +1418,30 @@ function formatAssignmentValue(value: ExpressionAssignmentValue): string {
 
 function assignmentValuesEqual(actual: unknown, expected: string): boolean {
   return valuesEqual(actual, expected);
+}
+
+interface RawMemoryExpression {
+  typeName: "uint8_t" | "uint16_t" | "uint32_t";
+  typeSize: 8 | 16 | 32;
+  address: number;
+  addressText: string;
+}
+
+const rawMemoryExpressionPattern = /^\s*\*\s*\(\s*(uint8_t|uint16_t|uint32_t)\s*\*\s*\)\s*(0[xX][0-9a-fA-F]+|[0-9]+)\s*$/;
+
+function parseRawMemoryExpression(expression: string): RawMemoryExpression | undefined {
+  const match = rawMemoryExpressionPattern.exec(expression);
+  if (!match) return undefined;
+  const typeName = match[1] as RawMemoryExpression["typeName"];
+  const typeSize = typeName === "uint8_t" ? 8 : typeName === "uint16_t" ? 16 : 32;
+  const address = Number(match[2]);
+  if (!Number.isSafeInteger(address) || address < 0) return undefined;
+  return { typeName, typeSize, address, addressText: match[2]! };
+}
+
+function normalizeRawMemoryValue(value: number, typeSize: RawMemoryExpression["typeSize"]): number {
+  if (!Number.isFinite(value)) return value;
+  if (typeSize === 8) return value & 0xff;
+  if (typeSize === 16) return value & 0xffff;
+  return value >>> 0;
 }

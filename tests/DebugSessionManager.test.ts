@@ -945,6 +945,34 @@ MEMORY CONFIGURATION
     ]);
   });
 
+  test("reads fixed-width raw address expressions through the adapter memory path", async () => {
+    const manager = createManager();
+    const session = await manager.createDebugSession({ sessionName: "raw-address-read", coreMap });
+    await manager.connectTarget(session.sessionId, 0);
+    await manager.writeMemory(session.sessionId, 0, "DATA", 0x022240, 0x12345678, 32);
+    await manager.writeMemory(session.sessionId, 0, "DATA", 0x022242, 0xabcd, 16);
+
+    await expect(manager.evaluateMany(session.sessionId, 0, [
+      "*(uint32_t *)0x022240",
+      "*(uint16_t *)0x022242"
+    ])).resolves.toEqual([
+      {
+        expression: "*(uint32_t *)0x022240",
+        success: true,
+        value: String(0x12345678),
+        type: "uint32_t",
+        address: "0x022240"
+      },
+      {
+        expression: "*(uint16_t *)0x022242",
+        success: true,
+        value: String(0xabcd),
+        type: "uint16_t",
+        address: "0x022242"
+      }
+    ]);
+  });
+
   test("assigns multiple expressions across explicit cores with independent per-item results", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter({
       expressionValues: {

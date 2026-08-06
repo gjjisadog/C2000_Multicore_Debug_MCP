@@ -67,7 +67,7 @@ describe("durable step cleanup and output safety", () => {
     const fixture = await createFixture({
       async invokeTool(toolName) {
         if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
-        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ success: true, value: "x".repeat(2 * 1024 * 1024) }] };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ expression: "g_x", success: true, value: "x".repeat(2 * 1024 * 1024) }] };
         if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
         throw new Error(`unexpected tool ${toolName}`);
       }
@@ -84,12 +84,43 @@ describe("durable step cleanup and output safety", () => {
     fixture.store.close();
   });
 
+  test("fails the durable job when a capture contains an unreadable expression", async () => {
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_evaluateMany") return {
+          success: true,
+          results: [{ expression: "g_unreadable", success: false, error: { code: "ExpressionEvaluationFailed", message: "simulated CCS evaluator failure" } }]
+        };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "capture-expression-fail-closed",
+      boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "captureExpressions", reads: [{ coreId: 0, expressions: ["g_unreadable"] }] }]
+    }).jobId);
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
+    expect(fixture.runs.steps(jobId)[1]).toEqual(expect.objectContaining({
+      status: "FAILED",
+      error: expect.objectContaining({
+        code: "ExpressionCaptureFailed",
+        details: expect.objectContaining({ failures: [expect.objectContaining({ expression: "g_unreadable" })] })
+      })
+    }));
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
   test("enforces the aggregate evidence budget across all boards in one job", async () => {
     const largeValue = "x".repeat(1_500_000);
     const fixture = await createFixture({
       async invokeTool(toolName) {
         if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
-        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ success: true, value: largeValue }] };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ expression: "g_x", success: true, value: largeValue }] };
         if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
         throw new Error(`unexpected tool ${toolName}`);
       }
@@ -120,7 +151,7 @@ describe("durable step cleanup and output safety", () => {
     const fixture = await createFixture({
       async invokeTool(toolName) {
         if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
-        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ success: true, value: largeValue }] };
+        if (toolName === "c2000_evaluateMany") return { success: true, results: [{ expression: "g_x", success: true, value: largeValue }] };
         if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
         throw new Error(`unexpected tool ${toolName}`);
       }
