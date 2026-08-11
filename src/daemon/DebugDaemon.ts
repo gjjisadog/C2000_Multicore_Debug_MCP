@@ -179,9 +179,13 @@ export class DebugDaemon {
           {
             type: "runIpcAcceptance",
             timeoutMs: input.timeoutMs,
+            intervalMs: input.intervalMs,
+            startupPreset: input.startupPreset,
+            resetType: input.resetType,
             verifyRuntimeRamOwnership: input.verifyRuntimeRamOwnership,
             loadPolicy: input.loadPolicy,
             loadSequence: input.loadSequence,
+            runSequence: input.runSequence,
             ipcReadyExpressions: input.ipcReadyExpressions
           },
           { type: "cleanup" }

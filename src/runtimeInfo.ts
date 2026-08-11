@@ -28,6 +28,20 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
     configuration: {
       adapterMode,
       toolProfile: config.toolProfile,
+      profile: {
+        effective: config.toolProfile,
+        source: process.env.C2000_MCP_TOOL_PROFILE
+          ? "environment"
+          : process.env.C2000_MCP_CONFIG ? "config-file" : "default",
+        configPath: process.env.C2000_MCP_CONFIG ?? null,
+        appliedAt: startedAt
+      },
+      reload: {
+        supported: false,
+        daemonRestartRequired: false,
+        frontendReconnectRequired: true,
+        message: "Tool registration is fixed when this MCP frontend starts. Update configuration, then reconnect only this frontend; do not restart c2000-debugd or board workers."
+      },
       configFileConfigured: Boolean(process.env.C2000_MCP_CONFIG),
       loggingToFile: Boolean(config.logging.logFile),
       pathsConfigured: {

@@ -124,21 +124,49 @@ export class DebugWorkflowService {
   }
 
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
+    const effectiveStartup = {
+      startupPreset: input.startupPreset ?? null,
+      resetType: input.resetType,
+      loadSequence: input.loadSequence,
+      runSequence: input.runSequence,
+      timeoutMs: input.timeoutMs,
+      intervalMs: input.intervalMs
+    };
+    let workflowStage = "artifact-validation";
+    try {
+      const result = await this.runIpcAcceptanceCore(input, stage => { workflowStage = stage; });
+      return { ...result, effectiveStartup, workflowStage: "completed" };
+    } catch (error) {
+      if (error instanceof DebugMcpError) {
+        throw new DebugMcpError(error.code, error.message, {
+          ...error.details,
+          workflowStage,
+          effectiveStartup
+        });
+      }
+      throw error;
+    }
+  }
+
+  private async runIpcAcceptanceCore(input: z.infer<typeof runIpcAcceptanceSchema>, setStage: (stage: string) => void): Promise<ToolResult> {
     assertIpcArtifactSet(input);
     const workflowStartedAt = performance.now();
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
 
+    setStage("initial-halt");
     const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
     assertBatchSucceeded("haltCores", initialHalt);
+    setStage("reset");
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
     assertBatchSucceeded("resetCores", reset);
     const cpu1Program = { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy };
     const cpu2Program = { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy };
     let load;
+    setStage("program-load");
     if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
       const cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
       assertBatchSucceeded("loadCpu1Program", cpu1Load);
@@ -154,9 +182,11 @@ export class DebugWorkflowService {
       performedSteps.push("loadPrograms");
     }
     assertBatchSucceeded("loadPrograms", load);
+    setStage("post-load-halt");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
     assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
+    setStage("pre-run-evidence");
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
     const ramOwnership = await this.analyzeRamOwnership({ maps });
@@ -171,12 +201,14 @@ export class DebugWorkflowService {
       input.verifyRuntimeRamOwnership,
       ramOwnership.ownershipActions
     );
+    setStage("run-sequence");
     const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
     for (const coreId of runPlan.coreOrder) {
       await this.manager.runCore(input.sessionId, coreId);
       performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
       await sleep(input.runSequence.settleMs);
     }
+    setStage("ipc-readiness-wait");
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
     const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule);
     performedSteps.push("waitForIpcReady");
@@ -186,6 +218,7 @@ export class DebugWorkflowService {
     if (timeoutRecovery) {
       performedSteps.push("haltAndResolvePcOnTimeout");
     }
+    setStage("diagnosis");
     const diagnosis = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
       device: input.device,

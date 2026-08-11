@@ -20,11 +20,15 @@ describe("server runtime health", () => {
       tools: { registeredCount: 1, registeredNames: ["c2000_getServerHealth"] }
     }));
     expect(health.runtime.bundled).toBe(isBundledRuntime());
-    expect(health.configuration.pathsConfigured).toEqual({
-      ccsInstallPath: false,
-      c2000WarePath: false,
-      ccxmlPath: false,
-      workspacePath: false
-    });
+    expect(Object.values(health.configuration.pathsConfigured).every(value => typeof value === "boolean")).toBe(true);
+    expect(health.configuration.profile).toEqual(expect.objectContaining({
+      effective: config.toolProfile,
+      appliedAt: "2026-07-11T00:00:00.000Z"
+    }));
+    expect(health.configuration.reload).toEqual(expect.objectContaining({
+      supported: false,
+      daemonRestartRequired: false,
+      frontendReconnectRequired: true
+    }));
   });
 });

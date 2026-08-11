@@ -1,6 +1,19 @@
 import { z } from "zod";
 import { canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
+import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
+
+const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
+const ipcLoadSequenceSchema = z.object({
+  mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
+  cpu1SettleMs: z.number().int().nonnegative().default(250)
+});
+const ipcRunSequenceSchema = z.object({
+  runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
+  runCpu1First: z.boolean().default(true),
+  runCpu2: z.boolean().default(false),
+  settleMs: z.number().int().nonnegative().default(0)
+});
 
 export const coreConfigSchema = z.object({
   coreId: z.number().int(),
@@ -102,12 +115,13 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
   artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
   parallelism: z.number().int().positive().optional(),
   timeoutMs: z.number().int().positive().default(10000),
+  intervalMs: z.number().int().positive().default(100),
+  startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
+  resetType: resetTypeSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  loadSequence: z.object({
-    mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-run-before-cpu2"),
-    cpu1SettleMs: z.number().int().nonnegative().default(250)
-  }).default({ mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 }),
+  loadSequence: ipcLoadSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
+  runSequence: ipcRunSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(true),
@@ -323,7 +337,7 @@ export const workflowRunSequenceSchema = z.object({
   settleMs: z.number().int().nonnegative().default(0)
 }).default({ runCpu1First: true, runCpu2: false, settleMs: 0 });
 
-export const runIpcAcceptanceSchema = z.object({
+const runIpcAcceptanceObjectSchema = z.object({
   sessionId: z.string().min(1),
   device: z.string().min(1).default("F28P65x"),
   cpu1CoreId: z.number().int(),
@@ -332,14 +346,12 @@ export const runIpcAcceptanceSchema = z.object({
   cpu2OutPath: z.string().min(1),
   cpu1MapPath: z.string().min(1),
   cpu2MapPath: z.string().min(1),
-  resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
+  startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
+  resetType: resetTypeSchema.default("default"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  loadSequence: z.object({
-    mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
-    cpu1SettleMs: z.number().int().nonnegative().default(250)
-  }).default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
-  runSequence: workflowRunSequenceSchema,
+  loadSequence: ipcLoadSequenceSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
+  runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive(),
   intervalMs: z.number().int().positive().default(100),
@@ -350,7 +362,9 @@ export const runIpcAcceptanceSchema = z.object({
   outputDir: z.string().min(1).optional()
 });
 
-export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceSchema.omit({ sessionId: true }).extend({
+export const runIpcAcceptanceSchema = runIpcAcceptanceObjectSchema;
+
+export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true }).extend({
   boardId: z.string().min(1).optional(),
   sessionMode: z.enum(["ephemeral", "interactive"]).default("ephemeral"),
   idleTimeoutMs: z.number().int().positive().optional(),

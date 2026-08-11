@@ -10,6 +10,7 @@ import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, valida
 import { analyzeRamOwnership as analyzeRamOwnershipDefault } from "../hardware/mapOwnership.js";
 import { formatDebugProcessOwners, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
+import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { buildBootHandoffVerdict as buildBootHandoffVerdictCore } from "../debug/bootHandoffVerdict.js";
 import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
@@ -100,6 +101,18 @@ import {
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
+
+function assertBoundedWorkflowPolling(timeoutMs: number, intervalMs: number): void {
+  const requestedPollIterations = workflowPollIterations(timeoutMs, intervalMs);
+  if (requestedPollIterations > MAX_WORKFLOW_POLL_ITERATIONS) {
+    throw new DebugMcpError("EvidenceLimitExceeded", `polling exceeds ${MAX_WORKFLOW_POLL_ITERATIONS} bounded iterations`, {
+      timeoutMs,
+      intervalMs,
+      requestedPollIterations,
+      maxPollIterations: MAX_WORKFLOW_POLL_ITERATIONS
+    });
+  }
+}
 
 export interface ToolHandlerDeps {
   runHardwarePreflight?: typeof runHardwarePreflight;
@@ -769,6 +782,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async waitForExpressionSet(input: z.input<typeof waitForExpressionSetSchema>) {
       const parsed = waitForExpressionSetSchema.parse(input);
+      assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
       const startedAt = performance.now();
       const deadline = startedAt + parsed.timeoutMs;
       let lastConditions: ToolResult[] = [];
@@ -893,7 +907,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async runIpcAcceptance(input: z.input<typeof runIpcAcceptanceSchema>) {
       try {
-        const parsed = runIpcAcceptanceSchema.parse(input);
+        const parsed = runIpcAcceptanceSchema.parse(resolveIpcStartupPreset(input as Record<string, unknown>));
+        assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
         return ok(await workflows.runIpcAcceptance(parsed));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
@@ -902,7 +917,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async launchAndRunIpcAcceptance(input: z.input<typeof launchAndRunIpcAcceptanceSchema>) {
       try {
-        const parsed = launchAndRunIpcAcceptanceSchema.parse(input);
+        const parsed = launchAndRunIpcAcceptanceSchema.parse(resolveIpcStartupPreset(input as Record<string, unknown>));
+        assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
         return ok(await workflows.launchAndRunIpcAcceptance(parsed));
       } catch (error) {
         return fail(error);

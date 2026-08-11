@@ -132,8 +132,11 @@ describe("StepRegistry", () => {
         { type: "launchMulticore", loadPrograms: false },
         {
           type: "runIpcAcceptance",
+          startupPreset: "hybrid30k-dk9-owner-first",
+          resetType: "cpu",
           loadPolicy: "if-changed",
-          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+          runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
           ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
         }
       ]
@@ -175,7 +178,10 @@ describe("StepRegistry", () => {
         cpu1OutPath: "/firmware/cpu1.out",
         cpu2OutPath: "/firmware/cpu2.out",
         loadPolicy: "if-changed",
-        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+        startupPreset: "hybrid30k-dk9-owner-first",
+        resetType: "cpu",
+        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+        runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
         ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
       })
     });
@@ -263,5 +269,32 @@ describe("StepRegistry", () => {
     expect(parsed.ipcReadyExpressions).toEqual([
       { label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }
     ]);
+    expect(parsed).toEqual(expect.objectContaining({
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 }
+    }));
+  });
+
+  test("durable IPC persists validated startup defaults and rejects conflicting presets or excessive polling", () => {
+    const build = (step: Record<string, unknown>) => ({
+      planVersion: 1 as const,
+      name: "startup-contract",
+      boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "runIpcAcceptance", ...step }]
+    });
+    const parsed = testPlanSchema.parse(build({}));
+    expect(parsed.steps[1]).toEqual(expect.objectContaining({
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
+      timeoutMs: 10000,
+      intervalMs: 100
+    }));
+    expect(testPlanSchema.safeParse(build({
+      startupPreset: "hybrid30k-dk9-owner-first",
+      runSequence: { runCpu1First: true, runCpu2: true, settleMs: 33 }
+    })).success).toBe(false);
+    expect(testPlanSchema.safeParse(build({ timeoutMs: 10001, intervalMs: 1 })).success).toBe(false);
   });
 });
