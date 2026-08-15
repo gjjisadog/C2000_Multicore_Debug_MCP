@@ -4,6 +4,11 @@ logs/
 runtime/
 .env
 
+# Local Python development environment and generated metadata
+.venv/
+__pycache__/
+*.egg-info/
+
 .planning/
 .worktrees/
 task_plan.md
@@ -14,6 +19,9 @@ scripts/run_t05_*.mjs
 
 # Runtime debug evidence bundles
 .c2000-debug-bundles/
+
+# CCS build artifacts
+artifacts/
 
 # Local hardware demo workspaces
 .hardware-demo-workspace-ipc-ex1/

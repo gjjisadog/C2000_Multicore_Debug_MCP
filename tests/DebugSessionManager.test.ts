@@ -136,6 +136,71 @@ describe("DebugSessionManager", () => {
     expect(info!.sha256).toHaveLength(64);
   });
 
+  test("refreshes the adapter session and reconnects cores before an actual CPU1 program load", async () => {
+    class RefreshingAdapter extends MockDebugAdapter {
+      readonly refreshes: Array<{ previousAdapterSessionId: string; coreId: CoreId }> = [];
+      readonly connections: Array<{ adapterSessionId: string; coreId: CoreId }> = [];
+
+      async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
+        if (coreId !== 0) return session;
+        this.refreshes.push({ previousAdapterSessionId: session.adapterSessionId, coreId });
+        return this.createSession({ sessionName: session.sessionName, ccxmlPath: session.ccxmlPath, coreMap: session.coreMap });
+      }
+
+      override async connect(session: AdapterSession, coreId: CoreId): Promise<void> {
+        this.connections.push({ adapterSessionId: session.adapterSessionId, coreId });
+        await super.connect(session, coreId);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-session-refresh-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    await writeFile(cpu1Out, "cpu1-image");
+    const adapter = new RefreshingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "refresh-before-cpu1", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+    const originalAdapterSessionId = (await manager.getSessionTopology(session.sessionId)).adapterSessionId;
+
+    await manager.loadProgram(session.sessionId, 0, cpu1Out);
+
+    const refreshedAdapterSessionId = (await manager.getSessionTopology(session.sessionId)).adapterSessionId;
+    expect(refreshedAdapterSessionId).not.toBe(originalAdapterSessionId);
+    expect(adapter.refreshes).toEqual([{ previousAdapterSessionId: originalAdapterSessionId, coreId: 0 }]);
+    expect(adapter.connections.slice(-2)).toEqual([
+      { adapterSessionId: refreshedAdapterSessionId, coreId: 0 },
+      { adapterSessionId: refreshedAdapterSessionId, coreId: 2 }
+    ]);
+    await expect(manager.getTargetState(session.sessionId, 0)).resolves.toEqual(expect.objectContaining({ connected: true }));
+    await expect(manager.getTargetState(session.sessionId, 2)).resolves.toEqual(expect.objectContaining({ connected: true }));
+  });
+
+  test("does not refresh the adapter session when if-changed skips CPU1 programming", async () => {
+    class RefreshingAdapter extends MockDebugAdapter {
+      refreshCount = 0;
+
+      async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
+        if (coreId !== 0) return session;
+        this.refreshCount += 1;
+        return this.createSession({ sessionName: session.sessionName, ccxmlPath: session.ccxmlPath, coreMap: session.coreMap });
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-if-changed-refresh-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    await writeFile(cpu1Out, "cpu1-image");
+    const adapter = new RefreshingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "skip-refresh-when-unchanged", coreMap });
+    await manager.connectTarget(session.sessionId, 0);
+
+    await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out }]);
+    const skipped = await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out, loadPolicy: "if-changed" }]);
+
+    expect(adapter.refreshCount).toBe(1);
+    expect(skipped.results).toEqual([expect.objectContaining({ success: true, loaded: false, skipped: true })]);
+  });
+
   test("registry verification is explicit and never claims to verify target Flash", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-registry-verify-"));
     const cpu1Out = path.join(tempDir, "cpu1.out");
@@ -328,6 +393,64 @@ MEMORY CONFIGURATION
       { type: "prepareFlashLoad", coreId: 2, flashBanks: [3, 4] },
       { type: "loadProgram", coreId: 2, programUri: cpu2Out }
     ]);
+  });
+
+  test("rebuilds the adapter session so CPU1 can load again after CPU2 Flash preparation poisons the prior session", async () => {
+    class PoisoningFlashAdapter extends MockDebugAdapter {
+      private readonly flashState = new Map<string, { poisoned: boolean }>();
+      refreshCount = 0;
+
+      override async createSession(options: Parameters<MockDebugAdapter["createSession"]>[0]): Promise<AdapterSession> {
+        const session = await super.createSession(options);
+        this.flashState.set(session.adapterSessionId, { poisoned: false });
+        return session;
+      }
+
+      async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
+        if (coreId !== 0) return session;
+        this.refreshCount += 1;
+        return this.createSession({ sessionName: session.sessionName, ccxmlPath: session.ccxmlPath, coreMap: session.coreMap });
+      }
+
+      async prepareFlashLoad(session: AdapterSession): Promise<void> {
+        this.flashState.get(session.adapterSessionId)!.poisoned = true;
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        if (coreId === 0 && this.flashState.get(session.adapterSessionId)?.poisoned) {
+          throw new Error("Load failed");
+        }
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-poisoned-flash-session-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX"
+    ].join("\n"));
+    const adapter = new PoisoningFlashAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "poisoned-flash-session", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    const first = await manager.loadPrograms(session.sessionId, [
+      { coreId: 0, programUri: cpu1Out },
+      { coreId: 2, programUri: cpu2Out, mapUri: cpu2Map }
+    ]);
+    const second = await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out }]);
+
+    expect(first.results).toEqual([
+      expect.objectContaining({ coreId: 0, success: true }),
+      expect.objectContaining({ coreId: 2, success: true })
+    ]);
+    expect(second.results).toEqual([expect.objectContaining({ coreId: 0, success: true })]);
+    expect(adapter.refreshCount).toBe(2);
   });
 
   test("fails closed when a CPU2 Flash map requires unsupported preparation", async () => {

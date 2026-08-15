@@ -464,13 +464,15 @@ export class DebugSessionManager {
     }
     let ownershipNote: string | undefined;
     try {
+      await this.refreshSessionForProgramLoad(sessionId, session, coreId);
       ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions);
       await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
     } catch (error) {
       if (error instanceof DebugMcpError && (
         error.code === "OwnerCoreNotConnected" ||
         error.code === "CoreNotConnected" ||
-        error.code === "FlashLoadPreparationUnsupported"
+        error.code === "FlashLoadPreparationUnsupported" ||
+        error.code === "ProgramLoadSessionRefreshFailed"
       )) {
         throw error;
       }
@@ -501,6 +503,65 @@ export class DebugSessionManager {
     this.loadedPrograms.set(info);
     this.logger.info("program loaded", { sessionId, coreId, programUri: normalizedUri, sha256: info.sha256 });
     return info;
+  }
+
+  private async refreshSessionForProgramLoad(
+    sessionId: string,
+    session: LogicalDebugSession,
+    coreId: CoreId
+  ): Promise<void> {
+    if (!this.adapter.refreshSessionForProgramLoad) {
+      return;
+    }
+    const previousAdapterSession = session.adapterSession;
+    const connectedCoreIds = Array.from(session.cores.values())
+      .filter(candidate => candidate.connected)
+      .map(candidate => candidate.coreId);
+    let refreshedAdapterSession: AdapterSession;
+    try {
+      refreshedAdapterSession = await this.adapter.refreshSessionForProgramLoad(previousAdapterSession, coreId);
+    } catch (error) {
+      throw new DebugMcpError("ProgramLoadSessionRefreshFailed", `Failed to refresh the debugger session before loading core ${coreId}`, {
+        sessionId,
+        coreId,
+        previousAdapterSessionId: previousAdapterSession.adapterSessionId,
+        cause: toStructuredError(error)
+      });
+    }
+    if (refreshedAdapterSession.adapterSessionId === previousAdapterSession.adapterSessionId) {
+      return;
+    }
+    session.adapterSession = refreshedAdapterSession;
+    for (const candidate of session.cores.values()) {
+      candidate.connected = false;
+      candidate.active = false;
+      candidate.state = "Disconnected";
+    }
+    try {
+      for (const connectedCoreId of connectedCoreIds) {
+        const candidate = session.cores.get(connectedCoreId)!;
+        await this.adapter.connect(refreshedAdapterSession, connectedCoreId);
+        candidate.connected = true;
+        candidate.active = true;
+        candidate.state = "Connected";
+      }
+    } catch (error) {
+      throw new DebugMcpError("ProgramLoadSessionRefreshFailed", `Failed to reconnect cores after refreshing the debugger session for core ${coreId}`, {
+        sessionId,
+        coreId,
+        previousAdapterSessionId: previousAdapterSession.adapterSessionId,
+        refreshedAdapterSessionId: refreshedAdapterSession.adapterSessionId,
+        connectedCoreIds,
+        cause: toStructuredError(error)
+      });
+    }
+    this.logger.info("debugger session refreshed before program load", {
+      sessionId,
+      coreId,
+      previousAdapterSessionId: previousAdapterSession.adapterSessionId,
+      refreshedAdapterSessionId: refreshedAdapterSession.adapterSessionId,
+      reconnectedCoreIds: connectedCoreIds
+    });
   }
 
   private async prepareCpu2RamOwnership(

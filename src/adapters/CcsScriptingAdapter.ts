@@ -76,6 +76,18 @@ export class CcsScriptingAdapter implements DebugAdapter {
     await this.bridge.disposeSession?.(session.adapterSessionId);
   }
 
+  async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
+    if (coreId !== 0) {
+      return session;
+    }
+    await this.disposeSession(session);
+    return this.createSession({
+      sessionName: session.sessionName,
+      ccxmlPath: session.ccxmlPath,
+      coreMap: session.coreMap
+    });
+  }
+
   async listCores(session: AdapterSession): Promise<CoreInfo[]> {
     return session.coreMap.map(core => ({
       ...core,

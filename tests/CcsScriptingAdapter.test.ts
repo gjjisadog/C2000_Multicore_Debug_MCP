@@ -80,6 +80,34 @@ describe("CcsScriptingAdapter", () => {
     expect(bridge.sessions[0]?.ccxmlPath).toBe(path.resolve(relativeCcxmlPath));
   });
 
+  test("rebuilds the physical DSS session before CPU1 program loads", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "cpu1-flash-refresh", ccxmlPath, coreMap });
+
+    const refreshed = await adapter.refreshSessionForProgramLoad(session, 0);
+
+    expect(refreshed.adapterSessionId).not.toBe(session.adapterSessionId);
+    expect(bridge.disposedSessions).toEqual([session.adapterSessionId]);
+    expect(bridge.sessions).toHaveLength(2);
+    expect(bridge.sessions[1]).toEqual(expect.objectContaining({
+      adapterSessionId: refreshed.adapterSessionId,
+      sessionName: session.sessionName,
+      ccxmlPath,
+      coreMap
+    }));
+  });
+
+  test("keeps the current DSS session for CPU2 program loads", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "cpu2-flash-load", ccxmlPath, coreMap });
+
+    await expect(adapter.refreshSessionForProgramLoad(session, 2)).resolves.toBe(session);
+    expect(bridge.disposedSessions).toEqual([]);
+    expect(bridge.sessions).toHaveLength(1);
+  });
+
   test("sends per-core connect, run, halt, reset and load commands through the bridge", async () => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({ ccsInstallPath: "/Applications/ti/ccs2100/ccs" }, bridge);

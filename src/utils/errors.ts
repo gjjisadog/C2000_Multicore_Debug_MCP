@@ -14,6 +14,7 @@ export type DebugErrorCode =
   | "OwnerCoreNotConnected"
   | "ProgramFileNotFound"
   | "ProgramLoadFailed"
+  | "ProgramLoadSessionRefreshFailed"
   | "BatchOperationFailed"
   | "ArtifactPairInvalid"
   | "LaunchProgramMissing"

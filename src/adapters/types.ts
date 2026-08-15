@@ -28,6 +28,12 @@ export interface DebugAdapter {
   ownedProcesses?(): Record<string, unknown>[];
   createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession>;
   disposeSession?(session: AdapterSession): Promise<void>;
+  /**
+   * Return the adapter session that must be used for the next program load.
+   * Adapters may replace a poisoned physical debugger session while preserving
+   * the caller-visible logical session.
+   */
+  refreshSessionForProgramLoad?(session: AdapterSession, coreId: CoreId): Promise<AdapterSession>;
   listCores(session: AdapterSession): Promise<CoreInfo[]>;
   connect(session: AdapterSession, coreId: CoreId): Promise<void>;
   disconnect(session: AdapterSession, coreId: CoreId): Promise<void>;
