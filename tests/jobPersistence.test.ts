@@ -75,10 +75,11 @@ describe("durable background test jobs", () => {
       await first.close();
 
       const second = new McpDaemonClient((await discoverDaemon(config)).client);
-      await waitFor(async () => {
-        const run = await second.invokeTool("c2000_getTestRun", { jobId, includeSteps: true });
-        return run.status === "PASSED" ? run : undefined;
-      });
+      const waited = await second.invokeTool("c2000_getTestRun", { jobId, includeSteps: true, waitForTerminalMs: 1_000 });
+      expect(waited).toEqual(expect.objectContaining({
+        status: "PASSED",
+        wait: expect.objectContaining({ requestedMs: 1_000, terminal: true, timedOut: false })
+      }));
       const completed = await second.invokeTool("c2000_getTestRun", { jobId, includeSteps: true, includeEvents: true });
       expect(completed).toEqual(expect.objectContaining({
         success: true,

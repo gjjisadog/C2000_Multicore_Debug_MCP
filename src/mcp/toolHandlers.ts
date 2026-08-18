@@ -16,6 +16,7 @@ import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
 import { sleep as sleepCore } from "../utils/async.js";
 import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
+import type { FilesystemPolicy } from "../security/pathPolicy.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -131,6 +132,7 @@ export interface ToolHandlerDeps {
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
   programSearchRoots?: string[];
+  filesystem?: FilesystemPolicy;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -174,7 +176,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const daemonRoutingConfigured = Boolean(deps.getDaemonHealth && deps.listBoards);
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const configuredProgramSearchRoots = deps.programSearchRoots;
-  const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
+  const workflows = new DebugWorkflowService(manager, analyzeRamOwnership, deps.filesystem);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
     success: false,

@@ -24,6 +24,7 @@ import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
 import type { DebugEvidence } from "../debug/DebugEvidence.js";
+import { assertAllowedWritePath, type FilesystemPolicy } from "../security/pathPolicy.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -32,7 +33,8 @@ type ExpressionReadSet = z.infer<typeof expressionReadSetSchema>;
 export class DebugWorkflowService {
   constructor(
     private readonly manager: DebugSessionManager,
-    private readonly analyzeRamOwnership: typeof analyzeRamOwnershipDefault = analyzeRamOwnershipDefault
+    private readonly analyzeRamOwnership: typeof analyzeRamOwnershipDefault = analyzeRamOwnershipDefault,
+    private readonly filesystem?: FilesystemPolicy
   ) {}
 
   async launchAndRunIpcAcceptance(input: z.infer<typeof launchAndRunIpcAcceptanceSchema>): Promise<ToolResult> {
@@ -138,6 +140,9 @@ export class DebugWorkflowService {
     artifactPreflight: ToolResult
   ): Promise<ToolResult> {
     const workflowStartedAt = performance.now();
+    const bundleOutputDir = input.collectDebugBundle
+      ? await this.resolveBundleOutputDir(input.outputDir, "ipc-acceptance")
+      : undefined;
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
@@ -179,7 +184,7 @@ export class DebugWorkflowService {
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
-    ]);
+    ], artifactPreflight);
     performedSteps.push("checkElfFreshness");
     const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
       input.sessionId,
@@ -258,11 +263,12 @@ export class DebugWorkflowService {
         ipcPollMs: ipcReady.pollDurationMs,
         ipcPollIterations: ipcReady.pollIterations,
         expressionBatchCount: ipcReady.expressionBatchCalls,
-        expressionCount: ipcReady.expressionCount
+        expressionCount: ipcReady.expressionCount,
+        diagnosisExpressionReadsReused: diagnosis.performance?.expressionReadsReused === true
       }
     };
     if (input.collectDebugBundle) {
-      result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("ipc-acceptance"), result);
+      result.debugBundle = await this.writeDebugBundle(bundleOutputDir!, result);
     }
     return result;
   }
@@ -295,6 +301,9 @@ export class DebugWorkflowService {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const artifactPreflight = await assertReloadArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    const bundleOutputDir = input.collectDebugBundle
+      ? await this.resolveBundleOutputDir(input.outputDir, "reload-diagnose")
+      : undefined;
     performedSteps.push("artifactPreflight");
     const maps = this.normalizeMaps(mapsFromPaths(input));
     const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
@@ -329,7 +338,7 @@ export class DebugWorkflowService {
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
-    ]);
+    ], artifactPreflight);
     const runCpu1 = input.postLoadBoot?.runCpu1 ?? input.runCpu1;
     const runCpu2 = input.postLoadBoot?.runCpu2 ?? input.runCpu2;
     if (runCpu1) {
@@ -404,12 +413,13 @@ export class DebugWorkflowService {
       diagnosis
     };
     if (input.collectDebugBundle) {
-      result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("reload-diagnose"), result);
+      result.debugBundle = await this.writeDebugBundle(bundleOutputDir!, result);
     }
     return result;
   }
 
   async runFullDebugBundle(input: z.infer<typeof runFullDebugBundleSchema>): Promise<ToolResult> {
+    const bundleOutputDir = await this.resolveBundleOutputDir(input.outputDir, "full-debug-bundle");
     const coreIds = input.coreIds ?? [input.cpu1CoreId, input.cpu2CoreId];
     const maps = this.normalizeMaps(input.maps ?? mapsFromPaths(input));
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
@@ -480,8 +490,15 @@ export class DebugWorkflowService {
       bootHandoff,
       evidence
     };
-    result.bundle = await this.writeDebugBundle(input.outputDir, result);
+    result.bundle = await this.writeDebugBundle(bundleOutputDir, result);
     return result;
+  }
+
+  private async resolveBundleOutputDir(outputDir: string | undefined, label: string): Promise<string> {
+    if (outputDir) {
+      return this.filesystem ? assertAllowedWritePath(outputDir, this.filesystem) : outputDir;
+    }
+    return defaultBundleDir(label, this.filesystem);
   }
 
   private async buildBootHandoffDiagnosis(options: {
@@ -498,6 +515,7 @@ export class DebugWorkflowService {
     evidence?: DebugEvidence;
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
+    precomputedExpressionResults?: Array<{ coreId: CoreId; results: EvaluateResult[] }>;
   }): Promise<ToolResult> {
     const cpu1Expressions = options.extraExpressions
       ?.filter(condition => condition.coreId === options.cpu1CoreId)
@@ -505,6 +523,8 @@ export class DebugWorkflowService {
     const cpu2Expressions = options.extraExpressions
       ?.filter(condition => condition.coreId === options.cpu2CoreId)
       .map(condition => condition.expression);
+    const precomputedExpressionResults = options.precomputedExpressionResults
+      ?? buildPrecomputedExpressionResults(options.extraExpressions, options.ipcReady);
     const boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
@@ -518,10 +538,18 @@ export class DebugWorkflowService {
       } : {
         cpu1Expressions: options.cpu1Expressions,
         cpu2Expressions: options.cpu2Expressions
-      })
+      }),
+      ...(precomputedExpressionResults ? { precomputedExpressionResults } : {})
     });
     const extraExpressions = options.extraExpressions
-      ? await this.evaluateConditions(options.sessionId, options.extraExpressions)
+      ? precomputedExpressionResults
+        ? options.extraExpressions.map(condition => conditionResult(
+          condition,
+          precomputedExpressionResults
+            .find(group => group.coreId === condition.coreId)
+            ?.results.find(result => result.expression === condition.expression)
+        ))
+        : await this.evaluateConditions(options.sessionId, options.extraExpressions)
       : undefined;
     const bootVerdict = options.ipcAcceptance
       ? buildIpcAcceptanceVerdict(options.ipcReady, options.ramOwnership)
@@ -568,6 +596,9 @@ export class DebugWorkflowService {
       ...(options.ramOwnership ? { ramOwnership: options.ramOwnership } : {}),
       ...(options.elfFreshness ? { elfFreshness: options.elfFreshness } : {}),
       ...(options.runtimeRamOwnership ? { runtimeRamOwnership: options.runtimeRamOwnership } : {}),
+      performance: {
+        expressionReadsReused: Boolean(precomputedExpressionResults)
+      },
       ...(extraExpressions ? { expressions: extraExpressions } : {})
     };
   }
@@ -655,20 +686,29 @@ export class DebugWorkflowService {
     return { halt, pc };
   }
 
-  private async checkElfFreshness(sessionId: string, programs: Array<{ coreId: CoreId; outPath?: string }>) {
+  private async checkElfFreshness(sessionId: string, programs: Array<{ coreId: CoreId; outPath?: string }>, artifactPreflight?: ToolResult) {
+    const preflightFiles = Array.isArray(artifactPreflight?.hostFiles)
+      ? artifactPreflight.hostFiles.filter((item: unknown): item is ToolResult => Boolean(item) && typeof item === "object")
+      : [];
     const checked = await Promise.all(programs
       .filter((program): program is { coreId: CoreId; outPath: string } => typeof program.outPath === "string" && program.outPath.length > 0)
       .map(async program => {
         const expectedPath = this.manager.normalizeArtifactUri(program.outPath);
         const loadedProgramInfo = await this.manager.getLoadedProgramInfo(sessionId, program.coreId);
         const metadata = await fileMetadata(expectedPath);
+        const preflightFile = preflightFiles.find(item => item.path === expectedPath);
+        const preflightStable = !preflightFile
+          || (preflightFile.fileSize === metadata.fileSize && preflightFile.fileMTime === metadata.fileMTime && preflightFile.sha256 === metadata.sha256);
         const fresh = loadedProgramInfo?.programUri === expectedPath
           && loadedProgramInfo.fileSize === metadata.fileSize
-          && loadedProgramInfo.sha256 === metadata.sha256;
+          && loadedProgramInfo.sha256 === metadata.sha256
+          && preflightStable;
         return {
           coreId: program.coreId,
           expectedPath,
           fresh,
+          preflightStable,
+          ...(preflightFile ? { preflightFile } : {}),
           hostFile: metadata,
           loadedProgramInfo
         };
@@ -769,6 +809,16 @@ async function assertIpcArtifactSet(input: {
     }
   }));
   issues.push(...fileChecks.filter((issue): issue is string => issue !== undefined));
+  const hostFiles = await Promise.all(files
+    .filter(([label]) => label.endsWith("output"))
+    .map(async ([label, filePath]) => {
+      try {
+        const metadata = await fileMetadata(filePath);
+        return { label, path: filePath, ...metadata };
+      } catch {
+        return undefined;
+      }
+    }));
   const artifactSemantics = await validateIpcArtifactSymbols({
     cpu1CoreId: input.cpu1CoreId,
     cpu2CoreId: input.cpu2CoreId,
@@ -803,6 +853,7 @@ async function assertIpcArtifactSet(input: {
       cpu1MapPath: normalizedInput.cpu1MapPath,
       cpu2MapPath: normalizedInput.cpu2MapPath
     },
+    hostFiles: hostFiles.filter(item => item !== undefined),
     programPair,
     mapPair,
     artifactSemantics
@@ -843,6 +894,16 @@ async function assertReloadArtifactSet(input: {
     }
   }));
   issues.push(...fileChecks.filter((issue): issue is string => issue !== undefined));
+  const hostFiles = await Promise.all(files
+    .filter(([label]) => label.endsWith("output"))
+    .map(async ([label, filePath]) => {
+      try {
+        const metadata = await fileMetadata(filePath);
+        return { label, path: filePath, ...metadata };
+      } catch {
+        return undefined;
+      }
+    }));
   let mapPair: ReturnType<typeof validateProgramPair> | undefined;
   let artifactSemantics: ToolResult | undefined;
   if (normalized.cpu1MapPath && normalized.cpu2MapPath) {
@@ -873,6 +934,7 @@ async function assertReloadArtifactSet(input: {
   return {
     checked: true,
     normalizedPaths: normalized,
+    hostFiles: hostFiles.filter(item => item !== undefined),
     programPair,
     ...(mapPair ? { mapPair } : {}),
     ...(artifactSemantics ? { artifactSemantics } : {})
@@ -1002,6 +1064,40 @@ function conditionResult(condition: ExpressionCondition, result?: EvaluateResult
     matched: result?.success === true && valuesEqual(result.value, condition.expected),
     result
   };
+}
+
+function buildPrecomputedExpressionResults(
+  conditions: ExpressionCondition[] | undefined,
+  ipcReady: ToolResult | undefined
+): Array<{ coreId: CoreId; results: EvaluateResult[] }> | undefined {
+  // A timed-out poll is followed by a halt/PC recovery, so its values are no
+  // longer a snapshot of the state used by the diagnosis. Only reuse a fully
+  // matched poll with no intervening target mutation.
+  if (!conditions || ipcReady?.matched !== true || !Array.isArray(ipcReady.conditions)) return undefined;
+
+  const observed = new Map<CoreId, Map<string, EvaluateResult>>();
+  for (const condition of ipcReady.conditions) {
+    if (!isEvaluateResult(condition?.result)) continue;
+    const byExpression = observed.get(condition.coreId) ?? new Map<string, EvaluateResult>();
+    byExpression.set(condition.expression, condition.result);
+    observed.set(condition.coreId, byExpression);
+  }
+
+  const groups = groupConditionsByCore(conditions);
+  const results: Array<{ coreId: CoreId; results: EvaluateResult[] }> = [];
+  for (const group of groups) {
+    const byExpression = observed.get(group.coreId);
+    const groupResults = group.expressions.map(expression => byExpression?.get(expression));
+    if (groupResults.some(result => result === undefined)) return undefined;
+    results.push({ coreId: group.coreId, results: groupResults as EvaluateResult[] });
+  }
+  return results;
+}
+
+function isEvaluateResult(value: unknown): value is EvaluateResult {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<EvaluateResult>;
+  return typeof candidate.expression === "string" && typeof candidate.success === "boolean";
 }
 
 function bootEvidence(evidence: DebugEvidence, cpu1CoreId: CoreId, cpu2CoreId: CoreId): ToolResult {
@@ -1143,8 +1239,16 @@ function compactEvidence(result: ToolResult) {
   };
 }
 
-function defaultBundleDir(label: string): string {
-  return path.join(process.cwd(), ".c2000-debug-bundles", `${label}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
+function defaultBundleDir(label: string, filesystem?: FilesystemPolicy): string {
+  const configuredRoot = filesystem?.allowedWriteRoots.find(root => root.length > 0);
+  if (filesystem && !configuredRoot) {
+    throw new DebugMcpError("PathOutsideAllowedWriteRoots", "No allowed write root is configured for the default workflow bundle", {
+      label,
+      allowedRoots: []
+    });
+  }
+  const root = configuredRoot ? path.resolve(configuredRoot) : process.cwd();
+  return path.join(root, ".c2000-debug-bundles", `${label}-${new Date().toISOString().replace(/[:.]/g, "-")}`);
 }
 
 function runtimeRamOwnershipAccepted(status: ToolResult | undefined): boolean {
