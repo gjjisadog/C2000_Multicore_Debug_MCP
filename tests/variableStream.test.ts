@@ -48,6 +48,9 @@ describe("slow variable stream contracts", () => {
     expect(startVariableStreamSchema.safeParse(startInput({ samplePeriodMs: 9 })).success).toBe(false);
     expect(startVariableStreamSchema.safeParse(startInput({ variables: Array.from({ length: 33 }, (_, index) => `v${index}`) })).success).toBe(false);
     expect(startVariableStreamSchema.safeParse(startInput()).success).toBe(true);
+    expect(startVariableStreamSchema.safeParse(startInput({
+      variables: [{ symbol: "g_u16", typeName: "uint16_t" }]
+    })).success).toBe(true);
   });
 
   it("models C28x 16-bit address units without ARM byte assumptions", () => {

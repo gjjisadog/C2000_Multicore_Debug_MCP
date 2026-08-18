@@ -20,6 +20,7 @@ import { BoardExecutionSemaphore, type BoardExecutionPermit, type BoardExecution
 import type { LeasedBoard } from "../boards/BoardLeaseManager.js";
 import type { BoardWorkerRoute } from "../boards/BoardWorkerSupervisor.js";
 import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from "./JobSemantics.js";
+import { classifyDebugFailure } from "../debug/DebugFailureClassifier.js";
 import { portableDurableEvidenceFromSteps, type JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
 
@@ -494,7 +495,7 @@ export class TestJobEngine {
               signal: activeSignal
             };
             const safetyGuardChecks: Record<string, unknown>[] = [];
-            if (sessionOpen && sessionId && guardBeforeStep(plannedStep.type)) {
+            if (sessionOpen && sessionId && guardBeforeStep(plannedStep)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
             }
             let output = await this.steps.execute(executionContext);
@@ -520,7 +521,7 @@ export class TestJobEngine {
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current);
             }
-            if (sessionOpen && sessionId && guardAfterStep(plannedStep.type)) {
+            if (sessionOpen && sessionId && guardAfterStep(plannedStep)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards({ ...executionContext, sessionId }, sessionId, "after-step"));
             }
             if (safetyGuardChecks.length > 0) {
@@ -544,19 +545,21 @@ export class TestJobEngine {
             break;
           } catch (error) {
             const structured = { ...toStructuredError(error) };
+            const optimization = classifyDebugFailure(structured);
+            const structuredWithOptimization = { ...structured, optimization };
             if (isAbortError(error)) cancelled = true;
-            if (failedSafetyIsolation(structured)) {
+            if (failedSafetyIsolation(structuredWithOptimization)) {
               try {
                 this.options.registry.transition(board.boardId, "QUARANTINED", {
                   code: "DurableSafetyIsolationFailed",
                   message: "A durable safety halt could not be confirmed while the fenced lease was held",
                   jobId,
                   stepType: step.stepType,
-                  error: structured
+                  error: structuredWithOptimization
                 });
               } catch { /* original fenced halt failure remains authoritative */ }
             }
-            const retryDecision = decideRetry({ step, attempt, policy, errorCode: structured.code });
+            const retryDecision = decideRetry({ step, attempt, policy, errorCode: structuredWithOptimization.code });
             let reconcileEvidence: Record<string, unknown> | undefined;
             if (retryDecision.retry && retryDecision.requiresReconcile) {
               reconcileEvidence = await this.reconcileBeforeRetry(sessionId, lease.context);
@@ -566,16 +569,16 @@ export class TestJobEngine {
               }
             }
             const finishedAt = new Date().toISOString();
-            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "FAILED", error: structured, retryDecision, backoffMs: retryDecision.backoffMs, reconcileEvidence });
+            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "FAILED", error: structuredWithOptimization, retryDecision, backoffMs: retryDecision.backoffMs, reconcileEvidence });
             if (retryDecision.retry && !cancelled) {
-              this.options.events.append({ level: "warn", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_STEP_RETRY", payload: { stepType: step.stepType, attempt, error: structured, retryDecision, reconcileEvidence } });
+              this.options.events.append({ level: "warn", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_STEP_RETRY", payload: { stepType: step.stepType, attempt, error: structuredWithOptimization, retryDecision, reconcileEvidence } });
               await abortableBackoff(retryDecision.backoffMs, this.abortControllers.get(jobId)?.signal);
               continue;
             }
             failed = !cancelled;
-            lastError = structured;
-            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: { retryDecision, reconcileEvidence } });
-            this.options.events.append({ level: cancelled ? "warn" : "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED", payload: { stepType: step.stepType, error: lastError } });
+            lastError = structuredWithOptimization;
+            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: { retryDecision, reconcileEvidence, optimization } });
+            this.options.events.append({ level: cancelled ? "warn" : "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED", payload: { stepType: step.stepType, error: lastError, optimization } });
             break;
           }
         }
@@ -725,12 +728,16 @@ function isAbortError(error: unknown): boolean {
     || (error instanceof Error && error.name === "AbortError");
 }
 
-function guardBeforeStep(stepType: TestPlanStep["type"]): boolean {
-  return guardAfterStep(stepType) && stepType !== "reconnectAfterTargetReset";
+function guardBeforeStep(step: TestPlanStep): boolean {
+  return guardAfterStep(step) && step.type !== "reconnectAfterTargetReset";
 }
 
-function guardAfterStep(stepType: TestPlanStep["type"]): boolean {
-  return stepType !== "cleanup" && stepType !== "restorePrograms";
+function guardAfterStep(step: TestPlanStep): boolean {
+  // A connect-only launch has no loaded symbols. Evaluating firmware safety
+  // expressions here creates a false failure (`identifier not found`) before
+  // the first load/run step has made those expressions readable.
+  if (step.type === "launchMulticore" && !step.loadPrograms) return false;
+  return step.type !== "cleanup" && step.type !== "restorePrograms";
 }
 
 function stepRequiresLiveWorkerRoute(stepType: TestPlanStep["type"]): boolean {

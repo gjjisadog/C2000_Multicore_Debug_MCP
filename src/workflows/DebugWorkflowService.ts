@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
@@ -18,6 +18,8 @@ import type {
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { buildBootHandoffVerdict } from "../debug/bootHandoffVerdict.js";
 import { defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
+import { classifyDebugFailure, classifyIpcAcceptance } from "../debug/DebugFailureClassifier.js";
+import { describeWorkflowStartupContract, workflowStartupContractIssues } from "../debug/startupContract.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
@@ -34,7 +36,8 @@ export class DebugWorkflowService {
   ) {}
 
   async launchAndRunIpcAcceptance(input: z.infer<typeof launchAndRunIpcAcceptanceSchema>): Promise<ToolResult> {
-    assertIpcArtifactSet(input);
+    assertWorkflowStartupContract(input);
+    const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
     const sessionName = input.sessionName ?? "launch-and-run-ipc-acceptance";
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     let sessionId: string | undefined;
@@ -55,10 +58,10 @@ export class DebugWorkflowService {
       });
       sessionId = created.sessionId;
       const connected = await this.manager.connectCores(sessionId, coreIds);
-      const acceptance = await this.runIpcAcceptance({
+      const acceptance = await this.runIpcAcceptanceInternal({
         ...input,
         sessionId
-      });
+      }, artifactPreflight);
 
       const result = {
         ...acceptance,
@@ -102,10 +105,11 @@ export class DebugWorkflowService {
           launch.cleanupError = toStructuredError(cleanupError);
         }
       }
+      const cause = toStructuredError(error);
       throw new DebugMcpError(
         "PostLaunchCheckFailed",
         "Launch and IPC acceptance workflow failed",
-        { launch, cause: toStructuredError(error) }
+        { launch, cause, optimization: classifyDebugFailure(cause) }
       );
     } finally {
       if (sessionId && input.sessionMode === "ephemeral") {
@@ -124,11 +128,24 @@ export class DebugWorkflowService {
   }
 
   async runIpcAcceptance(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
-    assertIpcArtifactSet(input);
+    assertWorkflowStartupContract(input);
+    const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    return this.runIpcAcceptanceInternal(input, artifactPreflight);
+  }
+
+  private async runIpcAcceptanceInternal(
+    input: z.infer<typeof runIpcAcceptanceSchema>,
+    artifactPreflight: ToolResult
+  ): Promise<ToolResult> {
     const workflowStartedAt = performance.now();
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
+    // Parse linker maps before touching the target. This produces the GS/flash
+    // ownership plan up front and prevents a malformed map from leaving a
+    // partially reset or partially loaded multicore session behind.
+    const ramOwnership = await this.analyzeRamOwnership({ maps });
+    performedSteps.push("artifactPreflight", "analyzeRamOwnership");
 
     const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
@@ -159,8 +176,6 @@ export class DebugWorkflowService {
     assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
-    const ramOwnership = await this.analyzeRamOwnership({ maps });
-    performedSteps.push("analyzeRamOwnership");
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
@@ -200,6 +215,7 @@ export class DebugWorkflowService {
       cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
       cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
     });
+    const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan });
     performedSteps.push("diagnoseBootHandoff");
     const result: ToolResult = {
       workflow: "c2000_runIpcAcceptance",
@@ -221,11 +237,20 @@ export class DebugWorkflowService {
       load,
       postLoadHalt,
       snapshot,
+      artifactPreflight,
       ramOwnership,
       elfFreshness,
       runtimeRamOwnership,
       runPlan,
+      loadSequence: input.loadSequence,
+      startupContract: describeWorkflowStartupContract({
+        loadMode: input.loadSequence.mode,
+        runMode: input.runSequence.runMode,
+        runCpu1First: input.runSequence.runCpu1First,
+        runCpu2: input.runSequence.runCpu2
+      }),
       ipcReady,
+      optimization,
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
       diagnosis,
       performance: {
@@ -269,7 +294,11 @@ export class DebugWorkflowService {
   async runReloadAndDiagnose(input: z.infer<typeof runReloadAndDiagnoseSchema>): Promise<ToolResult> {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
+    const artifactPreflight = await assertReloadArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    performedSteps.push("artifactPreflight");
     const maps = this.normalizeMaps(mapsFromPaths(input));
+    const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
+    if (ramOwnership) performedSteps.push("analyzeRamOwnership");
     const halt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCores");
     assertBatchSucceeded("haltCores", halt);
@@ -297,7 +326,6 @@ export class DebugWorkflowService {
     }
     const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
     performedSteps.push("getMulticoreSnapshot");
-    const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
@@ -368,6 +396,7 @@ export class DebugWorkflowService {
         postLoadResetHalt
       } : {}),
       snapshot,
+      artifactPreflight,
       ...(ramOwnership ? { ramOwnership } : {}),
       elfFreshness,
       runtimeRamOwnership,
@@ -569,9 +598,12 @@ export class DebugWorkflowService {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
     let lastConditions: ToolResult[] = [];
+    let firstFailure: ToolResult | undefined;
     let pollIterations = 0;
     let expressionBatchCalls = 0;
+    let expressionCount = 0;
     const grouped = groupConditionsByCore(conditions);
+    const uniqueExpressionsPerPoll = grouped.reduce((count, group) => count + group.expressions.length, 0);
     while (performance.now() <= deadline) {
       pollIterations++;
       const batches = await Promise.all(grouped.map(async group => ({
@@ -579,19 +611,42 @@ export class DebugWorkflowService {
         results: await this.manager.evaluateMany(sessionId, group.coreId, group.expressions)
       })));
       expressionBatchCalls += batches.length;
+      expressionCount += uniqueExpressionsPerPoll;
       lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
         conditionResult(condition, results.find(result => result.expression === condition.expression))
       ));
       if (lastConditions.every(condition => condition.matched)) {
         const pollDurationMs = performance.now() - startedAt;
-        return { sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs, matchedAtMs: pollDurationMs };
+        return {
+          sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations,
+          expressionBatchCalls, expressionCount, pollDurationMs, matchedAtMs: pollDurationMs,
+          ...(firstFailure ? { firstFailure } : {})
+        };
+      }
+      if (!firstFailure) {
+        let snapshot: ToolResult | undefined;
+        try {
+          snapshot = await this.manager.getMulticoreSnapshot(sessionId, grouped.map(group => group.coreId));
+        } catch (error) {
+          snapshot = { error: toStructuredError(error) };
+        }
+        firstFailure = {
+          pollIteration: pollIterations,
+          elapsedMs: performance.now() - startedAt,
+          conditions: lastConditions.filter(condition => condition.matched !== true),
+          snapshot
+        };
       }
       const remainingMs = deadline - performance.now();
       if (remainingMs <= 0) break;
       const elapsedMs = performance.now() - startedAt;
       await sleep(Math.min(strategy === "fixed" ? intervalMs : adaptiveInterval(elapsedMs, schedule), remainingMs));
     }
-    return { sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations, expressionBatchCalls, expressionCount: pollIterations * conditions.length, pollDurationMs: performance.now() - startedAt };
+    return {
+      sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations,
+      expressionBatchCalls, expressionCount, pollDurationMs: performance.now() - startedAt,
+      ...(firstFailure ? { firstFailure } : {})
+    };
   }
 
   private async haltAndResolvePc(sessionId: string, coreIds: CoreId[]) {
@@ -667,6 +722,7 @@ export class DebugWorkflowService {
       files.push(filePath);
     };
     await writeJson("snapshot.json", result.snapshot ?? result.diagnosis?.snapshot ?? result.bootHandoff?.snapshot);
+    await writeJson("artifact-preflight.json", result.artifactPreflight ?? null);
     await writeJson("ram-ownership.json", result.ramOwnership ?? result.diagnosis?.ramOwnership ?? result.bootHandoff?.ramOwnership ?? null);
     await writeJson("elf-freshness.json", result.elfFreshness ?? result.diagnosis?.elfFreshness ?? result.bootHandoff?.elfFreshness ?? null);
     await writeJson("boot-handoff.json", result.diagnosis ?? result.bootHandoff ?? result);
@@ -678,20 +734,53 @@ export class DebugWorkflowService {
   }
 }
 
-function assertIpcArtifactSet(input: {
+async function assertIpcArtifactSet(input: {
   device: string;
+  cpu1CoreId: CoreId;
+  cpu2CoreId: CoreId;
   cpu1OutPath: string;
   cpu2OutPath: string;
   cpu1MapPath: string;
   cpu2MapPath: string;
-}): void {
-  const programPair = validateProgramPair(input.cpu1OutPath, input.cpu2OutPath, input.device);
-  const mapPair = validateProgramPair(input.cpu1MapPath, input.cpu2MapPath, input.device);
+  ipcReadyExpressions?: ExpressionCondition[];
+}, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
+  const normalizedInput = {
+    ...input,
+    cpu1OutPath: normalizePath(input.cpu1OutPath),
+    cpu2OutPath: normalizePath(input.cpu2OutPath),
+    cpu1MapPath: normalizePath(input.cpu1MapPath),
+    cpu2MapPath: normalizePath(input.cpu2MapPath)
+  };
+  const programPair = validateProgramPair(normalizedInput.cpu1OutPath, normalizedInput.cpu2OutPath, input.device);
+  const mapPair = validateProgramPair(normalizedInput.cpu1MapPath, normalizedInput.cpu2MapPath, input.device);
   const issues = [...programPair.issues, ...mapPair.issues.map(issue => `map: ${issue}`)];
-  const cpu1Out = describeProgramArtifact(input.cpu1OutPath);
-  const cpu1Map = describeProgramArtifact(input.cpu1MapPath);
-  const cpu2Out = describeProgramArtifact(input.cpu2OutPath);
-  const cpu2Map = describeProgramArtifact(input.cpu2MapPath);
+  const files = [
+    ["CPU1 output", normalizedInput.cpu1OutPath],
+    ["CPU2 output", normalizedInput.cpu2OutPath],
+    ["CPU1 map", normalizedInput.cpu1MapPath],
+    ["CPU2 map", normalizedInput.cpu2MapPath]
+  ] as const;
+  const fileChecks = await Promise.all(files.map(async ([label, filePath]) => {
+    try {
+      const info = await stat(filePath);
+      return info.isFile() ? undefined : `${label} is not a regular file: ${filePath}`;
+    } catch (error) {
+      return `${label} is not readable: ${filePath} (${error instanceof Error ? error.message : String(error)})`;
+    }
+  }));
+  issues.push(...fileChecks.filter((issue): issue is string => issue !== undefined));
+  const artifactSemantics = await validateIpcArtifactSymbols({
+    cpu1CoreId: input.cpu1CoreId,
+    cpu2CoreId: input.cpu2CoreId,
+    cpu1MapPath: normalizedInput.cpu1MapPath,
+    cpu2MapPath: normalizedInput.cpu2MapPath,
+    expressions: input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)
+  });
+  issues.push(...artifactSemantics.issues);
+  const cpu1Out = describeProgramArtifact(normalizedInput.cpu1OutPath);
+  const cpu1Map = describeProgramArtifact(normalizedInput.cpu1MapPath);
+  const cpu2Out = describeProgramArtifact(normalizedInput.cpu2OutPath);
+  const cpu2Map = describeProgramArtifact(normalizedInput.cpu2MapPath);
   if (cpu1Out.configuration && cpu1Map.configuration && cpu1Out.configuration !== cpu1Map.configuration) {
     issues.push(`CPU1 output/map configuration mismatch: ${cpu1Out.configuration} vs ${cpu1Map.configuration}`);
   }
@@ -702,9 +791,164 @@ function assertIpcArtifactSet(input: {
     throw new DebugMcpError("ArtifactPairInvalid", "IPC acceptance artifacts are incomplete or incompatible", {
       programPair,
       mapPair,
+      artifactSemantics,
       issues
     });
   }
+  return {
+    checked: true,
+    normalizedPaths: {
+      cpu1OutPath: normalizedInput.cpu1OutPath,
+      cpu2OutPath: normalizedInput.cpu2OutPath,
+      cpu1MapPath: normalizedInput.cpu1MapPath,
+      cpu2MapPath: normalizedInput.cpu2MapPath
+    },
+    programPair,
+    mapPair,
+    artifactSemantics
+  };
+}
+
+async function assertReloadArtifactSet(input: {
+  device: string;
+  cpu1CoreId: CoreId;
+  cpu2CoreId: CoreId;
+  cpu1OutPath: string;
+  cpu2OutPath: string;
+  cpu1MapPath?: string;
+  cpu2MapPath?: string;
+  waitExpressions?: ExpressionCondition[];
+}, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
+  const normalized = {
+    ...input,
+    cpu1OutPath: normalizePath(input.cpu1OutPath),
+    cpu2OutPath: normalizePath(input.cpu2OutPath),
+    ...(input.cpu1MapPath ? { cpu1MapPath: normalizePath(input.cpu1MapPath) } : {}),
+    ...(input.cpu2MapPath ? { cpu2MapPath: normalizePath(input.cpu2MapPath) } : {})
+  };
+  const programPair = validateProgramPair(normalized.cpu1OutPath, normalized.cpu2OutPath, input.device);
+  const issues = [...programPair.issues];
+  const files = [
+    ["CPU1 output", normalized.cpu1OutPath],
+    ["CPU2 output", normalized.cpu2OutPath],
+    ...(normalized.cpu1MapPath ? [["CPU1 map", normalized.cpu1MapPath] as const] : []),
+    ...(normalized.cpu2MapPath ? [["CPU2 map", normalized.cpu2MapPath] as const] : [])
+  ] as const;
+  const fileChecks = await Promise.all(files.map(async ([label, filePath]) => {
+    try {
+      const info = await stat(filePath);
+      return info.isFile() ? undefined : `${label} is not a regular file: ${filePath}`;
+    } catch (error) {
+      return `${label} is not readable: ${filePath} (${error instanceof Error ? error.message : String(error)})`;
+    }
+  }));
+  issues.push(...fileChecks.filter((issue): issue is string => issue !== undefined));
+  let mapPair: ReturnType<typeof validateProgramPair> | undefined;
+  let artifactSemantics: ToolResult | undefined;
+  if (normalized.cpu1MapPath && normalized.cpu2MapPath) {
+    mapPair = validateProgramPair(normalized.cpu1MapPath, normalized.cpu2MapPath, input.device);
+    issues.push(...mapPair.issues.map(issue => `map: ${issue}`));
+    const cpu1Map = describeProgramArtifact(normalized.cpu1MapPath);
+    const cpu2Map = describeProgramArtifact(normalized.cpu2MapPath);
+    if (cpu1Map.configuration && cpu2Map.configuration && cpu1Map.configuration !== cpu2Map.configuration) {
+      issues.push(`map configuration mismatch: ${cpu1Map.configuration} vs ${cpu2Map.configuration}`);
+    }
+    artifactSemantics = await validateIpcArtifactSymbols({
+      cpu1CoreId: input.cpu1CoreId,
+      cpu2CoreId: input.cpu2CoreId,
+      cpu1MapPath: normalized.cpu1MapPath,
+      cpu2MapPath: normalized.cpu2MapPath,
+      expressions: input.waitExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)
+    });
+    issues.push(...artifactSemantics.issues);
+  }
+  if (issues.length > 0) {
+    throw new DebugMcpError("ArtifactPairInvalid", "Reload workflow artifacts are incomplete or incompatible", {
+      programPair,
+      ...(mapPair ? { mapPair } : {}),
+      ...(artifactSemantics ? { artifactSemantics } : {}),
+      issues
+    });
+  }
+  return {
+    checked: true,
+    normalizedPaths: normalized,
+    programPair,
+    ...(mapPair ? { mapPair } : {}),
+    ...(artifactSemantics ? { artifactSemantics } : {})
+  };
+}
+
+async function validateIpcArtifactSymbols(input: {
+  cpu1CoreId: CoreId;
+  cpu2CoreId: CoreId;
+  cpu1MapPath: string;
+  cpu2MapPath: string;
+  expressions: ExpressionCondition[];
+}): Promise<ToolResult> {
+  const maps = [
+    { coreId: input.cpu1CoreId, mapPath: input.cpu1MapPath },
+    { coreId: input.cpu2CoreId, mapPath: input.cpu2MapPath }
+  ];
+  const requiredByCore = new Map<number, string[]>();
+  const validCoreIds = new Set(maps.map(map => map.coreId));
+  const unknownCoreConditions = input.expressions
+    .filter(condition => !validCoreIds.has(condition.coreId))
+    .map(condition => `IPC condition ${condition.expression} targets core ${condition.coreId}, which is not in the CPU1/CPU2 acceptance pair`);
+  for (const condition of input.expressions) {
+    const root = expressionRootSymbol(condition.expression);
+    if (!root) continue;
+    const symbols = requiredByCore.get(condition.coreId) ?? [];
+    if (!symbols.includes(root)) symbols.push(root);
+    requiredByCore.set(condition.coreId, symbols);
+  }
+  const results = await Promise.all(maps.map(async map => {
+    const requiredSymbols = requiredByCore.get(map.coreId) ?? [];
+    try {
+      const content = await readFile(map.mapPath, "utf8");
+      const hasSymbolTable = /GLOBAL (?:DATA )?SYMBOLS:\s+SORTED/i.test(content);
+      if (!hasSymbolTable) {
+        return {
+          coreId: map.coreId,
+          mapPath: map.mapPath,
+          checked: false,
+          reason: "map does not expose a recognizable global symbol table",
+          requiredSymbols
+        };
+      }
+      const missingSymbols = requiredSymbols.filter(symbol => !new RegExp(`\\b${escapeRegExp(symbol)}\\b`).test(content));
+      return {
+        coreId: map.coreId,
+        mapPath: map.mapPath,
+        checked: true,
+        requiredSymbols,
+        missingSymbols
+      };
+    } catch (error) {
+      return {
+        coreId: map.coreId,
+        mapPath: map.mapPath,
+        checked: false,
+        reason: error instanceof Error ? error.message : String(error),
+        requiredSymbols
+      };
+    }
+  }));
+  const missing = results.flatMap(result => (result.missingSymbols ?? []).map(symbol => `core ${result.coreId} map is missing IPC diagnostic symbol ${symbol}`));
+  return {
+    mode: "map-global-symbols",
+    checked: results.some(result => result.checked === true),
+    results,
+    issues: [...unknownCoreConditions, ...missing]
+  };
+}
+
+function expressionRootSymbol(expression: string): string | undefined {
+  return expression.trim().match(/^[(&\s]*([A-Za-z_][A-Za-z0-9_]*)/)?.[1];
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function assertBatchSucceeded(label: string, result: ToolResult): void {
@@ -714,6 +958,29 @@ function assertBatchSucceeded(label: string, result: ToolResult): void {
   if (failed.length > 0) {
     throw new DebugMcpError("BatchOperationFailed", `${label} failed for ${failed.length} item(s)`, {
       failed
+    });
+  }
+}
+
+function assertWorkflowStartupContract(input: {
+  loadSequence: { mode: "cpu1-then-cpu2" | "cpu1-run-before-cpu2" };
+  runSequence: { runMode?: "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running"; runCpu1First: boolean; runCpu2: boolean };
+}): void {
+  const issues = workflowStartupContractIssues({
+    loadMode: input.loadSequence.mode,
+    runMode: input.runSequence.runMode,
+    runCpu1First: input.runSequence.runCpu1First,
+    runCpu2: input.runSequence.runCpu2
+  });
+  if (issues.length > 0) {
+    throw new DebugMcpError("StartupContractInvalid", "The requested multicore load/run sequence is internally contradictory", {
+      issues,
+      startupContract: describeWorkflowStartupContract({
+        loadMode: input.loadSequence.mode,
+        runMode: input.runSequence.runMode,
+        runCpu1First: input.runSequence.runCpu1First,
+        runCpu2: input.runSequence.runCpu2
+      })
     });
   }
 }
@@ -820,6 +1087,7 @@ function summaryMarkdown(result: ToolResult): string {
     `- mcpToolCalls: ${JSON.stringify(result.mcpToolCalls ?? [])}`,
     `- verdictReady: ${String(evidence.verdictReady)}`,
     `- runtimeRamOwnershipMatched: ${String(evidence.runtimeRamOwnership?.matched ?? "n/a")}`,
+    `- failureSignature: ${String(evidence.optimization?.failureSignature ?? "n/a")}`,
     "",
     "## IPC conditions",
     "",
@@ -865,7 +1133,9 @@ function compactEvidence(result: ToolResult) {
     severity: diagnosis.severity,
     verdictReady: diagnosis.verdict?.ready,
     conditions,
+    artifactPreflight: result.artifactPreflight,
     runtimeRamOwnership: result.runtimeRamOwnership ?? diagnosis.runtimeRamOwnership,
+    optimization: result.optimization,
     programs,
     pc,
     runPlan: result.runPlan,

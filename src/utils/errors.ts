@@ -17,6 +17,8 @@ export type DebugErrorCode =
   | "ProgramLoadSessionRefreshFailed"
   | "BatchOperationFailed"
   | "ArtifactPairInvalid"
+  | "LaunchArtifactsMissing"
+  | "StartupContractInvalid"
   | "LaunchProgramMissing"
   | "MemoryReadFailed"
   | "RamOwnershipVerifyFailed"

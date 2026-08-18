@@ -10,6 +10,8 @@ export interface ProgramArtifactIdentity {
   device?: string;
   configuration?: ProgramConfiguration;
   example?: string;
+  /** Build-family key after removing core/profile qualifiers from the name. */
+  pairKey?: string;
 }
 
 export interface ProgramPairValidation {
@@ -78,12 +80,14 @@ export function describeProgramArtifact(artifactPath: string): ProgramArtifactId
     .replace(/(?:^|[_-])(?:ram|flash)(?:[_-]|$)/g, "_")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+  const pairKey = buildPairKey(example);
   return {
     path: artifactPath,
     ...(core ? { core } : {}),
     ...(device ? { device } : {}),
     ...(configurationMatch ? { configuration: configurationMatch.toUpperCase() as ProgramConfiguration } : {}),
-    ...(example ? { example } : {})
+    ...(example ? { example } : {}),
+    ...(pairKey ? { pairKey } : {})
   };
 }
 
@@ -110,7 +114,7 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
     compareKnownIdentity("device", cpu1.device, cpu2.device, issues);
     compareKnownIdentity("configuration", cpu1.configuration, cpu2.configuration, issues);
     if (cpu1.core && cpu2.core) {
-      compareKnownIdentity("example", cpu1.example, cpu2.example, issues);
+      compareKnownIdentity("build family", cpu1.pairKey ?? cpu1.example, cpu2.pairKey ?? cpu2.example, issues);
     }
   }
   const normalizedExpectedDevice = expectedDevice?.toLowerCase();
@@ -123,6 +127,23 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
   }
   const complete = cpu1 !== undefined && cpu2 !== undefined;
   return { complete, compatible: complete && issues.length === 0, ...(cpu1 ? { cpu1 } : {}), ...(cpu2 ? { cpu2 } : {}), issues };
+}
+
+/**
+ * CPU1/CPU2 acceptance images may intentionally use different profile names
+ * (for example `DK9_RUNTIME_ACCEPTANCE` vs `DK9_CE_PRELOADED_VALIDATION`).
+ * Compare their stable application family while retaining the raw `example`
+ * name for diagnostics. This keeps profile-qualified companion artifacts
+ * usable without allowing unrelated application names to pair silently.
+ */
+function buildPairKey(example: string): string | undefined {
+  if (!example) return undefined;
+  const profileQualifiers = new Set([
+    "acceptance", "ce", "debug", "dk8", "dk9", "launchxl", "preloaded", "prod",
+    "production", "runtime", "safe", "validation"
+  ]);
+  const parts = example.split("_").filter(part => part.length > 0 && !profileQualifiers.has(part));
+  return parts.join("_") || undefined;
 }
 
 function compareKnownIdentity(label: string, left: string | undefined, right: string | undefined, issues: string[]): void {

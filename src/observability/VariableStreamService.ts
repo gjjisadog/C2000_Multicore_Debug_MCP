@@ -376,7 +376,10 @@ export class VariableStreamService {
       const typeName = item.typeName ?? stringValue(value.type);
       if (!typeName) {
         throw new DebugMcpError("VariableTypeRequired", "The adapter did not expose a reliable C type; provide typeName explicitly", {
-          symbol: item.symbol
+          symbol: item.symbol,
+          acceptedRequest: { symbol: item.symbol, typeName: "uint16_t" },
+          supportedTypeExamples: ["uint16_t", "int16_t", "uint32_t", "int32_t", "float"],
+          resolutionMode: "adapter-type-or-explicit-typeName"
         });
       }
       const type = classifyType(typeName, item.enumSignedness);
