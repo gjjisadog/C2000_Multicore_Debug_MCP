@@ -4,19 +4,19 @@ export const VARIABLE_STREAM_SCHEMA_VERSION = 1 as const;
 export const VARIABLE_STREAM_INTERNAL_TOOL = "__c2000_readVariableBatch";
 
 export const variableRequestSchema = z.union([
-  z.string().min(1),
   z.object({
     symbol: z.string().min(1),
     typeName: z.string().min(1),
     enumSignedness: z.enum(["signed", "unsigned"]).optional()
-  })
+  }).describe("Prefer this form when the adapter may not report a reliable C type"),
+  z.string().min(1).describe("A symbol name; use the typed object form if metadata resolution cannot infer its C type")
 ]);
 
 export const startVariableStreamSchema = z.object({
   boardId: z.string().min(1),
   sessionId: z.string().min(1),
   coreId: z.number().int().nonnegative(),
-  variables: z.array(variableRequestSchema).min(1).max(32),
+  variables: z.array(variableRequestSchema).min(1).max(32).describe("Prefer {symbol,typeName} for deterministic C28x width/address-unit validation; bare symbols remain supported when the adapter exposes type metadata"),
   samplePeriodMs: z.number().int().min(10).max(5000),
   durationMs: z.number().int().min(10).max(600_000),
   maxSamples: z.number().int().positive().max(100_000),

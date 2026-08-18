@@ -72,11 +72,21 @@ function isWithin(candidate: string, root: string): boolean {
 }
 
 export async function validateToolPaths(input: unknown, policy: FilesystemPolicy): Promise<void> {
+  const pending = new Map<string, Promise<void>>();
   await visit(input, async (key, value) => {
-    if (["outputDir", "logFile"].includes(key)) await assertAllowedWritePath(value, policy);
-    if (["ccxmlPath", "programUri", "mapUri", "mapPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath"].includes(key)) await assertAllowedReadPath(value, policy);
-    if (key === "searchRoots") await assertAllowedReadPath(value, policy);
+    const operation = ["outputDir", "logFile"].includes(key)
+      ? "write"
+      : ["ccxmlPath", "programUri", "mapUri", "mapPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath", "searchRoots"].includes(key)
+        ? "read"
+        : undefined;
+    if (!operation) return;
+    const dedupeKey = `${operation}:${value}`;
+    if (pending.has(dedupeKey)) return;
+    pending.set(dedupeKey, operation === "write"
+      ? assertAllowedWritePath(value, policy).then(() => undefined)
+      : assertAllowedReadPath(value, policy).then(() => undefined));
   });
+  await Promise.all(pending.values());
 }
 
 async function visit(value: unknown, check: (key: string, value: string) => Promise<void>, parentKey = ""): Promise<void> {

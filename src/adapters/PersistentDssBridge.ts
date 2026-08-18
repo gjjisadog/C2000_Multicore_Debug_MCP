@@ -178,7 +178,7 @@ class DefaultDssServerLauncher implements DssServerLauncher {
       } catch (error) {
         lastError = error;
         const retryableProbeError = isRetryableXdsLaunchError(error);
-        if (this.options.basePort !== undefined && !retryableProbeError) {
+        if (!retryableProbeError) {
           throw error;
         }
         if (retryableProbeError && attempt < attempts - 1) {

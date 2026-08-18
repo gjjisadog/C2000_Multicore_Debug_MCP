@@ -1,8 +1,12 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { StepRegistry } from "../src/jobs/StepRegistry.js";
 import { DURABLE_PLAN_LIMITS, parsePersistedTestPlan, testPlanSchema } from "../src/jobs/TestPlanSchema.js";
-import { submitMultiBoardIpcAcceptanceSchema } from "../src/mcp/toolSchemas.js";
+import { submitMultiBoardIpcAcceptanceSchema, workflowRunSequenceSchema } from "../src/mcp/toolSchemas.js";
 import type { C2000ToolInvoker } from "../src/mcp/tools.js";
+import { sha256File } from "../src/utils/fileHash.js";
 
 class RecordingToolInvoker implements C2000ToolInvoker {
   readonly calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
@@ -134,6 +138,7 @@ describe("StepRegistry", () => {
           type: "runIpcAcceptance",
           loadPolicy: "if-changed",
           loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+          runMode: "debugger_runs_both",
           ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
         }
       ]
@@ -176,9 +181,118 @@ describe("StepRegistry", () => {
         cpu2OutPath: "/firmware/cpu2.out",
         loadPolicy: "if-changed",
         loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 500 },
+        runSequence: { runMode: "debugger_runs_both", settleMs: 0 },
         ipcReadyExpressions: [{ label: "ti-ipc-demo-pass", coreId: 0, expression: "pass", expected: 1 }]
       })
     });
+  });
+
+  test("runMode supplies explicit run defaults and rejects contradictory legacy flags", () => {
+    expect(workflowRunSequenceSchema.parse({ runMode: "cpu2_pre_running" })).toEqual({
+      runMode: "cpu2_pre_running",
+      runCpu1First: false,
+      runCpu2: true,
+      settleMs: 0
+    });
+    expect(workflowRunSequenceSchema.safeParse({
+      runMode: "cpu2_pre_running",
+      runCpu1First: true,
+      runCpu2: true
+    }).success).toBe(false);
+    expect(testPlanSchema.safeParse({
+      planVersion: 1,
+      name: "contradictory-startup",
+      boardIds: ["board-a"],
+      artifacts: {
+        cpu1OutPath: "/firmware/cpu1.out",
+        cpu2OutPath: "/firmware/cpu2.out",
+        cpu1MapPath: "/firmware/cpu1.map",
+        cpu2MapPath: "/firmware/cpu2.map"
+      },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "runIpcAcceptance",
+          runMode: "cpu2_pre_running",
+          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+          ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: 1 }]
+        }
+      ]
+    }).success).toBe(false);
+    expect(testPlanSchema.safeParse({
+      planVersion: 1,
+      name: "cpu1-release-after-cpu2-load",
+      boardIds: ["board-a"],
+      artifacts: {
+        cpu1OutPath: "/firmware/cpu1.out",
+        cpu2OutPath: "/firmware/cpu2.out",
+        cpu1MapPath: "/firmware/cpu1.map",
+        cpu2MapPath: "/firmware/cpu2.map"
+      },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "runIpcAcceptance",
+          runMode: "cpu1_boots_cpu2",
+          loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+          ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: 1 }]
+        }
+      ]
+    }).success).toBe(false);
+  });
+
+  test("fails closed instead of silently converting a load-enabled launch into connect-only", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "missing-launch-artifacts",
+      boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore" }]
+    });
+
+    await expect(registry.execute({
+      jobId: "job-a",
+      boardId: "board-a",
+      plan,
+      step: plan.steps[0]!
+    })).rejects.toMatchObject({ code: "LaunchArtifactsMissing" });
+    expect(invoker.calls).toEqual([]);
+  });
+
+  test("checks declared launch artifact hashes before invoking the target", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "c2000-durable-launch-hash-"));
+    try {
+      const cpu1OutPath = path.join(root, "Hybrid30K_CPU1_DK9_RUNTIME_ACCEPTANCE_RAM.out");
+      const cpu2OutPath = path.join(root, "Hybrid30K_CPU2_DK9_CE_PRELOADED_VALIDATION_RAM.out");
+      await writeFile(cpu1OutPath, "cpu1-fresh");
+      await writeFile(cpu2OutPath, "cpu2-fresh");
+      const hashes = { cpu1: await sha256File(cpu1OutPath), cpu2: await sha256File(cpu2OutPath) };
+      const invoker = new RecordingToolInvoker();
+      const registry = new StepRegistry(invoker, undefined, { allowedReadRoots: [root], allowedWriteRoots: [] });
+      const plan = testPlanSchema.parse({
+        planVersion: 1,
+        name: "declared-launch-hashes",
+        boardIds: ["board-a"],
+        artifacts: {
+          cpu1OutPath,
+          cpu2OutPath,
+          cpu1OutSha256: hashes.cpu1,
+          cpu2OutSha256: hashes.cpu2
+        },
+        steps: [{ type: "launchMulticore", loadPrograms: true }]
+      });
+
+      const output = await registry.execute({ jobId: "job-a", boardId: "board-a", plan, step: plan.steps[0]! });
+      expect(output.artifactPreflight).toEqual(expect.objectContaining({ checked: true, mode: "declared-sha256" }));
+      expect(invoker.calls).toHaveLength(1);
+
+      await writeFile(cpu2OutPath, "cpu2-swapped");
+      await expect(registry.execute({ jobId: "job-a", boardId: "board-a", plan, step: plan.steps[0]! })).rejects.toMatchObject({ code: "ArtifactHashMismatch" });
+      expect(invoker.calls).toHaveLength(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("executes mutation, capture, wait, and reset recovery in one fenced current-session sequence", async () => {

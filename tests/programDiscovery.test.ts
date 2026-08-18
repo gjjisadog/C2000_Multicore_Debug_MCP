@@ -104,4 +104,18 @@ describe("hardware acceptance program discovery", () => {
       ])
     }));
   });
+
+  test("accepts profile-qualified CPU1/CPU2 companion artifacts from the same build family", async () => {
+    const result = await discoverAcceptancePrograms({
+      cpu1Program: "C:/build/Hybrid30K_CPU1_DK9_RUNTIME_ACCEPTANCE_RAM.out",
+      cpu2Program: "C:/build/Hybrid30K_CPU2_DK9_CE_PRELOADED_VALIDATION_RAM.out"
+    });
+
+    expect(result.pairing).toEqual(expect.objectContaining({
+      compatible: true,
+      issues: [],
+      cpu1: expect.objectContaining({ pairKey: "hybrid30k" }),
+      cpu2: expect.objectContaining({ pairKey: "hybrid30k" })
+    }));
+  });
 });

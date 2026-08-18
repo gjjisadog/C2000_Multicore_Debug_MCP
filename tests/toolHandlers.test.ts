@@ -1045,6 +1045,83 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([]);
   });
 
+  test("runIpcAcceptance rejects an IPC expression missing from a real map symbol table", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-symbol-preflight-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, [
+      "GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name",
+      "0     00002000  g_present"
+    ].join("\n"));
+    await writeFile(cpu2MapPath, [
+      "GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name",
+      "0     00012000  g_cpu2_present"
+    ].join("\n"));
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, { defaultWorkspacePath: tempDir });
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-symbol-preflight", coreMap });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      ipcReadyExpressions: [{ coreId: 0, expression: "g_missing.ipcReady", expected: 1 }],
+      runSequence: { runMode: "debugger_runs_both" },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "ArtifactPairInvalid",
+        details: expect.objectContaining({
+          artifactSemantics: expect.objectContaining({
+            results: expect.arrayContaining([
+              expect.objectContaining({ coreId: 0, missingSymbols: ["g_missing"] })
+            ])
+          })
+        })
+      })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("runIpcAcceptance rejects contradictory load/run modes before touching the target", async () => {
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-startup-contract", coreMap });
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "C:/f28p65x/cpu1.out",
+      cpu2OutPath: "C:/f28p65x/cpu2.out",
+      cpu1MapPath: "C:/f28p65x/cpu1.map",
+      cpu2MapPath: "C:/f28p65x/cpu2.map",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+      runSequence: { runMode: "cpu2_pre_running" },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "StartupContractInvalid" })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
   test("launchAndRunIpcAcceptance can run CPU1 initialization before loading a CPU2 RAM image", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
@@ -2165,6 +2242,31 @@ describe("tool handlers", () => {
       success: true,
       results: [expect.objectContaining({ value: "1" })]
     }));
+  });
+
+  test("assignExpression supports explicit write-only semantics for one-shot hooks", async () => {
+    const handlers = createHandlers(new MockDebugAdapter({
+      expressionValues: {
+        g_ulOneShotHook: { value: "0", type: "uint32_t", address: "0x00002004" }
+      }
+    }));
+    const created = await handlers.createDebugSession({ sessionName: "assign-write-only", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.assignExpression({
+      sessionId: created.sessionId,
+      coreId: 0,
+      expression: "g_ulOneShotHook",
+      value: 1,
+      verification: "write-only"
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      expression: "g_ulOneShotHook",
+      assignedValue: "1"
+    }));
+    expect(result.readback).toBeUndefined();
   });
 
   test("assignExpressions returns batch failure with explicit per-core results", async () => {

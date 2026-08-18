@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
+import { workflowStartupContractIssues } from "../debug/startupContract.js";
 
 export const testArtifactsSchema = z.object({
   cpu1OutPath: z.string().min(1).max(4096),
   cpu2OutPath: z.string().min(1).max(4096),
   cpu1MapPath: z.string().min(1).max(4096).optional(),
   cpu2MapPath: z.string().min(1).max(4096).optional(),
+  cpu1OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu1MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   outputDir: z.string().min(1).max(4096).optional()
 });
 
@@ -82,7 +87,8 @@ const expressionAssignmentStepSchema = z.object({
   coreId: coreIdSchema,
   expression: expressionSchema,
   value: expressionValueSchema,
-  verify: z.boolean().default(true)
+  verify: z.boolean().default(true),
+  verification: z.enum(["readback", "write-only"]).optional()
 }).strict();
 const expressionFaultStepSchema = expressionAssignmentStepSchema.extend({ label: labelSchema.optional() }).strict();
 const expressionReadStepSchema = z.object({
@@ -129,6 +135,7 @@ const loadSequenceStepSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
   cpu1SettleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250)
 }).strict();
+const runModeStepSchema = z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]);
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const baseStep = { on: onSchema.optional() };
 
@@ -197,6 +204,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional(),
     loadPolicy: loadPolicySchema.optional(), loadSequence: loadSequenceStepSchema.optional(),
+    runMode: runModeStepSchema.optional(),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
@@ -294,6 +302,18 @@ export const testPlanSchema = z.object({
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence"], message: "loadSequence cannot request CPU1 pre-run when loadPrograms=false" });
       }
       continue;
+    }
+    if (step.type === "runIpcAcceptance" && step.runMode && step.loadSequence) {
+      const runCpu1First = step.runMode !== "cpu2_pre_running";
+      const runCpu2 = step.runMode !== "cpu1_boots_cpu2";
+      for (const issue of workflowStartupContractIssues({
+        loadMode: step.loadSequence.mode,
+        runMode: step.runMode,
+        runCpu1First,
+        runCpu2
+      })) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence", "mode"], message: issue });
+      }
     }
     if (["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle"].includes(step.type) && !hasCurrentFlowSession) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} requires an earlier launchMulticore step in the same durable board flow` });
@@ -482,7 +502,7 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       if (isRecord(step.loadSequence)) migrated.loadSequence = step.loadSequence;
       break;
     case "runIpcAcceptance":
-      for (const key of ["timeoutMs", "intervalMs", "loadPolicy", "loadSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+      for (const key of ["timeoutMs", "intervalMs", "loadPolicy", "loadSequence", "runMode", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
         if (key in step) migrated[key] = step[key];
       }
       break;
