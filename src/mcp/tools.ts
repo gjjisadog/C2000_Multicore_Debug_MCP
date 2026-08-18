@@ -222,7 +222,7 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_listCanProfiles", title: "List CAN Profiles", description: "List versioned, hash-addressable CAN profile declarations without touching a target.", schema: listCanProfilesSchema, handlerName: "listCanProfiles", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_submitCanFaultCampaign", title: "Submit CAN Fault Campaign", description: "Submit a finite, durable two-board CAN fault campaign. Reset/rejoin recovery is never blindly replayed after interruption.", schema: submitCanFaultCampaignSchema, handlerName: "submitCanFaultCampaign", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_submitCanSoakTest", title: "Submit CAN Soak Test", description: "Submit a finite duration/iteration CAN soak job with durable checkpoints; it never runs indefinitely.", schema: submitCanSoakTestSchema, handlerName: "submitCanSoakTest", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId. Set waitForTerminalMs up to 30 seconds to avoid repeated client-side polling.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
@@ -471,7 +471,7 @@ export function getToolSurfaceGuide() {
       "Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; launchMulticoreDebug followed by generic runCores does not perform the boot-handoff contract.",
       "For one-shot firmware hooks, set assignment.verification=write-only; ordinary assignments keep readback verification by default.",
       "If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute.",
-      "outputDir must be inside a configured allowedWriteRoots path; program, map, and ccxml files must be inside allowedReadRoots."
+      "outputDir must be inside a configured allowedWriteRoots path; when omitted, workflow bundles use a timestamped directory under the first allowedWriteRoots entry. Program, map, and ccxml files must be inside allowedReadRoots."
     ],
     families,
     preferredWorkflows,

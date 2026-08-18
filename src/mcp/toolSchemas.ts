@@ -87,7 +87,13 @@ export const recoverBoardSchema = z.object({
 });
 
 export const submitTestPlanSchema = z.object({ plan: testPlanSchema });
-export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeSteps: z.boolean().default(true), includeEvents: z.boolean().default(false) });
+export const getTestRunSchema = z.object({
+  jobId: z.string().min(1),
+  includeSteps: z.boolean().default(true),
+  includeEvents: z.boolean().default(false),
+  waitForTerminalMs: z.number().int().nonnegative().max(30_000).default(0)
+    .describe("Wait up to 30 seconds for a terminal status to reduce client-side polling; 0 reads immediately.")
+});
 export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
 export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
 export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });

@@ -326,6 +326,9 @@ Use the daemon/job surface for multi-board work:
 - `c2000_submitTestPlan` returns a stable `jobId` immediately; use
   `c2000_getTestRun`, `c2000_listTestRuns`, `c2000_cancelTestRun`, and
   `c2000_getTestArtifacts` afterwards.
+- `c2000_getTestRun` accepts `waitForTerminalMs` from `0` to `30000`; use it
+  after submission when the caller needs the terminal result instead of
+  issuing repeated client-side status polls.
 - A daemon stop marks in-flight runs `RECOVERING`. Startup makes a
   **persisted-metadata-only** decision: it creates fresh worker/session state
   and may restart an authorized RAM plan from its declared whole-board safe
@@ -612,6 +615,13 @@ the matching `.out` file. It calls the DSS symbol loader only and returns
 insert a false entry into the MCP loaded-program registry.
 
 Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
+
+`c2000_runIpcAcceptance` also reuses a successful final readiness-poll expression
+batch when building its boot diagnosis, so the same IPC symbols are not read a
+second time (or once per condition). Snapshot, loaded-program, and PC evidence
+remain fresh; timeout paths deliberately re-read after halt recovery. The
+result reports this as `performance.diagnosisExpressionReadsReused` and
+`diagnosis.performance.expressionReadsReused`.
 
 Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run benchmark:hardware` is explicitly opt-in and reports a skip unless the CCS/XDS110 environment is supplied; it never fabricates board timings.
 
@@ -1579,7 +1589,7 @@ Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exp
 
 ## Filesystem Policy
 
-`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output. Tool errors return the canonical rejected path and configured roots. Keep `.ccxml`, `.out`, and `.map` inputs under a read root, and `outputDir` under a write root. The runtime also adds configured TI paths (`ccs.installPath`, `ccs.c2000WarePath`, the configured ccxml directory), board ccxml directories, and `programSearchRoots` to the read policy. This allows CCS to live outside the firmware checkout without allowing arbitrary per-call paths; an explicitly supplied firmware `searchRoots` must still be configured in `programSearchRoots` or `C2000_MCP_ALLOWED_READ_ROOTS`.
+`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output. When `outputDir` is omitted, workflow bundles use a timestamped directory under the first configured write root. Tool errors return the canonical rejected path and configured roots. Keep `.ccxml`, `.out`, and `.map` inputs under a read root, and `outputDir` under a write root. The runtime also adds configured TI paths (`ccs.installPath`, `ccs.c2000WarePath`, the configured ccxml directory), board ccxml directories, and `programSearchRoots` to the read policy. This allows CCS to live outside the firmware checkout without allowing arbitrary per-call paths; an explicitly supplied firmware `searchRoots` must still be configured in `programSearchRoots` or `C2000_MCP_ALLOWED_READ_ROOTS`.
 
 ## RAM Ownership Policy
 

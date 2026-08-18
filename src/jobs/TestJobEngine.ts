@@ -23,6 +23,9 @@ import { conditionForStep, conditionMatches, decideRetry, retryPolicyFor } from 
 import { classifyDebugFailure } from "../debug/DebugFailureClassifier.js";
 import { portableDurableEvidenceFromSteps, type JobArtifactSnapshotService } from "../artifacts/JobArtifactSnapshotService.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
+import { sleep } from "../utils/async.js";
+
+const terminalTestRunStatuses = new Set(["PASSED", "FAILED", "PARTIAL", "CANCELLED", "NEEDS_MANUAL_INTERVENTION"]);
 
 export class TestJobEngine {
   private readonly scheduler: TestScheduler;
@@ -175,9 +178,19 @@ export class TestJobEngine {
     return { success: true, jobId, status: "QUEUED", submittedAt, selectedBoards: boardRuns.map(board => ({ boardId: board.boardId, probeSerial: board.probeSerial })) };
   }
 
-  get(jobId: string, options: { includeSteps?: boolean; includeEvents?: boolean } = {}): Record<string, unknown> {
-    const run = this.options.runs.get(jobId);
+  async get(jobId: string, options: { includeSteps?: boolean; includeEvents?: boolean; waitForTerminalMs?: number } = {}): Promise<Record<string, unknown>> {
+    let run = this.options.runs.get(jobId);
     if (!run) throw new DebugMcpError("SessionNotFound", `Test run not found: ${jobId}`, { jobId });
+    const requestedWaitMs = Math.min(Math.max(0, options.waitForTerminalMs ?? 0), 30_000);
+    const waitStartedAt = Date.now();
+    const waitDeadline = waitStartedAt + requestedWaitMs;
+    if (requestedWaitMs > 0 && !terminalTestRunStatuses.has(run.status)) {
+      while (Date.now() < waitDeadline && !terminalTestRunStatuses.has(run.status)) {
+        await sleep(Math.min(250, Math.max(1, waitDeadline - Date.now())));
+        run = this.options.runs.get(jobId);
+        if (!run) throw new DebugMcpError("SessionNotFound", `Test run not found: ${jobId}`, { jobId });
+      }
+    }
     const boards = this.options.runs.boards(jobId);
     return {
       success: true,
@@ -193,6 +206,14 @@ export class TestJobEngine {
       resultSummary: run.resultSummary,
       lastError: run.error,
       artifacts: this.options.artifacts.list(jobId),
+      ...(requestedWaitMs > 0 ? {
+        wait: {
+          requestedMs: requestedWaitMs,
+          elapsedMs: Date.now() - waitStartedAt,
+          terminal: terminalTestRunStatuses.has(run.status),
+          timedOut: !terminalTestRunStatuses.has(run.status)
+        }
+      } : {}),
       ...(run.plan.can && typeof (run.plan.can as Record<string, unknown>).groupId === "string" ? {
         can: {
           group: this.options.boardGroups?.require(String((run.plan.can as Record<string, unknown>).groupId)),
