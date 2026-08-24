@@ -1,8 +1,12 @@
-param(
-  [switch]$ForceDependencyInstall,
-  [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]]$InstallerArguments
-)
+$ForceDependencyInstall = $false
+$InstallerArguments = @()
+foreach ($argument in $args) {
+  if ($argument -eq "-ForceDependencyInstall" -or $argument -eq "--force-dependency-install") {
+    $ForceDependencyInstall = $true
+  } else {
+    $InstallerArguments += $argument
+  }
+}
 
 $ErrorActionPreference = "Stop"
 

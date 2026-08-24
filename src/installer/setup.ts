@@ -46,6 +46,7 @@ export interface SetupResult {
   builtAt?: string;
   sourceRevision?: string;
   sourceDirty?: boolean | null;
+  runtimeAction: "installed" | "replaced" | "reused";
   platform: string;
   arch: string;
   installDirectory: string;
@@ -223,9 +224,14 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   );
   const installedManifestPath = path.join(installDirectory, "dist", "src", "runtime-manifest.json");
   const alreadyInstalled = await exists(installedManifestPath);
+  const runtimeAction: SetupResult["runtimeAction"] = alreadyInstalled
+    ? options.force ? "replaced" : "reused"
+    : "installed";
   if (!alreadyInstalled || options.force) {
     await installRuntimeAtomically(packageRoot, installDirectory, manifest, nodeModulesAbi);
   }
+  const installedManifest = JSON.parse(await readFile(installedManifestPath, "utf8")) as RuntimeManifest;
+  validateRuntimeManifest(installedManifest, { platform, arch, nodeModulesAbi });
 
   const runtimeDirectory = path.join(installRoot, "runtime");
   await mkdir(runtimeDirectory, { recursive: true });
@@ -242,7 +248,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     await writeFile(installedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 
-  const entrypoint = path.join(installDirectory, "dist", "src", manifest.entrypoints.proxy);
+  const entrypoint = path.join(installDirectory, "dist", "src", installedManifest.entrypoints.proxy);
   await access(entrypoint);
 
   let skillDirectory: string | undefined;
@@ -298,10 +304,11 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   }
 
   return {
-    version: manifest.version,
-    builtAt: manifest.builtAt,
-    sourceRevision: manifest.sourceRevision,
-    sourceDirty: manifest.sourceDirty,
+    version: installedManifest.version,
+    builtAt: installedManifest.builtAt,
+    sourceRevision: installedManifest.sourceRevision,
+    sourceDirty: installedManifest.sourceDirty,
+    runtimeAction,
     platform,
     arch,
     installDirectory,

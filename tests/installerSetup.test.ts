@@ -97,6 +97,65 @@ describe("one-command installer", () => {
     expect(config.storage.sqlitePath).toBe(path.join(runtime, "c2000-debugd.sqlite"));
   });
 
+  test("reports reused runtime metadata and force-replaces the same version", async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-installer-force-test-"));
+    try {
+      const packageRoot = path.join(temporary, "package");
+      const installRoot = path.join(temporary, "install");
+      const version = "9.9.9";
+      const installDirectory = path.join(installRoot, "versions", `${version}-${process.platform}-${process.arch}-abi${process.versions.modules}`);
+      const newManifest = {
+        version,
+        builtAt: "2026-08-24T01:00:00.000Z",
+        sourceRevision: "new-revision",
+        sourceDirty: false,
+        platform: process.platform,
+        arch: process.arch,
+        nodeModulesAbi: process.versions.modules,
+        entrypoints: { proxy: "index.js" }
+      };
+      const oldManifest = {
+        ...newManifest,
+        builtAt: "2026-07-31T00:00:00.000Z",
+        sourceRevision: "old-revision"
+      };
+
+      await mkdir(path.join(packageRoot, "dist", "src"), { recursive: true });
+      await mkdir(path.join(packageRoot, "scripts"), { recursive: true });
+      await writeFile(path.join(packageRoot, "dist", "src", "index.js"), "new-runtime");
+      await writeFile(path.join(packageRoot, "dist", "src", "runtime-manifest.json"), JSON.stringify(newManifest));
+      await writeFile(path.join(packageRoot, "scripts", "c2000-mcp-doctor.mjs"), "");
+      await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "c2000-multicore-mcp" }));
+      await mkdir(path.join(installDirectory, "dist", "src"), { recursive: true });
+      await writeFile(path.join(installDirectory, "dist", "src", "index.js"), "old-runtime");
+      await writeFile(path.join(installDirectory, "dist", "src", "runtime-manifest.json"), JSON.stringify(oldManifest));
+
+      const baseArgs = [
+        "install", "--install-root", installRoot, "--workspace", temporary,
+        "--no-register", "--no-skill", "--no-doctor"
+      ];
+      const dependencies = { packageRoot, homeDirectory: path.join(temporary, "home"), cwd: temporary };
+      const reused = await runSetup(parseSetupArgs(baseArgs), dependencies);
+      expect(reused.runtimeAction).toBe("reused");
+      expect(reused.sourceRevision).toBe("old-revision");
+      expect(await readFile(reused.entrypoint, "utf8")).toBe("old-runtime");
+
+      const replaced = await runSetup(parseSetupArgs([...baseArgs, "--force"]), dependencies);
+      expect(replaced.runtimeAction).toBe("replaced");
+      expect(replaced.sourceRevision).toBe("new-revision");
+      expect(await readFile(replaced.entrypoint, "utf8")).toBe("new-runtime");
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  });
+
+  test("forwards installer --force without colliding with dependency refresh", async () => {
+    const source = await readFile("scripts/install-source.ps1", "utf8");
+    expect(source).not.toContain("[switch]$ForceDependencyInstall");
+    expect(source).toContain('$argument -eq "--force-dependency-install"');
+    expect(source).toContain("$InstallerArguments += $argument");
+  });
+
   test("falls back to an idempotent managed Codex config block when the CLI is unavailable", async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-installer-test-"));
     try {

@@ -11,6 +11,7 @@ async function main(): Promise<void> {
     }
     process.stdout.write([
       `C2000 Multicore MCP ${result.version} installed successfully.`,
+      `Runtime action: ${result.runtimeAction}`,
       result.builtAt ? `Build: ${result.builtAt}` : undefined,
       result.sourceRevision ? `Source revision: ${result.sourceRevision}${result.sourceDirty ? " (dirty)" : ""}` : undefined,
       `Runtime: ${result.entrypoint}`,
