@@ -59,8 +59,17 @@ export class StepRegistry {
             }
           ]
         }));
-      case "assignExpressions":
-        return this.tools.invokeTool("c2000_assignExpressions", fenced(context, requiredSession({ sessionId, assignments: step.assignments })));
+      case "assignExpressions": {
+        const activeSessionId = requiredSessionId(sessionId);
+        const results: Record<string, unknown>[] = [];
+        for (const assignment of step.assignments) {
+          results.push(await this.invokeRequired("c2000_assignExpression", fenced(context, {
+            sessionId: activeSessionId,
+            ...assignment
+          })));
+        }
+        return { success: true, sessionId: activeSessionId, assignmentMode: "ordered-fail-fast", results };
+      }
       case "injectFaults":
         return this.tools.invokeTool("c2000_injectFaults", fenced(context, requiredSession({ sessionId, faults: step.faults })));
       case "captureExpressions":

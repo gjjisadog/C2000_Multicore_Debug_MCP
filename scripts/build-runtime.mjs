@@ -1,5 +1,6 @@
 import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { build } from "esbuild";
 import path from "node:path";
@@ -9,6 +10,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const outdir = process.env.C2000_BUILD_RUNTIME_OUTDIR
   ? path.resolve(process.env.C2000_BUILD_RUNTIME_OUTDIR)
   : path.join(projectRoot, "dist", "src");
+const builtAt = new Date().toISOString();
+const sourceState = readSourceState(projectRoot);
 
 await rm(outdir, { recursive: true, force: true });
 await mkdir(outdir, { recursive: true });
@@ -29,6 +32,9 @@ await build({
   sourcemap: true,
   define: {
     __C2000_RUNTIME_BUNDLED__: "true",
+    __C2000_RUNTIME_BUILT_AT__: JSON.stringify(builtAt),
+    __C2000_RUNTIME_SOURCE_REVISION__: JSON.stringify(sourceState.revision),
+    __C2000_RUNTIME_SOURCE_DIRTY__: JSON.stringify(sourceState.dirty),
     // Source execution uses import.meta.url; published CJS uses argv[1].
     "import.meta.url": "undefined"
   }
@@ -38,7 +44,7 @@ await build({
 // preserve its Node require semantics without relying on the package root.
 await writeFile(path.join(outdir, "package.json"), `${JSON.stringify({ type: "commonjs" })}\n`);
 await copyNativeSqliteBinding(projectRoot, outdir);
-await writeRuntimeManifest(projectRoot, outdir);
+await writeRuntimeManifest(projectRoot, outdir, builtAt, sourceState);
 
 await Promise.all([
   chmod(path.join(outdir, "index.js"), 0o755),
@@ -71,14 +77,16 @@ async function copyNativeSqliteBinding(root, runtimeDirectory) {
   await copyFile(source, destination);
 }
 
-async function writeRuntimeManifest(root, runtimeDirectory) {
+async function writeRuntimeManifest(root, runtimeDirectory, runtimeBuiltAt, runtimeSourceState) {
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const sqlitePackage = JSON.parse(await readFile(path.join(root, "node_modules", "better-sqlite3", "package.json"), "utf8"));
   const relativeBinding = path.join("build", "Release", "better_sqlite3.node").replaceAll("\\", "/");
   const binding = await readFile(path.join(runtimeDirectory, relativeBinding));
   const manifest = {
     version: packageJson.version,
-    builtAt: new Date().toISOString(),
+    builtAt: runtimeBuiltAt,
+    sourceRevision: runtimeSourceState.revision,
+    sourceDirty: runtimeSourceState.dirty,
     platform: process.platform,
     arch: process.arch,
     nodeVersion: process.version,
@@ -98,4 +106,13 @@ async function writeRuntimeManifest(root, runtimeDirectory) {
     }]
   };
   await writeFile(path.join(runtimeDirectory, "runtime-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function readSourceState(root) {
+  const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true });
+  const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8", windowsHide: true });
+  return {
+    revision: revision.status === 0 ? revision.stdout.trim() : "unknown",
+    dirty: status.status === 0 ? status.stdout.trim().length > 0 : null
+  };
 }

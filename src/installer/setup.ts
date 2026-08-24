@@ -25,6 +25,9 @@ export interface SetupOptions {
 
 export interface RuntimeManifest {
   version: string;
+  builtAt?: string;
+  sourceRevision?: string;
+  sourceDirty?: boolean | null;
   platform: string;
   arch: string;
   nodeModulesAbi: string;
@@ -40,6 +43,9 @@ export interface RuntimeManifest {
 
 export interface SetupResult {
   version: string;
+  builtAt?: string;
+  sourceRevision?: string;
+  sourceDirty?: boolean | null;
   platform: string;
   arch: string;
   installDirectory: string;
@@ -293,6 +299,9 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
 
   return {
     version: manifest.version,
+    builtAt: manifest.builtAt,
+    sourceRevision: manifest.sourceRevision,
+    sourceDirty: manifest.sourceDirty,
     platform,
     arch,
     installDirectory,

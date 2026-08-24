@@ -7,10 +7,14 @@ import type { C2000ToolInvoker } from "../src/mcp/tools.js";
 class RecordingToolInvoker implements C2000ToolInvoker {
   readonly calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
   readonly failedExpressions = new Set<string>();
+  readonly failedAssignments = new Set<string>();
 
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
     const record = input as Record<string, unknown>;
     this.calls.push({ toolName, input: record });
+    if (toolName === "c2000_assignExpression" && this.failedAssignments.has(String(record.expression))) {
+      return { success: false, error: { code: "ExpressionVerifyFailed", message: "simulated assignment failure" } };
+    }
     if (toolName === "c2000_evaluateMany") {
       const expressions = Array.isArray(record.expressions)
         ? record.expressions.filter((expression): expression is string => typeof expression === "string")
@@ -197,7 +201,10 @@ describe("StepRegistry", () => {
       artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out" },
       steps: [
         { type: "launchMulticore", loadPrograms: false },
-        { type: "assignExpressions", assignments: [{ coreId: 0, expression: "g_cmd", value: 1 }] },
+        { type: "assignExpressions", assignments: [
+          { coreId: 0, expression: "g_payload", value: 1 },
+          { coreId: 0, expression: "g_nonce", value: 2 }
+        ] },
         { type: "injectFaults", faults: [{ label: "ocp", coreId: 2, expression: "g_fault", value: true }] },
         { type: "captureExpressions", label: "window", reads: [{ coreId: 0, expressions: ["g_state"] }], sampleCount: 2, intervalMs: 0 },
         { type: "waitForExpressions", conditions: [{ coreId: 2, expression: "g_safe", expected: 1 }], timeoutMs: 500 },
@@ -212,7 +219,7 @@ describe("StepRegistry", () => {
       await registry.execute({ jobId: "job-a", boardId: "board-a", sessionId: "dbg-current", leaseContext, plan, step });
     }
     expect(invoker.calls.map(call => call.toolName)).toEqual([
-      "c2000_assignExpressions", "c2000_injectFaults",
+      "c2000_assignExpression", "c2000_assignExpression", "c2000_injectFaults",
       "c2000_evaluateMany", "c2000_evaluateMany", "c2000_waitForExpressionSet",
       "c2000_resetCores", "c2000_connectCores", "c2000_loadSymbols", "c2000_loadSymbols",
       "c2000_evaluateMany", "c2000_evaluateMany"
@@ -221,6 +228,39 @@ describe("StepRegistry", () => {
     expect(invoker.calls.every(call => call.input.__leaseContext === leaseContext)).toBe(true);
     expect(invoker.calls.find(call => call.toolName === "c2000_resetCores")?.input).toEqual(expect.objectContaining({ coreIds: [0, 2], resetType: "cpu" }));
     expect(invoker.calls.filter(call => call.toolName === "c2000_loadSymbols").map(call => call.input.coreId)).toEqual([0, 2]);
+  });
+
+  test("stops ordered durable assignments before the final nonce when a payload write fails", async () => {
+    const invoker = new RecordingToolInvoker();
+    invoker.failedAssignments.add("g_payload_b");
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "mailbox-fail-fast",
+      boardIds: ["board-a"],
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        { type: "assignExpressions", assignments: [
+          { coreId: 0, expression: "g_payload_a", value: 1 },
+          { coreId: 0, expression: "g_payload_b", value: 2 },
+          { coreId: 0, expression: "g_nonce", value: 3 }
+        ] }
+      ]
+    });
+
+    await expect(registry.execute({
+      jobId: "job-a",
+      boardId: "board-a",
+      sessionId: "dbg-current",
+      leaseContext: {
+        leaseId: "lease-a", leaseToken: "secret", fencingToken: 7, leaseGeneration: 3,
+        ownerJobId: "job-a", boardId: "board-a", probeSerial: "XDS-A", workerInstanceId: "worker-a"
+      },
+      plan,
+      step: plan.steps[1]!
+    })).rejects.toMatchObject({ code: "BatchOperationFailed" });
+
+    expect(invoker.calls.map(call => call.input.expression)).toEqual(["g_payload_a", "g_payload_b"]);
   });
 
   test("fails closed when one captured expression is unreadable", async () => {

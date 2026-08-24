@@ -2,12 +2,23 @@ import process from "node:process";
 import type { C2000McpConfig } from "./config/config.schema.js";
 
 declare const __C2000_RUNTIME_BUNDLED__: boolean;
+declare const __C2000_RUNTIME_BUILT_AT__: string;
+declare const __C2000_RUNTIME_SOURCE_REVISION__: string;
+declare const __C2000_RUNTIME_SOURCE_DIRTY__: boolean | null;
 
 export const SERVER_NAME = "c2000-multicore-mcp";
 export const SERVER_VERSION = "0.7.0";
 
 export function isBundledRuntime(): boolean {
   return typeof __C2000_RUNTIME_BUNDLED__ !== "undefined" && __C2000_RUNTIME_BUNDLED__;
+}
+
+export function runtimeBuildInfo() {
+  return {
+    builtAt: typeof __C2000_RUNTIME_BUILT_AT__ === "undefined" ? null : __C2000_RUNTIME_BUILT_AT__,
+    sourceRevision: typeof __C2000_RUNTIME_SOURCE_REVISION__ === "undefined" ? null : __C2000_RUNTIME_SOURCE_REVISION__,
+    sourceDirty: typeof __C2000_RUNTIME_SOURCE_DIRTY__ === "undefined" ? null : __C2000_RUNTIME_SOURCE_DIRTY__
+  };
 }
 
 export function buildServerHealth(config: C2000McpConfig, startedAt: string, registeredToolNames: string[]) {
@@ -23,7 +34,8 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
       arch: process.arch,
       pid: process.pid,
       startedAt,
-      uptimeSeconds: Math.floor(process.uptime())
+      uptimeSeconds: Math.floor(process.uptime()),
+      build: runtimeBuildInfo()
     },
     configuration: {
       adapterMode,

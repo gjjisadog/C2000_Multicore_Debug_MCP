@@ -29,7 +29,6 @@ const hybrid30kReadyExpressionValues = {
   "g_stCoreCommCpu1Watch.uiCpu2Ready": { value: "1" },
   "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "0" },
   "g_stCoreCommCpu2Watch.emStage": { value: "5" },
-  "g_stCoreCommCpu2Watch.ulInitParamSnapSeq": { value: "1" },
   "g_stCoreCommCpu2Watch.uiInitParamApplied": { value: "1" }
 };
 
@@ -2083,7 +2082,6 @@ describe("tool handlers", () => {
         "g_stCoreCommCpu1Watch.uiCpu2Ready": { value: "0", type: "uint16_t", address: "0x0000A80A" },
         "g_stCoreCommCpu1Watch.ulCpu2BootLastError": { value: "1", type: "uint32_t", address: "0x0000A816" },
         "g_stCoreCommCpu2Watch.emStage": { value: "0", type: "enum", address: "0x00018870" },
-        "g_stCoreCommCpu2Watch.ulInitParamSnapSeq": { value: "0", type: "uint32_t" },
         "g_stCoreCommCpu2Watch.uiInitParamApplied": { value: "0", type: "uint16_t" }
       }
     }));
@@ -2104,9 +2102,10 @@ describe("tool handlers", () => {
       }),
       cpu2: expect.objectContaining({
         coreId: 2,
-        expressions: expect.arrayContaining([
-          expect.objectContaining({ expression: "g_stCoreCommCpu2Watch.emStage", success: true, value: "0" })
-        ])
+        expressions: [
+          expect.objectContaining({ expression: "g_stCoreCommCpu2Watch.emStage", success: true, value: "0" }),
+          expect.objectContaining({ expression: "g_stCoreCommCpu2Watch.uiInitParamApplied", success: true, value: "0" })
+        ]
       }),
       snapshot: expect.objectContaining({
         cores: expect.arrayContaining([

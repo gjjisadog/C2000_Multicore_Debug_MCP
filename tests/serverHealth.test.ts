@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildServerHealth, isBundledRuntime } from "../src/runtimeInfo.js";
+import { buildServerHealth, isBundledRuntime, runtimeBuildInfo } from "../src/runtimeInfo.js";
 import { loadConfig } from "../src/config/config.loader.js";
 
 describe("server runtime health", () => {
@@ -20,6 +20,7 @@ describe("server runtime health", () => {
       tools: { registeredCount: 1, registeredNames: ["c2000_getServerHealth"] }
     }));
     expect(health.runtime.bundled).toBe(isBundledRuntime());
+    expect(health.runtime.build).toEqual(runtimeBuildInfo());
     expect(Object.values(health.configuration.pathsConfigured).every(value => typeof value === "boolean")).toBe(true);
     expect(health.configuration.profile).toEqual(expect.objectContaining({
       effective: config.toolProfile,

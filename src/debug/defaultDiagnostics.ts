@@ -9,7 +9,6 @@ export const DEFAULT_CPU1_BOOT_EXPRESSIONS = [
 
 export const DEFAULT_CPU2_BOOT_EXPRESSIONS = [
   "g_stCoreCommCpu2Watch.emStage",
-  "g_stCoreCommCpu2Watch.ulInitParamSnapSeq",
   "g_stCoreCommCpu2Watch.uiInitParamApplied"
 ] as const;
 
