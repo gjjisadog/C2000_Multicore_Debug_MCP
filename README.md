@@ -925,7 +925,6 @@ Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores
    - `g_stCoreCommCpu1Watch.uiCpu2Ready`
    - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
    - `g_stCoreCommCpu2Watch.emStage`
-   - `g_stCoreCommCpu2Watch.ulInitParamSnapSeq`
    - `g_stCoreCommCpu2Watch.uiInitParamApplied`
 9. If stuck, `c2000_haltCores`, then `c2000_resolvePc` (for PC) or `c2000_resolveAddress` (address only; symbol mapping may be `partial` / not implemented).
 10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/ready/error fields, and CPU2 stage.
@@ -1031,7 +1030,6 @@ For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `owne
   - `g_stCoreCommCpu1Watch.ulCpu2BootLastError`
 - CPU2 expressions:
   - `g_stCoreCommCpu2Watch.emStage`
-  - `g_stCoreCommCpu2Watch.ulInitParamSnapSeq`
   - `g_stCoreCommCpu2Watch.uiInitParamApplied`
 
 Example:
@@ -1562,7 +1560,9 @@ Recommended approval policy:
 
 ## Tool Profiles
 
-Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exposes only tools whose annotations are read-only. `safe` adds session lifecycle, target control, loading, and safe workflows but hides arbitrary expression writes and fault injection. `full` exposes every tool. `c2000_getToolContracts` reports only the active set together with `activeToolProfile`, `hiddenTools`, and `profileReason`.
+Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exposes only tools whose annotations are read-only. `safe` adds session lifecycle, target control, loading, and safe workflows but hides direct arbitrary expression writes and fault injection. Guarded target writes remain available through `c2000_submitTestPlan`: use one fenced durable flow with `safetyGuards`, `launchMulticore`, and strict `assignExpressions` / `captureExpressions` / `waitForExpressions` steps. Durable assignments execute in array order and stop at the first failed write or readback; for mailbox protocols, place the nonce/commit expression last so it is never attempted after a payload failure. `full` exposes every direct tool. `c2000_getToolContracts` reports only the active set together with `activeToolProfile`, `hiddenTools`, and `profileReason`.
+
+For Hybrid30K runtime acceptance, the OFF-state startup baseline must not require `g_stCpu1RuntimeAcceptWatch.uiRuntimeValid == 1`; its expected OFF-state value is `0`. Wait for `uiRuntimeValid == 1` only after the formal control mode and mailbox command have been accepted.
 
 ## Filesystem Policy
 

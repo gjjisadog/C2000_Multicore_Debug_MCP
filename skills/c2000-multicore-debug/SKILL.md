@@ -38,6 +38,18 @@ Put them after `launchMulticore` in the same plan. Use
 `launchMulticore.loadPrograms: false` for a connect-only launch, or declare its
 `loadSequence` explicitly when CPU1 must run before CPU2 RAM load.
 
+The `safe` frontend intentionally hides direct `c2000_assignExpression(s)`
+tools. Use `c2000_submitTestPlan` for target writes that must remain inside the
+daemon lease and safety boundary. Durable `assignExpressions` entries execute
+in declared order and stop on the first failed write or verification. Put all
+mailbox payload fields first and the nonce/commit expression last; it will not
+be attempted after an earlier payload failure.
+
+For Hybrid30K runtime acceptance, do not require
+`g_stCpu1RuntimeAcceptWatch.uiRuntimeValid == 1` in the OFF-state startup
+baseline. OFF-state `uiRuntimeValid == 0` is expected; require `1` only after
+the formal control mode and mailbox command have been accepted.
+
 Never configure retry or automatic recovery for `assignExpressions`,
 `injectFaults`, `runCores`, `reconnectAfterTargetReset`, `restorePrograms`, or
 `resetReconnectCapture`; the daemon classifies them as non-idempotent and

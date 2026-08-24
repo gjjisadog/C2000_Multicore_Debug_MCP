@@ -43,10 +43,16 @@ export function evaluateHostVerificationGate(results: HostVerificationStepResult
   const debugProcessDetails = readinessReport?.preflight?.debugProcessDetails;
   const uiIndependenceEvidence = readinessReport?.uiIndependenceEvidence;
   const acceptanceEvidence = readinessReport?.acceptanceEvidence;
-  const acceptanceEvidenceResult = evaluateAcceptanceEvidence(acceptanceEvidence, readinessResult !== undefined);
+  const readinessSkippedWithoutHardware = readinessJson?.status === "SKIPPED_NO_HARDWARE"
+    && readinessJson.targetAccessAttempted === false;
+  const acceptanceEvidenceResult = readinessSkippedWithoutHardware && mcpSmokeRan
+    ? { valid: true, error: undefined }
+    : evaluateAcceptanceEvidence(acceptanceEvidence, readinessResult !== undefined);
   const hostChecksPassed = nonReadinessStepsPassed && mcpSmokeRan && acceptanceEvidenceResult.valid;
   const readyForHardwareAcceptance = readinessReport?.readyForHardwareAcceptance === true;
-  const readinessBlocked = hostChecksPassed && readinessResult?.status === "blocked" && !readyForHardwareAcceptance;
+  const readinessBlocked = hostChecksPassed
+    && (readinessResult?.status === "blocked" || readinessSkippedWithoutHardware)
+    && !readyForHardwareAcceptance;
   const success = hostChecksPassed && readyForHardwareAcceptance;
 
   return {
