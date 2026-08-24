@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
+import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
 
 export const testArtifactsSchema = z.object({
   cpu1OutPath: z.string().min(1).max(4096),
@@ -129,6 +130,12 @@ const loadSequenceStepSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
   cpu1SettleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250)
 }).strict();
+const runSequenceStepSchema = z.object({
+  runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
+  runCpu1First: z.boolean().default(true),
+  runCpu2: z.boolean().default(true),
+  settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(500)
+}).strict();
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const baseStep = { on: onSchema.optional() };
 
@@ -194,9 +201,13 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     type: z.literal("runIpcAcceptance"), ...baseStep,
-    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
-    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional(),
-    loadPolicy: loadPolicySchema.optional(), loadSequence: loadSequenceStepSchema.optional(),
+    timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).default(10000),
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100),
+    startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
+    resetType: z.enum(["cpu", "system", "restart", "default"]).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
+    loadPolicy: loadPolicySchema.default("always"),
+    loadSequence: loadSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
+    runSequence: runSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
@@ -329,6 +340,16 @@ export const testPlanSchema = z.object({
     }
     if (step.type === "reconnectAfterTargetReset" && Math.ceil(step.timeoutMs / Math.min(step.intervalMs, plan.safetyGuards?.intervalMs ?? step.intervalMs)) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `reconnect polling exceeds ${DURABLE_PLAN_LIMITS.maxGuardPolls} bounded iterations` });
+    }
+    if ((step.type === "waitForExpressions" || step.type === "runIpcAcceptance") && Math.ceil(step.timeoutMs / step.intervalMs) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} polling exceeds ${DURABLE_PLAN_LIMITS.maxGuardPolls} bounded iterations` });
+    }
+    if (step.type === "runIpcAcceptance" && step.startupPreset === "hybrid30k-dk9-owner-first") {
+      if (step.resetType !== HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType
+        || JSON.stringify(step.loadSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence)
+        || JSON.stringify(step.runSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence)) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: "hybrid30k-dk9-owner-first parameters must remain cpu / owner-first 250ms / debugger-runs-both 500ms" });
+      }
     }
     if (plan.safetyGuards && step.type === "runCores" && step.monitorMs === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "monitorMs"], message: "guarded runCores requires a positive bounded monitorMs" });
@@ -482,7 +503,7 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       if (isRecord(step.loadSequence)) migrated.loadSequence = step.loadSequence;
       break;
     case "runIpcAcceptance":
-      for (const key of ["timeoutMs", "intervalMs", "loadPolicy", "loadSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "loadSequence", "runSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
         if (key in step) migrated[key] = step[key];
       }
       break;

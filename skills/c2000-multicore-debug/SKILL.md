@@ -12,16 +12,22 @@ Use those exact CCS names for `corePattern`; do not send regular expressions.
 
 Before any board-bound work:
 
-1. Read daemon health and verify `boardConcurrency.limit` can fit the requested
+1. Read server health once. Use `configuration.profile.effective`, `source`,
+   `configPath`, and `appliedAt` as the authoritative frontend profile state.
+   Never repeat `c2000_getToolContracts` to guess whether safe/full changed.
+   `configuration.reload` explains that tool registration is fixed at frontend
+   startup: update config and reconnect only that frontend; do not restart the
+   daemon or board workers.
+2. Read daemon health and verify `boardConcurrency.limit` can fit the requested
    physical boards.
-2. List boards. If the list is empty or health reports
+3. List boards. If the list is empty or health reports
    `boards.registrationRequired`, stop and call `c2000_registerBoard` with a
    serial-bound `.ccxml`; do not try alternate launch tools or direct DSS.
-3. Require distinct `boardId` and `probeSerial`; do not select leased or
+4. Require distinct `boardId` and `probeSerial`; do not select leased or
    quarantined boards.
-4. Keep `.ccxml`, `.out`, and `.map` under `allowedReadRoots`, and evidence
+5. Keep `.ccxml`, `.out`, and `.map` under `allowedReadRoots`, and evidence
    `outputDir` under `allowedWriteRoots`.
-5. Submit one durable job and retain its `jobId`.
+6. Submit one durable job and retain its `jobId`.
 
 For Hybrid30K A–E safety regressions, prefer strict durable steps over client-
 side tool sequences: `assignExpressions`, `injectFaults`,
@@ -69,6 +75,15 @@ For a CPU2 RAM image whose GS ownership or release is initialized by CPU1, set
 `loadSequence.mode` to `cpu1-run-before-cpu2` and choose an explicit
 `cpu1SettleMs`. Leave the default sequence unchanged for ordinary or Flash
 loads.
+
+For the validated Hybrid30K DK9 owner-first path, use
+`startupPreset: hybrid30k-dk9-owner-first`. It resolves and persists the exact
+parameters `resetType=cpu`, CPU1-run-before-CPU2 load with 250 ms settle, and
+debugger-runs-both with CPU1 first and 500 ms settle. Explicit conflicting
+values fail before target access. Durable plans persist all effective startup
+parameters; failures report `workflowStage` and `effectiveStartup`. Polling is
+bounded to 10,000 iterations; increase the interval instead of creating an
+unbounded wait.
 
 When the program is already resident in Flash and only debug symbols are
 needed, use `c2000_loadSymbols`. Never substitute `c2000_loadProgram`, because

@@ -767,7 +767,9 @@ There are many tools by design (host gates, atomics, batches, workflows). Semant
 | `c2000_runCore` | `c2000_continue` |
 | `c2000_haltCore` | `c2000_pause` |
 
-Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` for `tools[]` plus `toolSurface` (`families`, `preferredWorkflows`, `preferredAtomics`, `aliases`, `guidance`).
+Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` reports the effective frontend profile, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
+
+Hybrid30K DK9 RAM acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
 
 Environment overrides:
 

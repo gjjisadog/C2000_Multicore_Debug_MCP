@@ -916,6 +916,12 @@ describe("tool handlers", () => {
       error: expect.objectContaining({
         code: "BatchOperationFailed",
         details: expect.objectContaining({
+          workflowStage: "program-load",
+          effectiveStartup: expect.objectContaining({
+            resetType: "cpu",
+            timeoutMs: 20,
+            intervalMs: 1
+          }),
           failed: [expect.objectContaining({ coreId: 2, success: false })]
         })
       })
@@ -930,6 +936,37 @@ describe("tool handlers", () => {
     ]);
     expect(adapter.events).not.toContain("run:0");
     expect(adapter.events).not.toContain("run:2");
+  });
+
+  test("IPC workflow rejects conflicting presets and unbounded polling before target access", async () => {
+    const adapter = new MockDebugAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const common = {
+      sessionId: "not-opened",
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "cpu1.out",
+      cpu2OutPath: "cpu2.out",
+      cpu1MapPath: "cpu1.map",
+      cpu2MapPath: "cpu2.map"
+    };
+    const presetConflict = await handlers.runIpcAcceptance({
+      ...common,
+      startupPreset: "hybrid30k-dk9-owner-first",
+      runSequence: { runCpu1First: true, runCpu2: true, settleMs: 33 },
+      timeoutMs: 1000
+    });
+    expect(presetConflict).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "EvidenceLimitExceeded", details: expect.objectContaining({ field: "runSequence" }) })
+    }));
+    const unbounded = await handlers.runIpcAcceptance({ ...common, timeoutMs: 10001, intervalMs: 1 });
+    expect(unbounded).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "EvidenceLimitExceeded", details: expect.objectContaining({ maxPollIterations: 10000 }) })
+    }));
   });
 
   test.each(["initialHalt", "reset", "postLoadHalt"] as const)("runIpcAcceptance fails closed when %s has a per-core failure", async stage => {
