@@ -97,7 +97,7 @@ describe("one-command installer", () => {
     expect(config.storage.sqlitePath).toBe(path.join(runtime, "c2000-debugd.sqlite"));
   });
 
-  test("reports reused runtime metadata and force-replaces the same version", async () => {
+  test("reports reused runtime metadata and force-installs the same version beside an in-use runtime", async () => {
     const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-installer-force-test-"));
     try {
       const packageRoot = path.join(temporary, "package");
@@ -140,10 +140,13 @@ describe("one-command installer", () => {
       expect(reused.sourceRevision).toBe("old-revision");
       expect(await readFile(reused.entrypoint, "utf8")).toBe("old-runtime");
 
-      const replaced = await runSetup(parseSetupArgs([...baseArgs, "--force"]), dependencies);
-      expect(replaced.runtimeAction).toBe("replaced");
-      expect(replaced.sourceRevision).toBe("new-revision");
-      expect(await readFile(replaced.entrypoint, "utf8")).toBe("new-runtime");
+      const sideBySide = await runSetup(parseSetupArgs([...baseArgs, "--force"]), dependencies);
+      expect(sideBySide.runtimeAction).toBe("installed-side-by-side");
+      expect(sideBySide.installDirectory).not.toBe(installDirectory);
+      expect(sideBySide.installDirectory).toContain(`${installDirectory}-build`);
+      expect(sideBySide.sourceRevision).toBe("new-revision");
+      expect(await readFile(sideBySide.entrypoint, "utf8")).toBe("new-runtime");
+      expect(await readFile(path.join(installDirectory, "dist", "src", "index.js"), "utf8")).toBe("old-runtime");
     } finally {
       await rm(temporary, { recursive: true, force: true });
     }

@@ -46,7 +46,7 @@ export interface SetupResult {
   builtAt?: string;
   sourceRevision?: string;
   sourceDirty?: boolean | null;
-  runtimeAction: "installed" | "replaced" | "reused";
+  runtimeAction: "installed" | "installed-side-by-side" | "reused";
   platform: string;
   arch: string;
   installDirectory: string;
@@ -217,16 +217,20 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
       ?? env.C2000_MCP_HOME
       ?? path.join(homeDirectory, ".c2000-multicore-mcp")
   );
-  const installDirectory = path.join(
+  const baseInstallDirectory = path.join(
     installRoot,
     "versions",
     `${manifest.version}-${platform}-${arch}-abi${nodeModulesAbi}`
   );
+  const baseDirectoryExists = await exists(baseInstallDirectory);
+  const installDirectory = options.force && baseDirectoryExists
+    ? await nextRuntimeSlot(baseInstallDirectory, manifest)
+    : baseInstallDirectory;
   const installedManifestPath = path.join(installDirectory, "dist", "src", "runtime-manifest.json");
   const alreadyInstalled = await exists(installedManifestPath);
   const runtimeAction: SetupResult["runtimeAction"] = alreadyInstalled
-    ? options.force ? "replaced" : "reused"
-    : "installed";
+    ? "reused"
+    : installDirectory === baseInstallDirectory ? "installed" : "installed-side-by-side";
   if (!alreadyInstalled || options.force) {
     await installRuntimeAtomically(packageRoot, installDirectory, manifest, nodeModulesAbi);
   }
@@ -478,6 +482,21 @@ async function installRuntimeAtomically(
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+async function nextRuntimeSlot(baseInstallDirectory: string, manifest: RuntimeManifest): Promise<string> {
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(manifest))
+    .digest("hex")
+    .slice(0, 12);
+  const stem = `${baseInstallDirectory}-build${fingerprint}`;
+  let candidate = stem;
+  let suffix = 2;
+  while (await exists(candidate)) {
+    candidate = `${stem}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 async function findPackageRoot(entrypoint?: string): Promise<string> {

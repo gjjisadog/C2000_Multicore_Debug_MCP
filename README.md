@@ -274,7 +274,10 @@ skips `npm ci` when the lockfile dependencies and native SQLite binding are
 already usable, and builds under a unique temporary directory. It never
 overwrites the repository `dist` directory, so running Codex MCP
 proxy/supervisor/daemon processes cannot lock the upgrade build. The temporary
-staging directory is removed on success or failure.
+staging directory is removed on success or failure. When `--force` upgrades an
+already-present semantic version, the installer activates an immutable
+build-fingerprinted sibling directory instead of deleting a runtime whose
+native SQLite binding may still be loaded by an existing Windows MCP process.
 
 The lower-level cross-platform development sequence remains:
 
