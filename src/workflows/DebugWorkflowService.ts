@@ -295,7 +295,8 @@ export class DebugWorkflowService {
       ramOwnership,
       elfFreshness,
       runtimeRamOwnership,
-      extraExpressions: input.expressions
+      extraExpressions: input.expressions,
+      expectedPostLoadHalt: input.expectedPostLoadHalt
     });
   }
 
@@ -502,6 +503,7 @@ export class DebugWorkflowService {
     evidence?: DebugEvidence;
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
+    expectedPostLoadHalt?: boolean;
   }): Promise<ToolResult> {
     const cpu1Expressions = options.extraExpressions
       ?.filter(condition => condition.coreId === options.cpu1CoreId)
@@ -550,6 +552,16 @@ export class DebugWorkflowService {
       : diagnosisCode === "BOOT_HANDOFF_NOT_READY" || diagnosisCode === "IPC_ACCEPTANCE_NOT_READY"
         ? "warning"
         : "info";
+    const postLoadHaltSemantics = options.expectedPostLoadHalt
+      ? {
+        phase: "post-load-halt",
+        expected: true,
+        diagnosisCode,
+        bootHandoffNotReadyIsExpected: diagnosisCode === "BOOT_HANDOFF_NOT_READY",
+        normalAcceptanceRunExecuted: false,
+        note: "The launch-only contract intentionally leaves both cores halted; BOOT_HANDOFF_NOT_READY is a bounded post-load diagnostic outcome, not an OpenLoop function failure."
+      }
+      : undefined;
     return {
       workflow: "c2000_runBootHandoffDiagnosis",
       orchestration: "server-internal",
@@ -560,6 +572,7 @@ export class DebugWorkflowService {
       device: options.device,
       diagnosisCode,
       severity,
+      ...(postLoadHaltSemantics ? { postLoadHaltSemantics } : {}),
       recommendedActions: recommendedActions(diagnosisCode, verdict, options.ramOwnership),
       evidence: {
         explicitCores: { cpu1CoreId: options.cpu1CoreId, cpu2CoreId: options.cpu2CoreId },
@@ -680,12 +693,23 @@ export class DebugWorkflowService {
     try {
       return await this.manager.verifyRuntimeRamOwnership(sessionId, actions ?? []);
     } catch (error) {
+      const structured = toStructuredError(error);
+      const details = structured.details ?? {};
       return {
         requested: true,
         supported: true,
         skipped: false,
         matched: false,
-        error: toStructuredError(error),
+        source: details.source === "MEMCFG_GSXMSEL" ? "MEMCFG_GSXMSEL" : undefined,
+        register: details.register === "MEMCFG_GSXMSEL" ? "MEMCFG_GSXMSEL" : undefined,
+        ownerCoreId: numberValue(details.ownerCoreId),
+        targetCoreId: numberValue(details.targetCoreId),
+        page: typeof details.page === "string" ? details.page : undefined,
+        typeSize: numberValue(details.typeSize),
+        address: numberValue(details.address),
+        expectedMask: numberValue(details.expectedMask),
+        actualValue: numberValue(details.actualValue),
+        error: structured,
         reason: error instanceof Error ? error.message : String(error)
       };
     }
@@ -912,6 +936,10 @@ function defaultBundleDir(label: string): string {
 
 function runtimeRamOwnershipAccepted(status: ToolResult | undefined): boolean {
   return status?.requested !== true || status.matched === true;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function resolveRunPlan(

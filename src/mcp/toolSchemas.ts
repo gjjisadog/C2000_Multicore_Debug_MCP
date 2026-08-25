@@ -104,6 +104,13 @@ export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeStep
 export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
 export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
 export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });
+export const createAcceptanceClosureSchema = z.object({
+  jobId: z.string().min(1),
+  offlineJsonPath: z.string().min(1),
+  offlineCsvPath: z.string().min(1),
+  offlineMarkdownPath: z.string().min(1),
+  outputPath: z.string().min(1).optional()
+});
 export const expressionConditionSchema = z.object({
   label: z.string().min(1).optional(),
   coreId: z.number().int(),
@@ -393,6 +400,7 @@ export const runBootHandoffDiagnosisSchema = z.object({
   maps: z.array(ramOwnershipMapSchema).min(1).optional(),
   expressions: z.array(expressionConditionSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
+  expectedPostLoadHalt: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
 });
 

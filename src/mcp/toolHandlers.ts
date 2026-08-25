@@ -59,6 +59,7 @@ import {
   environmentSchema,
   hardwarePreflightSchema,
   getTestArtifactsSchema,
+  createAcceptanceClosureSchema,
   getTestRunSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
@@ -129,6 +130,7 @@ export interface ToolHandlerDeps {
   listTestRuns?: (input: z.infer<typeof listTestRunsSchema>) => Promise<ToolResult> | ToolResult;
   cancelTestRun?: (input: z.infer<typeof cancelTestRunSchema>) => Promise<ToolResult> | ToolResult;
   getTestArtifacts?: (input: z.infer<typeof getTestArtifactsSchema>) => Promise<ToolResult> | ToolResult;
+  createAcceptanceClosure?: (input: z.infer<typeof createAcceptanceClosureSchema>) => Promise<ToolResult> | ToolResult;
   exportTrace?: (input: z.infer<typeof exportTraceSchema>) => Promise<ToolResult> | ToolResult;
   collectFailureBundle?: (input: z.infer<typeof collectFailureBundleSchema>) => Promise<ToolResult> | ToolResult;
   createRunBaseline?: (input: z.infer<typeof createRunBaselineSchema>) => Promise<ToolResult> | ToolResult;
@@ -172,6 +174,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listTestRuns = deps.listTestRuns ?? unavailableJobEngine;
   const cancelTestRun = deps.cancelTestRun ?? unavailableJobEngine;
   const getTestArtifacts = deps.getTestArtifacts ?? unavailableJobEngine;
+  const createAcceptanceClosure = deps.createAcceptanceClosure ?? unavailableJobEngine;
   const exportTrace = deps.exportTrace ?? unavailableTrace;
   const collectFailureBundle = deps.collectFailureBundle ?? unavailableTrace;
   const createRunBaseline = deps.createRunBaseline ?? unavailableJobEngine;
@@ -262,6 +265,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async listTestRuns(input: z.infer<typeof listTestRunsSchema>) { try { return ok(await listTestRuns(input)); } catch (error) { return fail(error); } },
     async cancelTestRun(input: z.infer<typeof cancelTestRunSchema>) { try { return ok(await cancelTestRun(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async getTestArtifacts(input: z.infer<typeof getTestArtifactsSchema>) { try { return ok(await getTestArtifacts(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async createAcceptanceClosure(input: z.input<typeof createAcceptanceClosureSchema>) { try { return ok(await createAcceptanceClosure(createAcceptanceClosureSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async exportTrace(input: z.input<typeof exportTraceSchema>) { try { return ok(await exportTrace(exportTraceSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async collectFailureBundle(input: z.input<typeof collectFailureBundleSchema>) { try { return ok(await collectFailureBundle(collectFailureBundleSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async createRunBaseline(input: z.input<typeof createRunBaselineSchema>) { try { return ok(await createRunBaseline(createRunBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
@@ -1242,6 +1246,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         }
         const snapshot = await runStage("snapshot", "getMulticoreSnapshot", () => manager.getMulticoreSnapshot(created.sessionId));
         failureContext = { ...failureContext, snapshot };
+        const sessionTopology = await manager.getSessionTopology(created.sessionId);
+        failureContext = { ...failureContext, sessionTopology };
         const postLaunchActions: ToolResult = {};
         const postLaunchActionsInput = parsed.postLaunchActions;
         if (postLaunchActionsInput?.assignExpressions) {
@@ -1301,6 +1307,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         }
         const result = {
           sessionId: created.sessionId,
+          adapterSessionId: sessionTopology.adapterSessionId,
+          adapterName: sessionTopology.adapterName,
+          effectiveAdapterType: sessionTopology.effectiveAdapterType,
+          sessionTopology,
           deprecated: true,
           replacementTool: "c2000_launchMulticoreDebugWithActions",
           snapshot,

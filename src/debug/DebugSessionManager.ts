@@ -188,6 +188,7 @@ export class DebugSessionManager {
       ccxmlPath: session.ccxmlPath,
       workspacePath: this.defaultWorkspacePath,
       adapterName: this.adapter.name,
+      effectiveAdapterType: this.adapter.name === "mock" ? "mock" : "ccs",
       adapterSessionId: session.adapterSession.adapterSessionId,
       debugSessionRoute: "sessionId -> adapterSessionId -> coreId -> DebugSession",
       cores: Array.from(session.cores.values()).map(core => ({
@@ -719,6 +720,13 @@ export class DebugSessionManager {
     supported: boolean;
     skipped: boolean;
     matched?: boolean;
+    source?: "MEMCFG_GSXMSEL";
+    register?: "MEMCFG_GSXMSEL";
+    ownerCoreId?: number;
+    targetCoreId?: number;
+    page?: string;
+    typeSize?: number;
+    address?: number;
     expectedMask?: number;
     actualValue?: number;
     reason?: string;
@@ -730,6 +738,8 @@ export class DebugSessionManager {
           requested: true as const,
           supported: false,
           skipped: true,
+          source: "MEMCFG_GSXMSEL" as const,
+          register: "MEMCFG_GSXMSEL" as const,
           reason: "Debug adapter does not implement readMemory for MEMCFG verification."
         };
       }
@@ -738,6 +748,8 @@ export class DebugSessionManager {
           requested: true as const,
           supported: true,
           skipped: true,
+          source: "MEMCFG_GSXMSEL" as const,
+          register: "MEMCFG_GSXMSEL" as const,
           reason: "No ownership actions to verify."
         };
       }
@@ -752,6 +764,12 @@ export class DebugSessionManager {
       if (!matched) {
         throw new DebugMcpError("RamOwnershipVerifyFailed", "Runtime MEMCFG GS ownership bits did not match expected mask", {
           sessionId,
+          source: "MEMCFG_GSXMSEL",
+          register: "MEMCFG_GSXMSEL",
+          ownerCoreId,
+          targetCoreId: actions[0]!.targetCoreId,
+          page,
+          typeSize,
           address,
           expectedMask,
           actualValue
@@ -762,6 +780,13 @@ export class DebugSessionManager {
         supported: true,
         skipped: false,
         matched: true,
+        source: "MEMCFG_GSXMSEL" as const,
+        register: "MEMCFG_GSXMSEL" as const,
+        ownerCoreId,
+        targetCoreId: actions[0]!.targetCoreId,
+        page,
+        typeSize,
+        address,
         expectedMask,
         actualValue,
         reads: [{ address, value: actualValue, expectedBits: expectedMask }]

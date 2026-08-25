@@ -22,6 +22,7 @@ export class BoardWorkerProcess implements BoardWorkerClient {
   readonly boardId: string;
   readonly probeSerial: string;
   readonly pid?: number;
+  effectiveAdapterType?: "ccs" | "mock";
   lastHeartbeatAt?: number;
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
   private child?: ChildProcess;
@@ -58,6 +59,9 @@ export class BoardWorkerProcess implements BoardWorkerClient {
       const readyTimer = setTimeout(() => reject(new DebugMcpError("WorkerHeartbeatTimeout", "Board worker did not report ready", { boardId: this.boardId })), 15000);
       const onReady = (message: unknown) => {
         if (!isMessage(message) || message.type !== "ready" || message.workerInstanceId !== this.workerInstanceId) return;
+        if (message.effectiveAdapterType === "ccs" || message.effectiveAdapterType === "mock") {
+          this.effectiveAdapterType = message.effectiveAdapterType;
+        }
         clearTimeout(readyTimer);
         child.off("message", onReady);
         resolve();

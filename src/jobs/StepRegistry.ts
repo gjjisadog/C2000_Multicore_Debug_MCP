@@ -166,7 +166,19 @@ export class StepRegistry {
           outputDir: artifacts?.outputDir
         })));
       case "runBootHandoffDiagnosis":
-        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, verifyRuntimeRamOwnership: false, outputDir: artifacts?.outputDir })));
+        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", fenced(context, requiredSession({
+          sessionId,
+          device: "F28P65x",
+          cpu1CoreId: 0,
+          cpu2CoreId: 2,
+          cpu1OutPath: artifacts?.cpu1OutPath,
+          cpu2OutPath: artifacts?.cpu2OutPath,
+          cpu1MapPath: artifacts?.cpu1MapPath,
+          cpu2MapPath: artifacts?.cpu2MapPath,
+          verifyRuntimeRamOwnership: Boolean(step.verifyRuntimeRamOwnership),
+          expectedPostLoadHalt: Boolean(step.expectedPostLoadHalt),
+          outputDir: artifacts?.outputDir
+        })));
       case "runReloadAndDiagnose":
         return this.tools.invokeTool("c2000_runReloadAndDiagnose", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir })));
       case "runFullDebugBundle":

@@ -1195,7 +1195,8 @@ describe("tool handlers", () => {
       device: "F28P65x",
       cpu1CoreId: 0,
       cpu2CoreId: 2,
-      cpu2MapPath
+      cpu2MapPath,
+      expectedPostLoadHalt: true
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -1205,6 +1206,7 @@ describe("tool handlers", () => {
       mcpToolCalls: [],
       diagnosisCode: "BOOT_HANDOFF_NOT_READY",
       severity: "warning",
+      postLoadHaltSemantics: expect.objectContaining({ expected: true, bootHandoffNotReadyIsExpected: true, normalAcceptanceRunExecuted: false }),
       evidence: expect.objectContaining({
         explicitCores: { cpu1CoreId: 0, cpu2CoreId: 2 }
       }),

@@ -214,7 +214,11 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
-  z.object({ type: z.literal("runBootHandoffDiagnosis"), ...baseStep }).strict(),
+  z.object({
+    type: z.literal("runBootHandoffDiagnosis"), ...baseStep,
+    verifyRuntimeRamOwnership: z.boolean().default(false),
+    expectedPostLoadHalt: z.boolean().default(false)
+  }).strict(),
   z.object({
     type: z.literal("runReloadAndDiagnose"), ...baseStep,
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
@@ -520,6 +524,9 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       break;
     case "runReloadAndDiagnose":
       for (const key of ["timeoutMs", "intervalMs"]) if (key in step) migrated[key] = step[key];
+      break;
+    case "runBootHandoffDiagnosis":
+      for (const key of ["verifyRuntimeRamOwnership", "expectedPostLoadHalt"]) if (key in step) migrated[key] = step[key];
       break;
     case "delay":
       migrated.delayMs = typeof step.delayMs === "number" && Number.isFinite(step.delayMs) && step.delayMs >= 0 ? step.delayMs : 0;

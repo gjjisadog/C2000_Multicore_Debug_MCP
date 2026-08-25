@@ -37,6 +37,8 @@ export interface C2000McpRuntime {
   server: McpServer;
   manager: DebugSessionManager;
   toolInvoker: C2000ToolInvoker;
+  /** The adapter selected after resolving config (never the literal `auto`). */
+  adapterResolution: AdapterResolution;
   ownedProcesses(): Record<string, unknown>[];
   dispose(): Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>>;
 }
@@ -158,6 +160,7 @@ function buildRuntime(
     server,
     manager,
     toolInvoker,
+    adapterResolution,
     ownedProcesses: () => adapter.ownedProcesses?.() ?? [],
     dispose: () => (disposal ??= manager.disposeAllSessions())
   };

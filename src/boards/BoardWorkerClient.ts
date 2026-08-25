@@ -7,6 +7,7 @@ export interface BoardWorkerClient {
   readonly probeSerial: string;
   readonly pid?: number;
   readonly processStartTime: string;
+  readonly effectiveAdapterType?: "ccs" | "mock";
   lastHeartbeatAt?: number;
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
   start(): Promise<void>;

@@ -26,6 +26,7 @@ export interface SessionTopology {
   ccxmlPath?: string;
   workspacePath?: string;
   adapterName: string;
+  effectiveAdapterType: "ccs" | "mock";
   adapterSessionId: string;
   debugSessionRoute: "sessionId -> adapterSessionId -> coreId -> DebugSession";
   cores: CoreTopology[];

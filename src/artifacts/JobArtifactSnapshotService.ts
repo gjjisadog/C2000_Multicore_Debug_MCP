@@ -227,8 +227,6 @@ export class JobArtifactSnapshotService {
     if (portableEvidenceBytes > DURABLE_PLAN_LIMITS.maxJobEvidenceBytes) {
       throw new Error(`Portable durable evidence exceeds ${DURABLE_PLAN_LIMITS.maxJobEvidenceBytes} bytes`);
     }
-    const adapterType = this.adapterType;
-    const evidenceClassification = adapterType === "mock" ? "MOCK" : adapterType === "ccs" ? "HARDWARE_TARGET" : "UNKNOWN";
     const targetContext = await Promise.all(runBoards.map(async runBoard => {
       const board = this.options.boards.require(runBoard.boardId);
       const session = runBoard.sessionId
@@ -245,6 +243,17 @@ export class JobArtifactSnapshotService {
       ]) : [];
       return { runBoard, board, session, worker, cores, programs };
     }));
+    const targetEvidence = targetContext.map(context => ({
+      ...context,
+      adapterEvidence: buildAdapterEvidence(
+        this.options.config,
+        context.runBoard.boardId,
+        context.board.probeSerial,
+        context.session,
+        durableStepResults
+      )
+    }));
+    const evidenceClassification = combineEvidenceClassification(targetEvidence.map(context => context.adapterEvidence.classification));
 
     const cancelled = run.status === "CANCELLED";
     const missingProgramHash = targetContext.some(context => context.programs.some(program =>
@@ -260,11 +269,15 @@ export class JobArtifactSnapshotService {
       schemaVersion: ARTIFACT_SCHEMA_VERSION,
       jobId,
       jobType: run.planName,
-      targets: targetContext.map(({ board, session, worker, cores, programs }) => ({
+      targets: targetEvidence.map(({ board, session, worker, cores, programs, adapterEvidence }) => ({
         boardId: board.boardId,
         boardProfile: { device: board.device, tags: [...board.tags].sort() },
         xds110Serial: board.probeSerial,
-        adapterType,
+        adapterType: adapterEvidence.effectiveAdapterType ?? "auto",
+        configuredAdapterMode: adapterEvidence.configuredAdapterMode,
+        configuredScriptingMode: adapterEvidence.configuredScriptingMode,
+        effectiveAdapterType: adapterEvidence.effectiveAdapterType,
+        adapterEvidence,
         workerGeneration: worker?.workerGeneration ?? null,
         adapterSessionId: session?.adapterSessionId ?? null,
         sessionId: session?.sessionId ?? null,
@@ -281,11 +294,16 @@ export class JobArtifactSnapshotService {
         parallelism: plan.parallelism ?? null,
         failurePolicy: plan.failurePolicy,
         recoveryPolicy: plan.recoveryPolicy,
-        adapterType
+        adapterType: targetEvidence.length === 1 ? (targetEvidence[0]!.adapterEvidence.effectiveAdapterType ?? "auto") : "auto",
+        configuredAdapterMode: this.options.config.adapter,
+        configuredScriptingMode: this.options.config.ccs.scriptingMode,
+        effectiveAdapterType: targetEvidence.length === 1 ? targetEvidence[0]!.adapterEvidence.effectiveAdapterType : null
       },
       startedAt: run.startedAt ?? run.submittedAt,
       endedAt: run.finishedAt ?? run.submittedAt,
       evidenceLevel: evidenceClassification,
+      evidenceClassification,
+      adapterEvidence: { targets: targetEvidence.map(context => context.adapterEvidence) },
       completeness,
       durableStepResults
     };
@@ -364,10 +382,6 @@ export class JobArtifactSnapshotService {
         createdAt: this.options.runs.get(jobId)?.finishedAt ?? new Date().toISOString()
       });
     }
-  }
-
-  private get adapterType(): "mock" | "ccs" | "auto" {
-    return this.options.config.adapter === "auto" ? this.options.config.ccs.scriptingMode : this.options.config.adapter;
   }
 
   private async postCommitFileMetadata(filePath: string): Promise<{ size: number; sha256: string }> {
@@ -457,8 +471,9 @@ function expressionSnapshotsFromSteps(steps: TestStepRecord[]): Record<string, u
 
 function durableStepResultsFromSteps(steps: TestStepRecord[]): Record<string, unknown>[] {
   const durableTypes = new Set([
-    "launchMulticore", "assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions",
-    "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture", "delay"
+    "preflight", "launchMulticore", "assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions",
+    "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture",
+    "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle", "cleanup", "delay"
   ]);
   return steps.filter(step => durableTypes.has(step.stepType)).map(step => {
     const output = step.output ? sanitize(step.output) : undefined;
@@ -482,12 +497,18 @@ function sanitize(value: Record<string, unknown>): Record<string, unknown> {
 
 function renderSummary(manifest: ArtifactManifest, result: ArtifactResult): string {
   const targets = manifest.targets.map(target => `- ${target.boardId} (${target.boardProfile.device}, XDS110 ${target.xds110Serial})`).join("\n");
+  const adapterEvidence = manifest.adapterEvidence && isRecord(manifest.adapterEvidence)
+    ? JSON.stringify(manifest.adapterEvidence)
+    : "n/a";
   return `# Test evidence summary
 
 - Job: ${manifest.jobId}
 - Type: ${manifest.jobType}
 - Status: ${result.overallStatus}
 - Evidence: ${result.evidenceClassification}
+- Configured adapter: ${String(manifest.configSummary.configuredAdapterMode ?? "unknown")} / scripting=${String(manifest.configSummary.configuredScriptingMode ?? "unknown")}
+- Effective adapter: ${String(manifest.configSummary.effectiveAdapterType ?? "unknown")}
+- Adapter evidence: ${adapterEvidence}
 - Artifact completeness: ${manifest.completeness.status}
 - Started: ${manifest.startedAt}
 - Ended: ${manifest.endedAt}
@@ -504,6 +525,104 @@ ${targets}
 
 This summary is generated from manifest.json and result.json; those structured files and events.jsonl are the evidence sources.
 `;
+}
+
+type EffectiveAdapterType = "ccs" | "mock";
+type EvidenceClassification = "MOCK" | "HARDWARE_TARGET" | "UNKNOWN" | "MIXED";
+
+export function buildAdapterEvidence(
+  config: C2000McpConfig,
+  boardId: string,
+  probeSerial: string,
+  session: { sessionId: string; adapterSessionId?: string } | undefined,
+  steps: Record<string, unknown>[]
+): Record<string, unknown> & {
+  classification: EvidenceClassification;
+  configuredAdapterMode: "auto" | "mock" | "ccs";
+  configuredScriptingMode: "auto" | "mock" | "ccs";
+  effectiveAdapterType: EffectiveAdapterType | null;
+} {
+  const launch = steps.find(step => step.stepType === "launchMulticore")?.output;
+  const preflight = steps.find(step => step.stepType === "preflight")?.output;
+  const launchRecord = isRecord(launch) ? launch : undefined;
+  const topology = launchRecord && isRecord(launchRecord.sessionTopology) ? launchRecord.sessionTopology : undefined;
+  const sessionRecord = session && isRecord(session) ? session : undefined;
+  const effectiveAdapterType = adapterTypeFrom(
+    launchRecord?.effectiveAdapterType,
+    topology?.effectiveAdapterType,
+    topology?.adapterName,
+    sessionRecord?.adapterSessionId,
+    config.adapter === "mock" || config.ccs.scriptingMode === "mock" ? "mock" : undefined
+  );
+  const adapterSessionId = stringOrNull(launchRecord?.adapterSessionId)
+    ?? stringOrNull(topology?.adapterSessionId)
+    ?? stringOrNull(sessionRecord?.adapterSessionId);
+  const sessionId = stringOrNull(launchRecord?.sessionId) ?? stringOrNull(sessionRecord?.sessionId);
+  const physicalPreflight = physicalPreflightEvidence(preflight, probeSerial);
+  const sessionEvidence = {
+    present: Boolean(sessionId && adapterSessionId),
+    sessionId,
+    adapterSessionId,
+    effectiveAdapterType
+  };
+  const classification: EvidenceClassification = effectiveAdapterType === "mock"
+    ? "MOCK"
+    : effectiveAdapterType === "ccs" && sessionEvidence.present && physicalPreflight.matched
+      ? "HARDWARE_TARGET"
+      : "UNKNOWN";
+  return {
+    boardId,
+    configuredAdapterMode: config.adapter,
+    configuredScriptingMode: config.ccs.scriptingMode,
+    effectiveAdapterType,
+    classification,
+    physicalPreflight,
+    sessionEvidence,
+    provenance: {
+      actualAdapterSource: launchRecord?.effectiveAdapterType ? "worker-response" : topology?.effectiveAdapterType ? "session-topology" : sessionRecord?.adapterSessionId ? "persisted-session" : "unavailable",
+      configuredModeIsNotPromoted: true,
+      classificationRequires: ["effectiveAdapterType", "adapterSessionId", "physicalXds110PreflightSerial"]
+    }
+  };
+}
+
+function physicalPreflightEvidence(output: unknown, probeSerial: string): Record<string, unknown> & { matched: boolean } {
+  const value = isRecord(output) ? output : {};
+  const xdsdfu = isRecord(value.xdsdfu) ? value.xdsdfu : {};
+  const devices = Array.isArray(xdsdfu.devices) ? xdsdfu.devices.filter(isRecord) : [];
+  const matching = devices.find(device => device.serialNumber === probeSerial);
+  const matched = xdsdfu.probeReady === true && Boolean(matching);
+  return {
+    source: "c2000_getHardwarePreflight.xdsdfu",
+    requestedProbeSerial: probeSerial,
+    probeReady: xdsdfu.probeReady === true,
+    matched,
+    matchedDevice: matching ? {
+      serialNumber: matching.serialNumber,
+      name: matching.name,
+      configuration: matching.configuration,
+      mode: matching.mode,
+      version: matching.version
+    } : null,
+    observedSerials: devices.map(device => device.serialNumber).filter((serial): serial is string => typeof serial === "string")
+  };
+}
+
+function adapterTypeFrom(...values: unknown[]): EffectiveAdapterType | null {
+  for (const value of values) {
+    if (value === "ccs" || value === "ccs-scripting") return "ccs";
+    if (value === "mock") return "mock";
+    if (typeof value === "string" && value.startsWith("ccs-")) return "ccs";
+    if (typeof value === "string" && value.startsWith("mock-")) return "mock";
+  }
+  return null;
+}
+
+function combineEvidenceClassification(values: EvidenceClassification[]): EvidenceClassification {
+  if (values.length === 0) return "UNKNOWN";
+  if (values.every(value => value === "MOCK")) return "MOCK";
+  if (values.every(value => value === "HARDWARE_TARGET")) return "HARDWARE_TARGET";
+  return values.some(value => value === "UNKNOWN") ? "UNKNOWN" : "MIXED";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
