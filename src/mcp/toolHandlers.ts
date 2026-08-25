@@ -117,6 +117,8 @@ function assertBoundedWorkflowPolling(timeoutMs: number, intervalMs: number): vo
 
 export interface ToolHandlerDeps {
   runHardwarePreflight?: typeof runHardwarePreflight;
+  /** Adapter mode resolved by the owning runtime; never infer it from config `auto`. */
+  effectiveAdapterType?: "ccs" | "mock";
   discoverAcceptancePrograms?: typeof discoverAcceptanceProgramsDefault;
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
@@ -1124,15 +1126,16 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           ?? { mode: "cpu1-then-cpu2" as const, cpu1SettleMs: 250 };
         const resetType = (resolvedStartup.resetType as ResetType | undefined) ?? "cpu";
         const runSequence = resolvedStartup.runSequence ?? null;
-        effectiveStartup = {
+      effectiveStartup = {
           startupPreset: resolvedStartup.startupPreset ?? null,
           resetType,
           loadSequence,
           runSequence,
           runPolicy: "owner-first-handoff-only",
-          normalAcceptanceRunExecuted: false
-        };
+        normalAcceptanceRunExecuted: false
+      };
         failureContext = { effectiveStartup, workflowStage, performedSteps: [...performedSteps], targetAccessAttempted: false };
+        let physicalPreflight: ToolResult | undefined;
         workflowStage = "program-discovery";
         const programDiscovery = parsed.loadPrograms && parsed.programDiscovery?.enabled
           ? await discoverAcceptancePrograms({
@@ -1170,6 +1173,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           if (!pairing.compatible) {
             throw new DebugMcpError("ArtifactPairInvalid", "CPU1/CPU2 launch artifacts are incomplete or incompatible", { pairing });
           }
+        }
+        // Capture the physical XDS evidence before CCS opens the debug
+        // session and claims the probe.  The resolved runtime adapter mode is
+        // the only authority used here; configured `auto` is never promoted.
+        if (deps.effectiveAdapterType === "ccs") {
+          workflowStage = "hardware-preflight";
+          physicalPreflight = await hardwarePreflight({
+            ccsInstallPath: deps.tiEnvironment?.ccsInstallPath
+          });
+          performedSteps.push("hardwarePreflight");
+          failureContext = { ...failureContext, workflowStage, performedSteps: [...performedSteps], preflight: physicalPreflight };
         }
         const created = await manager.createDebugSession({
           sessionName: parsed.sessionName ?? parsed.targetConfigurationName ?? "launch-multicore-debug",
@@ -1252,8 +1266,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         // identity.  This is deliberately captured after the worker/session
         // exists, and only for a real CCS adapter; mock launches must remain
         // deterministic and classify as MOCK without touching host hardware.
-        let physicalPreflight: ToolResult | undefined;
-        if (sessionTopology.effectiveAdapterType === "ccs") {
+        if (!physicalPreflight && sessionTopology.effectiveAdapterType === "ccs") {
           physicalPreflight = await runStage("hardware-preflight", "hardwarePreflight", () => hardwarePreflight({
             ccsInstallPath: deps.tiEnvironment?.ccsInstallPath
           }));

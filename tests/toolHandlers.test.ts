@@ -2534,6 +2534,7 @@ describe("tool handlers", () => {
     const manager = new DebugSessionManager(new CcsNamedMockAdapter(), new LoadedProgramRegistry());
     let preflightCalls = 0;
     const handlers = createToolHandlers(manager, {
+      effectiveAdapterType: "ccs",
       tiEnvironment: { ccsInstallPath: "C:/ti/ccs" },
       runHardwarePreflight: async options => {
         preflightCalls += 1;
