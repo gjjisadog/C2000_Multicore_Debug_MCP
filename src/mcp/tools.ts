@@ -40,6 +40,7 @@ import {
   environmentSchema,
   hardwarePreflightSchema,
   getTestArtifactsSchema,
+  createAcceptanceClosureSchema,
   getTestRunSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
@@ -226,6 +227,7 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_createAcceptanceClosure", title: "Create C2000 Acceptance Closure", description: "Create a detached, hash-bound acceptance attestation for canonical run artifacts and independently generated offline analysis without mutating the canonical manifest or touching a target.", schema: createAcceptanceClosureSchema, handlerName: "createAcceptanceClosure", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_exportTrace", title: "Export C2000 Perfetto Trace", description: "Atomically export an offline Perfetto timeline from durable SQLite and/or completed artifacts. It never reconnects to a target or changes a job result.", schema: exportTraceSchema, handlerName: "exportTrace", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
@@ -507,7 +509,7 @@ function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annota
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
   if (targetEffect === "observation-control") {
-    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline") return ["host-read", "bundle-write"];
+    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];
     if (name === "c2000_startVariableStream") return ["target-read", "bundle-write"];
     if (name === "c2000_exportVariableStream") return ["bundle-write"];
     if (name === "c2000_stopVariableStream") return ["host-write"];
@@ -528,7 +530,7 @@ function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] 
   if (targetEffect === "memory-write") return name.includes("injectFault") ? ["target-memory-write", "fault-injection"] : ["target-memory-write"];
   if (targetEffect === "job-control") {
     if (name === "c2000_recoverBoard") return ["host-process-terminate"];
-    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline") return ["host-read", "bundle-write"];
+    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];
     return ["host-write"];
   }
   if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];

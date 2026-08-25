@@ -96,6 +96,60 @@ describe("standard job artifact snapshot", () => {
     fixture.store.close();
   });
 
+  it("exports live pre-cleanup launch diagnostics from the durable failed step", async () => {
+    const fixture = await createFixture("FAILED");
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.store.run("UPDATE test_steps SET step_type = ?, input_json = ? WHERE step_run_id = ?", [
+      "launchMulticore",
+      JSON.stringify({ type: "launchMulticore", startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu", loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 } }),
+      step.stepRunId
+    ]);
+    fixture.runs.updateStep({
+      ...step,
+      input: {
+        type: "launchMulticore",
+        startupPreset: "hybrid30k-dk9-owner-first",
+        resetType: "cpu",
+        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 }
+      },
+      status: "FAILED",
+      error: { code: "ProgramLoadFailed", message: "CPU2 load failed" },
+      output: {
+        success: false,
+        sessionId: "session-a",
+        cleanedUp: true,
+        effectiveStartup: { startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" },
+        preCleanupDiagnostics: {
+          schemaVersion: 1,
+          provenance: { captureSource: "live-pre-cleanup-session", capturedBeforeSessionClose: true, targetReadsOnly: true },
+          targetState: [{ name: "target-state:0", status: "COLLECTED" }]
+        }
+      }
+    });
+
+    await fixture.service.exportJob(fixture.jobId);
+    await fixture.service.exportJob(fixture.jobId);
+    const diagnostics = await readJson(path.join(fixture.jobDirectory, "pre-cleanup-launch-diagnostics.json"));
+    const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
+    expect(diagnostics).toEqual(expect.objectContaining({
+      jobId: fixture.jobId,
+      stepStatus: "FAILED",
+      provenance: expect.objectContaining({
+        source: "durable-step-output",
+        captureSource: "live-pre-cleanup-session",
+        collectorTargetAccessed: false
+      }),
+      diagnostics: expect.objectContaining({ schemaVersion: 1 })
+    }));
+    expect(manifest.generatedFiles).toEqual(expect.arrayContaining([expect.objectContaining({
+      path: "pre-cleanup-launch-diagnostics.json",
+      artifactType: "evidence:pre-cleanup-launch-diagnostics",
+      completeness: "COMPLETE",
+      sha256: expect.stringMatching(/^[a-f0-9]{64}$/)
+    })]));
+    fixture.store.close();
+  });
+
   it("restores the previous expression snapshot together with its manifest when commit publication fails", async () => {
     const fixture = await createFixture();
     const step = fixture.runs.steps(fixture.jobId)[0]!;

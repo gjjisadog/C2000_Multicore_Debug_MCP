@@ -7,7 +7,7 @@ import type { ResetType } from "../debug/types.js";
 import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js";
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
-import { analyzeRamOwnership as analyzeRamOwnershipDefault } from "../hardware/mapOwnership.js";
+import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
 import { formatDebugProcessOwners, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
@@ -59,6 +59,7 @@ import {
   environmentSchema,
   hardwarePreflightSchema,
   getTestArtifactsSchema,
+  createAcceptanceClosureSchema,
   getTestRunSchema,
   injectFaultsSchema,
   launchAndRunIpcAcceptanceSchema,
@@ -116,6 +117,8 @@ function assertBoundedWorkflowPolling(timeoutMs: number, intervalMs: number): vo
 
 export interface ToolHandlerDeps {
   runHardwarePreflight?: typeof runHardwarePreflight;
+  /** Adapter mode resolved by the owning runtime; never infer it from config `auto`. */
+  effectiveAdapterType?: "ccs" | "mock";
   discoverAcceptancePrograms?: typeof discoverAcceptanceProgramsDefault;
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
@@ -129,6 +132,7 @@ export interface ToolHandlerDeps {
   listTestRuns?: (input: z.infer<typeof listTestRunsSchema>) => Promise<ToolResult> | ToolResult;
   cancelTestRun?: (input: z.infer<typeof cancelTestRunSchema>) => Promise<ToolResult> | ToolResult;
   getTestArtifacts?: (input: z.infer<typeof getTestArtifactsSchema>) => Promise<ToolResult> | ToolResult;
+  createAcceptanceClosure?: (input: z.infer<typeof createAcceptanceClosureSchema>) => Promise<ToolResult> | ToolResult;
   exportTrace?: (input: z.infer<typeof exportTraceSchema>) => Promise<ToolResult> | ToolResult;
   collectFailureBundle?: (input: z.infer<typeof collectFailureBundleSchema>) => Promise<ToolResult> | ToolResult;
   createRunBaseline?: (input: z.infer<typeof createRunBaselineSchema>) => Promise<ToolResult> | ToolResult;
@@ -172,6 +176,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listTestRuns = deps.listTestRuns ?? unavailableJobEngine;
   const cancelTestRun = deps.cancelTestRun ?? unavailableJobEngine;
   const getTestArtifacts = deps.getTestArtifacts ?? unavailableJobEngine;
+  const createAcceptanceClosure = deps.createAcceptanceClosure ?? unavailableJobEngine;
   const exportTrace = deps.exportTrace ?? unavailableTrace;
   const collectFailureBundle = deps.collectFailureBundle ?? unavailableTrace;
   const createRunBaseline = deps.createRunBaseline ?? unavailableJobEngine;
@@ -262,6 +267,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async listTestRuns(input: z.infer<typeof listTestRunsSchema>) { try { return ok(await listTestRuns(input)); } catch (error) { return fail(error); } },
     async cancelTestRun(input: z.infer<typeof cancelTestRunSchema>) { try { return ok(await cancelTestRun(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async getTestArtifacts(input: z.infer<typeof getTestArtifactsSchema>) { try { return ok(await getTestArtifacts(input)); } catch (error) { return fail(error, { jobId: input.jobId }); } },
+    async createAcceptanceClosure(input: z.input<typeof createAcceptanceClosureSchema>) { try { return ok(await createAcceptanceClosure(createAcceptanceClosureSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async exportTrace(input: z.input<typeof exportTraceSchema>) { try { return ok(await exportTrace(exportTraceSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async collectFailureBundle(input: z.input<typeof collectFailureBundleSchema>) { try { return ok(await collectFailureBundle(collectFailureBundleSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async createRunBaseline(input: z.input<typeof createRunBaselineSchema>) { try { return ok(await createRunBaseline(createRunBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
@@ -1088,8 +1094,49 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async launchMulticoreDebug(input: z.input<typeof launchMulticoreDebugSchema>) {
       let createdSessionId: string | undefined;
       let failureContext: ToolResult = {};
+      let launchCores: Array<{ coreId: number; coreName: string; programUri?: string; mapUri?: string; ramOwnershipPolicy?: "require-map" | "explicit-fallback" | "skip"; fallbackGsRegions?: number[] }> = [];
+      let workflowStage = "input-validation";
+      const performedSteps: string[] = [];
+      let effectiveStartup: ToolResult = {
+        startupPreset: null,
+        resetType: null,
+        loadSequence: null,
+        runSequence: null,
+        runPolicy: "owner-first-handoff-only",
+        normalAcceptanceRunExecuted: false
+      };
       try {
         const parsed = launchMulticoreDebugSchema.parse(input);
+        workflowStage = "startup-contract-validation";
+        failureContext = {
+          effectiveStartup: {
+            startupPreset: parsed.startupPreset ?? null,
+            resetType: parsed.resetType ?? null,
+            loadSequence: parsed.loadSequence ?? null,
+            runSequence: parsed.runSequence ?? null,
+            runPolicy: "owner-first-handoff-only",
+            normalAcceptanceRunExecuted: false
+          },
+          workflowStage,
+          performedSteps: [...performedSteps],
+          targetAccessAttempted: false
+        };
+        const resolvedStartup = resolveIpcStartupPreset(parsed as unknown as Record<string, unknown>);
+        const loadSequence = (resolvedStartup.loadSequence as { mode: "cpu1-then-cpu2" | "cpu1-run-before-cpu2"; cpu1SettleMs: number } | undefined)
+          ?? { mode: "cpu1-then-cpu2" as const, cpu1SettleMs: 250 };
+        const resetType = (resolvedStartup.resetType as ResetType | undefined) ?? "cpu";
+        const runSequence = resolvedStartup.runSequence ?? null;
+      effectiveStartup = {
+          startupPreset: resolvedStartup.startupPreset ?? null,
+          resetType,
+          loadSequence,
+          runSequence,
+          runPolicy: "owner-first-handoff-only",
+        normalAcceptanceRunExecuted: false
+      };
+        failureContext = { effectiveStartup, workflowStage, performedSteps: [...performedSteps], targetAccessAttempted: false };
+        let physicalPreflight: ToolResult | undefined;
+        workflowStage = "program-discovery";
         const programDiscovery = parsed.loadPrograms && parsed.programDiscovery?.enabled
           ? await discoverAcceptancePrograms({
             cpu1Program: parsed.programDiscovery.cpu1Program ?? process.env.C2000_CPU1_OUT,
@@ -1099,7 +1146,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           })
           : undefined;
         if (programDiscovery) {
-          failureContext = { programDiscovery };
+          failureContext = { ...failureContext, programDiscovery };
         }
         const requestedCores = programDiscovery
           ? parsed.cores.map(core => ({
@@ -1108,6 +1155,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           }))
           : parsed.cores;
         const cores = requestedCores.map(core => parsed.loadPrograms ? core : { ...core, load: false });
+        launchCores = cores;
         for (const core of cores) {
           if (core.load && !core.programUri) {
             throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
@@ -1126,6 +1174,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             throw new DebugMcpError("ArtifactPairInvalid", "CPU1/CPU2 launch artifacts are incomplete or incompatible", { pairing });
           }
         }
+        // Capture the physical XDS evidence before CCS opens the debug
+        // session and claims the probe.  The resolved runtime adapter mode is
+        // the only authority used here; configured `auto` is never promoted.
+        if (deps.effectiveAdapterType === "ccs") {
+          workflowStage = "hardware-preflight";
+          physicalPreflight = await hardwarePreflight({
+            ccsInstallPath: deps.tiEnvironment?.ccsInstallPath
+          });
+          performedSteps.push("hardwarePreflight");
+          failureContext = { ...failureContext, workflowStage, performedSteps: [...performedSteps], preflight: physicalPreflight };
+        }
         const created = await manager.createDebugSession({
           sessionName: parsed.sessionName ?? parsed.targetConfigurationName ?? "launch-multicore-debug",
           ccxmlPath: parsed.ccxmlPath,
@@ -1136,106 +1195,160 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           coreMap: cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, corePattern: core.corePattern }))
         });
         createdSessionId = created.sessionId;
-        // CPU1 first so GS ownership writes for CPU2 always see a connected owner core.
-        const orderedCores = orderCoresCpu1First(cores);
-        let cpu1RanBeforeCpu2Load = false;
-        for (const core of orderedCores) {
-          if (core.load && isCpuCore(core, "cpu2") && parsed.loadSequence.mode === "cpu1-run-before-cpu2") {
-            const loadedCpu1 = orderedCores.find(candidate => candidate.load && isCpuCore(candidate, "cpu1"));
-            if (!loadedCpu1) {
-              throw new DebugMcpError("LaunchProgramMissing", "cpu1-run-before-cpu2 requires a load-enabled CPU1 core");
+        failureContext = { ...failureContext, sessionId: created.sessionId, created, targetAccessAttempted: true };
+        const loadedCpu1 = cores.find(core => core.load && isCpuCore(core, "cpu1"));
+        const loadedCpu2 = cores.find(core => core.load && isCpuCore(core, "cpu2"));
+        const dualCoreLoad = parsed.loadPrograms && Boolean(loadedCpu1 && loadedCpu2);
+        const runStage = async <T>(stage: string, operation: string, action: () => Promise<T>): Promise<T> => {
+          workflowStage = stage;
+          const value = await action();
+          performedSteps.push(operation);
+          failureContext = { ...failureContext, workflowStage, performedSteps: [...performedSteps] };
+          return value;
+        };
+
+        if (dualCoreLoad) {
+          // Owner-first launch is deliberately explicit: connect both cores,
+          // establish a halted/reset baseline, then perform only the CPU1
+          // handoff run required to release CPU2 RAM ownership.
+          const coreIds = [loadedCpu1!.coreId, loadedCpu2!.coreId];
+          const connected = await runStage("connect-both", "connectCores", () => manager.connectCores(created.sessionId, coreIds));
+          assertBatchSucceeded("connectCores", connected);
+          const initialHalt = await runStage("initial-halt", "haltCores", () => manager.haltCores(created.sessionId, coreIds));
+          assertBatchSucceeded("haltCores", initialHalt);
+          const reset = await runStage("reset", "resetCores", () => manager.resetCores(created.sessionId, coreIds, resetType));
+          assertBatchSucceeded("resetCores", reset);
+          await runStage("cpu1-load", "loadCpu1Program", () => manager.loadProgramWithMap(
+            created.sessionId,
+            loadedCpu1!.coreId,
+            loadedCpu1!.programUri!,
+            loadedCpu1!.mapUri,
+            loadedCpu1!.ramOwnershipPolicy ?? "skip",
+            loadedCpu1!.fallbackGsRegions
+          ));
+          if (loadSequence.mode === "cpu1-run-before-cpu2") {
+            await runStage("owner-first-handoff-run", "runCpu1BeforeCpu2Load", () => manager.runCore(created.sessionId, loadedCpu1!.coreId));
+            await runStage("owner-first-handoff-settle", "waitCpu1Settle", () => sleepCore(loadSequence.cpu1SettleMs));
+          }
+          await runStage("cpu2-load", "loadCpu2Program", () => manager.loadProgramWithMap(
+            created.sessionId,
+            loadedCpu2!.coreId,
+            loadedCpu2!.programUri!,
+            loadedCpu2!.mapUri,
+            loadedCpu2!.ramOwnershipPolicy ?? "skip",
+            loadedCpu2!.fallbackGsRegions
+          ));
+          const postLoadHalt = await runStage("post-load-halt", "haltCoresAfterLoad", () => manager.haltCores(created.sessionId, coreIds));
+          assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
+        } else {
+          // Connect-only and single-core launches retain their existing
+          // semantics: loadPrograms=false never resets, loads, or runs.
+          for (const core of orderCoresCpu1First(cores)) {
+            if (core.connect) await runStage("connect", `connectCore:${core.coreId}`, () => manager.connectTarget(created.sessionId, core.coreId));
+            if (core.load) {
+              await runStage("program-load", `loadProgram:${core.coreId}`, () => manager.loadProgramWithMap(
+                created.sessionId,
+                core.coreId,
+                core.programUri!,
+                core.mapUri,
+                core.ramOwnershipPolicy ?? "skip",
+                core.fallbackGsRegions
+              ));
             }
-            await manager.runCore(created.sessionId, loadedCpu1.coreId);
-            cpu1RanBeforeCpu2Load = true;
-            await sleepCore(parsed.loadSequence.cpu1SettleMs);
-          }
-          if (core.connect) {
-            await manager.connectTarget(created.sessionId, core.coreId);
-          }
-          if (core.load) {
-            const programUri = core.programUri;
-            if (!programUri) {
-              throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
-                coreId: core.coreId,
-                coreName: core.coreName,
-                programDiscovery
-              });
-            }
-            await manager.loadProgramWithMap(created.sessionId, core.coreId, programUri, core.mapUri, core.ramOwnershipPolicy ?? "skip", core.fallbackGsRegions);
-          }
-          if (core.haltAtEntry) {
-            await manager.haltCore(created.sessionId, core.coreId);
+            if (core.haltAtEntry) await runStage("halt", `haltCore:${core.coreId}`, () => manager.haltCore(created.sessionId, core.coreId));
           }
         }
-        if (cpu1RanBeforeCpu2Load) {
-          const cpu1 = orderedCores.find(candidate => candidate.load && isCpuCore(candidate, "cpu1"));
-          if (cpu1?.haltAtEntry) await manager.haltCore(created.sessionId, cpu1.coreId);
+        const snapshot = await runStage("snapshot", "getMulticoreSnapshot", () => manager.getMulticoreSnapshot(created.sessionId));
+        failureContext = { ...failureContext, snapshot };
+        const sessionTopology = await manager.getSessionTopology(created.sessionId);
+        failureContext = { ...failureContext, sessionTopology };
+        // Persist the physical XDS preflight alongside the effective adapter
+        // identity.  This is deliberately captured after the worker/session
+        // exists, and only for a real CCS adapter; mock launches must remain
+        // deterministic and classify as MOCK without touching host hardware.
+        if (!physicalPreflight && sessionTopology.effectiveAdapterType === "ccs") {
+          physicalPreflight = await runStage("hardware-preflight", "hardwarePreflight", () => hardwarePreflight({
+            ccsInstallPath: deps.tiEnvironment?.ccsInstallPath
+          }));
+          failureContext = { ...failureContext, preflight: physicalPreflight };
         }
-        const snapshot = await manager.getMulticoreSnapshot(created.sessionId);
-        failureContext = { sessionId: created.sessionId, snapshot };
         const postLaunchActions: ToolResult = {};
-        if (parsed.postLaunchActions?.assignExpressions) {
-          postLaunchActions.assignExpressions = await manager.assignExpressions(
+        const postLaunchActionsInput = parsed.postLaunchActions;
+        if (postLaunchActionsInput?.assignExpressions) {
+          postLaunchActions.assignExpressions = await runStage("post-launch-actions", "assignExpressions", () => manager.assignExpressions(
             created.sessionId,
-            parsed.postLaunchActions.assignExpressions
-          );
+            postLaunchActionsInput.assignExpressions!
+          ));
         }
-        if (parsed.postLaunchActions?.injectFaults) {
-          postLaunchActions.injectFaults = await manager.injectFaults(
+        if (postLaunchActionsInput?.injectFaults) {
+          postLaunchActions.injectFaults = await runStage("post-launch-actions", "injectFaults", () => manager.injectFaults(
             created.sessionId,
-            parsed.postLaunchActions.injectFaults
-          );
+            postLaunchActionsInput.injectFaults!
+          ));
         }
         if (Object.keys(postLaunchActions).length > 0) {
           failureContext = { ...failureContext, postLaunchActions };
           assertPostLaunchActions(postLaunchActions);
         }
         const postLaunchChecks: ToolResult = {};
-        if (parsed.postLaunchChecks?.waitForExpressionSet) {
-          postLaunchChecks.waitForExpressionSet = await waitForExpressionSetResult(
+        const postLaunchChecksInput = parsed.postLaunchChecks;
+        if (postLaunchChecksInput?.waitForExpressionSet) {
+          postLaunchChecks.waitForExpressionSet = await runStage("post-launch-checks", "waitForExpressionSet", () => waitForExpressionSetResult(
             created.sessionId,
-            parsed.postLaunchChecks.waitForExpressionSet.conditions,
-            parsed.postLaunchChecks.waitForExpressionSet.timeoutMs,
-            parsed.postLaunchChecks.waitForExpressionSet.intervalMs
-          );
+            postLaunchChecksInput.waitForExpressionSet!.conditions,
+            postLaunchChecksInput.waitForExpressionSet!.timeoutMs,
+            postLaunchChecksInput.waitForExpressionSet!.intervalMs
+          ));
         }
-        if (parsed.postLaunchChecks?.compareExpressions) {
-          postLaunchChecks.compareExpressions = await manager.compareExpressions(
+        if (postLaunchChecksInput?.compareExpressions) {
+          postLaunchChecks.compareExpressions = await runStage("post-launch-checks", "compareExpressions", () => manager.compareExpressions(
             created.sessionId,
-            parsed.postLaunchChecks.compareExpressions
-          );
+            postLaunchChecksInput.compareExpressions!
+          ));
         }
-        if (parsed.postLaunchChecks?.diagnoseCpu2Boot) {
-          postLaunchChecks.diagnoseCpu2Boot = await manager.diagnoseCpu2Boot({
+        if (postLaunchChecksInput?.diagnoseCpu2Boot) {
+          postLaunchChecks.diagnoseCpu2Boot = await runStage("post-launch-diagnosis", "diagnoseCpu2Boot", () => manager.diagnoseCpu2Boot({
             sessionId: created.sessionId,
-            cpu1CoreId: parsed.postLaunchChecks.diagnoseCpu2Boot.cpu1CoreId,
-            cpu2CoreId: parsed.postLaunchChecks.diagnoseCpu2Boot.cpu2CoreId,
-            cpu1Expressions: parsed.postLaunchChecks.diagnoseCpu2Boot.cpu1Expressions,
-            cpu2Expressions: parsed.postLaunchChecks.diagnoseCpu2Boot.cpu2Expressions
-          });
+            cpu1CoreId: postLaunchChecksInput.diagnoseCpu2Boot!.cpu1CoreId,
+            cpu2CoreId: postLaunchChecksInput.diagnoseCpu2Boot!.cpu2CoreId,
+            cpu1Expressions: postLaunchChecksInput.diagnoseCpu2Boot!.cpu1Expressions,
+            cpu2Expressions: postLaunchChecksInput.diagnoseCpu2Boot!.cpu2Expressions
+          }));
         }
-        if (parsed.postLaunchChecks?.verifyRunPauseIsolation) {
-          postLaunchChecks.verifyRunPauseIsolation = await manager.verifyRunPauseIsolation({
+        if (postLaunchChecksInput?.verifyRunPauseIsolation) {
+          postLaunchChecks.verifyRunPauseIsolation = await runStage("post-launch-checks", "verifyRunPauseIsolation", () => manager.verifyRunPauseIsolation({
             sessionId: created.sessionId,
-            cpu1CoreId: parsed.postLaunchChecks.verifyRunPauseIsolation.cpu1CoreId,
-            cpu2CoreId: parsed.postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId,
-            settleMs: parsed.postLaunchChecks.verifyRunPauseIsolation.settleMs
-          });
+            cpu1CoreId: postLaunchChecksInput.verifyRunPauseIsolation!.cpu1CoreId,
+            cpu2CoreId: postLaunchChecksInput.verifyRunPauseIsolation!.cpu2CoreId,
+            settleMs: postLaunchChecksInput.verifyRunPauseIsolation!.settleMs
+          }));
         }
         if (Object.keys(postLaunchChecks).length > 0) {
           failureContext = { ...failureContext, postLaunchChecks };
           assertPostLaunchChecks(postLaunchChecks, {
-            verifyRunPauseIsolation: parsed.postLaunchChecks?.verifyRunPauseIsolation
+            verifyRunPauseIsolation: postLaunchChecksInput?.verifyRunPauseIsolation
           });
         }
         const result = {
           sessionId: created.sessionId,
+          adapterSessionId: sessionTopology.adapterSessionId,
+          adapterName: sessionTopology.adapterName,
+          effectiveAdapterType: sessionTopology.effectiveAdapterType,
+          sessionTopology,
           deprecated: true,
           replacementTool: "c2000_launchMulticoreDebugWithActions",
           snapshot,
           autoCloseOnComplete: parsed.autoCloseOnComplete,
           loadPrograms: parsed.loadPrograms,
-          loadSequence: parsed.loadSequence,
+          startupPreset: effectiveStartup.startupPreset,
+          resetType,
+          loadSequence,
+          runSequence,
+          effectiveStartup,
+          workflowStage: "completed",
+          performedSteps,
+          normalAcceptanceRunExecuted: false,
+          ...(physicalPreflight ? { preflight: physicalPreflight } : {}),
           ...(programDiscovery ? { programDiscovery } : {}),
           ...(Object.keys(postLaunchActions).length > 0 ? { postLaunchActions } : {}),
           ...(Object.keys(postLaunchChecks).length > 0 ? { postLaunchChecks } : {})
@@ -1248,18 +1361,70 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           autoClose: manager.armIdleAutoClose(created.sessionId, parsed.autoCloseIdleTimeoutMs)
         });
       } catch (error) {
-        const body: ToolResult = { ...failureContext };
+        const body: ToolResult = {
+          ...failureContext,
+          workflowStage,
+          performedSteps: [...performedSteps],
+          effectiveStartup,
+          targetAccessAttempted: Boolean(createdSessionId)
+        };
         if (createdSessionId) {
           body.sessionId = createdSessionId;
           try {
-            await manager.closeDebugSession(createdSessionId);
-            body.cleanedUp = true;
+            body.preCleanupDiagnostics = await captureLaunchPreCleanupDiagnostics({
+              manager,
+              analyzeRamOwnership,
+              sessionId: createdSessionId,
+              cores: launchCores,
+              workflowStage,
+              performedSteps,
+              effectiveStartup
+            });
+          } catch (diagnosticError) {
+            body.preCleanupDiagnostics = {
+              schemaVersion: 1,
+              provenance: {
+                captureSource: "pre-cleanup-collector-failed",
+                capturedBeforeSessionClose: true,
+                collectorTargetAccessed: false,
+                targetReadsOnly: true
+              },
+              sessionId: createdSessionId,
+              workflowStage,
+              performedSteps: [...performedSteps],
+              effectiveStartup,
+              collectorError: toStructuredError(diagnosticError)
+            };
+          }
+          try {
+            const cleanup = await manager.closeDebugSession(createdSessionId);
+            body.cleanup = cleanup;
+            body.cleanedUp = cleanup.closed === true;
+            body.sessionClosed = cleanup.closed === true;
+            body.adapterDisposed = cleanup.cleanup?.adapterDisposed === true;
           } catch (cleanupError) {
             body.cleanedUp = false;
+            body.sessionClosed = false;
             body.cleanupError = toStructuredError(cleanupError);
           }
         }
-        return fail(error, body);
+        const structured = toStructuredError(error);
+        return {
+          success: false,
+          timestamp: new Date().toISOString(),
+          ...body,
+          error: {
+            ...structured,
+            details: {
+              ...(structured.details ?? {}),
+              workflowStage,
+              performedSteps: [...performedSteps],
+              effectiveStartup,
+              targetAccessAttempted: Boolean(createdSessionId),
+              ...(body.preCleanupDiagnostics ? { preCleanupDiagnostics: body.preCleanupDiagnostics } : {})
+            }
+          }
+        };
       }
     },
 
@@ -1435,6 +1600,138 @@ function discoveredProgramForCore(coreId: number, programDiscovery: ToolResult):
     return typeof programDiscovery.cpu2?.selected === "string" ? programDiscovery.cpu2.selected : undefined;
   }
   return undefined;
+}
+
+/**
+ * Collect live launch evidence while the original session/lease still exists.
+ * Each item is isolated so one unavailable debugger capability cannot hide the
+ * remaining target state, PC, loaded identity, map, or handoff evidence.
+ * This helper performs reads only; it never halts, resets, runs, loads, or
+ * writes target state.
+ */
+async function captureLaunchPreCleanupDiagnostics(options: {
+  manager: DebugSessionManager;
+  analyzeRamOwnership: (input: MapOwnershipInput) => unknown | Promise<unknown>;
+  sessionId: string;
+  cores: Array<{ coreId: number; coreName: string; programUri?: string; mapUri?: string }>;
+  workflowStage: string;
+  performedSteps: string[];
+  effectiveStartup: Record<string, unknown>;
+}): Promise<ToolResult> {
+  const capture = async (name: string, action: () => Promise<unknown>): Promise<ToolResult> => {
+    try {
+      return { name, status: "COLLECTED", value: await action() };
+    } catch (error) {
+      return { name, status: "FAILED", error: toStructuredError(error) };
+    }
+  };
+
+  const sessionTopology = await capture("session-topology", () => options.manager.getSessionTopology(options.sessionId));
+  const targetState: ToolResult[] = [];
+  const resolvedPc: ToolResult[] = [];
+  const loadedProgramIdentity: ToolResult[] = [];
+  for (const core of options.cores) {
+    targetState.push(await capture(`target-state:${core.coreId}`, async () => {
+      const state = await options.manager.getTargetState(options.sessionId, core.coreId);
+      return { coreId: core.coreId, coreName: core.coreName, rawPc: state.pc ?? null, state };
+    }));
+    resolvedPc.push(await capture(`pc:${core.coreId}`, async () => {
+      const resolved = await options.manager.resolvePc(options.sessionId, core.coreId);
+      return { coreId: core.coreId, rawPc: resolved.pc ?? null, resolved };
+    }));
+    loadedProgramIdentity.push(await capture(`loaded-program:${core.coreId}`, async () => {
+      const info = await options.manager.getLoadedProgramInfo(options.sessionId, core.coreId);
+      return {
+        coreId: core.coreId,
+        available: info !== undefined,
+        source: "mcp-loaded-program-registry",
+        info: info ?? null
+      };
+    }));
+  }
+
+  const snapshot = await capture("multicore-snapshot", () => options.manager.getMulticoreSnapshot(options.sessionId));
+  const maps: MapOwnershipInput["maps"] = [];
+  const mapResolutionFailures: ToolResult[] = [];
+  for (const core of options.cores.filter(candidate => typeof candidate.mapUri === "string" && candidate.mapUri.length > 0)) {
+    try {
+      maps.push({
+        coreId: core.coreId,
+        coreName: core.coreName,
+        mapPath: options.manager.normalizeArtifactUri(core.mapUri!)
+      });
+    } catch (error) {
+      mapResolutionFailures.push({ name: `map:${core.coreId}`, status: "FAILED", error: toStructuredError(error) });
+    }
+  }
+  const staticRamOwnership = maps.length > 0
+    ? await capture("static-ram-ownership", async () => {
+      const analysis = await options.analyzeRamOwnership({ maps }) as Record<string, unknown>;
+      return mapResolutionFailures.length > 0 ? { ...analysis, mapResolutionFailures } : analysis;
+    })
+    : mapResolutionFailures.length > 0
+      ? { name: "static-ram-ownership", status: "FAILED", value: { mapResolutionFailures } }
+      : { name: "static-ram-ownership", status: "MISSING", reason: "No launch map was supplied for read-only static ownership analysis." };
+  let runtimeRamOwnership: ToolResult;
+  const ownership = staticRamOwnership.value as { ownershipActions?: unknown[] } | undefined;
+  if (staticRamOwnership.status === "COLLECTED" && Array.isArray(ownership?.ownershipActions)) {
+    runtimeRamOwnership = await capture("runtime-ram-ownership", () => options.manager.verifyRuntimeRamOwnership(
+      options.sessionId,
+      ownership.ownershipActions as never[]
+    ));
+  } else {
+    runtimeRamOwnership = { name: "runtime-ram-ownership", status: "MISSING", reason: "Static ownership actions were unavailable." };
+  }
+  const coreIds = options.cores.map(core => core.coreId);
+  const cpu1CoreId = options.cores.find(core => isCpuCore(core, "cpu1"))?.coreId;
+  const cpu2CoreId = options.cores.find(core => isCpuCore(core, "cpu2"))?.coreId;
+  const bootHandoffDiagnosis = cpu1CoreId !== undefined && cpu2CoreId !== undefined
+    ? await capture("boot-handoff-diagnosis", () => options.manager.diagnoseCpu2Boot({
+      sessionId: options.sessionId,
+      cpu1CoreId,
+      cpu2CoreId
+    }))
+    : { name: "boot-handoff-diagnosis", status: "MISSING", reason: "CPU1/CPU2 core pair was not available." };
+
+  return {
+    schemaVersion: 1,
+    provenance: {
+      captureSource: "live-pre-cleanup-session",
+      capturedBeforeSessionClose: true,
+      collectorTargetAccessed: true,
+      targetReadsOnly: true,
+      targetAccessAttempted: true
+    },
+    sessionId: options.sessionId,
+    adapterSessionId: sessionTopology.status === "COLLECTED"
+      && sessionTopology.value && typeof sessionTopology.value === "object"
+      && typeof (sessionTopology.value as Record<string, unknown>).adapterSessionId === "string"
+      ? (sessionTopology.value as Record<string, unknown>).adapterSessionId
+      : null,
+    workerGeneration: null,
+    workerGenerationAvailability: "not-exposed-by-launch-handler",
+    workflowStage: options.workflowStage,
+    performedSteps: [...options.performedSteps],
+    effectiveStartup: options.effectiveStartup,
+    coreIds,
+    sessionTopology,
+    targetState,
+    resolvedPc,
+    loadedProgramIdentity,
+    snapshot,
+    staticRamOwnership,
+    runtimeRamOwnership,
+    bootHandoffDiagnosis
+  };
+}
+
+function assertBatchSucceeded(label: string, result: ToolResult): void {
+  const failed = Array.isArray(result.results)
+    ? (result.results as ToolResult[]).filter(item => item.success !== true)
+    : [];
+  if (failed.length > 0) {
+    throw new DebugMcpError("BatchOperationFailed", `${label} failed for ${failed.length} item(s)`, { failed });
+  }
 }
 
 function isCpuCore(core: { coreId: number; coreName: string }, expected: "cpu1" | "cpu2"): boolean {

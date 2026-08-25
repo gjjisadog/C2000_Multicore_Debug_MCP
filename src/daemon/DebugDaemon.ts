@@ -45,6 +45,7 @@ import { TraceService } from "../observability/TraceService.js";
 import { FailureBundleService } from "../observability/FailureBundleService.js";
 import { RunMetricsService } from "../analytics/RunMetricsService.js";
 import { BaselineService } from "../analytics/BaselineService.js";
+import { AcceptanceClosureService } from "../artifacts/AcceptanceClosureService.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -109,6 +110,10 @@ export class DebugDaemon {
       exports: artifactExports
     });
     const observabilityRoot = path.join(path.dirname(databasePath), "artifacts");
+    const acceptanceClosures = new AcceptanceClosureService({
+      rootDirectory: observabilityRoot,
+      artifacts
+    });
     const trace = new TraceService({
       rootDirectory: observabilityRoot,
       runs: this.testRuns,
@@ -164,6 +169,7 @@ export class DebugDaemon {
         artifacts: artifacts.list(input.jobId),
         artifactExport: artifactExports.get(input.jobId) ?? null
       }),
+      createAcceptanceClosure: input => acceptanceClosures.create(input),
       exportTrace: input => trace.export(input),
       collectFailureBundle: input => failureBundles.collect(input),
       createRunBaseline: input => baselines.create(input),

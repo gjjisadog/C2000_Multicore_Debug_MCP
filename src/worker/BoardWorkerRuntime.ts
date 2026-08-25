@@ -36,6 +36,10 @@ export class BoardWorkerRuntime {
     private readonly config: C2000McpConfig
   ) {}
 
+  get effectiveAdapterType(): "ccs" | "mock" {
+    return this.runtime?.adapterResolution.mode ?? (this.config.adapter === "mock" || this.config.ccs.scriptingMode === "mock" ? "mock" : "ccs");
+  }
+
   async start(): Promise<void> {
     const workerConfig: C2000McpConfig = {
       ...this.config,
@@ -73,11 +77,25 @@ export class BoardWorkerRuntime {
         boardId: this.options.boardId,
         probeSerial: this.options.probeSerial,
         workerInstanceId: this.options.workerInstanceId,
+        configuredAdapterMode: this.config.adapter,
+        configuredScriptingMode: this.config.ccs.scriptingMode,
+        effectiveAdapterType: this.runtime.adapterResolution.mode,
+        adapterName: typeof result.sessionId === "string"
+          ? await this.adapterNameForSession(result.sessionId)
+          : undefined,
         commandId
       };
     } finally {
       this.currentCommandId = undefined;
       this.status = "READY";
+    }
+  }
+
+  private async adapterNameForSession(sessionId: string): Promise<string | undefined> {
+    try {
+      return (await this.runtime?.manager.getSessionTopology(sessionId))?.adapterName;
+    } catch {
+      return undefined;
     }
   }
 

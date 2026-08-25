@@ -148,7 +148,10 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("launchMulticore"), ...baseStep,
     loadPrograms: z.boolean().default(true),
-    loadSequence: loadSequenceStepSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 })
+    startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
+    resetType: z.enum(["cpu", "system", "restart", "default"]).optional(),
+    loadSequence: loadSequenceStepSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
+    runSequence: runSequenceStepSchema.optional()
   }).strict(),
   z.object({ type: z.literal("assignExpressions"), ...baseStep, assignments: z.array(expressionAssignmentStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxAssignments) }).strict(),
   z.object({ type: z.literal("injectFaults"), ...baseStep, faults: z.array(expressionFaultStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxFaults) }).strict(),
@@ -211,7 +214,11 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
-  z.object({ type: z.literal("runBootHandoffDiagnosis"), ...baseStep }).strict(),
+  z.object({
+    type: z.literal("runBootHandoffDiagnosis"), ...baseStep,
+    verifyRuntimeRamOwnership: z.boolean().default(false),
+    expectedPostLoadHalt: z.boolean().default(false)
+  }).strict(),
   z.object({
     type: z.literal("runReloadAndDiagnose"), ...baseStep,
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
@@ -303,6 +310,13 @@ export const testPlanSchema = z.object({
       hasCurrentFlowSession = true;
       if (!step.loadPrograms && step.loadSequence.mode !== "cpu1-then-cpu2") {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence"], message: "loadSequence cannot request CPU1 pre-run when loadPrograms=false" });
+      }
+      if (step.startupPreset === "hybrid30k-dk9-owner-first") {
+        if (step.resetType !== HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType
+          || JSON.stringify(step.loadSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence)
+          || (step.runSequence !== undefined && JSON.stringify(step.runSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence))) {
+          context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: "hybrid30k-dk9-owner-first parameters must remain cpu / owner-first 250ms / debugger-runs-both 500ms" });
+        }
       }
       continue;
     }
@@ -501,6 +515,7 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
     case "launchMulticore":
       if (typeof step.loadPrograms === "boolean") migrated.loadPrograms = step.loadPrograms;
       if (isRecord(step.loadSequence)) migrated.loadSequence = step.loadSequence;
+      for (const key of ["startupPreset", "resetType", "runSequence"]) if (key in step) migrated[key] = step[key];
       break;
     case "runIpcAcceptance":
       for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "loadSequence", "runSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
@@ -509,6 +524,9 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       break;
     case "runReloadAndDiagnose":
       for (const key of ["timeoutMs", "intervalMs"]) if (key in step) migrated[key] = step[key];
+      break;
+    case "runBootHandoffDiagnosis":
+      for (const key of ["verifyRuntimeRamOwnership", "expectedPostLoadHalt"]) if (key in step) migrated[key] = step[key];
       break;
     case "delay":
       migrated.delayMs = typeof step.delayMs === "number" && Number.isFinite(step.delayMs) && step.delayMs >= 0 ? step.delayMs : 0;

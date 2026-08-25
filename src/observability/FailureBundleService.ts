@@ -65,22 +65,34 @@ export class FailureBundleService {
     const items: BundleItem[] = [];
     try {
       const recentEvents = this.recentEvents(input.jobId, run.submittedAt, run.finishedAt, input.recentEventLimit);
+      const preCleanupDiagnostics = await this.readPreCleanupDiagnostics(input.jobId);
       await this.capture(items, "recent-events", "recent-events.jsonl", directory, input.itemTimeoutMs, controller.signal, async () => recentEvents);
+      await this.capture(items, "pre-cleanup-launch-diagnostics", "pre-cleanup-launch-diagnostics.json", directory, input.itemTimeoutMs, controller.signal, async () =>
+        preCleanupDiagnostics ?? {
+          available: false,
+          provenance: "no-live-pre-cleanup-capture-persisted",
+          collectorTargetAccessed: false
+        }
+      );
 
       const boards = this.options.runs.boards(input.jobId);
       const sessions = boards.flatMap(board => board.sessionId ? [this.options.sessions.get(board.sessionId)].filter(Boolean) : []);
       await this.capture(items, "session-state", "session-state.json", directory, input.itemTimeoutMs, controller.signal, async () => ({
-        available: sessions.length > 0,
-        sessions
+        available: sessions.length > 0 || preCleanupDiagnostics !== undefined,
+        sessions,
+        closedSessionFallback: preCleanupDiagnostics?.diagnostics ?? null,
+        provenance: preCleanupDiagnostics ? "live-pre-cleanup-capture" : "session-repository"
       }));
       await this.capture(items, "target-state", "target-state.json", directory, input.itemTimeoutMs, controller.signal, async () => ({
-        available: sessions.some(session => session?.lastSnapshot),
+        available: sessions.some(session => session?.lastSnapshot) || preCleanupDiagnostics !== undefined,
         snapshots: sessions.flatMap(session => session?.lastSnapshot ? [{
           boardId: session.boardId,
           sessionId: session.sessionId,
           adapterSessionId: session.adapterSessionId ?? null,
           snapshot: session.lastSnapshot
-        }] : [])
+        }] : []),
+        closedSessionFallback: preCleanupDiagnostics?.diagnostics ?? null,
+        provenance: preCleanupDiagnostics ? "live-pre-cleanup-capture" : "session-repository"
       }));
 
       const can = this.options.canResults.list(input.jobId);
@@ -270,6 +282,35 @@ export class FailureBundleService {
       try { await stat(candidate); return candidate; } catch { /* absent */ }
     }
     return undefined;
+  }
+
+  private async readPreCleanupDiagnostics(jobId: string): Promise<Record<string, unknown> | undefined> {
+    const launchStep = this.options.runs.steps(jobId).find(step =>
+      step.stepType === "launchMulticore" && isRecord(step.output?.preCleanupDiagnostics)
+    );
+    if (launchStep && isRecord(launchStep.output?.preCleanupDiagnostics)) {
+      return {
+        schemaVersion: 1,
+        jobId,
+        boardId: launchStep.boardId,
+        stepIndex: launchStep.stepIndex,
+        provenance: {
+          source: "durable-step-output",
+          captureSource: "live-pre-cleanup-session",
+          capturedBeforeSessionClose: true,
+          collectorTargetAccessed: false
+        },
+        diagnostics: launchStep.output.preCleanupDiagnostics
+      };
+    }
+    const artifact = await this.findArtifact(jobId, "pre-cleanup-launch-diagnostics.json");
+    if (!artifact) return undefined;
+    try {
+      const parsed = JSON.parse(await readFile(artifact, "utf8")) as unknown;
+      return isRecord(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private jobDirectory(jobId: string): string {

@@ -73,8 +73,8 @@ function isWithin(candidate: string, root: string): boolean {
 
 export async function validateToolPaths(input: unknown, policy: FilesystemPolicy): Promise<void> {
   await visit(input, async (key, value) => {
-    if (["outputDir", "logFile"].includes(key)) await assertAllowedWritePath(value, policy);
-    if (["ccxmlPath", "programUri", "mapUri", "mapPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath"].includes(key)) await assertAllowedReadPath(value, policy);
+    if (["outputDir", "logFile", "outputPath"].includes(key)) await assertAllowedWritePath(value, policy);
+    if (["ccxmlPath", "programUri", "mapUri", "mapPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath", "offlineJsonPath", "offlineCsvPath", "offlineMarkdownPath"].includes(key)) await assertAllowedReadPath(value, policy);
     if (key === "searchRoots") await assertAllowedReadPath(value, policy);
   });
 }

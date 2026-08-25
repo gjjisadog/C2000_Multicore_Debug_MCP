@@ -62,7 +62,13 @@ export class WorkerRpcServer {
     await this.runtime.start();
     this.heartbeatTimer = setInterval(() => this.send({ type: "heartbeat", heartbeat: this.runtime?.heartbeat() }), 1000);
     this.heartbeatTimer.unref();
-    this.send({ type: "ready", workerInstanceId: message.options.workerInstanceId });
+    this.send({
+      type: "ready",
+      workerInstanceId: message.options.workerInstanceId,
+      configuredAdapterMode: config.adapter,
+      configuredScriptingMode: config.ccs.scriptingMode,
+      effectiveAdapterType: this.runtime.effectiveAdapterType
+    });
   }
 
   private assertAuthenticated(message: WorkerMessage): void {

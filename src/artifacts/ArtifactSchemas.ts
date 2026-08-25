@@ -27,6 +27,10 @@ export const artifactTargetSchema = z.object({
   }),
   xds110Serial: z.string().min(1),
   adapterType: z.enum(["mock", "ccs", "auto"]),
+  configuredAdapterMode: z.enum(["mock", "ccs", "auto"]).optional(),
+  configuredScriptingMode: z.enum(["mock", "ccs", "auto"]).optional(),
+  effectiveAdapterType: z.enum(["mock", "ccs"]).nullable().optional(),
+  adapterEvidence: z.record(z.unknown()).optional(),
   workerGeneration: z.number().int().positive().nullable(),
   adapterSessionId: z.string().min(1).nullable(),
   sessionId: z.string().min(1).nullable(),
@@ -51,6 +55,8 @@ export const artifactManifestSchema = z.object({
   startedAt: z.string().datetime(),
   endedAt: z.string().datetime(),
   evidenceLevel: evidenceClassificationSchema,
+  evidenceClassification: evidenceClassificationSchema.optional(),
+  adapterEvidence: z.record(z.unknown()).optional(),
   completeness: z.object({
     status: artifactCompletenessSchema,
     reason: z.string().min(1).nullable()

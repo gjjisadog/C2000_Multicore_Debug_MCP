@@ -80,12 +80,66 @@ describe("DebugSessionManager", () => {
       sessionName: "topology",
       ccxmlPath: "/tmp/f28p65x.ccxml",
       adapterName: "mock",
+      effectiveAdapterType: "mock",
       adapterSessionId: expect.stringMatching(/^mock-/),
       debugSessionRoute: "sessionId -> adapterSessionId -> coreId -> DebugSession",
       cores: [
         { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", targetSelector: "C28xx_CPU1", debugSessionKey: expect.stringMatching(/^mock-.*:0$/) },
         { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", targetSelector: "C28xx_CPU2", debugSessionKey: expect.stringMatching(/^mock-.*:2$/) }
       ]
+    });
+  });
+
+  test("records runtime RAM ownership register source, expected mask, and actual value", async () => {
+    class OwnershipReadAdapter extends MockDebugAdapter {
+      constructor(private readonly value: number) { super(); }
+
+      override async readMemory(
+        _session: AdapterSession,
+        _coreId: CoreId,
+        _page: string,
+        _address: number,
+        _typeSize: number
+      ): Promise<number> {
+        return this.value;
+      }
+    }
+
+    const action = {
+      ownerCoreId: 0,
+      targetCoreId: 2,
+      targetCoreName: "C28xx_CPU2",
+      memoryRegion: "RAMGS3",
+      gsIndex: 3,
+      page: "DATA",
+      address: 0x0005F444,
+      value: 24,
+      typeSize: 32,
+      reason: "test"
+    };
+    const matchingManager = new DebugSessionManager(new OwnershipReadAdapter(24), new LoadedProgramRegistry());
+    const matchingSession = await matchingManager.createDebugSession({ sessionName: "ownership-match", coreMap });
+    await matchingManager.connectTarget(matchingSession.sessionId, 0);
+    await expect(matchingManager.verifyRuntimeRamOwnership(matchingSession.sessionId, [action])).resolves.toEqual(expect.objectContaining({
+      requested: true,
+      supported: true,
+      skipped: false,
+      matched: true,
+      source: "MEMCFG_GSXMSEL",
+      register: "MEMCFG_GSXMSEL",
+      expectedMask: 24,
+      actualValue: 24,
+      ownerCoreId: 0,
+      targetCoreId: 2,
+      address: 0x0005F444
+    }));
+
+    const mismatchManager = new DebugSessionManager(new OwnershipReadAdapter(0), new LoadedProgramRegistry());
+    const mismatchSession = await mismatchManager.createDebugSession({ sessionName: "ownership-mismatch", coreMap });
+    await mismatchManager.connectTarget(mismatchSession.sessionId, 0);
+    await expect(mismatchManager.verifyRuntimeRamOwnership(mismatchSession.sessionId, [action])).rejects.toMatchObject({
+      code: "RamOwnershipVerifyFailed",
+      details: expect.objectContaining({ source: "MEMCFG_GSXMSEL", expectedMask: 24, actualValue: 0, targetCoreId: 2 })
     });
   });
 

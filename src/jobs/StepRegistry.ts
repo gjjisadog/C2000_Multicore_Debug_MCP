@@ -44,8 +44,12 @@ export class StepRegistry {
         return this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
           boardId,
           sessionName: `${plan.name}-${boardId}`,
+          autoCloseOnComplete: false,
           loadPrograms,
+          ...(step.startupPreset ? { startupPreset: step.startupPreset } : {}),
+          ...(step.resetType ? { resetType: step.resetType } : {}),
           loadSequence: step.loadSequence,
+          ...(step.runSequence ? { runSequence: step.runSequence } : {}),
           cores: [
             {
               coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1",
@@ -54,7 +58,11 @@ export class StepRegistry {
             },
             {
               coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
-              ...(loadPrograms && artifacts?.cpu2OutPath ? { programUri: artifacts.cpu2OutPath, mapUri: artifacts.cpu2MapPath } : {}),
+              ...(loadPrograms && artifacts?.cpu2OutPath ? {
+                programUri: artifacts.cpu2OutPath,
+                mapUri: artifacts.cpu2MapPath,
+                ramOwnershipPolicy: "require-map"
+              } : {}),
               connect: true, load: loadPrograms && Boolean(artifacts?.cpu2OutPath), haltAtEntry: true
             }
           ]
@@ -158,7 +166,19 @@ export class StepRegistry {
           outputDir: artifacts?.outputDir
         })));
       case "runBootHandoffDiagnosis":
-        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, verifyRuntimeRamOwnership: false, outputDir: artifacts?.outputDir })));
+        return this.tools.invokeTool("c2000_runBootHandoffDiagnosis", fenced(context, requiredSession({
+          sessionId,
+          device: "F28P65x",
+          cpu1CoreId: 0,
+          cpu2CoreId: 2,
+          cpu1OutPath: artifacts?.cpu1OutPath,
+          cpu2OutPath: artifacts?.cpu2OutPath,
+          cpu1MapPath: artifacts?.cpu1MapPath,
+          cpu2MapPath: artifacts?.cpu2MapPath,
+          verifyRuntimeRamOwnership: Boolean(step.verifyRuntimeRamOwnership),
+          expectedPostLoadHalt: Boolean(step.expectedPostLoadHalt),
+          outputDir: artifacts?.outputDir
+        })));
       case "runReloadAndDiagnose":
         return this.tools.invokeTool("c2000_runReloadAndDiagnose", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir })));
       case "runFullDebugBundle":
@@ -262,8 +282,14 @@ export class StepRegistry {
     let lastSnapshot: Record<string, unknown> | undefined = baselineSnapshot;
     let resetEvidence: Record<string, unknown> | undefined;
     let observed: Record<string, unknown> | undefined;
-    while (Date.now() <= deadline) {
-      await abortableDelay(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), context.signal);
+    // A host-side guard/evidence read can consume a very small configured
+    // timeout before the first post-baseline snapshot is returned. Always
+    // allow two bounded observations so a disconnect that occurs between the
+    // baseline and first poll is not lost solely to scheduler jitter.
+    const minimumPollIterations = 2;
+    while (pollIterations < minimumPollIterations || Date.now() <= deadline) {
+      const remainingMs = Math.max(0, deadline - Date.now());
+      if (remainingMs > 0) await abortableDelay(Math.min(pollIntervalMs, remainingMs), context.signal);
       pollIterations += 1;
       try {
         lastSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
@@ -293,7 +319,7 @@ export class StepRegistry {
           break;
         }
       }
-      if (Date.now() >= deadline) break;
+      if (Date.now() >= deadline && pollIterations >= minimumPollIterations) break;
     }
     if (!observed) {
       throw new DebugMcpError("TargetResetNotObserved", "No target disconnect or matching explicit reset evidence was observed before reconnect timeout", {

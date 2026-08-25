@@ -63,6 +63,55 @@ describe("durable step cleanup and output safety", () => {
     fixture.store.close();
   });
 
+  test("keeps the primary launch error when final session cleanup also fails", async () => {
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        if (toolName === "c2000_launchMulticoreDebug") return {
+          success: false,
+          sessionId: "dbg-live",
+          cleanedUp: false,
+          preCleanupDiagnostics: { schemaVersion: 1, provenance: { captureSource: "live-pre-cleanup-session" } },
+          error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+        };
+        if (toolName === "c2000_closeDebugSession") return {
+          success: false,
+          sessionId: "dbg-live",
+          error: { code: "WorkerUnavailable", message: "worker disappeared during cleanup" }
+        };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "primary-error-survives-cleanup-failure",
+      boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }]
+    }).jobId);
+
+    const terminal = await waitForTerminal(fixture.runs, jobId);
+    expect(terminal.status).toBe("FAILED");
+    expect(terminal.error).toEqual(expect.objectContaining({
+      code: "ProgramLoadFailed",
+      message: "CPU2 program load failed",
+      details: expect.objectContaining({
+        coreId: 2,
+        cleanupError: expect.objectContaining({ code: "WorkerUnavailable" })
+      })
+    }));
+    expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
+      error: expect.objectContaining({ code: "ProgramLoadFailed" }),
+      output: expect.objectContaining({
+        preCleanupDiagnostics: expect.objectContaining({ schemaVersion: 1 })
+      })
+    }));
+    expect(fixture.registry.get("board-a")).toEqual(expect.objectContaining({
+      status: "QUARANTINED",
+      lastError: expect.objectContaining({ code: "JobSessionCleanupFailed" })
+    }));
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
   test("fails closed before persisting an oversized runtime expression result", async () => {
     const fixture = await createFixture({
       async invokeTool(toolName) {
@@ -299,6 +348,8 @@ describe("durable step cleanup and output safety", () => {
           success: false,
           sessionId: "dbg-cleaned",
           cleanedUp: true,
+          effectiveStartup: { startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" },
+          preCleanupDiagnostics: { schemaVersion: 1, provenance: { captureSource: "live-pre-cleanup-session", capturedBeforeSessionClose: true } },
           error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
         };
         throw new Error(`unexpected tool ${toolName}`);
@@ -314,6 +365,11 @@ describe("durable step cleanup and output safety", () => {
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
     expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
       error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+    }));
+    expect(fixture.runs.steps(jobId)[0]?.output).toEqual(expect.objectContaining({
+      effectiveStartup: expect.objectContaining({ startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" }),
+      preCleanupDiagnostics: expect.objectContaining({ schemaVersion: 1 }),
+      retryDecision: expect.objectContaining({ retry: false })
     }));
     expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
     expect(fixture.registry.get("board-a").status).not.toBe("QUARANTINED");

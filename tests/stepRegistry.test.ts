@@ -337,4 +337,80 @@ describe("StepRegistry", () => {
     })).success).toBe(false);
     expect(testPlanSchema.safeParse(build({ timeoutMs: 10001, intervalMs: 1 })).success).toBe(false);
   });
+
+  test("durable launch persists the explicit owner-first startup contract and rejects conflicts", () => {
+    const base = {
+      planVersion: 1 as const,
+      name: "durable-owner-first-launch",
+      boardIds: ["board-a"],
+      artifacts: {
+        cpu1OutPath: "/firmware/cpu1.out",
+        cpu1MapPath: "/firmware/cpu1.map",
+        cpu2OutPath: "/firmware/cpu2.out",
+        cpu2MapPath: "/firmware/cpu2.map"
+      }
+    };
+    const startup = {
+      startupPreset: "hybrid30k-dk9-owner-first",
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 }
+    };
+    const plan = testPlanSchema.parse({
+      ...base,
+      steps: [{ type: "launchMulticore", loadPrograms: true, ...startup }]
+    });
+    expect(plan.steps[0]).toEqual(expect.objectContaining({ type: "launchMulticore", loadPrograms: true, ...startup }));
+    expect(parsePersistedTestPlan({ ...base, steps: [{ type: "launchMulticore", loadPrograms: true, ...startup }] }).steps[0])
+      .toEqual(expect.objectContaining(startup));
+
+    expect(testPlanSchema.safeParse({
+      ...base,
+      steps: [{ type: "launchMulticore", loadPrograms: true, ...startup, resetType: "system" }]
+    }).success).toBe(false);
+    expect(testPlanSchema.safeParse({
+      ...base,
+      steps: [{ type: "launchMulticore", loadPrograms: true, ...startup, loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 250 } }]
+    }).success).toBe(false);
+  });
+
+  test("durable launch forwards owner-first fields and requires a CPU2 linker map", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "durable-owner-first-forwarding",
+      boardIds: ["board-a"],
+      artifacts: {
+        cpu1OutPath: "/firmware/cpu1.out",
+        cpu1MapPath: "/firmware/cpu1.map",
+        cpu2OutPath: "/firmware/cpu2.out",
+        cpu2MapPath: "/firmware/cpu2.map"
+      },
+      steps: [{
+        type: "launchMulticore",
+        loadPrograms: true,
+        startupPreset: "hybrid30k-dk9-owner-first",
+        resetType: "cpu",
+        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+        runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 }
+      }]
+    });
+
+    await registry.execute({ jobId: "job-owner-first", boardId: "board-a", plan, step: plan.steps[0] });
+    expect(invoker.calls[0]).toEqual({
+      toolName: "c2000_launchMulticoreDebug",
+      input: expect.objectContaining({
+        autoCloseOnComplete: false,
+        startupPreset: "hybrid30k-dk9-owner-first",
+        resetType: "cpu",
+        loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+        runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
+        cores: expect.arrayContaining([
+          expect.objectContaining({ coreId: 0, mapUri: "/firmware/cpu1.map" }),
+          expect.objectContaining({ coreId: 2, mapUri: "/firmware/cpu2.map", ramOwnershipPolicy: "require-map" })
+        ])
+      })
+    });
+  });
 });

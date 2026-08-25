@@ -104,6 +104,13 @@ export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeStep
 export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
 export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
 export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });
+export const createAcceptanceClosureSchema = z.object({
+  jobId: z.string().min(1),
+  offlineJsonPath: z.string().min(1),
+  offlineCsvPath: z.string().min(1),
+  offlineMarkdownPath: z.string().min(1),
+  outputPath: z.string().min(1).optional()
+});
 export const expressionConditionSchema = z.object({
   label: z.string().min(1).optional(),
   coreId: z.number().int(),
@@ -393,6 +400,7 @@ export const runBootHandoffDiagnosisSchema = z.object({
   maps: z.array(ramOwnershipMapSchema).min(1).optional(),
   expressions: z.array(expressionConditionSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
+  expectedPostLoadHalt: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
 });
 
@@ -475,6 +483,9 @@ export const launchMulticoreDebugSchema = z.object({
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
   allowAutoProbeAllocation: z.boolean().default(false),
   loadPrograms: z.boolean().default(true),
+  /** Explicit startup contract. A preset is resolved before any target access. */
+  startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
+  resetType: resetTypeSchema.optional(),
   programDiscovery: z.object({
     enabled: z.boolean().default(false),
     cpu1Program: z.string().min(1).optional(),
@@ -485,7 +496,14 @@ export const launchMulticoreDebugSchema = z.object({
   loadSequence: z.object({
     mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
     cpu1SettleMs: z.number().int().nonnegative().default(250)
-  }).default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
+  }).optional(),
+  /** Recorded in effectiveStartup; launch never executes this normal run sequence. */
+  runSequence: z.object({
+    runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
+    runCpu1First: z.boolean().default(true),
+    runCpu2: z.boolean().default(true),
+    settleMs: z.number().int().nonnegative().default(500)
+  }).optional(),
   cores: z.array(launchCoreSchema).min(1),
   postLaunchActions: z.object({
     assignExpressions: z.array(expressionAssignmentSchema).min(1).optional(),
