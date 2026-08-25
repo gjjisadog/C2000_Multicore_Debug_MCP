@@ -474,6 +474,7 @@ export class TestJobEngine {
           const attemptStartedAt = new Date().toISOString();
           const running = { ...step, status: "RUNNING", attempt, startedAt: attemptStartedAt } as TestStepRecord;
           this.options.runs.updateStep(running);
+          let failedToolOutput: Record<string, unknown> | undefined;
           try {
             if (stepRequiresLiveWorkerRoute(plannedStep.type)) {
               await this.assertCurrentWorkerRoute(board.boardId, lease);
@@ -499,6 +500,7 @@ export class TestJobEngine {
             }
             let output = await this.steps.execute(executionContext);
             if (plannedStep.type === "launchMulticore" && output.success === false) {
+              failedToolOutput = output;
               if (output.cleanedUp !== true && typeof output.sessionId === "string") {
                 sessionId = output.sessionId;
                 sessionOpen = true;
@@ -574,8 +576,23 @@ export class TestJobEngine {
             }
             failed = !cancelled;
             lastError = structured;
-            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: { retryDecision, reconcileEvidence } });
-            this.options.events.append({ level: cancelled ? "warn" : "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED", payload: { stepType: step.stepType, error: lastError } });
+            const persistedFailureOutput = failedToolOutput
+              ? { ...boundedLaunchFailureOutput(failedToolOutput), retryDecision, reconcileEvidence }
+              : { retryDecision, reconcileEvidence };
+            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: persistedFailureOutput });
+            this.options.events.append({
+              level: cancelled ? "warn" : "error",
+              sourceType: "job",
+              sourceId: jobId,
+              jobId,
+              boardId: board.boardId,
+              eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED",
+              payload: {
+                stepType: step.stepType,
+                error: lastError,
+                ...(failedToolOutput ? { launchFailureOutput: boundedLaunchFailureOutput(failedToolOutput) } : {})
+              }
+            });
             break;
           }
         }
@@ -770,6 +787,7 @@ function failedSafetyIsolation(error: Record<string, unknown>): boolean {
 }
 
 function structuredToolFailure(output: Record<string, unknown>, stepType: string): StructuredToolError {
+  const persistedOutput = stepType === "launchMulticore" ? boundedLaunchFailureOutput(output) : output;
   const error = output.error;
   if (error && typeof error === "object" && !Array.isArray(error)) {
     const record = error as Record<string, unknown>;
@@ -783,7 +801,54 @@ function structuredToolFailure(output: Record<string, unknown>, stepType: string
       });
     }
   }
-  return new StructuredToolError({ code: "BatchOperationFailed", message: `Job step ${stepType} returned failure`, details: { output } });
+  return new StructuredToolError({ code: "BatchOperationFailed", message: `Job step ${stepType} returned failure`, details: { output: persistedOutput } });
+}
+
+function boundedLaunchFailureOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const outputBytes = jsonBytes(output);
+  if (outputBytes <= DURABLE_PLAN_LIMITS.maxStepOutputBytes) return output;
+  const diagnostic = output.preCleanupDiagnostics;
+  const compactDiagnostic = diagnostic && typeof diagnostic === "object" && !Array.isArray(diagnostic)
+    ? compactLaunchDiagnostic(diagnostic as Record<string, unknown>)
+    : undefined;
+  const compact = {
+    success: output.success,
+    timestamp: output.timestamp,
+    sessionId: output.sessionId,
+    cleanedUp: output.cleanedUp,
+    sessionClosed: output.sessionClosed,
+    adapterDisposed: output.adapterDisposed,
+    workflowStage: output.workflowStage,
+    performedSteps: output.performedSteps,
+    effectiveStartup: output.effectiveStartup,
+    targetAccessAttempted: output.targetAccessAttempted,
+    error: output.error,
+    ...(compactDiagnostic ? { preCleanupDiagnostics: compactDiagnostic } : {}),
+    outputTruncated: true,
+    originalOutputBytes: outputBytes
+  };
+  return jsonBytes(compact) <= DURABLE_PLAN_LIMITS.maxStepOutputBytes
+    ? compact
+    : {
+      success: output.success,
+      error: output.error,
+      workflowStage: output.workflowStage,
+      performedSteps: output.performedSteps,
+      effectiveStartup: output.effectiveStartup,
+      targetAccessAttempted: output.targetAccessAttempted,
+      outputTruncated: true,
+      originalOutputBytes: outputBytes
+    };
+}
+
+function compactLaunchDiagnostic(value: Record<string, unknown>): Record<string, unknown> {
+  const keep = [
+    "schemaVersion", "provenance", "sessionId", "adapterSessionId", "workerGeneration",
+    "workerGenerationAvailability", "workflowStage", "performedSteps", "effectiveStartup", "coreIds",
+    "sessionTopology", "targetState", "resolvedPc", "loadedProgramIdentity", "snapshot",
+    "staticRamOwnership", "runtimeRamOwnership", "bootHandoffDiagnosis"
+  ];
+  return Object.fromEntries(keep.filter(key => key in value).map(key => [key, value[key]]));
 }
 
 function assertConfirmedSessionClose(output: Record<string, unknown>, expectedSessionId: string, message: string): void {

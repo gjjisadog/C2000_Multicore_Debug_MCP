@@ -185,6 +185,47 @@ describe("automatic failure context bundle", () => {
     fixture.store.close();
   });
 
+  it("uses persisted live pre-cleanup launch evidence after the session is closed", async () => {
+    const fixture = await createFixture(false);
+    const step = fixture.runs.steps(fixture.jobId)[0]!;
+    fixture.store.run("UPDATE test_steps SET step_type = ?, input_json = ? WHERE step_run_id = ?", [
+      "launchMulticore",
+      JSON.stringify({ type: "launchMulticore", startupPreset: "hybrid30k-dk9-owner-first" }),
+      step.stepRunId
+    ]);
+    fixture.runs.updateStep({
+      ...step,
+      output: {
+        success: false,
+        sessionId: "session-a",
+        cleanedUp: true,
+        preCleanupDiagnostics: {
+          schemaVersion: 1,
+          provenance: { captureSource: "live-pre-cleanup-session", capturedBeforeSessionClose: true, targetReadsOnly: true },
+          targetState: [{ name: "target-state:0", status: "COLLECTED" }]
+        }
+      }
+    });
+
+    const result = await fixture.bundles.collect({ jobId: fixture.jobId });
+    expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ name: "pre-cleanup-launch-diagnostics", status: "COLLECTED" })]));
+    const diagnostics = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "pre-cleanup-launch-diagnostics.json"))) as Record<string, any>;
+    const sessionState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "session-state.json"))) as Record<string, any>;
+    const targetState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "target-state.json"))) as Record<string, any>;
+    expect(diagnostics).toEqual(expect.objectContaining({ provenance: expect.objectContaining({ collectorTargetAccessed: false }) }));
+    expect(sessionState).toEqual(expect.objectContaining({
+      available: true,
+      provenance: "live-pre-cleanup-capture",
+      closedSessionFallback: expect.objectContaining({ schemaVersion: 1 })
+    }));
+    expect(targetState).toEqual(expect.objectContaining({
+      available: true,
+      provenance: "live-pre-cleanup-capture",
+      closedSessionFallback: expect.objectContaining({ schemaVersion: 1 })
+    }));
+    fixture.store.close();
+  });
+
   it("retains worker crash evidence", async () => {
     const fixture = await createFixture();
     fixture.events.append({

@@ -2519,9 +2519,104 @@ describe("tool handlers", () => {
 
     expect(result).toEqual(expect.objectContaining({ success: true, loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 } }));
     expect(adapter.events).toEqual([
-      "connect:0", "load:0:cpu1.out", "halt:0", "run:0",
-      "connect:2", "load:2:cpu2.out", "halt:2", "halt:0"
+      "connect:0", "connect:2", "halt:0", "halt:2", "reset:0:cpu", "reset:2:cpu",
+      "load:0:cpu1.out", "run:0", "load:2:cpu2.out", "halt:0", "halt:2"
     ]);
+  });
+
+  test("launchMulticoreDebug rejects a conflicting startup preset before target access", async () => {
+    const adapter = new CountingAdapter();
+    const handlers = createHandlers(adapter);
+    const result = await handlers.launchMulticoreDebug({
+      startupPreset: "hybrid30k-dk9-owner-first",
+      resetType: "system",
+      cores: [{
+        coreId: 0,
+        coreName: "C28xx_CPU1",
+        corePattern: "C28xx_CPU1",
+        programUri: path.join(tmpdir(), "must-not-be-read.out"),
+        connect: true,
+        load: true,
+        haltAtEntry: true
+      }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      targetAccessAttempted: false,
+      workflowStage: "startup-contract-validation",
+      error: expect.objectContaining({
+        code: "EvidenceLimitExceeded",
+        details: expect.objectContaining({ field: "resetType" })
+      })
+    }));
+    expect(adapter.createSessionCount).toBe(0);
+  });
+
+  test("CPU2 launch failure captures live diagnostics before closing the original session", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-precleanup-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu1Map = path.join(tempDir, "cpu1.map");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu1Map, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+    await writeFile(cpu2Map, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+    const adapter = new Cpu2LoadFailureAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "launch-precleanup-diagnostics",
+      autoCloseOnComplete: false,
+      startupPreset: "hybrid30k-dk9-owner-first",
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
+      cores: [
+        { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", programUri: cpu1Out, mapUri: cpu1Map, connect: true, load: true, haltAtEntry: true },
+        { coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2", programUri: cpu2Out, mapUri: cpu2Map, connect: true, load: true, haltAtEntry: true }
+      ]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      sessionId: expect.any(String),
+      cleanedUp: true,
+      workflowStage: "cpu2-load",
+      performedSteps: [
+        "connectCores", "haltCores", "resetCores", "loadCpu1Program",
+        "runCpu1BeforeCpu2Load", "waitCpu1Settle"
+      ],
+      error: expect.objectContaining({
+        code: "ProgramLoadFailed",
+        details: expect.objectContaining({ workflowStage: "cpu2-load" })
+      }),
+      preCleanupDiagnostics: expect.objectContaining({
+        provenance: expect.objectContaining({
+          captureSource: "live-pre-cleanup-session",
+          capturedBeforeSessionClose: true,
+          targetReadsOnly: true
+        }),
+        targetState: expect.arrayContaining([
+          expect.objectContaining({ name: "target-state:0", status: "COLLECTED" }),
+          expect.objectContaining({ name: "target-state:2", status: "COLLECTED" })
+        ]),
+        resolvedPc: expect.arrayContaining([
+          expect.objectContaining({ name: "pc:0", status: "COLLECTED" }),
+          expect.objectContaining({ name: "pc:2", status: "COLLECTED" })
+        ]),
+        loadedProgramIdentity: expect.arrayContaining([
+          expect.objectContaining({ name: "loaded-program:0", status: "COLLECTED" }),
+          expect.objectContaining({ name: "loaded-program:2", status: "COLLECTED" })
+        ]),
+        snapshot: expect.objectContaining({ status: "COLLECTED" }),
+        staticRamOwnership: expect.objectContaining({ status: "COLLECTED" }),
+        bootHandoffDiagnosis: expect.objectContaining({ name: "boot-handoff-diagnosis" })
+      })
+    }));
+    await expect(manager.listCores(result.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
   });
 
   test("launchMulticoreDebug honors top-level loadPrograms=false without discovering or loading images", async () => {

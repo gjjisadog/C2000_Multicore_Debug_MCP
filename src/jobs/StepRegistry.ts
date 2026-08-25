@@ -44,8 +44,12 @@ export class StepRegistry {
         return this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
           boardId,
           sessionName: `${plan.name}-${boardId}`,
+          autoCloseOnComplete: false,
           loadPrograms,
+          ...(step.startupPreset ? { startupPreset: step.startupPreset } : {}),
+          ...(step.resetType ? { resetType: step.resetType } : {}),
           loadSequence: step.loadSequence,
+          ...(step.runSequence ? { runSequence: step.runSequence } : {}),
           cores: [
             {
               coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1",
@@ -54,7 +58,11 @@ export class StepRegistry {
             },
             {
               coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
-              ...(loadPrograms && artifacts?.cpu2OutPath ? { programUri: artifacts.cpu2OutPath, mapUri: artifacts.cpu2MapPath } : {}),
+              ...(loadPrograms && artifacts?.cpu2OutPath ? {
+                programUri: artifacts.cpu2OutPath,
+                mapUri: artifacts.cpu2MapPath,
+                ramOwnershipPolicy: "require-map"
+              } : {}),
               connect: true, load: loadPrograms && Boolean(artifacts?.cpu2OutPath), haltAtEntry: true
             }
           ]

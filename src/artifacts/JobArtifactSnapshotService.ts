@@ -57,6 +57,7 @@ export class JobArtifactSnapshotService {
     const previousManifestPath = path.join(artifactDirectory, ".manifest.previous");
     const expressionSnapshotPath = path.join(artifactDirectory, "expression-snapshots.json");
     const previousExpressionSnapshotPath = path.join(artifactDirectory, ".expression-snapshots.previous");
+    const preCleanupDiagnosticsPath = path.join(artifactDirectory, "pre-cleanup-launch-diagnostics.json");
     let previousExpressionSnapshotSaved = false;
     let manifestPublished = false;
     this.options.exports.upsert({
@@ -79,6 +80,24 @@ export class JobArtifactSnapshotService {
         previousExpressionSnapshotSaved = true;
       }
       const snapshot = await this.buildSnapshot(jobId);
+      const preCleanupDiagnostics = preCleanupLaunchEvidence(jobId, this.options.runs.steps(jobId));
+      if (preCleanupDiagnostics) {
+        await this.writer.writeJson(preCleanupDiagnosticsPath, preCleanupDiagnostics);
+        const diagnosticsInfo = await this.postCommitFileMetadata(preCleanupDiagnosticsPath);
+        snapshot.manifest.generatedFiles = [
+          ...(snapshot.manifest.generatedFiles ?? []).filter(file => file.path !== "pre-cleanup-launch-diagnostics.json"),
+          {
+            path: "pre-cleanup-launch-diagnostics.json",
+            artifactType: "evidence:pre-cleanup-launch-diagnostics",
+            sha256: diagnosticsInfo.sha256,
+            size: diagnosticsInfo.size,
+            completeness: "COMPLETE"
+          }
+        ];
+      } else {
+        await rm(preCleanupDiagnosticsPath, { force: true });
+        snapshot.manifest.generatedFiles = snapshot.manifest.generatedFiles?.filter(file => file.path !== "pre-cleanup-launch-diagnostics.json");
+      }
       const previousManifest = await readJsonRecord(previousManifestPath);
       if (Array.isArray(previousManifest?.generatedFiles)) {
         snapshot.manifest.generatedFiles = previousManifest.generatedFiles.flatMap(value => {
@@ -332,7 +351,7 @@ export class JobArtifactSnapshotService {
   }
 
   private async registerStandardFiles(jobId: string, directory: string): Promise<void> {
-    for (const fileName of ["manifest.json", "result.json", "events.jsonl", "target-state.jsonl", "summary.md"]) {
+    for (const fileName of ["manifest.json", "result.json", "events.jsonl", "target-state.jsonl", "summary.md", "pre-cleanup-launch-diagnostics.json"]) {
       const filePath = path.join(directory, fileName);
       if (!await this.writer.exists(filePath)) continue;
       const info = await this.postCommitFileMetadata(filePath);
@@ -391,6 +410,26 @@ function assertionStatus(step: TestStepRecord): "PASSED" | "FAILED" | "SKIPPED" 
   if (step.status === "PASSED") return "PASSED";
   if (step.status === "FAILED") return "FAILED";
   return "SKIPPED";
+}
+
+function preCleanupLaunchEvidence(jobId: string, steps: TestStepRecord[]): Record<string, unknown> | undefined {
+  const launchStep = steps.find(step => step.stepType === "launchMulticore" && isRecord(step.output?.preCleanupDiagnostics));
+  const diagnostics = launchStep?.output?.preCleanupDiagnostics;
+  if (!launchStep || !isRecord(diagnostics)) return undefined;
+  return sanitize({
+    schemaVersion: 1,
+    jobId,
+    boardId: launchStep.boardId,
+    stepIndex: launchStep.stepIndex,
+    stepStatus: launchStep.status,
+    provenance: {
+      source: "durable-step-output",
+      captureSource: "live-pre-cleanup-session",
+      capturedBeforeSessionClose: true,
+      collectorTargetAccessed: false
+    },
+    diagnostics
+  });
 }
 
 export function portableDurableEvidenceFromSteps(steps: TestStepRecord[]): {

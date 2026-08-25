@@ -299,6 +299,8 @@ describe("durable step cleanup and output safety", () => {
           success: false,
           sessionId: "dbg-cleaned",
           cleanedUp: true,
+          effectiveStartup: { startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" },
+          preCleanupDiagnostics: { schemaVersion: 1, provenance: { captureSource: "live-pre-cleanup-session", capturedBeforeSessionClose: true } },
           error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
         };
         throw new Error(`unexpected tool ${toolName}`);
@@ -314,6 +316,11 @@ describe("durable step cleanup and output safety", () => {
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
     expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
       error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+    }));
+    expect(fixture.runs.steps(jobId)[0]?.output).toEqual(expect.objectContaining({
+      effectiveStartup: expect.objectContaining({ startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" }),
+      preCleanupDiagnostics: expect.objectContaining({ schemaVersion: 1 }),
+      retryDecision: expect.objectContaining({ retry: false })
     }));
     expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
     expect(fixture.registry.get("board-a").status).not.toBe("QUARANTINED");
