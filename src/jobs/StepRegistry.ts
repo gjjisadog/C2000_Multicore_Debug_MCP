@@ -282,8 +282,14 @@ export class StepRegistry {
     let lastSnapshot: Record<string, unknown> | undefined = baselineSnapshot;
     let resetEvidence: Record<string, unknown> | undefined;
     let observed: Record<string, unknown> | undefined;
-    while (Date.now() <= deadline) {
-      await abortableDelay(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())), context.signal);
+    // A host-side guard/evidence read can consume a very small configured
+    // timeout before the first post-baseline snapshot is returned. Always
+    // allow two bounded observations so a disconnect that occurs between the
+    // baseline and first poll is not lost solely to scheduler jitter.
+    const minimumPollIterations = 2;
+    while (pollIterations < minimumPollIterations || Date.now() <= deadline) {
+      const remainingMs = Math.max(0, deadline - Date.now());
+      if (remainingMs > 0) await abortableDelay(Math.min(pollIntervalMs, remainingMs), context.signal);
       pollIterations += 1;
       try {
         lastSnapshot = await this.invokeRequired("c2000_getMulticoreSnapshot", fenced(context, { sessionId, coreIds: step.coreIds }));
@@ -313,7 +319,7 @@ export class StepRegistry {
           break;
         }
       }
-      if (Date.now() >= deadline) break;
+      if (Date.now() >= deadline && pollIterations >= minimumPollIterations) break;
     }
     if (!observed) {
       throw new DebugMcpError("TargetResetNotObserved", "No target disconnect or matching explicit reset evidence was observed before reconnect timeout", {

@@ -100,10 +100,16 @@ export class JobArtifactSnapshotService {
       }
       const previousManifest = await readJsonRecord(previousManifestPath);
       if (Array.isArray(previousManifest?.generatedFiles)) {
-        snapshot.manifest.generatedFiles = previousManifest.generatedFiles.flatMap(value => {
+        const previousGeneratedFiles = previousManifest.generatedFiles.flatMap(value => {
           const parsed = artifactManifestSchema.shape.generatedFiles.unwrap().element.safeParse(value);
           return parsed.success ? [parsed.data] : [];
         });
+        const currentGeneratedFiles = snapshot.manifest.generatedFiles ?? [];
+        const currentPaths = new Set(currentGeneratedFiles.map(file => file.path));
+        snapshot.manifest.generatedFiles = [
+          ...previousGeneratedFiles.filter(file => !currentPaths.has(file.path)),
+          ...currentGeneratedFiles
+        ];
       }
       if (snapshot.expressionSnapshots.length > 0) {
         await this.writer.writeJson(expressionSnapshotPath, {

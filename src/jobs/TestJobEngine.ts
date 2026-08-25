@@ -278,9 +278,11 @@ export class TestJobEngine {
     const failed = outcomes.filter(outcome => !outcome.success);
     const cancelled = outcomes.every(outcome => outcome.cancelled);
     const status = cancelled ? "CANCELLED" : failed.length === 0 ? "PASSED" : plan.failurePolicy.continueHealthyBoards && failed.length < outcomes.length ? "PARTIAL" : "FAILED";
+    const boardFailure = this.options.runs.boards(jobId).find(board => board.error)?.error;
     this.options.runs.updateStatus(jobId, status, {
       finishedAt: new Date().toISOString(),
-      resultSummary: { totalBoards: outcomes.length, passedBoards: outcomes.filter(outcome => outcome.success).length, failedBoards: failed.length, cancelledBoards: outcomes.filter(outcome => outcome.cancelled).length }
+      resultSummary: { totalBoards: outcomes.length, passedBoards: outcomes.filter(outcome => outcome.success).length, failedBoards: failed.length, cancelledBoards: outcomes.filter(outcome => outcome.cancelled).length },
+      ...(boardFailure ? { error: boardFailure } : {})
     });
     this.options.events.append({ level: status === "PASSED" ? "info" : "warn", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_FINISHED", payload: { status } });
     await this.exportTerminalEvidence(jobId, status);
@@ -499,8 +501,14 @@ export class TestJobEngine {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
             }
             let output = await this.steps.execute(executionContext);
-            if (plannedStep.type === "launchMulticore" && output.success === false) {
+            if (output.success === false) {
+              // Keep the complete bounded tool response available to the
+              // terminal-step writer.  Launch failures use the compacting
+              // policy below; other failed tool responses are still retained
+              // instead of being replaced by retry metadata alone.
               failedToolOutput = output;
+            }
+            if (plannedStep.type === "launchMulticore" && output.success === false) {
               if (output.cleanedUp !== true && typeof output.sessionId === "string") {
                 sessionId = output.sessionId;
                 sessionOpen = true;
@@ -577,7 +585,13 @@ export class TestJobEngine {
             failed = !cancelled;
             lastError = structured;
             const persistedFailureOutput = failedToolOutput
-              ? { ...boundedLaunchFailureOutput(failedToolOutput), retryDecision, reconcileEvidence }
+              ? {
+                ...(step.stepType === "launchMulticore"
+                  ? boundedLaunchFailureOutput(failedToolOutput)
+                  : boundedToolFailureOutput(failedToolOutput)),
+                retryDecision,
+                reconcileEvidence
+              }
               : { retryDecision, reconcileEvidence };
             this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: persistedFailureOutput });
             this.options.events.append({
@@ -590,7 +604,11 @@ export class TestJobEngine {
               payload: {
                 stepType: step.stepType,
                 error: lastError,
-                ...(failedToolOutput ? { launchFailureOutput: boundedLaunchFailureOutput(failedToolOutput) } : {})
+                ...(failedToolOutput ? {
+                  launchFailureOutput: step.stepType === "launchMulticore"
+                    ? boundedLaunchFailureOutput(failedToolOutput)
+                    : boundedToolFailureOutput(failedToolOutput)
+                } : {})
               }
             });
             break;
@@ -618,21 +636,35 @@ export class TestJobEngine {
         } catch (error) {
           failed = true;
           cancelled = false;
-          lastError = { ...toStructuredError(error) };
+          const cleanupFailure = { ...toStructuredError(error) };
+          const cleanupError = extractCleanupError(cleanupFailure);
+          const primaryError = lastError;
+          lastError = primaryError
+            ? withSecondaryError(primaryError, "cleanupError", cleanupError)
+            : cleanupError;
           try {
             this.options.registry.transition(board.boardId, "QUARANTINED", {
               code: "JobSessionCleanupFailed",
               message: "Job session could not be closed while its fenced lease was still held; board ownership requires operator recovery",
               jobId,
               sessionId,
-              cleanupError: lastError
+              cleanupError,
+              ...(cleanupFailure.code !== cleanupError.code ? { cleanupFailure } : {}),
+              ...(primaryError ? { primaryError } : {})
             });
           } catch (quarantineError) {
-            lastError = {
-              code: "JobSessionCleanupAndQuarantineFailed",
-              message: "Session cleanup failed and board quarantine could not be persisted",
-              details: { sessionId, cleanupError: lastError, quarantineError: toStructuredError(quarantineError) }
-            };
+            const quarantineFailure = { ...toStructuredError(quarantineError) };
+            lastError = primaryError
+              ? withSecondaryError(
+                withSecondaryError(primaryError, "cleanupError", cleanupError),
+                "quarantineError",
+                quarantineFailure
+              )
+              : {
+                code: "JobSessionCleanupAndQuarantineFailed",
+                message: "Session cleanup failed and board quarantine could not be persisted",
+                details: { sessionId, cleanupError, cleanupFailure, quarantineError: quarantineFailure }
+              };
           }
           this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLEANUP_FAILED", payload: { sessionId, error: lastError } });
         }
@@ -841,6 +873,35 @@ function boundedLaunchFailureOutput(output: Record<string, unknown>): Record<str
     };
 }
 
+function boundedToolFailureOutput(output: Record<string, unknown>): Record<string, unknown> {
+  const outputBytes = jsonBytes(output);
+  if (outputBytes <= DURABLE_PLAN_LIMITS.maxStepOutputBytes) return output;
+  return {
+    success: output.success,
+    timestamp: output.timestamp,
+    sessionId: output.sessionId,
+    error: output.error,
+    outputTruncated: true,
+    originalOutputBytes: outputBytes
+  };
+}
+
+function withSecondaryError(
+  primary: Record<string, unknown>,
+  key: string,
+  secondary: Record<string, unknown>
+): Record<string, unknown> {
+  return {
+    ...primary,
+    details: {
+      ...(primary.details && typeof primary.details === "object" && !Array.isArray(primary.details)
+        ? primary.details
+        : {}),
+      [key]: secondary
+    }
+  };
+}
+
 function compactLaunchDiagnostic(value: Record<string, unknown>): Record<string, unknown> {
   const keep = [
     "schemaVersion", "provenance", "sessionId", "adapterSessionId", "workerGeneration",
@@ -855,6 +916,25 @@ function assertConfirmedSessionClose(output: Record<string, unknown>, expectedSe
   if (output.success !== true || output.closed !== true || output.sessionId !== expectedSessionId) {
     throw new DebugMcpError("WorkflowCleanupFailed", message, { expectedSessionId, output });
   }
+}
+
+function extractCleanupError(failure: Record<string, unknown>): Record<string, unknown> {
+  if (failure.code !== "WorkflowCleanupFailed") return failure;
+  const details = failure.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return failure;
+  const output = (details as Record<string, unknown>).output;
+  if (!output || typeof output !== "object" || Array.isArray(output)) return failure;
+  const error = (output as Record<string, unknown>).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return failure;
+  return {
+    ...(error as Record<string, unknown>),
+    details: {
+      ...((error as Record<string, unknown>).details && typeof (error as Record<string, unknown>).details === "object" && !Array.isArray((error as Record<string, unknown>).details)
+        ? (error as Record<string, unknown>).details as Record<string, unknown>
+        : {}),
+      workflowCleanupFailure: failure
+    }
+  };
 }
 
 function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {

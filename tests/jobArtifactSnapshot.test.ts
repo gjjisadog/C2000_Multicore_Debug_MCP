@@ -128,6 +128,7 @@ describe("standard job artifact snapshot", () => {
     });
 
     await fixture.service.exportJob(fixture.jobId);
+    await fixture.service.exportJob(fixture.jobId);
     const diagnostics = await readJson(path.join(fixture.jobDirectory, "pre-cleanup-launch-diagnostics.json"));
     const manifest = artifactManifestSchema.parse(await readJson(path.join(fixture.jobDirectory, "manifest.json")));
     expect(diagnostics).toEqual(expect.objectContaining({
