@@ -543,8 +543,13 @@ export function buildAdapterEvidence(
   effectiveAdapterType: EffectiveAdapterType | null;
 } {
   const launch = steps.find(step => step.stepType === "launchMulticore")?.output;
-  const preflight = steps.find(step => step.stepType === "preflight")?.output;
   const launchRecord = isRecord(launch) ? launch : undefined;
+  // A full acceptance plan may intentionally keep preflight inside the
+  // launch contract instead of adding a second durable step.  Treat that
+  // embedded host-only result as equivalent evidence; never promote the
+  // configured `auto` mode by itself.
+  const preflight = steps.find(step => step.stepType === "preflight")?.output
+    ?? (launchRecord && isRecord(launchRecord.preflight) ? launchRecord.preflight : undefined);
   const topology = launchRecord && isRecord(launchRecord.sessionTopology) ? launchRecord.sessionTopology : undefined;
   const sessionRecord = session && isRecord(session) ? session : undefined;
   const effectiveAdapterType = adapterTypeFrom(

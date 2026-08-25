@@ -37,6 +37,10 @@ function createHandlers(adapter = new MockDebugAdapter()) {
   return createToolHandlers(manager);
 }
 
+class CcsNamedMockAdapter extends MockDebugAdapter {
+  override readonly name = "ccs-scripting";
+}
+
 class CountingAdapter extends MockDebugAdapter {
   createSessionCount = 0;
 
@@ -2524,6 +2528,46 @@ describe("tool handlers", () => {
       "connect:0", "connect:2", "halt:0", "halt:2", "reset:0:cpu", "reset:2:cpu",
       "load:0:cpu1.out", "run:0", "load:2:cpu2.out", "halt:0", "halt:2"
     ]);
+  });
+
+  test("launchMulticoreDebug persists physical preflight for an effective CCS session", async () => {
+    const manager = new DebugSessionManager(new CcsNamedMockAdapter(), new LoadedProgramRegistry());
+    let preflightCalls = 0;
+    const handlers = createToolHandlers(manager, {
+      tiEnvironment: { ccsInstallPath: "C:/ti/ccs" },
+      runHardwarePreflight: async options => {
+        preflightCalls += 1;
+        expect(options.ccsInstallPath).toBe("C:/ti/ccs");
+        return {
+          xdsdfuPath: "C:/ti/ccs/xdsdfu",
+          xdsdfu: {
+            ok: true,
+            commandOk: true,
+            probeReady: true,
+            attempts: 1,
+            devices: [{ serialNumber: "XDS110-TEST", name: "XDS110" }]
+          },
+          debugProcesses: [],
+          debugProcessDetails: []
+        };
+      }
+    });
+
+    const result = await handlers.launchMulticoreDebug({
+      sessionName: "ccs-preflight-evidence",
+      autoCloseOnComplete: false,
+      loadPrograms: false,
+      cores: [{ coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1", connect: true, load: false, haltAtEntry: false }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      effectiveAdapterType: "ccs",
+      preflight: expect.objectContaining({ xdsdfu: expect.objectContaining({ probeReady: true }) }),
+      performedSteps: expect.arrayContaining(["hardwarePreflight"])
+    }));
+    expect(preflightCalls).toBe(1);
+    await manager.closeDebugSession(result.sessionId);
   });
 
   test("launchMulticoreDebug rejects a conflicting startup preset before target access", async () => {

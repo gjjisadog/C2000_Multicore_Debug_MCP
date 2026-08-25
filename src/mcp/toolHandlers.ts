@@ -1248,6 +1248,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         failureContext = { ...failureContext, snapshot };
         const sessionTopology = await manager.getSessionTopology(created.sessionId);
         failureContext = { ...failureContext, sessionTopology };
+        // Persist the physical XDS preflight alongside the effective adapter
+        // identity.  This is deliberately captured after the worker/session
+        // exists, and only for a real CCS adapter; mock launches must remain
+        // deterministic and classify as MOCK without touching host hardware.
+        let physicalPreflight: ToolResult | undefined;
+        if (sessionTopology.effectiveAdapterType === "ccs") {
+          physicalPreflight = await runStage("hardware-preflight", "hardwarePreflight", () => hardwarePreflight({
+            ccsInstallPath: deps.tiEnvironment?.ccsInstallPath
+          }));
+          failureContext = { ...failureContext, preflight: physicalPreflight };
+        }
         const postLaunchActions: ToolResult = {};
         const postLaunchActionsInput = parsed.postLaunchActions;
         if (postLaunchActionsInput?.assignExpressions) {
@@ -1324,6 +1335,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           workflowStage: "completed",
           performedSteps,
           normalAcceptanceRunExecuted: false,
+          ...(physicalPreflight ? { preflight: physicalPreflight } : {}),
           ...(programDiscovery ? { programDiscovery } : {}),
           ...(Object.keys(postLaunchActions).length > 0 ? { postLaunchActions } : {}),
           ...(Object.keys(postLaunchChecks).length > 0 ? { postLaunchChecks } : {})

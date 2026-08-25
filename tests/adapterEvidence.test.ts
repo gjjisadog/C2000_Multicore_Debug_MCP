@@ -51,6 +51,30 @@ describe("canonical adapter evidence classification", () => {
     expect(evidence.physicalPreflight).toEqual(expect.objectContaining({ matched: true, requestedProbeSerial: "XDS110-TEST" }));
   });
 
+  test("uses embedded launch preflight when the full plan has no separate preflight step", () => {
+    const evidence = buildAdapterEvidence(autoConfig, "dk9", "XDS110-TEST", {
+      sessionId: "dbg-test",
+      adapterSessionId: "ccs-session-test"
+    }, [{
+      stepType: "launchMulticore",
+      output: {
+        success: true,
+        sessionId: "dbg-test",
+        adapterSessionId: "ccs-session-test",
+        effectiveAdapterType: "ccs",
+        preflight: {
+          xdsdfu: {
+            probeReady: true,
+            devices: [{ serialNumber: "XDS110-TEST", name: "XDS110" }]
+          }
+        }
+      }
+    }]);
+
+    expect(evidence.classification).toBe("HARDWARE_TARGET");
+    expect(evidence.physicalPreflight).toEqual(expect.objectContaining({ matched: true }));
+  });
+
   test.each([
     ["missing session", { sessionId: undefined, adapterSessionId: undefined }],
     ["missing XDS match", { serial: "OTHER-XDS" }],
