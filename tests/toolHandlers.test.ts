@@ -58,6 +58,11 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
     await super.connect(session, coreId);
   }
 
+  override async disconnect(session: AdapterSession, coreId: CoreId): Promise<void> {
+    this.events.push(`disconnect:${coreId}`);
+    await super.disconnect(session, coreId);
+  }
+
   override async halt(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`halt:${coreId}`);
     await super.halt(session, coreId);
@@ -741,6 +746,60 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("runIpcAcceptance disconnects CPU2 during the firmware-owned CPU1 boot handoff", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-cpu2-release-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+    const adapter = new WorkflowRecordingAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } } });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-cpu2-release", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      resetType: "cpu",
+      runSequence: { runMode: "cpu1_boots_cpu2", runCpu1First: true, runCpu2: false, settleMs: 0 },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(adapter.events).toEqual([
+      "halt:0",
+      "halt:2",
+      "reset:0:cpu",
+      "reset:2:cpu",
+      "load:0:cpu1.out",
+      "load:2:cpu2.out",
+      "halt:0",
+      "halt:2",
+      "disconnect:2",
+      "run:0",
+      "connect:2"
+    ]);
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      runPlan: expect.objectContaining({ mode: "cpu1_boots_cpu2", coreOrder: [0], releaseCpu2BeforeCpu1: true }),
+      cpu2Release: expect.objectContaining({ mode: "disconnect-before-cpu1", reconnected: expect.objectContaining({ coreId: 2, connected: true }) }),
+      ipcReady: expect.objectContaining({ matched: true })
+    }));
+  });
+
   test("launchMultiBoardDebug allocates each connected XDS110 to an isolated session", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-multiboard-"));
     const boardAConfig = path.join(tempDir, "board-a.ccxml");
@@ -1350,6 +1409,64 @@ describe("tool handlers", () => {
       },
       postLoadReset: expect.objectContaining({ results: expect.any(Array) }),
       postLoadResetHalt: expect.objectContaining({ results: expect.any(Array) })
+    }));
+  });
+
+  test("runReloadAndDiagnose releases CPU2 around a post-load CPU1 boot", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-post-load-release-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    const adapter = new WorkflowRecordingAdapter({ expressionValues: hybrid30kReadyExpressionValues });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "post-load-release", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runReloadAndDiagnose({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      ramOwnershipPolicy: "skip",
+      resetType: "cpu",
+      runCpu1: false,
+      runCpu2: false,
+      postLoadBoot: {
+        resetType: "system",
+        runCpu1: true,
+        cpu1SettleMs: 0,
+        runCpu2: false,
+        releaseCpu2BeforeCpu1: true
+      }
+    });
+
+    expect(adapter.events).toEqual([
+      "halt:0",
+      "halt:2",
+      "reset:0:cpu",
+      "reset:2:cpu",
+      "load:0:cpu1.out",
+      "load:2:cpu2.out",
+      "halt:0",
+      "halt:2",
+      "reset:0:system",
+      "reset:2:system",
+      "halt:0",
+      "halt:2",
+      "disconnect:2",
+      "run:0",
+      "connect:2"
+    ]);
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      performedSteps: expect.arrayContaining(["disconnectCpu2BeforeCpu1", "reconnectCpu2AfterCpu1"]),
+      postLoadBoot: expect.objectContaining({ releaseCpu2BeforeCpu1: true }),
+      cpu2Release: expect.objectContaining({ mode: "disconnect-before-cpu1", reconnected: expect.objectContaining({ connected: true }) })
     }));
   });
 

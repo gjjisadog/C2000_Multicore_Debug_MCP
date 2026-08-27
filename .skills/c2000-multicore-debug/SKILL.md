@@ -184,9 +184,20 @@ CPU2 release, add
 `"loadSequence": {"mode": "cpu1-run-before-cpu2", "cpu1SettleMs": 250}`.
 Do not enable this staged run for ordinary or Flash loads without that evidence.
 
+When CPU1 firmware owns the CPU2 boot handoff, set
+`runSequence.runMode` to `cpu1_boots_cpu2`. The workflow disconnects CPU2 while
+CPU1 runs, then reconnects CPU2 before IPC readiness polling and diagnosis; the
+result records this as `cpu2Release`. Do not emulate this handoff with a long
+client-side chain of atomic calls.
+
 For an image already resident in Flash, load matching debug information with
 `c2000_loadSymbols`. Do not use `c2000_loadProgram` as a symbol-loading
 substitute because it can erase or reprogram Flash.
+
+MCP blocks a repeated CPU2 Flash load with `DestructiveFlashReloadBlocked`
+before CCS erase/program activity. Use `c2000_loadSymbols` for a resident image;
+only set `allowDestructiveFlashReload: true` after confirming target ownership
+and an intentional erase/reprogram operation.
 
 `verify-mcp-registry` only checks the loaded-program record in the same MCP
 session and returns `targetFlashVerified: false`; never present it as resident
@@ -228,7 +239,9 @@ Call `c2000_runBootHandoffDiagnosis` once. Require evidence for CPU1/CPU2 state,
 Call `c2000_runReloadAndDiagnose` when the user asks to reload both images or
 prepare a clean run before diagnosis. For freshly programmed Flash, set
 `postLoadBoot` to reset both cores after load and start CPU1 before CPU2 with
-an explicit settle time. This workflow does not write PC. If the firmware
+an explicit settle time. If CPU1 owns the handoff, also set
+`postLoadBoot.releaseCpu2BeforeCpu1: true`; CPU2 is disconnected for the CPU1
+run and reconnected before diagnosis. This workflow does not write PC. If the firmware
 requires a nonstandard entry address, stop and require a target-specific,
 explicitly approved procedure instead of silently assigning `PC`.
 

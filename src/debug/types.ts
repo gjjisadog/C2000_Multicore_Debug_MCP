@@ -58,6 +58,12 @@ export interface LoadProgramRequest {
   ramOwnershipPolicy?: RamOwnershipPolicy;
   fallbackGsRegions?: number[];
   loadPolicy?: LoadPolicy;
+  /**
+   * Explicitly authorizes reprogramming a CPU2 image when the session already
+   * has a resident image that may occupy Flash.  Without this confirmation,
+   * repeated loads fail closed before CCS can erase a Flash bank.
+   */
+  allowDestructiveFlashReload?: boolean;
 }
 
 export type LoadPolicy = "always" | "if-changed" | "verify-mcp-registry" | "verify-only";

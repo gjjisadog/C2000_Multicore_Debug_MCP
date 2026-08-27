@@ -142,7 +142,8 @@ export class StepRegistry {
               coreId,
               programUri: programForCore(artifacts, coreId),
               ...(mapForCore(artifacts, coreId) ? { mapUri: mapForCore(artifacts, coreId) } : {}),
-              loadPolicy: step.loadPolicy
+              loadPolicy: step.loadPolicy,
+              allowDestructiveFlashReload: step.allowDestructiveFlashReload
             }))
           })));
         }
@@ -157,6 +158,7 @@ export class StepRegistry {
           startupPreset: step.startupPreset,
           resetType: step.resetType,
           loadPolicy: step.loadPolicy,
+          allowDestructiveFlashReload: step.allowDestructiveFlashReload,
           loadSequence: step.loadSequence,
           ipcReadyExpressions: step.ipcReadyExpressions,
           runSequence: step.runSequence,
@@ -180,7 +182,7 @@ export class StepRegistry {
           outputDir: artifacts?.outputDir
         })));
       case "runReloadAndDiagnose":
-        return this.tools.invokeTool("c2000_runReloadAndDiagnose", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir })));
+        return this.tools.invokeTool("c2000_runReloadAndDiagnose", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, resetType: "cpu", runCpu1: true, runCpu2: false, allowDestructiveFlashReload: step.allowDestructiveFlashReload, timeoutMs: step.timeoutMs, intervalMs: step.intervalMs ?? 100, collectDebugBundle: plan.failurePolicy.collectDebugBundle, outputDir: artifacts?.outputDir })));
       case "runFullDebugBundle":
         return this.tools.invokeTool("c2000_runFullDebugBundle", fenced(context, requiredSession({ sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath, cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath, outputDir: artifacts?.outputDir })));
       case "cleanup":
@@ -389,7 +391,8 @@ export class StepRegistry {
           programUri: artifact.outPath,
           mapUri: artifact.mapPath,
           ramOwnershipPolicy: "require-map",
-          loadPolicy: "always"
+          loadPolicy: "always",
+          allowDestructiveFlashReload: step.allowDestructiveFlashReload
         }))
       }));
       verifyRestoredProgramResults(load, artifacts);

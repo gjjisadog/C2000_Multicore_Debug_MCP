@@ -449,6 +449,57 @@ MEMORY CONFIGURATION
     ]);
   });
 
+  test("blocks a repeated CPU2 Flash load before erase and allows an explicit destructive reload", async () => {
+    class CountingFlashAdapter extends MockDebugAdapter {
+      prepareCount = 0;
+      loadCount = 0;
+
+      async prepareFlashLoad(): Promise<void> {
+        this.prepareCount += 1;
+      }
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.loadCount += 1;
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-cpu2-flash-reload-guard-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX"
+    ].join("\n"));
+    const adapter = new CountingFlashAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "cpu2-flash-reload-guard", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
+    await expect(manager.loadPrograms(session.sessionId, [
+      { coreId: 0, programUri: cpu1Out },
+      { coreId: 2, programUri: cpu2Out, mapUri: cpu2Map }
+    ])).rejects.toMatchObject({ code: "DestructiveFlashReloadBlocked" });
+    expect(adapter.loadCount).toBe(1);
+    await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
+      code: "DestructiveFlashReloadBlocked",
+      details: expect.objectContaining({
+        targetMemoryWritten: false,
+        blocked: expect.objectContaining({ flashBanks: [3], mapEvidence: "flash" })
+      })
+    });
+    expect(adapter.prepareCount).toBe(1);
+    expect(adapter.loadCount).toBe(1);
+
+    await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map, "require-map", undefined, true);
+    expect(adapter.prepareCount).toBe(2);
+    expect(adapter.loadCount).toBe(2);
+  });
+
   test("rebuilds the adapter session so CPU1 can load again after CPU2 Flash preparation poisons the prior session", async () => {
     class PoisoningFlashAdapter extends MockDebugAdapter {
       private readonly flashState = new Map<string, { poisoned: boolean }>();

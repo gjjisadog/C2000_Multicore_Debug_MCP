@@ -68,6 +68,8 @@ export type DebugErrorCode =
   | "PcanChannelInUse"
   | "PcanPlatformUnsupported"
   | "FlashLoadPreparationUnsupported"
+  | "DestructiveFlashReloadBlocked"
+  | "Cpu2BootReleaseSequenceInvalid"
   | "UnsupportedResetType"
   | "PostLaunchActionFailed"
   | "PostLaunchCheckFailed"

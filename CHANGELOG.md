@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Harden CPU2 boot handoff workflows by disconnecting CPU2 while CPU1 performs
+  the firmware-owned release, reconnecting it before readiness/diagnosis, and
+  recording the release evidence in workflow results.
+- Fail closed before target programming when a session would repeat a CPU2
+  Flash load that can erase a resident image; use `c2000_loadSymbols` for
+  resident code or explicitly opt in with `allowDestructiveFlashReload`.
 - Extend the supported Node.js runtime contract to Node 24.x, upgrade
   `better-sqlite3` to the Node 24-compatible 12.x line, and publish the Node
   24 Windows ABI 137 package alongside the existing Node 20/22 packages.

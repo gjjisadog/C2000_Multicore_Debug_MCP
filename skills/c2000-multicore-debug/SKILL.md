@@ -88,6 +88,11 @@ For a CPU2 RAM image whose GS ownership or release is initialized by CPU1, set
 `cpu1SettleMs`. Leave the default sequence unchanged for ordinary or Flash
 loads.
 
+When CPU1 firmware owns the CPU2 boot handoff, set
+`runSequence.runMode` to `cpu1_boots_cpu2`. MCP disconnects CPU2 while CPU1
+runs and reconnects it before readiness polling/diagnosis, recording the
+`cpu2Release` evidence. Keep this inside the server-side workflow.
+
 For the validated Hybrid30K DK9 owner-first path, use
 `startupPreset: hybrid30k-dk9-owner-first`. It resolves and persists the exact
 parameters `resetType=cpu`, CPU1-run-before-CPU2 load with 250 ms settle, and
@@ -100,6 +105,12 @@ unbounded wait.
 When the program is already resident in Flash and only debug symbols are
 needed, use `c2000_loadSymbols`. Never substitute `c2000_loadProgram`, because
 that can erase or reprogram target Flash.
+
+Repeated CPU2 Flash programming is fail-closed with
+`DestructiveFlashReloadBlocked` before CCS erase/program activity. Use
+`c2000_loadSymbols` for a resident image; set
+`allowDestructiveFlashReload: true` only for an intentional, ownership-checked
+erase/reprogram.
 
 Treat `verify-mcp-registry` as same-session load-record verification only; it
 never verifies resident Flash. `verify-only` is a deprecated alias. After

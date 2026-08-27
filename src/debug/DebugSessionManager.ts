@@ -450,11 +450,35 @@ export class DebugSessionManager {
     });
   }
 
-  async loadProgramWithMap(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
-    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, coreId, programUri, mapUri, ramOwnershipPolicy, fallbackGsRegions));
+  async loadProgramWithMap(
+    sessionId: string,
+    coreId: CoreId,
+    programUri: string,
+    mapUri?: string,
+    ramOwnershipPolicy: RamOwnershipPolicy = "require-map",
+    fallbackGsRegions?: number[],
+    allowDestructiveFlashReload = false
+  ): Promise<LoadedProgramInfo> {
+    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(
+      sessionId,
+      coreId,
+      programUri,
+      mapUri,
+      ramOwnershipPolicy,
+      fallbackGsRegions,
+      allowDestructiveFlashReload
+    ));
   }
 
-  private async loadProgramWithMapUnlocked(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string, ramOwnershipPolicy: RamOwnershipPolicy = "require-map", fallbackGsRegions?: number[]): Promise<LoadedProgramInfo> {
+  private async loadProgramWithMapUnlocked(
+    sessionId: string,
+    coreId: CoreId,
+    programUri: string,
+    mapUri?: string,
+    ramOwnershipPolicy: RamOwnershipPolicy = "require-map",
+    fallbackGsRegions?: number[],
+    allowDestructiveFlashReload = false
+  ): Promise<LoadedProgramInfo> {
     const normalizedUri = this.normalizeArtifactUri(programUri);
     const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
     const { session, core } = this.requireCore(sessionId, coreId);
@@ -463,6 +487,11 @@ export class DebugSessionManager {
     } catch {
       throw new DebugMcpError("ProgramFileNotFound", `Program file was not found: ${normalizedUri}`, { programUri: normalizedUri });
     }
+    await this.assertSafeFlashReload(
+      sessionId,
+      { coreId, programUri: normalizedUri, mapUri: normalizedMapUri, loadPolicy: "always", allowDestructiveFlashReload },
+      allowDestructiveFlashReload
+    );
     let ownershipNote: string | undefined;
     try {
       await this.refreshSessionForProgramLoad(sessionId, session, coreId);
@@ -680,6 +709,104 @@ export class DebugSessionManager {
     return ownership.fallbackWarning;
   }
 
+  /**
+   * A CCS CPU2 Flash load can erase the selected bank before the image is
+   * accepted.  Once a session already has a resident CPU2 image, repeating a
+   * load without an explicit confirmation is therefore not a safe retry.  The
+   * check is host-only and runs before any target operation; a readable linker
+   * map proves a RAM-only image is safe to reload, while missing/invalid map
+   * evidence remains fail-closed.
+   */
+  private async findUnsafeFlashReloads(sessionId: string, programs: LoadProgramRequest[]): Promise<Record<string, unknown>[]> {
+    const blocked: Record<string, unknown>[] = [];
+    for (const program of programs) {
+      if (program.coreId !== F28P65X_CPU2_CORE_ID || program.allowDestructiveFlashReload === true) {
+        continue;
+      }
+      if (program.loadPolicy === "verify-mcp-registry" || program.loadPolicy === "verify-only") {
+        continue;
+      }
+      const normalizedProgramUri = this.normalizeArtifactUri(program.programUri);
+      try {
+        await access(normalizedProgramUri);
+      } catch {
+        // Preserve the normal ProgramFileNotFound result for missing images.
+        continue;
+      }
+      const existing = this.loadedPrograms.get(sessionId, program.coreId);
+      if (!existing) {
+        continue;
+      }
+      if (program.loadPolicy === "if-changed" && existing.programUri === normalizedProgramUri) {
+        try {
+          const metadata = await fileMetadata(normalizedProgramUri);
+          if (existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256) {
+            continue;
+          }
+        } catch {
+          // Let the normal load path report a missing/unreadable program file.
+        }
+      }
+
+      const mapUris = [...new Set([
+        program.mapUri ? this.normalizeArtifactUri(program.mapUri) : undefined,
+        existing.mapUri,
+        mapPathForProgram(normalizedProgramUri)
+      ].filter((value): value is string => typeof value === "string" && value.length > 0))];
+      let parsedMapCount = 0;
+      const flashBanks = new Set<number>();
+      for (const mapUri of mapUris) {
+        try {
+          await access(mapUri);
+          const parsed = parseLinkerMap(await readFile(mapUri, "utf8"), { coreId: F28P65X_CPU2_CORE_ID, coreName: "C28xx_CPU2", mapPath: mapUri });
+          parsedMapCount += 1;
+          for (const bank of flashOwnershipActionsForMap(parsed).flatMap(action => action.flashBanks)) {
+            flashBanks.add(bank);
+          }
+        } catch {
+          // An unreadable map is intentionally treated as unknown evidence.
+        }
+      }
+      if (parsedMapCount > 0 && flashBanks.size === 0) {
+        continue;
+      }
+      blocked.push({
+        coreId: program.coreId,
+        programUri: normalizedProgramUri,
+        existingProgramUri: existing.programUri,
+        mapUris,
+        mapEvidence: parsedMapCount > 0 ? "flash" : "unavailable",
+        flashBanks: [...flashBanks].sort((left, right) => left - right),
+        targetMemoryWritten: false
+      });
+    }
+    return blocked;
+  }
+
+  private async assertSafeFlashReload(
+    sessionId: string,
+    program: LoadProgramRequest,
+    allowDestructiveFlashReload: boolean
+  ): Promise<void> {
+    if (allowDestructiveFlashReload) {
+      return;
+    }
+    const blocked = await this.findUnsafeFlashReloads(sessionId, [program]);
+    if (blocked.length === 0) {
+      return;
+    }
+    throw new DebugMcpError(
+      "DestructiveFlashReloadBlocked",
+      "Repeated CPU2 Flash programming was blocked before CCS could erase a resident image",
+      {
+        sessionId,
+        targetMemoryWritten: false,
+        blocked: blocked[0],
+        nextAction: "Use c2000_loadSymbols for resident Flash, or set allowDestructiveFlashReload=true only after confirming target ownership and an intentional erase/reprogram operation."
+      }
+    );
+  }
+
   async readMemory(sessionId: string, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
     return this.exclusive(sessionId, async () => {
       const { session } = this.requireCore(sessionId, coreId);
@@ -843,6 +970,19 @@ export class DebugSessionManager {
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {
     return this.exclusive(sessionId, async () => {
+      const unsafeFlashReloads = await this.findUnsafeFlashReloads(sessionId, programs);
+      if (unsafeFlashReloads.length > 0) {
+        throw new DebugMcpError(
+          "DestructiveFlashReloadBlocked",
+          "Repeated CPU2 Flash programming was blocked before any target load; use c2000_loadSymbols for a resident image or explicitly authorize the destructive reload",
+          {
+            sessionId,
+            targetMemoryWritten: false,
+            blocked: unsafeFlashReloads,
+            nextAction: "Use c2000_loadSymbols for resident Flash, or set allowDestructiveFlashReload=true only after confirming target ownership and an intentional erase/reprogram operation."
+          }
+        );
+      }
       const results: BatchItemResult[] = [];
       for (const program of programs) {
         try {
@@ -868,7 +1008,15 @@ export class DebugSessionManager {
             });
             continue;
           }
-          const info = await this.loadProgramWithMapUnlocked(sessionId, program.coreId, program.programUri, program.mapUri, program.ramOwnershipPolicy, program.fallbackGsRegions);
+          const info = await this.loadProgramWithMapUnlocked(
+            sessionId,
+            program.coreId,
+            program.programUri,
+            program.mapUri,
+            program.ramOwnershipPolicy,
+            program.fallbackGsRegions,
+            program.allowDestructiveFlashReload
+          );
           results.push({ ...info, success: true, loaded: true, skipped: false });
         } catch (error) {
           results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });

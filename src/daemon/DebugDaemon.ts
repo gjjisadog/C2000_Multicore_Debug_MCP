@@ -190,6 +190,7 @@ export class DebugDaemon {
             resetType: input.resetType,
             verifyRuntimeRamOwnership: input.verifyRuntimeRamOwnership,
             loadPolicy: input.loadPolicy,
+            allowDestructiveFlashReload: input.allowDestructiveFlashReload,
             loadSequence: input.loadSequence,
             runSequence: input.runSequence,
             ipcReadyExpressions: input.ipcReadyExpressions

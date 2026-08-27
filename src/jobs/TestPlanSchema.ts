@@ -134,7 +134,8 @@ const runSequenceStepSchema = z.object({
   runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
   runCpu1First: z.boolean().default(true),
   runCpu2: z.boolean().default(true),
-  settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(500)
+  settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(500),
+  releaseCpu2BeforeCpu1: z.boolean().optional()
 }).strict();
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const baseStep = { on: onSchema.optional() };
@@ -191,6 +192,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     type: z.literal("restorePrograms"), on: z.literal("always"),
+    allowDestructiveFlashReload: z.boolean().default(false),
     artifacts: z.object({ cpu1: restoreArtifactSchema(0), cpu2: restoreArtifactSchema(2) }).strict()
   }).strict(),
   z.object({
@@ -200,6 +202,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250),
     reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
     loadPolicy: loadPolicySchema.default("if-changed"),
+    allowDestructiveFlashReload: z.boolean().default(false),
     reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads)
   }).strict(),
   z.object({
@@ -209,6 +212,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
     loadPolicy: loadPolicySchema.default("always"),
+    allowDestructiveFlashReload: z.boolean().default(false),
     loadSequence: loadSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
     runSequence: runSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
@@ -222,7 +226,8 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("runReloadAndDiagnose"), ...baseStep,
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
-    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional()
+    intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional(),
+    allowDestructiveFlashReload: z.boolean().default(false)
   }).strict(),
   z.object({ type: z.literal("runFullDebugBundle"), ...baseStep }).strict(),
   z.object({ type: z.literal("cleanup"), ...baseStep }).strict(),
@@ -518,12 +523,12 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       for (const key of ["startupPreset", "resetType", "runSequence"]) if (key in step) migrated[key] = step[key];
       break;
     case "runIpcAcceptance":
-      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "loadSequence", "runSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "allowDestructiveFlashReload", "loadSequence", "runSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
         if (key in step) migrated[key] = step[key];
       }
       break;
     case "runReloadAndDiagnose":
-      for (const key of ["timeoutMs", "intervalMs"]) if (key in step) migrated[key] = step[key];
+      for (const key of ["timeoutMs", "intervalMs", "allowDestructiveFlashReload"]) if (key in step) migrated[key] = step[key];
       break;
     case "runBootHandoffDiagnosis":
       for (const key of ["verifyRuntimeRamOwnership", "expectedPostLoadHalt"]) if (key in step) migrated[key] = step[key];

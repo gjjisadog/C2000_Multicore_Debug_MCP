@@ -605,6 +605,13 @@ the matching `.out` file. It calls the DSS symbol loader only and returns
 `targetMemoryWritten: false`; it does not erase or program Flash and does not
 insert a false entry into the MCP loaded-program registry.
 
+The manager also fails closed on a repeated CPU2 Flash load in the same MCP
+session. `DestructiveFlashReloadBlocked` is raised before CCS can select or
+erase a bank, and batch loads are preflighted so CPU1 is not partially loaded.
+Use `c2000_loadSymbols` for a resident image. Set
+`allowDestructiveFlashReload: true` only after confirming target ownership and
+an intentional erase/reprogram operation.
+
 Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
 
 Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run benchmark:hardware` is explicitly opt-in and reports a skip unless the CCS/XDS110 environment is supplied; it never fabricates board timings.
@@ -953,6 +960,12 @@ RAM builds that initialize GS ownership or CPU2 release from CPU1 can set
 This explicitly loads and runs CPU1 before the CPU2 image is loaded. The
 default remains `"cpu1-then-cpu2"` and introduces no extra pre-load run.
 
+If CPU1 firmware owns the boot handoff after both images are loaded, set
+`runSequence.runMode` to `cpu1_boots_cpu2`. The server disconnects CPU2 while
+CPU1 runs, reconnects CPU2 before readiness polling/diagnosis, and records the
+sequence in `cpu2Release`. `c2000_runReloadAndDiagnose` exposes the equivalent
+`postLoadBoot.releaseCpu2BeforeCpu1` switch.
+
 Use atomic tools for manual inspection and bottom-layer validation:
 
 - `c2000_getMulticoreSnapshot`
@@ -1002,7 +1015,18 @@ Recommended one-approval call from an unconnected target through `c2000_launchAn
 }
 ```
 
-`runMode` makes the startup contract explicit: `cpu1_boots_cpu2` runs only CPU1 and expects firmware boot handoff, `debugger_runs_both` runs CPU1 then CPU2, and `cpu2_pre_running` starts CPU2 before CPU1. The legacy `runCpu1First`/`runCpu2` fields remain supported when `runMode` is omitted. The result includes the resolved `runPlan`, created `sessionId`, launch connection evidence, `workflow`, `orchestration: "server-internal"`, `mcpToolCalls: []`, explicit CPU IDs, snapshot evidence, RAM ownership analysis, ELF freshness, IPC-ready conditions, boot handoff diagnosis, and optional bundle files. Bundles include both the detailed JSON files and a compact `evidence.json`. On launch failure the server closes the newly created logical session before returning a structured error.
+`runMode` makes the startup contract explicit: `cpu1_boots_cpu2` disconnects CPU2,
+runs only CPU1 for the firmware boot handoff, then reconnects CPU2 before
+diagnosis; `debugger_runs_both` runs CPU1 then CPU2, and `cpu2_pre_running`
+starts CPU2 before CPU1. The legacy `runCpu1First`/`runCpu2` fields remain
+supported when `runMode` is omitted. The result includes the resolved `runPlan`,
+and for the firmware-owned mode a `cpu2Release` record, plus created
+`sessionId`, launch connection evidence, `workflow`, `orchestration:
+"server-internal"`, `mcpToolCalls: []`, explicit CPU IDs, snapshot evidence,
+RAM ownership analysis, ELF freshness, IPC-ready conditions, boot handoff
+diagnosis, and optional bundle files. Bundles include both the detailed JSON
+files and a compact `evidence.json`. On launch failure the server closes the
+newly created logical session before returning a structured error.
 
 ## RAM Ownership Analysis
 

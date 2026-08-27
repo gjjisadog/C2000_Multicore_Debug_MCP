@@ -601,7 +601,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           mapUri: input.mapUri,
           ramOwnershipPolicy: input.ramOwnershipPolicy,
           fallbackGsRegions: input.fallbackGsRegions,
-          loadPolicy: input.loadPolicy
+          loadPolicy: input.loadPolicy,
+          allowDestructiveFlashReload: input.allowDestructiveFlashReload
         }]);
         const result = loaded.results[0] as ToolResult | undefined;
         if (!result || result.success !== true) {
@@ -877,7 +878,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           mapUri: parsed.mapUri,
           ramOwnershipPolicy: parsed.ramOwnershipPolicy,
           fallbackGsRegions: parsed.fallbackGsRegions,
-          loadPolicy: parsed.loadPolicy
+          loadPolicy: parsed.loadPolicy,
+          allowDestructiveFlashReload: parsed.allowDestructiveFlashReload
         }]);
         const loadedProgram = load.results[0] as ToolResult | undefined;
         if (!loadedProgram || loadedProgram.success !== true) {
@@ -1046,7 +1048,15 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
               await manager.connectTarget(created.sessionId, core.coreId);
             }
             if (core.load) {
-              await manager.loadProgramWithMap(created.sessionId, core.coreId, core.programUri!, core.mapUri);
+              await manager.loadProgramWithMap(
+                created.sessionId,
+                core.coreId,
+                core.programUri!,
+                core.mapUri,
+                core.ramOwnershipPolicy ?? "require-map",
+                core.fallbackGsRegions,
+                core.allowDestructiveFlashReload
+              );
             }
             if (core.haltAtEntry) {
               await manager.haltCore(created.sessionId, core.coreId);
@@ -1224,7 +1234,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             loadedCpu1!.programUri!,
             loadedCpu1!.mapUri,
             loadedCpu1!.ramOwnershipPolicy ?? "skip",
-            loadedCpu1!.fallbackGsRegions
+            loadedCpu1!.fallbackGsRegions,
+            loadedCpu1!.allowDestructiveFlashReload
           ));
           if (loadSequence.mode === "cpu1-run-before-cpu2") {
             await runStage("owner-first-handoff-run", "runCpu1BeforeCpu2Load", () => manager.runCore(created.sessionId, loadedCpu1!.coreId));
@@ -1236,7 +1247,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             loadedCpu2!.programUri!,
             loadedCpu2!.mapUri,
             loadedCpu2!.ramOwnershipPolicy ?? "skip",
-            loadedCpu2!.fallbackGsRegions
+            loadedCpu2!.fallbackGsRegions,
+            loadedCpu2!.allowDestructiveFlashReload
           ));
           const postLoadHalt = await runStage("post-load-halt", "haltCoresAfterLoad", () => manager.haltCores(created.sessionId, coreIds));
           assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
@@ -1252,7 +1264,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
                 core.programUri!,
                 core.mapUri,
                 core.ramOwnershipPolicy ?? "skip",
-                core.fallbackGsRegions
+                core.fallbackGsRegions,
+                core.allowDestructiveFlashReload
               ));
             }
             if (core.haltAtEntry) await runStage("halt", `haltCore:${core.coreId}`, () => manager.haltCore(created.sessionId, core.coreId));

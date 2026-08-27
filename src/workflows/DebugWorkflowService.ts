@@ -154,6 +154,15 @@ export class DebugWorkflowService {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
+    const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
+    if (runPlan.releaseCpu2BeforeCpu1 && (runPlan.coreOrder.length !== 1 || runPlan.coreOrder[0] !== input.cpu1CoreId)) {
+      throw new DebugMcpError("Cpu2BootReleaseSequenceInvalid", "CPU2 release-before-CPU1 requires a CPU1-only run plan", {
+        sessionId: input.sessionId,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu2CoreId: input.cpu2CoreId,
+        runPlan
+      });
+    }
 
     setStage("initial-halt");
     const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
@@ -163,8 +172,20 @@ export class DebugWorkflowService {
     const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
     performedSteps.push("resetCores");
     assertBatchSucceeded("resetCores", reset);
-    const cpu1Program = { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy };
-    const cpu2Program = { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, loadPolicy: input.loadPolicy };
+    const cpu1Program = {
+      coreId: input.cpu1CoreId,
+      programUri: input.cpu1OutPath,
+      mapUri: input.cpu1MapPath,
+      loadPolicy: input.loadPolicy,
+      allowDestructiveFlashReload: input.allowDestructiveFlashReload
+    };
+    const cpu2Program = {
+      coreId: input.cpu2CoreId,
+      programUri: input.cpu2OutPath,
+      mapUri: input.cpu2MapPath,
+      loadPolicy: input.loadPolicy,
+      allowDestructiveFlashReload: input.allowDestructiveFlashReload
+    };
     let load;
     setStage("program-load");
     if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
@@ -202,11 +223,28 @@ export class DebugWorkflowService {
       ramOwnership.ownershipActions
     );
     setStage("run-sequence");
-    const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
+    let cpu2Release: ToolResult | undefined;
+    if (runPlan.releaseCpu2BeforeCpu1) {
+      setStage("cpu2-release");
+      cpu2Release = {
+        disconnected: await this.manager.disconnectTarget(input.sessionId, input.cpu2CoreId),
+        mode: "disconnect-before-cpu1"
+      };
+      performedSteps.push("disconnectCpu2BeforeCpu1");
+    }
     for (const coreId of runPlan.coreOrder) {
       await this.manager.runCore(input.sessionId, coreId);
       performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
       await sleep(input.runSequence.settleMs);
+    }
+    if (runPlan.releaseCpu2BeforeCpu1) {
+      setStage("cpu2-reconnect");
+      cpu2Release = {
+        ...cpu2Release,
+        reconnected: await this.manager.connectTarget(input.sessionId, input.cpu2CoreId),
+        settleMs: input.runSequence.settleMs
+      };
+      performedSteps.push("reconnectCpu2AfterCpu1");
     }
     setStage("ipc-readiness-wait");
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
@@ -239,7 +277,10 @@ export class DebugWorkflowService {
       orchestration: "server-internal",
       mcpToolCalls: [],
       approvalClass: "workflow-confirmation",
-      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
+      effectsApplied: [
+        "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read",
+        ...(cpu2Release ? ["target-disconnect", "target-connect"] : [])
+      ],
       sessionId: input.sessionId,
       device: input.device,
       cpu1CoreId: input.cpu1CoreId,
@@ -258,6 +299,7 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       runPlan,
+      ...(cpu2Release ? { cpu2Release } : {}),
       ipcReady,
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
       diagnosis,
@@ -303,115 +345,209 @@ export class DebugWorkflowService {
   async runReloadAndDiagnose(input: z.infer<typeof runReloadAndDiagnoseSchema>): Promise<ToolResult> {
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     const performedSteps: string[] = [];
-    const maps = this.normalizeMaps(mapsFromPaths(input));
-    const halt = await this.manager.haltCores(input.sessionId, coreIds);
-    performedSteps.push("haltCores");
-    assertBatchSucceeded("haltCores", halt);
-    const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
-    performedSteps.push("resetCores");
-    assertBatchSucceeded("resetCores", reset);
-    const load = await this.manager.loadPrograms(input.sessionId, [
-      { coreId: input.cpu1CoreId, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, loadPolicy: input.loadPolicy },
-      { coreId: input.cpu2CoreId, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, ramOwnershipPolicy: input.ramOwnershipPolicy, fallbackGsRegions: input.fallbackGsRegions, loadPolicy: input.loadPolicy }
-    ]);
-    performedSteps.push("loadPrograms");
-    assertBatchSucceeded("loadPrograms", load);
-    const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
-    performedSteps.push("haltCoresAfterLoad");
-    assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
-    let postLoadReset: ToolResult | undefined;
-    let postLoadResetHalt: ToolResult | undefined;
-    if (input.postLoadBoot) {
-      postLoadReset = await this.manager.resetCores(input.sessionId, coreIds, input.postLoadBoot.resetType as ResetType);
-      performedSteps.push("resetCoresAfterLoad");
-      assertBatchSucceeded("resetCoresAfterLoad", postLoadReset);
-      postLoadResetHalt = await this.manager.haltCores(input.sessionId, coreIds);
-      performedSteps.push("haltCoresAfterPostLoadReset");
-      assertBatchSucceeded("haltCoresAfterPostLoadReset", postLoadResetHalt);
-    }
-    const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
-    performedSteps.push("getMulticoreSnapshot");
-    const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
-    const elfFreshness = await this.checkElfFreshness(input.sessionId, [
-      { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
-      { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
-    ]);
-    const runCpu1 = input.postLoadBoot?.runCpu1 ?? input.runCpu1;
-    const runCpu2 = input.postLoadBoot?.runCpu2 ?? input.runCpu2;
-    if (runCpu1) {
-      await this.manager.runCore(input.sessionId, input.cpu1CoreId);
-      performedSteps.push("runCpu1");
-    }
-    if (input.postLoadBoot && runCpu1 && runCpu2 && input.postLoadBoot.cpu1SettleMs > 0) {
-      await sleep(input.postLoadBoot.cpu1SettleMs);
-      performedSteps.push("cpu1PostLoadBootSettle");
-    }
-    if (runCpu2) {
-      await this.manager.runCore(input.sessionId, input.cpu2CoreId);
-      performedSteps.push("runCpu2");
-    }
-    const wait = input.waitExpressions && input.timeoutMs
-      ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule)
-      : undefined;
-    if (wait) {
-      performedSteps.push("waitExpressions");
-    }
-    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
-      input.sessionId,
-      input.verifyRuntimeRamOwnership,
-      ramOwnership?.ownershipActions
-    );
-    const diagnosis = await this.buildBootHandoffDiagnosis({
-      sessionId: input.sessionId,
-      device: input.device,
-      cpu1CoreId: input.cpu1CoreId,
-      cpu2CoreId: input.cpu2CoreId,
-      ramOwnership,
-      elfFreshness,
-      runtimeRamOwnership,
-      ipcReady: wait
-    });
-    const result: ToolResult = {
-      workflow: "c2000_runReloadAndDiagnose",
-      orchestration: "server-internal",
-      mcpToolCalls: [],
-      approvalClass: "workflow-confirmation",
-      effectsApplied: ["target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read"],
-      sessionId: input.sessionId,
-      device: input.device,
-      cpu1CoreId: input.cpu1CoreId,
-      cpu2CoreId: input.cpu2CoreId,
-      success: load.results.every((item: ToolResult) => item.success === true)
-        && (!wait || wait.matched === true)
-        && runtimeRamOwnershipAccepted(runtimeRamOwnership),
-      performedSteps,
-      halt,
-      reset,
-      load,
-      postLoadHalt,
-      ...(postLoadReset ? {
-        postLoadBoot: {
-          controlled: true,
-          resetType: input.postLoadBoot?.resetType,
-          runCpu1,
-          runCpu2,
-          cpu1SettleMs: input.postLoadBoot?.cpu1SettleMs,
-          pcWritten: false
-        },
-        postLoadReset,
-        postLoadResetHalt
-      } : {}),
-      snapshot,
-      ...(ramOwnership ? { ramOwnership } : {}),
-      elfFreshness,
-      runtimeRamOwnership,
-      ...(wait ? { wait } : {}),
-      diagnosis
+    let workflowStage = "input-validation";
+    let targetAccessAttempted = false;
+    const effectiveStartup = {
+      resetType: input.resetType,
+      runCpu1: input.runCpu1,
+      runCpu2: input.runCpu2,
+      postLoadBoot: input.postLoadBoot ?? null,
+      timeoutMs: input.timeoutMs,
+      intervalMs: input.intervalMs
     };
-    if (input.collectDebugBundle) {
-      result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("reload-diagnose"), result);
+    try {
+      workflowStage = "startup-contract-validation";
+      if (input.postLoadBoot?.releaseCpu2BeforeCpu1 && (!input.postLoadBoot.runCpu1 || input.postLoadBoot.runCpu2)) {
+        throw new DebugMcpError("Cpu2BootReleaseSequenceInvalid", "CPU2 release-before-CPU1 requires runCpu1=true and runCpu2=false", {
+          sessionId: input.sessionId,
+          runCpu1: input.postLoadBoot.runCpu1,
+          runCpu2: input.postLoadBoot.runCpu2
+        });
+      }
+      workflowStage = "initial-halt";
+      const maps = this.normalizeMaps(mapsFromPaths(input));
+      targetAccessAttempted = true;
+      const halt = await this.manager.haltCores(input.sessionId, coreIds);
+      performedSteps.push("haltCores");
+      assertBatchSucceeded("haltCores", halt);
+
+      workflowStage = "reset";
+      const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
+      performedSteps.push("resetCores");
+      assertBatchSucceeded("resetCores", reset);
+
+      workflowStage = "program-load";
+      const load = await this.manager.loadPrograms(input.sessionId, [
+        {
+          coreId: input.cpu1CoreId,
+          programUri: input.cpu1OutPath,
+          mapUri: input.cpu1MapPath,
+          loadPolicy: input.loadPolicy,
+          allowDestructiveFlashReload: input.allowDestructiveFlashReload
+        },
+        {
+          coreId: input.cpu2CoreId,
+          programUri: input.cpu2OutPath,
+          mapUri: input.cpu2MapPath,
+          ramOwnershipPolicy: input.ramOwnershipPolicy,
+          fallbackGsRegions: input.fallbackGsRegions,
+          loadPolicy: input.loadPolicy,
+          allowDestructiveFlashReload: input.allowDestructiveFlashReload
+        }
+      ]);
+      performedSteps.push("loadPrograms");
+      assertBatchSucceeded("loadPrograms", load);
+
+      workflowStage = "post-load-halt";
+      const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
+      performedSteps.push("haltCoresAfterLoad");
+      assertBatchSucceeded("haltCoresAfterLoad", postLoadHalt);
+      let postLoadReset: ToolResult | undefined;
+      let postLoadResetHalt: ToolResult | undefined;
+      let cpu2Release: ToolResult | undefined;
+      const postLoadBoot = input.postLoadBoot;
+      if (postLoadBoot) {
+        workflowStage = "post-load-reset";
+        postLoadReset = await this.manager.resetCores(input.sessionId, coreIds, postLoadBoot.resetType as ResetType);
+        performedSteps.push("resetCoresAfterLoad");
+        assertBatchSucceeded("resetCoresAfterLoad", postLoadReset);
+        postLoadResetHalt = await this.manager.haltCores(input.sessionId, coreIds);
+        performedSteps.push("haltCoresAfterPostLoadReset");
+        assertBatchSucceeded("haltCoresAfterPostLoadReset", postLoadResetHalt);
+      }
+
+      workflowStage = "pre-run-evidence";
+      const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
+      performedSteps.push("getMulticoreSnapshot");
+      const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
+      const elfFreshness = await this.checkElfFreshness(input.sessionId, [
+        { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
+        { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
+      ]);
+      const runCpu1 = postLoadBoot?.runCpu1 ?? input.runCpu1;
+      const runCpu2 = postLoadBoot?.runCpu2 ?? input.runCpu2;
+      if (postLoadBoot?.releaseCpu2BeforeCpu1) {
+        workflowStage = "cpu2-release";
+        cpu2Release = {
+          disconnected: await this.manager.disconnectTarget(input.sessionId, input.cpu2CoreId),
+          mode: "disconnect-before-cpu1"
+        };
+        performedSteps.push("disconnectCpu2BeforeCpu1");
+      }
+      if (runCpu1) {
+        workflowStage = "run-sequence";
+        await this.manager.runCore(input.sessionId, input.cpu1CoreId);
+        performedSteps.push("runCpu1");
+      }
+      if (postLoadBoot && runCpu1 && (runCpu2 || postLoadBoot.releaseCpu2BeforeCpu1) && postLoadBoot.cpu1SettleMs > 0) {
+        await sleep(postLoadBoot.cpu1SettleMs);
+        performedSteps.push("cpu1PostLoadBootSettle");
+      }
+      if (postLoadBoot?.releaseCpu2BeforeCpu1) {
+        workflowStage = "cpu2-reconnect";
+        cpu2Release = {
+          ...cpu2Release,
+          reconnected: await this.manager.connectTarget(input.sessionId, input.cpu2CoreId),
+          settleMs: postLoadBoot.cpu1SettleMs
+        };
+        performedSteps.push("reconnectCpu2AfterCpu1");
+      }
+      if (runCpu2) {
+        workflowStage = "run-sequence";
+        await this.manager.runCore(input.sessionId, input.cpu2CoreId);
+        performedSteps.push("runCpu2");
+      }
+      workflowStage = "ipc-readiness-wait";
+      const wait = input.waitExpressions && input.timeoutMs
+        ? await this.waitForExpressionSet(input.sessionId, input.waitExpressions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule)
+        : undefined;
+      if (wait) {
+        performedSteps.push("waitExpressions");
+      }
+      const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+        input.sessionId,
+        input.verifyRuntimeRamOwnership,
+        ramOwnership?.ownershipActions
+      );
+      workflowStage = "diagnosis";
+      const diagnosis = await this.buildBootHandoffDiagnosis({
+        sessionId: input.sessionId,
+        device: input.device,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu2CoreId: input.cpu2CoreId,
+        ramOwnership,
+        elfFreshness,
+        runtimeRamOwnership,
+        ipcReady: wait
+      });
+      performedSteps.push("diagnoseBootHandoff");
+      const result: ToolResult = {
+        workflow: "c2000_runReloadAndDiagnose",
+        orchestration: "server-internal",
+        mcpToolCalls: [],
+        approvalClass: "workflow-confirmation",
+        effectsApplied: [
+          "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read",
+          ...(cpu2Release ? ["target-disconnect", "target-connect"] : [])
+        ],
+        sessionId: input.sessionId,
+        device: input.device,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu2CoreId: input.cpu2CoreId,
+        success: load.results.every((item: ToolResult) => item.success === true)
+          && (!wait || wait.matched === true)
+          && runtimeRamOwnershipAccepted(runtimeRamOwnership),
+        workflowStage: "completed",
+        targetAccessAttempted,
+        effectiveStartup,
+        performedSteps,
+        halt,
+        reset,
+        load,
+        postLoadHalt,
+        ...(cpu2Release ? { cpu2Release } : {}),
+        ...(postLoadReset ? {
+          postLoadBoot: {
+            controlled: true,
+            resetType: postLoadBoot?.resetType,
+            runCpu1,
+            runCpu2,
+            cpu1SettleMs: postLoadBoot?.cpu1SettleMs,
+            ...(postLoadBoot?.releaseCpu2BeforeCpu1 === true ? { releaseCpu2BeforeCpu1: true } : {}),
+            pcWritten: false
+          },
+          postLoadReset,
+          postLoadResetHalt,
+          ...(cpu2Release ? { cpu2Release } : {})
+        } : {}),
+        snapshot,
+        ...(ramOwnership ? { ramOwnership } : {}),
+        elfFreshness,
+        runtimeRamOwnership,
+        ...(wait ? { wait } : {}),
+        diagnosis
+      };
+      if (input.collectDebugBundle) {
+        workflowStage = "bundle-write";
+        result.debugBundle = await this.writeDebugBundle(input.outputDir ?? defaultBundleDir("reload-diagnose"), result);
+      }
+      return result;
+    } catch (error) {
+      const structured = toStructuredError(error);
+      const details = {
+        ...(structured.details ?? {}),
+        workflow: "c2000_runReloadAndDiagnose",
+        sessionId: input.sessionId,
+        workflowStage,
+        performedSteps: [...performedSteps],
+        effectiveStartup,
+        targetAccessAttempted
+      };
+      if (error instanceof DebugMcpError) {
+        throw new DebugMcpError(error.code, error.message, details);
+      }
+      throw new DebugMcpError("PostLaunchCheckFailed", "Reload and diagnosis workflow failed", { ...details, cause: structured });
     }
-    return result;
   }
 
   async runFullDebugBundle(input: z.infer<typeof runFullDebugBundleSchema>): Promise<ToolResult> {
@@ -943,7 +1079,12 @@ function numberValue(value: unknown): number | undefined {
 }
 
 function resolveRunPlan(
-  sequence: { runMode?: "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running"; runCpu1First: boolean; runCpu2: boolean },
+  sequence: {
+    runMode?: "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running";
+    runCpu1First: boolean;
+    runCpu2: boolean;
+    releaseCpu2BeforeCpu1?: boolean;
+  },
   cpu1CoreId: CoreId,
   cpu2CoreId: CoreId
 ) {
@@ -951,16 +1092,18 @@ function resolveRunPlan(
     return {
       mode: sequence.runMode,
       coreOrder: [cpu1CoreId],
-      warnings: ["CPU2 is not run by the debugger; use this mode only when CPU1 firmware releases CPU2 from reset."]
+      releaseCpu2BeforeCpu1: true,
+      warnings: ["CPU2 is disconnected while CPU1 firmware releases it from reset, then reconnected for diagnosis."]
     };
   }
   if (sequence.runMode === "debugger_runs_both") {
-    return { mode: sequence.runMode, coreOrder: [cpu1CoreId, cpu2CoreId], warnings: [] };
+    return { mode: sequence.runMode, coreOrder: [cpu1CoreId, cpu2CoreId], releaseCpu2BeforeCpu1: false, warnings: [] };
   }
   if (sequence.runMode === "cpu2_pre_running") {
     return {
       mode: sequence.runMode,
       coreOrder: [cpu2CoreId, cpu1CoreId],
+      releaseCpu2BeforeCpu1: false,
       warnings: ["CPU2 is started before CPU1; use only for firmware designed for this ordering."]
     };
   }
@@ -970,8 +1113,9 @@ function resolveRunPlan(
       ...(sequence.runCpu1First ? [cpu1CoreId] : []),
       ...(sequence.runCpu2 ? [cpu2CoreId] : [])
     ],
-    warnings: sequence.runCpu1First && !sequence.runCpu2
-      ? ["CPU2 remains debugger-halted unless CPU1 firmware explicitly releases it."]
+    releaseCpu2BeforeCpu1: sequence.releaseCpu2BeforeCpu1 === true,
+    warnings: sequence.runCpu1First && !sequence.runCpu2 && !sequence.releaseCpu2BeforeCpu1
+      ? ["CPU2 remains debugger-halted unless CPU1 firmware explicitly releases it or releaseCpu2BeforeCpu1 is enabled."]
       : []
   };
 }

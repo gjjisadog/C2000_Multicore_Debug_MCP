@@ -12,7 +12,9 @@ const ipcRunSequenceSchema = z.object({
   runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
   runCpu1First: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
-  settleMs: z.number().int().nonnegative().default(0)
+  settleMs: z.number().int().nonnegative().default(0),
+  /** Disconnect CPU2 while CPU1 performs the firmware-owned boot handoff. */
+  releaseCpu2BeforeCpu1: z.boolean().optional()
 });
 
 export const coreConfigSchema = z.object({
@@ -127,6 +129,8 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
   resetType: resetTypeSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize repeated CPU2 Flash programming in each durable board session"),
   loadSequence: ipcLoadSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
   runSequence: ipcRunSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
@@ -208,7 +212,9 @@ export const loadProgramSchema = sessionCoreSchema.extend({
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
-    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias")
+    .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image")
 });
 
 export const loadSymbolsSchema = sessionCoreSchema.extend({
@@ -334,6 +340,8 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
   settleMs: z.number().int().nonnegative().default(250)
 });
 
@@ -341,7 +349,8 @@ export const workflowRunSequenceSchema = z.object({
   runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
   runCpu1First: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
-  settleMs: z.number().int().nonnegative().default(0)
+  settleMs: z.number().int().nonnegative().default(0),
+  releaseCpu2BeforeCpu1: z.boolean().optional()
 }).default({ runCpu1First: true, runCpu2: false, settleMs: 0 });
 
 const runIpcAcceptanceObjectSchema = z.object({
@@ -357,6 +366,8 @@ const runIpcAcceptanceObjectSchema = z.object({
   resetType: resetTypeSchema.default("default"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   loadSequence: ipcLoadSequenceSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
@@ -416,6 +427,8 @@ export const runReloadAndDiagnoseSchema = z.object({
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).default("require-map"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   runCpu1: z.boolean().default(true),
@@ -424,7 +437,9 @@ export const runReloadAndDiagnoseSchema = z.object({
     resetType: z.enum(["cpu", "system", "restart", "default"]).default("system"),
     runCpu1: z.boolean().default(true),
     cpu1SettleMs: z.number().int().nonnegative().default(250),
-    runCpu2: z.boolean().default(false)
+    runCpu2: z.boolean().default(false),
+    /** Disconnect CPU2 while CPU1 performs the firmware-owned boot handoff. */
+    releaseCpu2BeforeCpu1: z.boolean().optional()
   }).optional().describe("After programming and halting, reset both cores again and start them in a controlled CPU1-first order. This does not write PC or claim target Flash verification."),
   waitExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
@@ -467,6 +482,8 @@ export const launchCoreSchema = z.object({
   mapUri: z.string().min(1).optional(),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
+  allowDestructiveFlashReload: z.boolean().default(false)
+    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
   connect: z.boolean().default(true),
   load: z.boolean().default(true),
   haltAtEntry: z.boolean().default(true)
@@ -502,7 +519,8 @@ export const launchMulticoreDebugSchema = z.object({
     runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
     runCpu1First: z.boolean().default(true),
     runCpu2: z.boolean().default(true),
-    settleMs: z.number().int().nonnegative().default(500)
+    settleMs: z.number().int().nonnegative().default(500),
+    releaseCpu2BeforeCpu1: z.boolean().optional()
   }).optional(),
   cores: z.array(launchCoreSchema).min(1),
   postLaunchActions: z.object({
