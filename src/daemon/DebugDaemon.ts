@@ -193,6 +193,7 @@ export class DebugDaemon {
             allowDestructiveFlashReload: input.allowDestructiveFlashReload,
             loadSequence: input.loadSequence,
             runSequence: input.runSequence,
+            runMode: input.runMode,
             ipcReadyExpressions: input.ipcReadyExpressions
           },
           { type: "cleanup" }
@@ -208,19 +209,19 @@ export class DebugDaemon {
         ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}),
         ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
         can: { profile: input.profile },
-        steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }],
+        steps: [{ type: "launchMulticore", loadPrograms: hasCanArtifacts(input) }, { type: "canAcceptance" }, { type: "cleanup" }],
         failurePolicy: input.failurePolicy,
         recoveryPolicy: "safe_restart_board"
       }),
       submitCanFaultCampaign: input => this.requireJobEngine().submit({
         planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}), ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}), ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
         can: { profile: input.profile, execution: { mode: "fault_campaign", iterations: input.iterations, matrixCases: [], failFast: input.failFast, health: input.health, resetOrRejoinRequested: input.resetOrRejoinRequested } },
-        steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: input.resetOrRejoinRequested ? "manual_intervention_required" : "safe_restart_board"
+        steps: [{ type: "launchMulticore", loadPrograms: hasCanArtifacts(input) }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: input.resetOrRejoinRequested ? "manual_intervention_required" : "safe_restart_board"
       }),
       submitCanSoakTest: input => this.requireJobEngine().submit({
         planVersion: 1, name: input.name, boardIds: input.boardIds, ...(input.artifacts ? { artifacts: input.artifacts } : {}), ...(input.artifactsByBoard ? { artifactsByBoard: input.artifactsByBoard } : {}), ...(input.artifactsByRole ? { artifactsByRole: input.artifactsByRole } : {}),
         can: { profile: input.profile, execution: { mode: "soak", iterations: input.iterations, ...(input.durationMs ? { durationMs: input.durationMs } : {}), matrixCases: [], failFast: false, health: input.health, resetOrRejoinRequested: false } },
-        steps: [{ type: "launchMulticore" }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: "safe_restart_board"
+        steps: [{ type: "launchMulticore", loadPrograms: hasCanArtifacts(input) }, { type: "canAcceptance" }, { type: "cleanup" }], failurePolicy: input.failurePolicy, recoveryPolicy: "safe_restart_board"
       }),
       listCanProfiles: input => ({ profiles: canProfiles.list(input) }),
       getBoardGroupSnapshot: input => {
@@ -506,4 +507,13 @@ export class DebugDaemon {
       externalProcessTermination: false
     };
   }
+}
+
+function hasCanArtifacts(input: {
+  artifacts?: unknown;
+  artifactsByBoard?: unknown;
+  artifactsByRole?: unknown;
+}): boolean {
+  const hasRecordEntries = (value: unknown) => Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+  return Boolean(input.artifacts) || hasRecordEntries(input.artifactsByBoard) || hasRecordEntries(input.artifactsByRole);
 }

@@ -1,12 +1,17 @@
 import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
+import { workflowStartupContractIssues } from "../debug/startupContract.js";
 
 export const testArtifactsSchema = z.object({
   cpu1OutPath: z.string().min(1).max(4096),
   cpu2OutPath: z.string().min(1).max(4096),
   cpu1MapPath: z.string().min(1).max(4096).optional(),
   cpu2MapPath: z.string().min(1).max(4096).optional(),
+  cpu1OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu1MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   outputDir: z.string().min(1).max(4096).optional()
 });
 
@@ -83,7 +88,8 @@ const expressionAssignmentStepSchema = z.object({
   coreId: coreIdSchema,
   expression: expressionSchema,
   value: expressionValueSchema,
-  verify: z.boolean().default(true)
+  verify: z.boolean().default(true),
+  verification: z.enum(["readback", "write-only"]).optional()
 }).strict();
 const expressionFaultStepSchema = expressionAssignmentStepSchema.extend({ label: labelSchema.optional() }).strict();
 const expressionReadStepSchema = z.object({
@@ -130,13 +136,34 @@ const loadSequenceStepSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
   cpu1SettleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250)
 }).strict();
+const runModeStepSchema = z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]);
 const runSequenceStepSchema = z.object({
-  runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
-  runCpu1First: z.boolean().default(true),
-  runCpu2: z.boolean().default(true),
+  runMode: runModeStepSchema.optional(),
+  runCpu1First: z.boolean().optional(),
+  runCpu2: z.boolean().optional(),
   settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(500),
   releaseCpu2BeforeCpu1: z.boolean().optional()
-}).strict();
+}).strict().superRefine((sequence, context) => {
+  if (!sequence.runMode) return;
+  const expected = {
+    cpu1_boots_cpu2: { runCpu1First: true, runCpu2: false },
+    debugger_runs_both: { runCpu1First: true, runCpu2: true },
+    cpu2_pre_running: { runCpu1First: false, runCpu2: true }
+  }[sequence.runMode];
+  if (sequence.runCpu1First !== undefined && sequence.runCpu1First !== expected.runCpu1First) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu1First"], message: `runMode ${sequence.runMode} requires runCpu1First=${expected.runCpu1First}` });
+  }
+  if (sequence.runCpu2 !== undefined && sequence.runCpu2 !== expected.runCpu2) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu2"], message: `runMode ${sequence.runMode} requires runCpu2=${expected.runCpu2}` });
+  }
+  if (sequence.releaseCpu2BeforeCpu1 && sequence.runMode && sequence.runMode !== "cpu1_boots_cpu2") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["releaseCpu2BeforeCpu1"], message: "releaseCpu2BeforeCpu1 requires runMode=cpu1_boots_cpu2" });
+  }
+}).transform(sequence => ({
+  ...sequence,
+  runCpu1First: sequence.runCpu1First ?? (sequence.runMode !== "cpu2_pre_running"),
+  runCpu2: sequence.runCpu2 ?? (sequence.runMode !== "cpu1_boots_cpu2")
+})).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence);
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const baseStep = { on: onSchema.optional() };
 
@@ -215,6 +242,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     allowDestructiveFlashReload: z.boolean().default(false),
     loadSequence: loadSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
     runSequence: runSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
+    runMode: runModeStepSchema.optional(),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
@@ -324,6 +352,18 @@ export const testPlanSchema = z.object({
         }
       }
       continue;
+    }
+    if (step.type === "runIpcAcceptance" && step.runMode && step.loadSequence) {
+      const runCpu1First = step.runMode !== "cpu2_pre_running";
+      const runCpu2 = step.runMode !== "cpu1_boots_cpu2";
+      for (const issue of workflowStartupContractIssues({
+        loadMode: step.loadSequence.mode,
+        runMode: step.runMode,
+        runCpu1First,
+        runCpu2
+      })) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence", "mode"], message: issue });
+      }
     }
     if (["assignExpressions", "injectFaults", "captureExpressions", "waitForExpressions", "runCores", "haltCores", "reconnectAfterTargetReset", "restorePrograms", "resetReconnectCapture", "runIpcAcceptance", "runBootHandoffDiagnosis", "runReloadAndDiagnose", "runFullDebugBundle"].includes(step.type) && !hasCurrentFlowSession) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} requires an earlier launchMulticore step in the same durable board flow` });
@@ -523,7 +563,7 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       for (const key of ["startupPreset", "resetType", "runSequence"]) if (key in step) migrated[key] = step[key];
       break;
     case "runIpcAcceptance":
-      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "allowDestructiveFlashReload", "loadSequence", "runSequence", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "allowDestructiveFlashReload", "loadSequence", "runSequence", "runMode", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
         if (key in step) migrated[key] = step[key];
       }
       break;

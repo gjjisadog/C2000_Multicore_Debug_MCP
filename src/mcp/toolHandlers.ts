@@ -17,6 +17,7 @@ import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
 import { sleep as sleepCore } from "../utils/async.js";
 import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
+import type { FilesystemPolicy } from "../security/pathPolicy.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -148,6 +149,7 @@ export interface ToolHandlerDeps {
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
   programSearchRoots?: string[];
+  filesystem?: FilesystemPolicy;
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -192,7 +194,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const daemonRoutingConfigured = Boolean(deps.getDaemonHealth && deps.listBoards);
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const configuredProgramSearchRoots = deps.programSearchRoots;
-  const workflows = new DebugWorkflowService(manager, analyzeRamOwnership);
+  const workflows = new DebugWorkflowService(manager, analyzeRamOwnership, deps.filesystem);
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
     success: false,
@@ -682,7 +684,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async assignExpression(input: z.input<typeof assignExpressionSchema>) {
       try {
         const parsed = assignExpressionSchema.parse(input);
-        return ok(await manager.assignExpression(parsed.sessionId, parsed.coreId, parsed.expression, parsed.value, parsed.verify));
+        const assignment = normalizeExpressionAssignment(parsed);
+        return ok(await manager.assignExpression(parsed.sessionId, assignment.coreId, assignment.expression, assignment.value, assignment.verify));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId });
       }
@@ -691,7 +694,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async assignExpressions(input: z.input<typeof assignExpressionsSchema>) {
       try {
         const parsed = assignExpressionsSchema.parse(input);
-        return okBatch("c2000_assignExpressions", await manager.assignExpressions(parsed.sessionId, parsed.assignments));
+        return okBatch("c2000_assignExpressions", await manager.assignExpressions(parsed.sessionId, parsed.assignments.map(normalizeExpressionAssignment)));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
       }
@@ -700,7 +703,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async injectFaults(input: z.input<typeof injectFaultsSchema>) {
       try {
         const parsed = injectFaultsSchema.parse(input);
-        return okBatch("c2000_injectFaults", await manager.injectFaults(parsed.sessionId, parsed.faults));
+        return okBatch("c2000_injectFaults", await manager.injectFaults(parsed.sessionId, parsed.faults.map(fault => ({ ...normalizeExpressionAssignment(fault), ...(fault.label ? { label: fault.label } : {}) }))));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
       }
@@ -793,13 +796,17 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       const startedAt = performance.now();
       const deadline = startedAt + parsed.timeoutMs;
       let lastConditions: ToolResult[] = [];
+      let firstFailure: ToolResult | undefined;
       let pollIterations = 0;
       let expressionBatchCalls = 0;
+      let expressionCount = 0;
+      const uniqueExpressionsPerPoll = new Set(parsed.conditions.map(condition => `${condition.coreId}:${condition.expression}`)).size;
       while (performance.now() <= deadline) {
         pollIterations++;
         const evaluated = await evaluateConditions(parsed.sessionId, parsed.conditions);
         lastConditions = evaluated.conditions;
         expressionBatchCalls += evaluated.expressionBatchCalls;
+        expressionCount += uniqueExpressionsPerPoll;
         if (lastConditions.every(condition => condition.matched)) {
           const pollDurationMs = performance.now() - startedAt;
           return ok({
@@ -809,10 +816,18 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             conditions: lastConditions,
             pollIterations,
             expressionBatchCalls,
-            expressionCount: pollIterations * parsed.conditions.length,
+            expressionCount,
             pollDurationMs,
-            matchedAtMs: pollDurationMs
+            matchedAtMs: pollDurationMs,
+            ...(firstFailure ? { firstFailure } : {})
           });
+        }
+        if (!firstFailure) {
+          firstFailure = {
+            pollIteration: pollIterations,
+            elapsedMs: performance.now() - startedAt,
+            conditions: lastConditions.filter(condition => condition.matched !== true)
+          };
         }
         const remainingMs = deadline - performance.now();
         if (remainingMs <= 0) break;
@@ -827,8 +842,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         conditions: lastConditions,
         pollIterations,
         expressionBatchCalls,
-        expressionCount: pollIterations * parsed.conditions.length,
-        pollDurationMs: performance.now() - startedAt
+        expressionCount,
+        pollDurationMs: performance.now() - startedAt,
+        ...(firstFailure ? { firstFailure } : {})
       };
     },
 
@@ -1290,13 +1306,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         if (postLaunchActionsInput?.assignExpressions) {
           postLaunchActions.assignExpressions = await runStage("post-launch-actions", "assignExpressions", () => manager.assignExpressions(
             created.sessionId,
-            postLaunchActionsInput.assignExpressions!
+            postLaunchActionsInput.assignExpressions!.map(normalizeExpressionAssignment)
           ));
         }
         if (postLaunchActionsInput?.injectFaults) {
           postLaunchActions.injectFaults = await runStage("post-launch-actions", "injectFaults", () => manager.injectFaults(
             created.sessionId,
-            postLaunchActionsInput.injectFaults!
+            postLaunchActionsInput.injectFaults!.map(fault => ({ ...normalizeExpressionAssignment(fault), ...(fault.label ? { label: fault.label } : {}) }))
           ));
         }
         if (Object.keys(postLaunchActions).length > 0) {
@@ -1942,6 +1958,23 @@ function hardwareAcceptanceCommand(options: {
 
 function shellValue(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function normalizeExpressionAssignment<T extends {
+  coreId: number;
+  expression: string;
+  value: string | number | boolean;
+  verify: boolean;
+  verification?: "readback" | "write-only";
+}>(assignment: T) {
+  return {
+    coreId: assignment.coreId,
+    expression: assignment.expression,
+    value: assignment.value,
+    // A one-shot hook is consumed by firmware, so a post-write readback is
+    // not a valid success criterion. Keep ordinary assignments fail-closed.
+    verify: assignment.verification === "write-only" ? false : assignment.verify
+  };
 }
 
 function valuesEqual(actual: unknown, expected: unknown): boolean {

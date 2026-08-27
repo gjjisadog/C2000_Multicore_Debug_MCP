@@ -329,7 +329,7 @@ describe("durable step cleanup and output safety", () => {
     }).jobId);
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
     expect(calls).toEqual([
-      "c2000_launchMulticoreDebug", "c2000_evaluateMany",
+      "c2000_launchMulticoreDebug",
       "c2000_getMulticoreSnapshot", "c2000_evaluateMany",
       "c2000_getMulticoreSnapshot", "c2000_evaluateMany", "c2000_getMulticoreSnapshot",
       "c2000_connectCores", "c2000_evaluateMany", "c2000_evaluateMany",
@@ -364,7 +364,15 @@ describe("durable step cleanup and output safety", () => {
     }).jobId);
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
     expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
-      error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+      error: expect.objectContaining({
+        code: "ProgramLoadFailed",
+        message: "CPU2 program load failed",
+        details: { coreId: 2 },
+        optimization: expect.objectContaining({
+          failureSignature: "TARGET_OPERATION_FAILED",
+          automaticRetry: "never"
+        })
+      })
     }));
     expect(fixture.runs.steps(jobId)[0]?.output).toEqual(expect.objectContaining({
       effectiveStartup: expect.objectContaining({ startupPreset: "hybrid30k-dk9-owner-first", resetType: "cpu" }),
@@ -400,7 +408,15 @@ describe("durable step cleanup and output safety", () => {
     }).jobId);
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
     expect(fixture.runs.steps(jobId)[0]).toEqual(expect.objectContaining({
-      error: { code: "ProgramLoadFailed", message: "CPU2 program load failed", details: { coreId: 2 } }
+      error: expect.objectContaining({
+        code: "ProgramLoadFailed",
+        message: "CPU2 program load failed",
+        details: { coreId: 2 },
+        optimization: expect.objectContaining({
+          failureSignature: "TARGET_OPERATION_FAILED",
+          automaticRetry: "never"
+        })
+      })
     }));
     expect(fixture.runs.boards(jobId)[0]?.sessionId).toBeUndefined();
     expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_closeDebugSession"]);
@@ -496,10 +512,8 @@ describe("durable step cleanup and output safety", () => {
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
     expect(calls).toEqual([
       { toolName: "c2000_launchMulticoreDebug" },
-      { toolName: "c2000_evaluateMany", sessionId: "dbg-1" },
       { toolName: "c2000_closeDebugSession", sessionId: "dbg-1" },
       { toolName: "c2000_launchMulticoreDebug" },
-      { toolName: "c2000_evaluateMany", sessionId: "dbg-2" },
       { toolName: "c2000_closeDebugSession", sessionId: "dbg-2" }
     ]);
     expect(fixture.runs.steps(jobId)[1]?.output).toEqual(expect.objectContaining({ sessionId: "dbg-1", closed: true }));
@@ -557,9 +571,10 @@ describe("durable step cleanup and output safety", () => {
     });
     const jobId = String(fixture.engine.submit({
       planVersion: 1, name: "guard-halt-failed", boardIds: ["board-a"],
+      artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out", cpu2MapPath: "/fw/cpu2.map" },
       retryPolicy: { launchMulticore: 3 },
       safetyGuards: { conditions: [{ coreId: 0, expression: "g_safe", expected: 1 }], haltCoreIds: [0, 2] },
-      steps: [{ type: "launchMulticore", loadPrograms: false }, { type: "cleanup" }]
+      steps: [{ type: "launchMulticore", loadPrograms: true }, { type: "cleanup" }]
     }).jobId);
     expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("FAILED");
     expect(fixture.runs.stepAttempts(jobId).filter(attempt => attempt.status === "FAILED")).toEqual([

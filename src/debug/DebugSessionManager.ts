@@ -1397,17 +1397,28 @@ export class DebugSessionManager {
     cpu2CoreId: CoreId;
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
+    /**
+     * Internal workflow optimization: reuse expression results collected by
+     * the immediately preceding readiness poll. Snapshot and PC reads still
+     * run so the diagnosis retains fresh target-state evidence.
+     */
+    precomputedExpressionResults?: Array<{ coreId: CoreId; results: EvaluateResult[] }>;
   }) {
     return this.exclusive(options.sessionId, async () => {
       const cpu1CoreId = options.cpu1CoreId;
       const cpu2CoreId = options.cpu2CoreId;
       const cpu1Expressions = options.cpu1Expressions ?? this.diagnostics.cpu1BootExpressions;
       const cpu2Expressions = options.cpu2Expressions ?? this.diagnostics.cpu2BootExpressions;
+      const precomputedExpressionResults = new Map(
+        options.precomputedExpressionResults?.map(item => [item.coreId, item.results])
+      );
       const snapshot = await this.getMulticoreSnapshotUnlocked(options.sessionId);
       const cpu1Pc = await this.resolvePcUnlocked(options.sessionId, cpu1CoreId);
       const cpu2Pc = await this.resolvePcUnlocked(options.sessionId, cpu2CoreId);
-      const cpu1Results = await this.evaluateManyUnlocked(options.sessionId, cpu1CoreId, cpu1Expressions);
-      const cpu2Results = await this.evaluateManyUnlocked(options.sessionId, cpu2CoreId, cpu2Expressions);
+      const cpu1Results = precomputedExpressionResults.get(cpu1CoreId)
+        ?? await this.evaluateManyUnlocked(options.sessionId, cpu1CoreId, cpu1Expressions);
+      const cpu2Results = precomputedExpressionResults.get(cpu2CoreId)
+        ?? await this.evaluateManyUnlocked(options.sessionId, cpu2CoreId, cpu2Expressions);
 
       return {
         sessionId: options.sessionId,

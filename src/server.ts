@@ -143,6 +143,7 @@ function buildRuntime(
   const toolInvoker = createC2000ToolInvoker(manager, {
     ...toolHandlerDeps,
     effectiveAdapterType: adapterResolution.mode,
+    filesystem,
     programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,
     getToolContracts: () => getToolContracts(config.toolProfile),
     getToolSurfaceGuide,

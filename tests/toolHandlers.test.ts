@@ -52,6 +52,7 @@ class CountingAdapter extends MockDebugAdapter {
 
 class WorkflowRecordingAdapter extends MockDebugAdapter {
   readonly events: string[] = [];
+  readonly expressionBatches: Array<{ coreId: CoreId; expressions: string[] }> = [];
 
   override async connect(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`connect:${coreId}`);
@@ -81,6 +82,11 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`run:${coreId}`);
     await super.run(session, coreId);
+  }
+
+  override async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    this.expressionBatches.push({ coreId, expressions });
+    return super.evaluateExpressions(session, coreId, expressions);
   }
 }
 
@@ -156,6 +162,15 @@ class OwnershipMismatchRecordingAdapter extends WorkflowRecordingAdapter {
   ): Promise<number> {
     await super.readMemory(session, coreId, page, address, typeSize);
     return 0;
+  }
+}
+
+class ArtifactMutatingAdapter extends WorkflowRecordingAdapter {
+  override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    await super.loadProgram(session, coreId, programUri);
+    if (coreId === 0) {
+      await writeFile(programUri, "cpu1-image-mutated-during-load");
+    }
   }
 }
 
@@ -570,7 +585,6 @@ describe("tool handlers", () => {
 
   test("runIpcAcceptance performs the full server-side workflow in one handler call", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-workflow-"));
-    const outputDir = path.join(tempDir, "bundle");
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
     const cpu2OutPath = path.join(tempDir, "cpu2.out");
     const cpu1MapPath = path.join(tempDir, "cpu1.map");
@@ -595,7 +609,9 @@ describe("tool handlers", () => {
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, {
       defaultWorkspacePath: tempDir
     });
-    const handlers = createToolHandlers(manager);
+    const handlers = createToolHandlers(manager, {
+      filesystem: { allowedReadRoots: [tempDir], allowedWriteRoots: [tempDir] }
+    });
     const created = await handlers.createDebugSession({ sessionName: "ipc-acceptance-workflow", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
     adapter.events.length = 0;
@@ -620,8 +636,7 @@ describe("tool handlers", () => {
       timeoutMs: 20,
       intervalMs: 1,
       verifyRuntimeRamOwnership: true,
-      collectDebugBundle: true,
-      outputDir
+      collectDebugBundle: true
     });
 
     expect(adapter.events).toEqual([
@@ -679,7 +694,14 @@ describe("tool handlers", () => {
         })
       }),
       runtimeRamOwnership: expect.objectContaining({ requested: true, matched: false }),
+      artifactPreflight: expect.objectContaining({
+        hostFiles: expect.arrayContaining([
+          expect.objectContaining({ path: cpu1OutPath, sha256: expect.any(String) }),
+          expect.objectContaining({ path: cpu2OutPath, sha256: expect.any(String) })
+        ])
+      }),
       debugBundle: expect.objectContaining({
+        outputDir: expect.stringContaining(path.join(tempDir, ".c2000-debug-bundles")),
         files: expect.arrayContaining([
           expect.stringContaining("summary.md"),
           expect.stringContaining("snapshot.json"),
@@ -708,6 +730,7 @@ describe("tool handlers", () => {
     const handlers = createToolHandlers(manager);
     const created = await handlers.createDebugSession({ sessionName: "ipc-custom-condition", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.expressionBatches.length = 0;
 
     const result = await handlers.runIpcAcceptance({
       sessionId: created.sessionId,
@@ -732,6 +755,7 @@ describe("tool handlers", () => {
       diagnosis: expect.objectContaining({
         diagnosisCode: "IPC_ACCEPTANCE_READY",
         severity: "info",
+        performance: expect.objectContaining({ expressionReadsReused: true }),
         cpu1: expect.objectContaining({
           expressions: [expect.objectContaining({ expression: "ipc.responsePass", success: true, value: "1" })]
         }),
@@ -743,6 +767,54 @@ describe("tool handlers", () => {
           ready: true
         })
       })
+    }));
+    expect(adapter.expressionBatches).toEqual([
+      { coreId: 0, expressions: ["ipc.responsePass"] }
+    ]);
+  });
+
+  test("runIpcAcceptance rejects an output artifact that changes during target load", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-artifact-change-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0                00008000   00000800  00000010  000007f0  RWIX\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4                00018000   00002000  00000871  0000178f  RWIX\n");
+    const adapter = new ArtifactMutatingAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } } });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, { defaultWorkspacePath: tempDir });
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-artifact-change", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ label: "cpu1-response", coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      elfFreshness: expect.objectContaining({
+        allFresh: false,
+        programs: expect.arrayContaining([
+          expect.objectContaining({ coreId: 0, fresh: false, preflightStable: false }),
+          expect.objectContaining({ coreId: 2, preflightStable: true })
+        ])
+      }),
+      optimization: expect.objectContaining({ failureSignature: "ELF_STALE", nextAction: "host-artifact-repair" })
     }));
   });
 
@@ -1140,6 +1212,83 @@ describe("tool handlers", () => {
         code: "ArtifactPairInvalid",
         details: expect.objectContaining({ issues: expect.arrayContaining([expect.stringContaining("configuration mismatch")]) })
       })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("runIpcAcceptance rejects an IPC expression missing from a real map symbol table", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-symbol-preflight-"));
+    const cpu1OutPath = path.join(tempDir, "cpu1.out");
+    const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu1OutPath, "cpu1-image");
+    await writeFile(cpu2OutPath, "cpu2-image");
+    await writeFile(cpu1MapPath, [
+      "GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name",
+      "0     00002000  g_present"
+    ].join("\n"));
+    await writeFile(cpu2MapPath, [
+      "GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name",
+      "0     00012000  g_cpu2_present"
+    ].join("\n"));
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(), undefined, { defaultWorkspacePath: tempDir });
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-symbol-preflight", coreMap });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath,
+      cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
+      ipcReadyExpressions: [{ coreId: 0, expression: "g_missing.ipcReady", expected: 1 }],
+      runSequence: { runMode: "debugger_runs_both" },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({
+        code: "ArtifactPairInvalid",
+        details: expect.objectContaining({
+          artifactSemantics: expect.objectContaining({
+            results: expect.arrayContaining([
+              expect.objectContaining({ coreId: 0, missingSymbols: ["g_missing"] })
+            ])
+          })
+        })
+      })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("runIpcAcceptance rejects contradictory load/run modes before touching the target", async () => {
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-startup-contract", coreMap });
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "C:/f28p65x/cpu1.out",
+      cpu2OutPath: "C:/f28p65x/cpu2.out",
+      cpu1MapPath: "C:/f28p65x/cpu1.map",
+      cpu2MapPath: "C:/f28p65x/cpu2.map",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+      runSequence: { runMode: "cpu2_pre_running" },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "StartupContractInvalid" })
     }));
     expect(adapter.events).toEqual([]);
   });
@@ -2324,6 +2473,31 @@ describe("tool handlers", () => {
       success: true,
       results: [expect.objectContaining({ value: "1" })]
     }));
+  });
+
+  test("assignExpression supports explicit write-only semantics for one-shot hooks", async () => {
+    const handlers = createHandlers(new MockDebugAdapter({
+      expressionValues: {
+        g_ulOneShotHook: { value: "0", type: "uint32_t", address: "0x00002004" }
+      }
+    }));
+    const created = await handlers.createDebugSession({ sessionName: "assign-write-only", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.assignExpression({
+      sessionId: created.sessionId,
+      coreId: 0,
+      expression: "g_ulOneShotHook",
+      value: 1,
+      verification: "write-only"
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      expression: "g_ulOneShotHook",
+      assignedValue: "1"
+    }));
+    expect(result.readback).toBeUndefined();
   });
 
   test("assignExpressions returns batch failure with explicit per-core results", async () => {

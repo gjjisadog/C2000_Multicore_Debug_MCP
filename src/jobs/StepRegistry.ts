@@ -1,5 +1,5 @@
 import type { C2000ToolInvoker } from "../mcp/tools.js";
-import { DURABLE_PLAN_LIMITS, resolveArtifactsForBoard, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
+import { DURABLE_PLAN_LIMITS, resolveArtifactsForBoard, type TestArtifacts, type TestPlan, type TestPlanStep } from "./TestPlanSchema.js";
 import type { CanAcceptanceService } from "../can/CanAcceptanceService.js";
 import type { BoardLeaseContext } from "../boards/types.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
@@ -40,8 +40,20 @@ export class StepRegistry {
       case "preflight":
         return this.tools.invokeTool("c2000_getHardwarePreflight", {});
       case "launchMulticore":
-        const loadPrograms = step.loadPrograms;
-        return this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
+        const hasArtifacts = Boolean(artifacts?.cpu1OutPath && artifacts.cpu2OutPath);
+        // CAN-only plans use the debug session as a fenced board-flow
+        // boundary and intentionally do not need firmware artifacts. For all
+        // other durable flows, a load-enabled launch must be explicit and
+        // complete rather than silently degrading to connect-only.
+        const loadPrograms = step.loadPrograms && (hasArtifacts || !plan.can);
+        if (step.loadPrograms && !hasArtifacts && !plan.can) {
+          throw new DebugMcpError("LaunchArtifactsMissing", "launchMulticore.loadPrograms=true requires CPU1 and CPU2 artifacts for the selected board", {
+            boardId,
+            requiredArtifacts: ["cpu1OutPath", "cpu2OutPath"]
+          });
+        }
+        const artifactPreflight = loadPrograms ? await this.preflightDeclaredArtifactHashes(artifacts) : undefined;
+        const launch = await this.tools.invokeTool("c2000_launchMulticoreDebug", fenced(context, {
           boardId,
           sessionName: `${plan.name}-${boardId}`,
           autoCloseOnComplete: false,
@@ -54,6 +66,7 @@ export class StepRegistry {
             {
               coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1",
               ...(loadPrograms && artifacts?.cpu1OutPath ? { programUri: artifacts.cpu1OutPath, mapUri: artifacts.cpu1MapPath } : {}),
+              ...(loadPrograms ? { ramOwnershipPolicy: "require-map" } : {}),
               connect: true, load: loadPrograms && Boolean(artifacts?.cpu1OutPath), haltAtEntry: true
             },
             {
@@ -67,6 +80,10 @@ export class StepRegistry {
             }
           ]
         }));
+        return {
+          ...launch,
+          ...(artifactPreflight ? { artifactPreflight } : {})
+        };
       case "assignExpressions": {
         const activeSessionId = requiredSessionId(sessionId);
         const results: Record<string, unknown>[] = [];
@@ -161,8 +178,17 @@ export class StepRegistry {
           allowDestructiveFlashReload: step.allowDestructiveFlashReload,
           loadSequence: step.loadSequence,
           ipcReadyExpressions: step.ipcReadyExpressions,
-          runSequence: step.runSequence,
-          timeoutMs: step.timeoutMs, intervalMs: step.intervalMs,
+          runSequence: step.runMode
+            ? {
+              ...step.runSequence,
+              runMode: step.runMode,
+              runCpu1First: step.runMode !== "cpu2_pre_running",
+              runCpu2: step.runMode !== "cpu1_boots_cpu2",
+              settleMs: step.runSequence?.settleMs ?? 0
+            }
+            : step.runSequence,
+          timeoutMs: step.timeoutMs ?? 10000,
+          intervalMs: step.intervalMs ?? 100,
           verifyRuntimeRamOwnership: Boolean(step.verifyRuntimeRamOwnership),
           collectDebugBundle: plan.failurePolicy.collectDebugBundle,
           outputDir: artifacts?.outputDir
@@ -489,6 +515,47 @@ export class StepRegistry {
       throw new DebugMcpError("PathOutsideAllowedReadRoots", "Durable artifact access requires an explicit allowed-read-roots policy", { path: candidate, allowedRoots: [] });
     }
     return assertAllowedReadPath(candidate, this.filesystem);
+  }
+
+  /**
+   * Verify caller-declared build hashes before creating a target session.
+   * Hashes are optional for compatibility, but when supplied they turn the
+   * durable launch into a reproducible fresh-artifact boundary instead of
+   * discovering an old or swapped ELF only after target mutation.
+   */
+  private async preflightDeclaredArtifactHashes(artifacts: TestArtifacts | undefined): Promise<Record<string, unknown> | undefined> {
+    if (!artifacts) return undefined;
+    const declarations = [
+      { coreId: 0, kind: "out", path: artifacts.cpu1OutPath, expected: artifacts.cpu1OutSha256 },
+      { coreId: 2, kind: "out", path: artifacts.cpu2OutPath, expected: artifacts.cpu2OutSha256 },
+      { coreId: 0, kind: "map", path: artifacts.cpu1MapPath, expected: artifacts.cpu1MapSha256 },
+      { coreId: 2, kind: "map", path: artifacts.cpu2MapPath, expected: artifacts.cpu2MapSha256 }
+    ];
+    const missingDeclarations = declarations
+      .filter(declaration => declaration.expected && !declaration.path)
+      .map(declaration => `cpu${declaration.coreId === 0 ? 1 : 2}${declaration.kind === "out" ? "Out" : "Map"}Path`);
+    if (missingDeclarations.length > 0) {
+      throw new DebugMcpError("LaunchArtifactsMissing", "A durable launch hash declaration has no corresponding artifact path", {
+        missingDeclarations
+      });
+    }
+    const selected = declarations.filter((declaration): declaration is typeof declarations[number] & { path: string; expected: string } => Boolean(declaration.path && declaration.expected));
+    if (selected.length === 0) return undefined;
+    const verified = await Promise.all(selected.map(async declaration => {
+      const resolvedPath = await this.validateReadPath(declaration.path);
+      const actual = await sha256File(resolvedPath);
+      if (actual.toLowerCase() !== declaration.expected.toLowerCase()) {
+        throw new DebugMcpError("ArtifactHashMismatch", "Declared durable launch artifact hash does not match the host file", {
+          coreId: declaration.coreId,
+          kind: declaration.kind,
+          path: resolvedPath,
+          expectedSha256: declaration.expected,
+          actualSha256: actual
+        });
+      }
+      return { coreId: declaration.coreId, kind: declaration.kind, path: resolvedPath, sha256: actual };
+    }));
+    return { checked: true, mode: "declared-sha256", artifacts: verified };
   }
 
   private async captureExpressions(

@@ -10,12 +10,29 @@ const ipcLoadSequenceSchema = z.object({
 });
 const ipcRunSequenceSchema = z.object({
   runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
-  runCpu1First: z.boolean().default(true),
-  runCpu2: z.boolean().default(false),
+  runCpu1First: z.boolean().optional(),
+  runCpu2: z.boolean().optional(),
   settleMs: z.number().int().nonnegative().default(0),
   /** Disconnect CPU2 while CPU1 performs the firmware-owned boot handoff. */
   releaseCpu2BeforeCpu1: z.boolean().optional()
-});
+}).superRefine((sequence, context) => {
+  if (!sequence.runMode) return;
+  const expected = {
+    cpu1_boots_cpu2: { runCpu1First: true, runCpu2: false },
+    debugger_runs_both: { runCpu1First: true, runCpu2: true },
+    cpu2_pre_running: { runCpu1First: false, runCpu2: true }
+  }[sequence.runMode];
+  if (sequence.runCpu1First !== undefined && sequence.runCpu1First !== expected.runCpu1First) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu1First"], message: `runMode ${sequence.runMode} requires runCpu1First=${expected.runCpu1First}` });
+  }
+  if (sequence.runCpu2 !== undefined && sequence.runCpu2 !== expected.runCpu2) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu2"], message: `runMode ${sequence.runMode} requires runCpu2=${expected.runCpu2}` });
+  }
+}).transform(sequence => ({
+  ...sequence,
+  runCpu1First: sequence.runCpu1First ?? (sequence.runMode !== "cpu2_pre_running"),
+  runCpu2: sequence.runCpu2 ?? (sequence.runMode !== "cpu1_boots_cpu2")
+}));
 
 export const coreConfigSchema = z.object({
   coreId: z.number().int(),
@@ -102,7 +119,13 @@ export const recoverBoardSchema = z.object({
 });
 
 export const submitTestPlanSchema = z.object({ plan: testPlanSchema });
-export const getTestRunSchema = z.object({ jobId: z.string().min(1), includeSteps: z.boolean().default(true), includeEvents: z.boolean().default(false) });
+export const getTestRunSchema = z.object({
+  jobId: z.string().min(1),
+  includeSteps: z.boolean().default(true),
+  includeEvents: z.boolean().default(false),
+  waitForTerminalMs: z.number().int().nonnegative().max(30_000).default(0)
+    .describe("Wait up to 30 seconds for a terminal status to reduce client-side polling; 0 reads immediately.")
+});
 export const listTestRunsSchema = z.object({ status: z.array(z.string().min(1)).min(1).optional() });
 export const cancelTestRunSchema = z.object({ jobId: z.string().min(1) });
 export const getTestArtifactsSchema = z.object({ jobId: z.string().min(1) });
@@ -119,6 +142,7 @@ export const expressionConditionSchema = z.object({
   expression: z.string().min(1),
   expected: z.union([z.string(), z.number(), z.boolean()])
 });
+export const workflowRunModeSchema = z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]);
 export const submitMultiBoardIpcAcceptanceSchema = z.object({
   boardIds: z.array(z.string().min(1)).min(1),
   artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
@@ -133,6 +157,7 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
     .describe("Explicitly authorize repeated CPU2 Flash programming in each durable board session"),
   loadSequence: ipcLoadSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
   runSequence: ipcRunSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
+  runMode: workflowRunModeSchema.default("debugger_runs_both"),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(true),
@@ -242,14 +267,18 @@ export const evaluateManySchema = sessionCoreSchema.extend({
 export const assignExpressionSchema = sessionCoreSchema.extend({
   expression: z.string().min(1),
   value: z.union([z.string(), z.number(), z.boolean()]),
-  verify: z.boolean().default(true)
+  verify: z.boolean().default(true),
+  verification: z.enum(["readback", "write-only"]).optional()
+    .describe("write-only is for one-shot hooks consumed by firmware immediately; it maps to verify=false")
 });
 
 const expressionAssignmentSchema = z.object({
   coreId: z.number().int(),
   expression: z.string().min(1),
   value: z.union([z.string(), z.number(), z.boolean()]),
-  verify: z.boolean().default(true)
+  verify: z.boolean().default(true),
+  verification: z.enum(["readback", "write-only"]).optional()
+    .describe("write-only is for one-shot hooks consumed by firmware immediately; it maps to verify=false")
 });
 
 const expressionEndpointSchema = z.object({
@@ -345,13 +374,37 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   settleMs: z.number().int().nonnegative().default(250)
 });
 
+/**
+ * `runMode` is the durable startup contract. The legacy booleans remain
+ * accepted for compatibility, but an explicitly supplied value may not
+ * contradict the selected mode. When omitted, the booleans retain their
+ * historical defaults; when a mode is supplied, its implied defaults are
+ * materialized so callers do not have to repeat them.
+ */
 export const workflowRunSequenceSchema = z.object({
-  runMode: z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]).optional(),
-  runCpu1First: z.boolean().default(true),
-  runCpu2: z.boolean().default(false),
+  runMode: workflowRunModeSchema.optional(),
+  runCpu1First: z.boolean().optional(),
+  runCpu2: z.boolean().optional(),
   settleMs: z.number().int().nonnegative().default(0),
   releaseCpu2BeforeCpu1: z.boolean().optional()
-}).default({ runCpu1First: true, runCpu2: false, settleMs: 0 });
+}).superRefine((sequence, context) => {
+  if (!sequence.runMode) return;
+  const expected = {
+    cpu1_boots_cpu2: { runCpu1First: true, runCpu2: false },
+    debugger_runs_both: { runCpu1First: true, runCpu2: true },
+    cpu2_pre_running: { runCpu1First: false, runCpu2: true }
+  }[sequence.runMode];
+  if (sequence.runCpu1First !== undefined && sequence.runCpu1First !== expected.runCpu1First) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu1First"], message: `runMode ${sequence.runMode} requires runCpu1First=${expected.runCpu1First}` });
+  }
+  if (sequence.runCpu2 !== undefined && sequence.runCpu2 !== expected.runCpu2) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["runCpu2"], message: `runMode ${sequence.runMode} requires runCpu2=${expected.runCpu2}` });
+  }
+}).transform(sequence => ({
+  ...sequence,
+  runCpu1First: sequence.runCpu1First ?? (sequence.runMode !== "cpu2_pre_running"),
+  runCpu2: sequence.runCpu2 ?? (sequence.runMode !== "cpu1_boots_cpu2")
+})).default({ runCpu1First: true, runCpu2: false, settleMs: 0 });
 
 const runIpcAcceptanceObjectSchema = z.object({
   sessionId: z.string().min(1),

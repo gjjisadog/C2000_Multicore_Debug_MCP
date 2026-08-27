@@ -329,6 +329,9 @@ Use the daemon/job surface for multi-board work:
 - `c2000_submitTestPlan` returns a stable `jobId` immediately; use
   `c2000_getTestRun`, `c2000_listTestRuns`, `c2000_cancelTestRun`, and
   `c2000_getTestArtifacts` afterwards.
+- `c2000_getTestRun` accepts `waitForTerminalMs` from `0` to `30000`; use it
+  after submission when the caller needs the terminal result instead of
+  issuing repeated client-side status polls.
 - A daemon stop marks in-flight runs `RECOVERING`. Startup makes a
   **persisted-metadata-only** decision: it creates fresh worker/session state
   and may restart an authorized RAM plan from its declared whole-board safe
@@ -357,7 +360,16 @@ Supported target-oriented durable steps are:
   `false` creates a connect-only session and never supplies a program path or
   sets a core's `load` flag. `loadSequence` accepts `cpu1-then-cpu2` or the
   explicit `cpu1-run-before-cpu2` RAM-ownership sequence. A second launch is
-  rejected while the board flow still owns an active session; a default or
+  rejected when loading is requested without a complete CPU1/CPU2 artifact
+  pair; CAN-only plans explicitly use connect-only launch when no artifacts
+  are declared. Artifact assignments may include optional `cpu1OutSha256`,
+  `cpu2OutSha256`, `cpu1MapSha256`, and `cpu2MapSha256`; declared hashes are
+  checked against the host files before a target session is created and are
+  returned as `artifactPreflight`. CPU1/CPU2 companion images may use different
+  profile-qualified names such as `DK9_RUNTIME_ACCEPTANCE` and
+  `DK9_CE_PRELOADED_VALIDATION` when their normalized build family, device, and
+  RAM/Flash configuration agree. A second launch is rejected while the board flow still owns
+  an active session; a default or
   `on: always` cleanup must return the same session identity with `closed: true`
   before another launch. Missing or non-true success, missing closure, or an
   identity mismatch leaves the daemon session OPEN for recovery and makes
@@ -613,6 +625,13 @@ Use `c2000_loadSymbols` for a resident image. Set
 an intentional erase/reprogram operation.
 
 Full Debug Bundle captures a `DebugEvidence` object once; diagnosis and bundle writing consume that evidence rather than reading snapshot, PC, and expressions again. Workflow results expose polling and total-duration metrics. Inspect `performance` before increasing timeouts.
+
+`c2000_runIpcAcceptance` also reuses a successful final readiness-poll expression
+batch when building its boot diagnosis, so the same IPC symbols are not read a
+second time (or once per condition). Snapshot, loaded-program, and PC evidence
+remain fresh; timeout paths deliberately re-read after halt recovery. The
+result reports this as `performance.diagnosisExpressionReadsReused` and
+`diagnosis.performance.expressionReadsReused`.
 
 Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run benchmark:hardware` is explicitly opt-in and reports a skip unless the CCS/XDS110 environment is supplied; it never fabricates board timings.
 
@@ -986,6 +1005,8 @@ Use workflow tools for AI-driven automation:
   resident Flash contents.
 - `c2000_runFullDebugBundle`: collect snapshot, loaded-program info, expressions, PC, `.map` evidence, ELF freshness, boot diagnosis, and `summary.md`.
 
+Do not use `c2000_launchMulticoreDebug` followed by generic `c2000_runCores` when the goal is IPC readiness: that sequence does not perform the CPU1/CPU2 boot-handoff contract. Use one of the IPC workflows so load/run ordering, map symbols, first-failure evidence, and diagnosis are captured together.
+
 Recommended one-approval call from an unconnected target through `c2000_launchAndRunIpcAcceptance`:
 
 ```json
@@ -1019,14 +1040,29 @@ Recommended one-approval call from an unconnected target through `c2000_launchAn
 runs only CPU1 for the firmware boot handoff, then reconnects CPU2 before
 diagnosis; `debugger_runs_both` runs CPU1 then CPU2, and `cpu2_pre_running`
 starts CPU2 before CPU1. The legacy `runCpu1First`/`runCpu2` fields remain
-supported when `runMode` is omitted. The result includes the resolved `runPlan`,
-and for the firmware-owned mode a `cpu2Release` record, plus created
-`sessionId`, launch connection evidence, `workflow`, `orchestration:
+supported when `runMode` is omitted; when a mode is supplied, omitted legacy
+fields are derived from it and contradictory values are rejected. The server
+rejects incompatible load/run combinations before halting or loading the
+target. With real linker maps, the workflow checks that requested IPC condition
+root symbols exist before target mutation; minimal maps without a recognizable
+symbol table are retained as an explicit `checked=false` preflight result. The
+result includes the resolved `runPlan`, `loadSequence`, `startupContract`,
+created `sessionId`, launch connection evidence, `workflow`, `orchestration:
 "server-internal"`, `mcpToolCalls: []`, explicit CPU IDs, snapshot evidence,
-RAM ownership analysis, ELF freshness, IPC-ready conditions, boot handoff
-diagnosis, and optional bundle files. Bundles include both the detailed JSON
-files and a compact `evidence.json`. On launch failure the server closes the
-newly created logical session before returning a structured error.
+artifact preflight, RAM ownership analysis, ELF freshness, IPC-ready
+conditions, boot handoff diagnosis, an auditable optimization feedback record,
+and optional bundle files. For firmware-owned startup, it also includes a
+`cpu2Release` record. Bundles include `artifact-preflight.json`, the detailed
+JSON files, and a compact `evidence.json`. On launch failure the server closes
+the newly created logical session before returning a structured error.
+
+Durable step failures also include an `optimization` record. It distinguishes
+transient probe loss (`PROBE_TRANSIENT_UNAVAILABLE`), synchronization-sensitive
+preload failures (`PRELOADED_LOAD_SEMANTICS`), host artifact problems,
+safety-fence failures, and IPC handshake timeouts. The record is diagnostic
+only (`automaticRetry: "never"`); it points the next action to readiness
+recheck, artifact repair, read-only diagnosis, or manual intervention without
+hiding the original error.
 
 ## RAM Ownership Analysis
 
@@ -1124,7 +1160,7 @@ Example:
 
 ## Fault Injection
 
-`c2000_assignExpression` assigns one expression on one explicit core. It requires `sessionId`, `coreId`, `expression`, and `value`. By default `verify` is `true`: after the write, the same core re-reads the expression and **fails the tool** if the write reported failure or the readback does not match the assigned value (numeric strings such as `"0"` and `0` compare equal).
+`c2000_assignExpression` assigns one expression on one explicit core. It requires `sessionId`, `coreId`, `expression`, and `value`. By default `verify` is `true`: after the write, the same core re-reads the expression and **fails the tool** if the write reported failure or the readback does not match the assigned value (numeric strings such as `"0"` and `0` compare equal). For a firmware hook that is intentionally consumed immediately, set `verification: "write-only"`; the server maps that semantic mode to `verify: false` and records a successful write without a misleading readback check.
 
 | Outcome | Error code |
 | --- | --- |
@@ -1132,7 +1168,7 @@ Example:
 | Readback missing, failed, or mismatched (when `verify: true`) | `ExpressionVerifyFailed` |
 | Write + matching readback | success with `write` and `readback` fields |
 
-Set `"verify": false` only when you intentionally skip readback (for example a write-only register or a follow-up poll with `c2000_waitUntilExpression`).
+Set `"verification": "write-only"` for a one-shot hook. `verify: false` remains supported for compatibility; ordinary variables should keep the default readback verification.
 
 Example:
 
@@ -1148,7 +1184,7 @@ Example:
 
 String values are treated as CCS/C expression fragments, so values such as `"0x1"` or `"MY_ENUM_VALUE"` can be used for target-side assignments. Use `c2000_evaluateMany` on the peer core to confirm the injection did not change unrelated CPU1/CPU2 state.
 
-`c2000_assignExpressions` applies multiple explicit per-core assignments in one request. Every item carries its own `coreId`, `expression`, `value`, and optional `verify` flag (default `true`); the response returns independent per-item results and a top-level failure if any item fails.
+`c2000_assignExpressions` applies multiple explicit per-core assignments in one request. Every item carries its own `coreId`, `expression`, `value`, and optional `verify` flag (default `true`) or `verification` mode (`readback`/`write-only`); the response returns independent per-item results and a top-level failure if any item fails.
 
 Example:
 
@@ -1216,6 +1252,8 @@ Example:
 ```
 
 The result includes `matched`, `timedOut`, and the latest per-condition evaluation result.
+
+For `c2000_startVariableStream`, prefer each variable as `{ "symbol": "...", "typeName": "uint16_t" }` (and provide `enumSignedness` for simple enums). Bare symbol strings remain supported when the adapter reports a reliable C type; otherwise the server fails before polling with `VariableTypeRequired` and returns the exact symbol that needs an explicit type. This avoids repeated target reads caused by guessing C28x width or address units.
 
 ## Advanced Launch Flow
 
@@ -1593,7 +1631,7 @@ For Hybrid30K runtime acceptance, the OFF-state startup baseline must not requir
 
 ## Filesystem Policy
 
-`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output. Tool errors return the canonical rejected path and configured roots. Keep `.ccxml`, `.out`, and `.map` inputs under a read root, and `outputDir` under a write root. The runtime also adds configured TI paths (`ccs.installPath`, `ccs.c2000WarePath`, the configured ccxml directory), board ccxml directories, and `programSearchRoots` to the read policy. This allows CCS to live outside the firmware checkout without allowing arbitrary per-call paths; an explicitly supplied firmware `searchRoots` must still be configured in `programSearchRoots` or `C2000_MCP_ALLOWED_READ_ROOTS`.
+`C2000_MCP_ALLOWED_READ_ROOTS` and `C2000_MCP_ALLOWED_WRITE_ROOTS` use the platform path delimiter. Paths are resolved through real filesystem parents before containment checks, including missing write targets, so traversal and symlink escapes fail closed. Default read access is the configured repository/workspace and default writes are limited to `runtime`; an empty write-root list rejects bundle output. When `outputDir` is omitted, workflow bundles use a timestamped directory under the first configured write root. Tool errors return the canonical rejected path and configured roots. Keep `.ccxml`, `.out`, and `.map` inputs under a read root, and `outputDir` under a write root. The runtime also adds configured TI paths (`ccs.installPath`, `ccs.c2000WarePath`, the configured ccxml directory), board ccxml directories, and `programSearchRoots` to the read policy. This allows CCS to live outside the firmware checkout without allowing arbitrary per-call paths; an explicitly supplied firmware `searchRoots` must still be configured in `programSearchRoots` or `C2000_MCP_ALLOWED_READ_ROOTS`.
 
 ## RAM Ownership Policy
 
