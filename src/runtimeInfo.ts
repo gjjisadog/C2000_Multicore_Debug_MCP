@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import process from "node:process";
 import type { C2000McpConfig } from "./config/config.schema.js";
 
@@ -21,6 +24,37 @@ export function runtimeBuildInfo() {
   };
 }
 
+/**
+ * Inspect the runtime that launched this process. A source checkout is allowed
+ * to use the developer's Node; an installed offline artifact must be launched
+ * by the node.exe kept beside the installed MCP versions.
+ */
+export function inspectRuntime() {
+  const manifestPath = findRuntimeManifestPath();
+  const manifest = readManifest(manifestPath);
+  const expectedNodePath = manifest?.runtime?.bundledNode === true
+    ? findBundledNodePath(manifestPath)
+    : undefined;
+  const nativeBindingsValid = manifestPath
+    ? verifyNativeBindings(manifestPath, manifest?.nativeBindings)
+    : false;
+  const bundledNode = manifest?.runtime?.bundledNode === true
+    && Boolean(expectedNodePath)
+    && samePath(process.execPath, expectedNodePath!);
+  return {
+    bundledNode,
+    nodePath: process.execPath,
+    expectedNodePath: expectedNodePath ?? null,
+    nodeVersion: process.version,
+    nodeModulesAbi: process.versions.modules,
+    platform: process.platform,
+    arch: process.arch,
+    nativeBindingsValid,
+    runtimeManifestPath: manifestPath ?? null,
+    declaredRuntime: manifest?.runtime ?? null
+  };
+}
+
 export function buildServerHealth(config: C2000McpConfig, startedAt: string, registeredToolNames: string[]) {
   const adapterMode = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
   return {
@@ -28,10 +62,8 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
     server: { name: SERVER_NAME, version: SERVER_VERSION },
     runtime: {
       bundled: isBundledRuntime(),
+      ...inspectRuntime(),
       entrypoint: process.argv[1],
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
       pid: process.pid,
       startedAt,
       uptimeSeconds: Math.floor(process.uptime()),
@@ -68,4 +100,60 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
       registeredNames: registeredToolNames
     }
   };
+}
+
+function findRuntimeManifestPath(): string | undefined {
+  let current = process.argv[1]
+    ? path.dirname(path.resolve(process.argv[1]))
+    : process.cwd();
+  while (true) {
+    const candidate = path.join(current, "runtime-manifest.json");
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(current);
+    if (parent === current) return undefined;
+    current = parent;
+  }
+}
+
+function readManifest(manifestPath: string | undefined): any | undefined {
+  if (!manifestPath) return undefined;
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function findBundledNodePath(manifestPath: string | undefined): string | undefined {
+  if (!manifestPath) return undefined;
+  const packageRoot = path.dirname(path.dirname(path.dirname(manifestPath)));
+  const candidates = [
+    path.join(packageRoot, "runtime", process.platform === "win32" ? "node.exe" : "node"),
+    path.join(path.dirname(packageRoot), "runtime", process.platform === "win32" ? "node.exe" : "node"),
+    path.join(path.dirname(path.dirname(packageRoot)), "runtime", process.platform === "win32" ? "node.exe" : "node")
+  ];
+  return candidates.find(candidate => existsSync(candidate));
+}
+
+function verifyNativeBindings(manifestPath: string, bindings: unknown): boolean {
+  if (!Array.isArray(bindings) || bindings.length === 0) return false;
+  const base = path.dirname(manifestPath);
+  return bindings.every(binding => {
+    if (!binding || typeof binding !== "object") return false;
+    const candidate = binding as { path?: unknown; sha256?: unknown };
+    if (typeof candidate.path !== "string" || !/^[0-9a-f]{64}$/i.test(String(candidate.sha256))) return false;
+    const bindingPath = path.resolve(base, candidate.path);
+    const relative = path.relative(base, bindingPath);
+    if (relative.startsWith("..") || path.isAbsolute(relative) || !existsSync(bindingPath)) return false;
+    try {
+      const actual = createHash("sha256").update(readFileSync(bindingPath)).digest("hex");
+      return actual.toLowerCase() === String(candidate.sha256).toLowerCase();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function samePath(left: string, right: string): boolean {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
 }

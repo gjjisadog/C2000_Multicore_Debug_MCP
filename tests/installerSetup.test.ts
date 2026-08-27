@@ -103,7 +103,7 @@ describe("one-command installer", () => {
       const packageRoot = path.join(temporary, "package");
       const installRoot = path.join(temporary, "install");
       const version = "9.9.9";
-      const installDirectory = path.join(installRoot, "versions", `${version}-${process.platform}-${process.arch}-abi${process.versions.modules}`);
+      const installDirectory = path.join(installRoot, "versions", `${version}-${process.platform}-${process.arch}`);
       const newManifest = {
         version,
         builtAt: "2026-08-24T01:00:00.000Z",

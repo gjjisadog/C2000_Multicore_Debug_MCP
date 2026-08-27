@@ -1,0 +1,4 @@
+# Generated Python development metadata is not a release input.
+python/**/__pycache__/
+python/**/*.py[cod]
+python/**/*.egg-info/

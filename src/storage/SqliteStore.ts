@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -10,7 +11,10 @@ export class SqliteStore {
   static async open(databasePath: string, options: { wal?: boolean } = {}): Promise<SqliteStore> {
     const resolvedPath = path.resolve(databasePath);
     await mkdir(path.dirname(resolvedPath), { recursive: true });
-    const database = new Database(resolvedPath);
+    const nativeBinding = resolveSqliteNativeBinding();
+    const database = nativeBinding
+      ? new Database(resolvedPath, { nativeBinding })
+      : new Database(resolvedPath);
     const store = new SqliteStore(database, resolvedPath);
     database.pragma("foreign_keys = ON");
     if (options.wal ?? true) {
@@ -51,4 +55,20 @@ export class SqliteStore {
   close(): void {
     this.database.close();
   }
+}
+
+/**
+ * Bundled esbuild output cannot rely on the `bindings` package's stack-based
+ * module-root discovery. Prefer the native binding copied next to dist/src;
+ * source/developer execution falls back to better-sqlite3's normal lookup.
+ */
+export function resolveSqliteNativeBinding(entrypoint = process.argv[1]): string | undefined {
+  if (!entrypoint) return undefined;
+  const entryDirectory = path.dirname(path.resolve(entrypoint));
+  const candidates = [
+    path.join(entryDirectory, "build", "Release", "better_sqlite3.node"),
+    path.join(entryDirectory, "..", "build", "Release", "better_sqlite3.node"),
+    path.join(entryDirectory, "..", "..", "build", "Release", "better_sqlite3.node")
+  ];
+  return candidates.map(candidate => path.resolve(candidate)).find(candidate => existsSync(candidate));
 }

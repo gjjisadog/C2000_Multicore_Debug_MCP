@@ -20,7 +20,7 @@ if ($architecture -ne "x64") {
   throw "Windows source installation currently supports x64; detected $architecture."
 }
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  throw "Node.js was not found. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS."
+  throw "Node.js was not found. Source installation is a developer workflow; install a supported developer Node.js release or use the Windows offline ZIP."
 }
 if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
   throw "npm.cmd was not found next to the active Node.js installation."
@@ -33,7 +33,7 @@ $nodeSupported = ($nodeVersion.Major -eq 20 -and $nodeVersion.Minor -ge 19) -or
   ($nodeVersion.Major -eq 22 -and $nodeVersion.Minor -ge 12) -or
   ($nodeVersion.Major -eq 24)
 if (-not $nodeSupported) {
-  throw "Node.js $nodeVersionText is unsupported. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS."
+  throw "Node.js $nodeVersionText is unsupported for source builds. Install a supported developer Node.js release or use the Windows offline ZIP."
 }
 
 $stagingRoot = Join-Path ([System.IO.Path]::GetTempPath()) "c2000-source-install-$([guid]::NewGuid().ToString('N'))"

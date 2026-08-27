@@ -34,8 +34,19 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Read the fixed Windows developer runtime version
+        id: runtime
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/runtime-manifest.json | ConvertFrom-Json
+          if (-not $config.runtime.version -or $config.runtime.version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "config/runtime-manifest.json must contain a complete runtime version."
+          }
+          "version=$($config.runtime.version)" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v4
-        with: { node-version: "22", cache: npm }
+        with:
+          node-version: ${{ steps.runtime.outputs.version }}
+          cache: npm
       - run: npm ci
       - run: npm run build
       - run: npm run doctor:isolated
@@ -55,41 +66,99 @@ jobs:
 
   packaging-ci:
     name: Packaging CI (${{ matrix.target }})
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include:
+          # This is the only Windows packaging target. It must be built by
+          # the exact Node version shipped to the end user.
           - os: windows-latest
-            target: win32-x64-abi115
-            node: "20.19"
-          - os: windows-latest
-            target: win32-x64-abi127
-            node: "22.12"
-          - os: windows-latest
-            target: win32-x64-abi137
-            node: "24"
+            target: win32-x64
+            fixedRuntime: true
           - os: macos-14
             target: darwin-arm64
             node: "24"
+            fixedRuntime: false
           - os: macos-15-intel
             target: darwin-x64
             node: "24"
+            fixedRuntime: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Read the fixed Windows runtime version
+        id: runtime
+        if: matrix.fixedRuntime
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/runtime-manifest.json | ConvertFrom-Json
+          if (-not $config.runtime.version -or $config.runtime.version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "config/runtime-manifest.json must contain a complete runtime version."
+          }
+          "version=$($config.runtime.version)" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v4
-        with: { node-version: "${{ matrix.node }}", cache: npm }
+        with:
+          node-version: ${{ matrix.fixedRuntime && steps.runtime.outputs.version || matrix.node }}
+          cache: npm
       - run: npm ci
-      - run: npm run build
+      - name: Build the fixed Windows package
+        if: matrix.fixedRuntime
+        run: npm run build
+        env:
+          C2000_FIXED_RUNTIME_BUILD: "1"
+      - name: Build the developer component package
+        if: ${{ !matrix.fixedRuntime }}
+        run: npm run build
       - run: npm pack
       - run: npm run verify:package
       - run: node scripts/prepare-release-asset.mjs ${{ matrix.target }}
+      - name: Build and archive the Windows offline bundle
+        if: matrix.fixedRuntime
+        shell: pwsh
+        run: |
+          node scripts/prepare-offline-bundle.mjs
+          $manifest = Get-Content -Raw offline-bundle-win32-x64/manifest.json | ConvertFrom-Json
+          Compress-Archive -Path "offline-bundle-win32-x64/*" -DestinationPath $manifest.artifact.fileName -Force
+      - name: Assert the clean Windows offline install has no toolchain dependency
+        if: matrix.fixedRuntime
+        shell: pwsh
+        env:
+          C2000_MCP_ADAPTER: mock
+        run: |
+          $bundle = (Resolve-Path offline-bundle-win32-x64).Path
+          $installRoot = Join-Path $env:RUNNER_TEMP "c2000-offline-install-$([guid]::NewGuid().ToString('N'))"
+          $codexHome = Join-Path $env:RUNNER_TEMP "c2000-offline-codex-$([guid]::NewGuid().ToString('N'))"
+          New-Item -ItemType Directory -Path $codexHome | Out-Null
+          $oldPath = $env:PATH
+          try {
+            $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+            foreach ($tool in @("node", "npm", "npx", "gh", "git", "python")) {
+              if (Get-Command $tool -ErrorAction SilentlyContinue) {
+                throw "Clean acceptance PATH unexpectedly exposes $tool."
+              }
+            }
+            $env:CODEX_HOME = $codexHome
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "install.ps1") `
+              --install-root $installRoot --workspace $env:RUNNER_TEMP
+            if ($LASTEXITCODE -ne 0) { throw "Offline installer failed with exit code $LASTEXITCODE." }
+            $privateNode = Join-Path $installRoot "runtime\node.exe"
+            & $privateNode (Join-Path $bundle "mcp\scripts\verify-offline-acceptance.mjs") --install-root $installRoot
+            if ($LASTEXITCODE -ne 0) { throw "Offline acceptance failed with exit code $LASTEXITCODE." }
+          } finally {
+            $env:PATH = $oldPath
+            Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $codexHome -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
       - uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.target }}
+          if-no-files-found: error
           path: |
             c2000-multicore-mcp-*-${{ matrix.target }}.tgz
+            c2000-multicore-mcp-*-offline-win32-x64.zip
             dist/src/runtime-manifest.json
+            offline-bundle-win32-x64/manifest.json
+            offline-bundle-win32-x64/SHA256SUMS.json
             sbom.cdx.json

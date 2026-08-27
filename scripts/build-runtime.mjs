@@ -10,6 +10,32 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 const outdir = process.env.C2000_BUILD_RUNTIME_OUTDIR
   ? path.resolve(process.env.C2000_BUILD_RUNTIME_OUTDIR)
   : path.join(projectRoot, "dist", "src");
+const fixedRuntimeBuild = process.env.C2000_FIXED_RUNTIME_BUILD === "1";
+const runtimeConfig = JSON.parse(await readFile(
+  path.join(projectRoot, "config", "runtime-manifest.json"),
+  "utf8"
+));
+const configuredRuntime = runtimeConfig.runtime;
+if (!configuredRuntime || typeof configuredRuntime !== "object") {
+  throw new Error("config/runtime-manifest.json is missing the runtime configuration");
+}
+if (fixedRuntimeBuild) {
+  if (configuredRuntime.platform !== "win32" || configuredRuntime.arch !== "x64") {
+    throw new Error("The fixed runtime build target must be win32-x64.");
+  }
+  if (process.platform !== configuredRuntime.platform || process.arch !== configuredRuntime.arch) {
+    throw new Error(
+      `The fixed runtime build requires ${configuredRuntime.platform}-${configuredRuntime.arch}; `
+      + `detected ${process.platform}-${process.arch}.`
+    );
+  }
+  if (process.version !== configuredRuntime.nodeVersion || process.versions.modules !== configuredRuntime.modulesAbi) {
+    throw new Error(
+      `The fixed runtime build requires Node ${configuredRuntime.nodeVersion} (ABI ${configuredRuntime.modulesAbi}); `
+      + `detected ${process.version} (ABI ${process.versions.modules}).`
+    );
+  }
+}
 const builtAt = new Date().toISOString();
 const sourceState = readSourceState(projectRoot);
 
@@ -22,7 +48,8 @@ await build({
     "daemon/index": "src/daemon/index.ts",
     "worker/index": "src/worker/index.ts",
     "can-worker/index": "src/can-worker/index.ts",
-    "installer/index": "src/installer/index.ts"
+    "installer/index": "src/installer/index.ts",
+    "installer/runtime-check": "src/installer/runtimeCheck.ts"
   },
   outdir,
   bundle: true,
@@ -43,15 +70,18 @@ await build({
 // better-sqlite3 is CommonJS/native. A CJS runtime directory lets esbuild
 // preserve its Node require semantics without relying on the package root.
 await writeFile(path.join(outdir, "package.json"), `${JSON.stringify({ type: "commonjs" })}\n`);
-await copyNativeSqliteBinding(projectRoot, outdir);
-await writeRuntimeManifest(projectRoot, outdir, builtAt, sourceState);
+const nativeBindings = [await copyNativeSqliteBinding(projectRoot, outdir)];
+const koffiBinding = await copyKoffiPackage(projectRoot, outdir);
+if (koffiBinding) nativeBindings.push(koffiBinding);
+await writeRuntimeManifest(projectRoot, outdir, builtAt, sourceState, nativeBindings);
 
 await Promise.all([
   chmod(path.join(outdir, "index.js"), 0o755),
   chmod(path.join(outdir, "daemon", "index.js"), 0o755),
   chmod(path.join(outdir, "worker", "index.js"), 0o755),
   chmod(path.join(outdir, "can-worker", "index.js"), 0o755),
-  chmod(path.join(outdir, "installer", "index.js"), 0o755)
+  chmod(path.join(outdir, "installer", "index.js"), 0o755),
+  chmod(path.join(outdir, "installer", "runtime-check.js"), 0o755)
 ]);
 
 async function copyNativeSqliteBinding(root, runtimeDirectory) {
@@ -75,35 +105,114 @@ async function copyNativeSqliteBinding(root, runtimeDirectory) {
   const destination = path.join(runtimeDirectory, "build", "Release", "better_sqlite3.node");
   await mkdir(path.dirname(destination), { recursive: true });
   await copyFile(source, destination);
+  const binding = await readFile(destination);
+  return {
+    name: "better_sqlite3.node",
+    sha256: createHash("sha256").update(binding).digest("hex"),
+    path: path.relative(runtimeDirectory, destination).replaceAll("\\", "/"),
+    abi: process.versions.modules,
+    packageVersion: JSON.parse(await readFile(path.join(root, "node_modules", "better-sqlite3", "package.json"), "utf8")).version
+  };
 }
 
-async function writeRuntimeManifest(root, runtimeDirectory, runtimeBuiltAt, runtimeSourceState) {
+async function copyKoffiPackage(root, runtimeDirectory) {
+  const sourceRoot = path.join(root, "node_modules", "koffi");
+  try {
+    await access(path.join(sourceRoot, "package.json"));
+  } catch {
+    return undefined;
+  }
+
+  const triplet = `${process.platform}_${process.arch}`;
+  const sourceBinding = path.join(sourceRoot, "build", "koffi", triplet, "koffi.node");
+  try {
+    await access(sourceBinding);
+  } catch {
+    throw new Error(`koffi is installed but its ${triplet} native binding is missing: ${sourceBinding}`);
+  }
+
+  const destinationRoot = path.join(runtimeDirectory, "node_modules", "koffi");
+  await mkdir(path.join(destinationRoot, "build", "koffi", triplet), { recursive: true });
+  for (const file of ["index.js", "indirect.js", "package.json", "LICENSE.txt"]) {
+    const source = path.join(sourceRoot, file);
+    try {
+      await access(source);
+      await copyFile(source, path.join(destinationRoot, file));
+    } catch {
+      if (file === "LICENSE.txt") continue;
+      throw new Error(`koffi runtime file is missing: ${source}`);
+    }
+  }
+  const destinationBinding = path.join(destinationRoot, "build", "koffi", triplet, "koffi.node");
+  await copyFile(sourceBinding, destinationBinding);
+  try {
+    const requireFromRuntime = createRequire(path.join(runtimeDirectory, "package.json"));
+    requireFromRuntime("./node_modules/koffi");
+  } catch (error) {
+    throw new Error(
+      `The copied koffi ${triplet} native binding could not be loaded by the active Node ${process.version}: `
+      + `${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  const packageMetadata = JSON.parse(await readFile(path.join(sourceRoot, "package.json"), "utf8"));
+  const binding = await readFile(destinationBinding);
+  return {
+    name: "koffi.node",
+    sha256: createHash("sha256").update(binding).digest("hex"),
+    path: path.relative(runtimeDirectory, destinationBinding).replaceAll("\\", "/"),
+    abi: "napi",
+    packageVersion: packageMetadata.version
+  };
+}
+
+async function writeRuntimeManifest(root, runtimeDirectory, runtimeBuiltAt, runtimeSourceState, nativeBindings) {
   const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const sqlitePackage = JSON.parse(await readFile(path.join(root, "node_modules", "better-sqlite3", "package.json"), "utf8"));
-  const relativeBinding = path.join("build", "Release", "better_sqlite3.node").replaceAll("\\", "/");
-  const binding = await readFile(path.join(runtimeDirectory, relativeBinding));
+  const runtime = fixedRuntimeBuild
+    ? {
+        name: configuredRuntime.name,
+        version: configuredRuntime.version,
+        nodeVersion: configuredRuntime.nodeVersion,
+        platform: configuredRuntime.platform,
+        arch: configuredRuntime.arch,
+        modulesAbi: configuredRuntime.modulesAbi,
+        archiveName: configuredRuntime.archiveName,
+        source: configuredRuntime.source,
+        checksumSource: configuredRuntime.checksumSource,
+        archiveSha256: configuredRuntime.archiveSha256,
+        bundledNode: false,
+        executable: "runtime/node.exe"
+      }
+    : {
+        name: "node",
+        version: process.versions.node,
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        modulesAbi: process.versions.modules,
+        bundledNode: false
+      };
   const manifest = {
+    schemaVersion: 2,
     version: packageJson.version,
     builtAt: runtimeBuiltAt,
     sourceRevision: runtimeSourceState.revision,
     sourceDirty: runtimeSourceState.dirty,
     platform: process.platform,
     arch: process.arch,
-    nodeVersion: process.version,
-    nodeModulesAbi: process.versions.modules,
+    nodeVersion: runtime.nodeVersion,
+    nodeModulesAbi: runtime.modulesAbi,
+    runtime,
     betterSqlite3Version: sqlitePackage.version,
     entrypoints: {
       proxy: "index.js",
       daemon: "daemon/index.js",
       worker: "worker/index.js",
       canWorker: "can-worker/index.js",
-      installer: "installer/index.js"
+      installer: "installer/index.js",
+      runtimeCheck: "installer/runtime-check.js"
     },
-    nativeBindings: [{
-      name: "better_sqlite3.node",
-      sha256: createHash("sha256").update(binding).digest("hex"),
-      path: relativeBinding
-    }]
+    nativeBindings
   };
   await writeFile(path.join(runtimeDirectory, "runtime-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }

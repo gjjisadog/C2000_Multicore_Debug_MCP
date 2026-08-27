@@ -42,7 +42,7 @@ describe("ccs install path discovery", () => {
       path.resolve(newInstall)
     ]));
 
-    const resolved = await resolveCcsInstallPath({ searchRoots: [root] });
+    const resolved = await resolveCcsInstallPath({ searchRoots: [root], envInstallPath: "" });
     expect(resolved.source).toBe("discovered");
     expect(resolved.installPath).toBe(path.resolve(newInstall));
   });

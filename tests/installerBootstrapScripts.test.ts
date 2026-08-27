@@ -5,9 +5,10 @@ describe("installer bootstrap scripts", () => {
   test("Windows release bootstrap fails fast and verifies the private release asset", async () => {
     const source = await readFile("scripts/install-release.ps1", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");
-    expect(source).toContain("24.x");
-    expect(source).toContain("process.versions.modules");
-    expect(source).toContain("install-offline.ps1");
+    expect(source).toContain("offline-win32-x64.zip");
+    expect(source).toContain("install.ps1");
+    expect(source).not.toContain("Get-Command node");
+    expect(source).not.toContain("process.versions.modules");
     expect(source).not.toContain("npm.cmd exec");
     expect(source).toContain("finally");
   });
@@ -19,8 +20,9 @@ describe("installer bootstrap scripts", () => {
     expect(source).toContain("runtime-manifest.json");
     expect(source).toContain("dist\\src");
     expect(source).toContain("installer\\index.js");
-    expect(source).toContain("& node $installerPath install @InstallerArguments");
-    expect(source).toContain("Remove-Item -LiteralPath $stagingRoot");
+    expect(source).toContain("runtime\\node.exe");
+    expect(source).toContain("& $nodePath $installerPath install @InstallerArguments");
+    expect(source).toContain("$env:C2000_MCP_OFFLINE_BUNDLE_ROOT");
     expect(source).not.toContain("& npm");
     expect(source).not.toContain("npm.cmd");
     expect(source).not.toContain("gh ");
@@ -46,12 +48,14 @@ describe("installer bootstrap scripts", () => {
     expect(source).toContain("trap 'rm -rf \"$download_directory\"' EXIT");
   });
 
-  test("release automation publishes all supported Windows ABIs in one offline bundle", async () => {
+  test("release automation publishes one fixed-runtime Windows offline bundle", async () => {
     const source = await readFile(".github/workflows/release.yml", "utf8");
-    expect(source).toContain("target: win32-x64-abi115");
-    expect(source).toContain("target: win32-x64-abi127");
-    expect(source).toContain("target: win32-x64-abi137");
-    expect(source).toContain("offline-bundle-win32-x64.zip");
-    expect(source).toContain("scripts/install-offline.ps1");
+    expect(source).toContain("target: win32-x64");
+    expect(source).toContain("C2000_FIXED_RUNTIME_BUILD");
+    expect(source).toContain("config/runtime-manifest.json");
+    expect(source).toContain("offline-win32-x64.zip");
+    expect(source).not.toContain("target: win32-x64-abi115");
+    expect(source).not.toContain("target: win32-x64-abi127");
+    expect(source).not.toContain("target: win32-x64-abi137");
   });
 });

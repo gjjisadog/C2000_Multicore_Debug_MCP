@@ -135,10 +135,23 @@ uses authenticated local RPC rather than unconditional `taskkill`. For
 production Windows deployment use a service manager such as NSSM; these npm
 scripts are not a complete Windows Service manager.
 
-Runtime bundles are platform-, architecture-, Node ABI-, and native-binding
-specific. Each build clears `dist/src`, overwrites `better_sqlite3.node`, and
-writes `runtime-manifest.json`. Doctor verifies platform, architecture, ABI,
-and binding SHA-256. Do not copy bundles across platforms or Node ABIs.
+Runtime artifacts are platform-, architecture-, and native-binding-specific.
+Each build clears `dist/src`, writes the native bindings and
+`runtime-manifest.json`, and doctor verifies platform, architecture, ABI, and
+binding SHA-256. The Windows x64 release is a standalone offline bundle with
+the fixed Node.js `22.12.0` runtime (modules ABI `127`) inside the package; its
+users do not install Node or choose an ABI. Other platforms continue to use
+developer-built component artifacts.
+
+### Developer runtime versus installed runtime
+
+`package.json` engines describe the Node versions supported by the developer
+toolchain (`npm ci`, build, test, and packaging). They are not a prerequisite
+for installing the Windows offline release. The installed Windows MCP is
+launched by its private `runtime/node.exe`; `process.execPath` is intentionally
+that private executable for the proxy, daemon, board worker, CAN worker,
+supervisor, and doctor. Building from source requires Node.js and npm;
+installing the Windows offline bundle does not.
 
 ## What It Solves
 
@@ -187,60 +200,56 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ## Install
 
-### One-command install (Windows and macOS)
+### Standalone offline install (Windows x64)
 
-Prerequisites: Node.js 22.12+ LTS (recommended), Node.js 24.x, or Node.js 20.19+ LTS; an
-authenticated GitHub CLI (`gh auth status --hostname github.com`); and Codex.
-This repository is private, so anonymous release URLs do not work. The
-bootstrap fails before downloading when the Node version or GitHub
-authentication is invalid, selects the runtime for the active Node ABI, verifies
-the release archive against the published SHA-256 metadata, and removes its
-temporary download directory. No npm command or dependency download is used.
-The installer copies the
-platform-specific bundled runtime to `~/.c2000-multicore-mcp`, installs the
-bundled Codex skill, registers the `c2000-multicore` MCP server, and runs a
-runtime handshake check. Restart Codex after it succeeds.
-
-Windows x64 (PowerShell):
+Download the single release asset
+`c2000-multicore-mcp-x.y.z-offline-win32-x64.zip`, extract it on the target
+machine, and run:
 
 ```powershell
-gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - | powershell -NoProfile -ExecutionPolicy Bypass -Command -
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-macOS (Apple Silicon and Intel):
+No Node.js, npm, npx, Git, GitHub CLI, Python, Visual Studio Build Tools, or
+Internet connection is required. The ZIP contains the fixed private Node
+runtime, MCP bundle, native bindings, installer, manifest, checksums, and
+skill. The installer verifies all of them and then uses only the included
+`runtime\\node.exe`. The default per-user install is
+`%USERPROFILE%\\.c2000-multicore-mcp`; no system `PATH`, HKLM, or Program Files
+entry is modified.
+
+If Codex is not installed, keep the MCP runtime installation and skip
+registration:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --no-register
+```
+
+Without the Codex CLI, a normal install falls back to an idempotent managed
+block in `%USERPROFILE%\\.codex\\config.toml` and preserves unrelated settings
+and MCP servers. See [README-OFFLINE.md](README-OFFLINE.md) for upgrade,
+uninstall, external CCS/PCAN prerequisites, and the internal runtime metadata.
+
+### Online bootstrap
+
+The Windows online bootstrap still requires an authenticated GitHub CLI only to
+download the offline ZIP. It then invokes the same bundle installer, so online
+and USB/internal-network installation share one installation path:
+
+```powershell
+gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - |
+  powershell -NoProfile -ExecutionPolicy Bypass -Command -
+```
+
+macOS continues to use the existing authenticated release bootstrap:
 
 ```bash
 gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
 ```
 
 The release tag and assets must exist before these download commands can be
-used.
-
-### One-command offline install (Windows x64)
-
-On a connected machine, download `offline-bundle-win32-x64.zip` from the
-release and transfer it to the offline machine. The bundle contains the native
-runtimes for Node 20 ABI 115, Node 22 ABI 127, and Node 24 ABI 137, their
-SHA-256 metadata, and the installer. Extract it and run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install-offline.ps1
-```
-
-The script detects the active ABI, selects the matching local `.tgz`, verifies
-the archive SHA-256 and size, rejects unsafe archive paths, verifies the
-platform, ABI, and bundled native binding, directly runs
-`dist/src/installer/index.js`, and finishes with the installer's doctor check.
-It never invokes npm or accesses the network.
-
-For an unpublished or separately transferred package, pass both files
-explicitly:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install-offline.ps1 `
-  -PackagePath .\c2000-multicore-mcp-0.7.0-win32-x64-abi137.tgz `
-  -ChecksumPath .\SHA256SUMS-win32-x64-abi137.json
-```
+used. Windows end users do not need the GitHub CLI when they already have the
+offline ZIP.
 
 Useful options:
 
@@ -269,7 +278,7 @@ Pass installer options after `--`, for example:
 npm run install:source:windows -- --config C:\absolute\c2000.json --force
 ```
 
-This path validates the complete Node version before changing dependencies,
+This developer-only path validates the complete developer Node version before changing dependencies,
 skips `npm ci` when the lockfile dependencies and native SQLite binding are
 already usable, and builds under a unique temporary directory. It never
 overwrites the repository `dist` directory, so running Codex MCP
@@ -287,7 +296,7 @@ npm run build
 npm run doctor
 ```
 
-`npm run build` first type-checks production sources with the pinned TypeScript CLI (`lib/_tsc.js`), then invokes esbuild for the proxy, daemon, board-worker, CAN-worker, and installer entrypoints. It emits CommonJS self-contained bundles under `dist/src/` plus the required `better_sqlite3.node` binding, so a later partial or missing `node_modules` directory does not take the configured C2000 MCP service offline. `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci`.
+`npm run build` first type-checks production sources with the pinned TypeScript CLI (`lib/_tsc.js`), then invokes esbuild for the proxy, daemon, board-worker, CAN-worker, and installer entrypoints. It emits CommonJS self-contained bundles under `dist/src/` plus the required `better_sqlite3.node` and Koffi binding. `npm run typecheck` is also available as a standalone quality gate. If build fails after a partial `node_modules`, reinstall with `npm ci`. The exact Node `22.12.0` runtime is required only for the Windows release build (`C2000_FIXED_RUNTIME_BUILD=1`); source developers may use the supported developer engine range.
 
 ## Start
 
@@ -573,7 +582,12 @@ Read-only startup diagnosis:
 npm run doctor
 ```
 
-The doctor uses only Node built-ins. It starts the built MCP without touching the target, completes the MCP initialize handshake, lists tools, and calls `c2000_getServerHealth`. On failure it prints structured JSON with a failure code, remediation, and captured server stderr.
+The doctor itself has no npm or network step. It starts the built MCP without
+touching the target, verifies the declared native binding hashes and SQLite
+`:memory:` load, completes the MCP initialize handshake, lists tools, and calls
+`c2000_getServerHealth`. For an installed offline artifact it also requires
+`process.execPath` to be the private `runtime\\node.exe`. On failure it prints
+structured JSON with a failure code, remediation, and captured server stderr.
 
 Use `npm run doctor:isolated` to copy the full proxy/daemon/worker runtime into a temporary directory with no adjacent `node_modules` and perform the same handshake. `npm run verify:runtime-cwd` goes further: it starts the stdio proxy from an unrelated temporary working directory, auto-starts a detached daemon, and verifies a Mock worker reaches `READY`. These are the release checks that the configured artifact is genuinely self-contained and independent of the MCP host's cwd.
 
@@ -585,8 +599,8 @@ Startup events are written as one-line JSON to stderr, never stdout. A successfu
 
 If a client reports an empty tool list:
 
-1. Run `npm run doctor`.
-2. If the runtime artifact is missing, run `npm ci && npm run build`.
+1. For an offline installation, run the installed slot's `c2000-mcp-doctor.mjs` with its private runtime; for a source checkout, run `npm run doctor`.
+2. If a source runtime artifact is missing, run `npm ci && npm run build`; for an offline artifact, reinstall the ZIP.
 3. Re-run `npm run doctor` and confirm `runtime.bundled === true`.
 4. Restart or reload the MCP client so it performs a fresh `initialize` and `tools/list` handshake.
 
@@ -637,18 +651,19 @@ Run the deterministic mock comparison with `npm run benchmark:debug`. `npm run b
 
 ## Client Config
 
-Codex, Claude Desktop, ChatGPT MCP clients, or other stdio MCP hosts can spawn the built server:
+Codex, Claude Desktop, ChatGPT MCP clients, or other stdio MCP hosts can spawn
+the installed Windows offline server with an absolute private runtime path:
 
 ```json
 {
   "mcpServers": {
     "c2000-multicore": {
-      "command": "node",
+      "command": "C:/Users/<user>/.c2000-multicore-mcp/runtime/node.exe",
       "args": [
-        "/absolute/path/to/c2000-multicore-mcp/dist/src/index.js"
+        "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/dist/src/index.js"
       ],
       "env": {
-        "C2000_MCP_CONFIG": "/absolute/path/to/c2000-multicore-mcp/examples/f28p65x.config.json"
+        "C2000_MCP_CONFIG": "C:/Users/<user>/.c2000-multicore-mcp/config/c2000-multicore.json"
       }
     }
   }
@@ -676,28 +691,28 @@ For local development:
 
 ### Automatic recovery for Codex
 
-For an installed build, point Codex at `scripts/mcp-supervisor.mjs` instead of
-starting `dist/src/index.js` directly. The supervisor is an MCP-aware stdio
-proxy: after an unexpected server exit it starts a fresh server, replays the
+For a manually managed developer build, point Codex at
+`scripts/mcp-supervisor.mjs` instead of starting `dist/src/index.js` directly.
+The supervisor is an MCP-aware stdio proxy: after an unexpected server exit it starts a fresh server, replays the
 MCP initialization handshake, then resumes forwarding new requests. Its own
 diagnostics go to stderr, so stdout remains a JSON-RPC-only MCP channel.
 
 Add the following to the Codex `config.toml`, replacing both absolute paths:
 
 ```toml
-[mcp_servers.c2000-multicore]
-command = "node"
+[mcp_servers.c2000-multicore-dev-supervised]
+command = "C:/absolute/path/to/developer/node.exe"
 args = [
   "C:/absolute/path/to/c2000-multicore-mcp/scripts/mcp-supervisor.mjs",
   "--initial-delay-ms", "1000",
   "--max-delay-ms", "10000",
   "--max-restarts", "5",
   "--",
-  "node",
+  "C:/absolute/path/to/developer/node.exe",
   "C:/absolute/path/to/c2000-multicore-mcp/dist/src/index.js"
 ]
 
-[mcp_servers.c2000-multicore.env]
+[mcp_servers.c2000-multicore-dev-supervised.env]
 C2000_MCP_CONFIG = "C:/absolute/path/to/c2000-multicore-mcp/examples/f28p65x.config.json"
 ```
 

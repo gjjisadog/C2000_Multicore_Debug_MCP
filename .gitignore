@@ -23,5 +23,11 @@ scripts/run_t05_*.mjs
 # CCS build artifacts
 artifacts/
 
+# Generated Windows standalone release artifacts
+offline-bundle-win32-x64*/
+offline-bundle-win32-x64.zip
+*-offline-win32-x64.zip
+c2000-multicore-mcp-*.tgz
+
 # Local hardware demo workspaces
 .hardware-demo-workspace-ipc-ex1/

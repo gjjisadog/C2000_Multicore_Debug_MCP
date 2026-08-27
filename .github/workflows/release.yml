@@ -15,41 +15,68 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows is deliberately one fixed-runtime release target. The
+          # end user never selects a Node major or native ABI.
           - os: windows-latest
-            target: win32-x64-abi115
-            node: "20.19"
-          - os: windows-latest
-            target: win32-x64-abi127
-            node: "22.12"
-          - os: windows-latest
-            target: win32-x64-abi137
-            node: "24"
+            target: win32-x64
+            fixedRuntime: true
           - os: ubuntu-latest
             target: linux-x64
             node: "24"
+            fixedRuntime: false
           - os: macos-14
             target: darwin-arm64
             node: "24"
+            fixedRuntime: false
           - os: macos-15-intel
             target: darwin-x64
             node: "24"
+            fixedRuntime: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Read the fixed Windows runtime version
+        id: runtime
+        if: matrix.fixedRuntime
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/runtime-manifest.json | ConvertFrom-Json
+          if (-not $config.runtime.version -or $config.runtime.version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "config/runtime-manifest.json must contain a complete runtime version."
+          }
+          "version=$($config.runtime.version)" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v4
-        with: { node-version: "${{ matrix.node }}", cache: npm }
+        with:
+          node-version: ${{ matrix.fixedRuntime && steps.runtime.outputs.version || matrix.node }}
+          cache: npm
       - run: npm ci
-      - run: npm run build
+      - name: Build the fixed Windows runtime artifact
+        if: matrix.fixedRuntime
+        run: npm run build
+        env:
+          C2000_FIXED_RUNTIME_BUILD: "1"
+      - name: Build the developer component artifact
+        if: ${{ !matrix.fixedRuntime }}
+        run: npm run build
       - run: npm pack
       - run: npm run verify:package
       - run: node scripts/prepare-release-asset.mjs ${{ matrix.target }}
+      - name: Build the standalone Windows offline bundle
+        if: matrix.fixedRuntime
+        shell: pwsh
+        run: |
+          node scripts/prepare-offline-bundle.mjs
+          $manifest = Get-Content -Raw offline-bundle-win32-x64/manifest.json | ConvertFrom-Json
+          Compress-Archive -Path "offline-bundle-win32-x64/*" -DestinationPath $manifest.artifact.fileName -Force
       - run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
       - run: node scripts/write-release-metadata.mjs ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: c2000-multicore-mcp-${{ matrix.target }}
+          if-no-files-found: error
           path: |
             c2000-multicore-mcp-*-${{ matrix.target }}.tgz
+            c2000-multicore-mcp-*-offline-win32-x64.zip
             runtime-manifest-${{ matrix.target }}.json
             sbom-${{ matrix.target }}.cdx.json
             SHA256SUMS-${{ matrix.target }}.json
@@ -66,17 +93,14 @@ jobs:
         with:
           pattern: c2000-multicore-mcp-*
           path: release-assets
-      - name: Build Windows offline bundle
+      - name: Validate the single Windows offline asset
         shell: pwsh
         run: |
-          $bundle = "offline-bundle-win32-x64"
-          New-Item -ItemType Directory -Path $bundle | Out-Null
-          Copy-Item scripts/install-offline.ps1 $bundle
-          Get-ChildItem release-assets -Recurse -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz" | Copy-Item -Destination $bundle
-          Get-ChildItem release-assets -Recurse -File -Filter "SHA256SUMS-win32-x64-abi*.json" | Copy-Item -Destination $bundle
-          $abis = Get-ChildItem $bundle -File -Filter "c2000-multicore-mcp-*-win32-x64-abi*.tgz"
-          if ($abis.Count -ne 3) { throw "Expected Node 20, Node 22, and Node 24 Windows packages in the offline bundle." }
-          Compress-Archive -Path "$bundle/*" -DestinationPath "offline-bundle-win32-x64.zip"
+          $offline = @(Get-ChildItem release-assets -Recurse -File -Filter "c2000-multicore-mcp-*-offline-win32-x64.zip")
+          if ($offline.Count -ne 1) {
+            throw "Expected exactly one fixed-runtime Windows offline ZIP, found $($offline.Count)."
+          }
+          Copy-Item -LiteralPath $offline[0].FullName -Destination (Join-Path $PWD $offline[0].Name)
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
@@ -85,7 +109,8 @@ jobs:
             release-assets/**/SHA256SUMS-*.json
             release-assets/**/runtime-manifest-*.json
             release-assets/**/sbom-*.cdx.json
-            offline-bundle-win32-x64.zip
+            c2000-multicore-mcp-*-offline-win32-x64.zip
             scripts/install-release.ps1
             scripts/install-offline.ps1
             scripts/install-release.sh
+            README-OFFLINE.md

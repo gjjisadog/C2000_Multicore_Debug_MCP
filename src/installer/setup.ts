@@ -1,8 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { access, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { access, copyFile, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +23,7 @@ export interface SetupOptions {
 }
 
 export interface RuntimeManifest {
+  schemaVersion?: number;
   version: string;
   builtAt?: string;
   sourceRevision?: string;
@@ -31,13 +31,31 @@ export interface RuntimeManifest {
   platform: string;
   arch: string;
   nodeModulesAbi: string;
+  runtime?: {
+    name?: string;
+    version?: string;
+    nodeVersion?: string;
+    platform?: string;
+    arch?: string;
+    modulesAbi?: string;
+    archiveName?: string;
+    source?: string;
+    checksumSource?: string;
+    archiveSha256?: string;
+    bundledNode?: boolean;
+    executable?: string;
+    executableSha256?: string;
+  };
   entrypoints: {
     proxy: string;
+    runtimeCheck?: string;
   };
   nativeBindings?: Array<{
     name: string;
     sha256: string;
     path: string;
+    abi?: string;
+    packageVersion?: string;
   }>;
 }
 
@@ -51,6 +69,7 @@ export interface SetupResult {
   arch: string;
   installDirectory: string;
   entrypoint: string;
+  runtimeExecutable: string;
   configPath: string;
   registration: "codex-cli" | "config-file" | "skipped";
   codexConfigPath?: string;
@@ -64,6 +83,7 @@ interface SetupDependencies {
   arch?: string;
   nodeVersion?: string;
   nodeModulesAbi?: string;
+  executablePath?: string;
   homeDirectory?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -118,15 +138,33 @@ export function validateRuntimeManifest(
   expected: { platform: string; arch: string; nodeModulesAbi: string },
   options: { allowAbiMismatch?: boolean } = {}
 ): void {
-  if (manifest.platform !== expected.platform || manifest.arch !== expected.arch) {
+  const manifestPlatform = manifest.runtime?.platform ?? manifest.platform;
+  const manifestArch = manifest.runtime?.arch ?? manifest.arch;
+  const manifestAbi = manifest.runtime?.modulesAbi ?? manifest.nodeModulesAbi;
+  if (manifestPlatform !== expected.platform || manifestArch !== expected.arch) {
     throw new Error(
-      `Runtime package is for ${manifest.platform}-${manifest.arch}, but this machine is ${expected.platform}-${expected.arch}.`
+      `Runtime package is for ${manifestPlatform}-${manifestArch}, but this machine is ${expected.platform}-${expected.arch}.`
     );
   }
-  if (!options.allowAbiMismatch && manifest.nodeModulesAbi !== expected.nodeModulesAbi) {
+  if (!options.allowAbiMismatch && manifestAbi !== expected.nodeModulesAbi) {
     throw new Error(
-      `Runtime package requires Node modules ABI ${manifest.nodeModulesAbi}, but the active Node uses ABI ${expected.nodeModulesAbi}.`
+      `Runtime package requires Node modules ABI ${manifestAbi}, but the active Node uses ABI ${expected.nodeModulesAbi}.`
     );
+  }
+  if (manifest.runtime?.bundledNode === true && manifest.runtime.modulesAbi !== manifest.nodeModulesAbi) {
+    throw new Error(
+      `Runtime manifest has inconsistent ABI metadata: runtime ${manifest.runtime.modulesAbi}, native runtime ${manifest.nodeModulesAbi}.`
+    );
+  }
+  if (manifest.runtime?.bundledNode === true) {
+    const runtime = manifest.runtime;
+    if (runtime.name !== "node"
+      || !runtime.version
+      || !/^\d+\.\d+\.\d+$/.test(runtime.version)
+      || runtime.nodeVersion !== `v${runtime.version}`
+      || runtime.executable !== "runtime/node.exe") {
+      throw new Error("Bundled runtime metadata must declare a complete Node version and runtime/node.exe.");
+    }
   }
 }
 
@@ -141,7 +179,7 @@ export function validateNodeVersion(nodeVersion: string): void {
   if (!supported) {
     throw new Error(
       `Node.js ${match[1]}.${match[2]}.${match[3]} is unsupported. `
-      + "Use Node.js 22.12+ LTS (recommended), Node.js 24.x, or Node.js 20.19+ LTS."
+      + "Use a supported developer Node.js release for source builds (22.12.0 is the Windows release runtime)."
     );
   }
 }
@@ -150,7 +188,7 @@ export function buildCodexMcpAddArgs(
   serverName: string,
   entrypoint: string,
   configPath: string,
-  nodeExecutable = process.execPath
+  nodeExecutable: string
 ): string[] {
   return [
     "mcp",
@@ -203,14 +241,39 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   const arch = dependencies.arch ?? process.arch;
   const nodeVersion = dependencies.nodeVersion ?? process.version;
   const nodeModulesAbi = dependencies.nodeModulesAbi ?? process.versions.modules;
+  const executablePath = dependencies.executablePath ?? process.execPath;
   const homeDirectory = dependencies.homeDirectory ?? os.homedir();
   const cwd = path.resolve(dependencies.cwd ?? process.cwd());
   const env = dependencies.env ?? process.env;
   const packageRoot = dependencies.packageRoot ?? await findPackageRoot(process.argv[1]);
-  validateNodeVersion(nodeVersion);
   const manifestPath = path.join(packageRoot, "dist", "src", "runtime-manifest.json");
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as RuntimeManifest;
-  validateRuntimeManifest(manifest, { platform, arch, nodeModulesAbi }, { allowAbiMismatch: true });
+  const bundledNodeRequired = manifest.runtime?.bundledNode === true;
+  if (bundledNodeRequired) {
+    validateRuntimeManifest(manifest, { platform, arch, nodeModulesAbi });
+    if (manifest.runtime?.nodeVersion && normalizeNodeVersion(manifest.runtime.nodeVersion) !== normalizeNodeVersion(nodeVersion)) {
+      throw new Error(
+        `The offline installer was launched by Node ${nodeVersion}, but the bundle requires ${manifest.runtime.nodeVersion}.`
+      );
+    }
+    const sourceNodePath = await findBundledNodePath(packageRoot);
+    if (!sourceNodePath) {
+      throw new Error(`The offline MCP bundle is missing its private Node runtime beside ${packageRoot}.`);
+    }
+    if (!samePath(executablePath, sourceNodePath)) {
+      throw new Error(
+        `The offline installer must run with the bundled Node runtime ${sourceNodePath}; received ${executablePath}.`
+      );
+    }
+    await verifyNativeBindings(packageRoot, manifest);
+    await verifyRuntimeCheck(packageRoot, executablePath, manifest, dependencies.spawn ?? spawnSync, env);
+  } else {
+    // Source/npm component installation is a developer workflow. It may use a
+    // supported developer Node, but it must never be able to adapt an offline
+    // release to that Node's ABI.
+    validateNodeVersion(nodeVersion);
+    validateRuntimeManifest(manifest, { platform, arch, nodeModulesAbi }, { allowAbiMismatch: true });
+  }
 
   const installRoot = path.resolve(
     options.installRoot
@@ -220,25 +283,52 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   const baseInstallDirectory = path.join(
     installRoot,
     "versions",
-    `${manifest.version}-${platform}-${arch}-abi${nodeModulesAbi}`
+    `${manifest.version}-${platform}-${arch}`
   );
   const baseDirectoryExists = await exists(baseInstallDirectory);
-  const installDirectory = options.force && baseDirectoryExists
+  let installDirectory = options.force && baseDirectoryExists
     ? await nextRuntimeSlot(baseInstallDirectory, manifest)
     : baseInstallDirectory;
+  if (!options.force && baseDirectoryExists) {
+    const existingManifestPath = path.join(baseInstallDirectory, "dist", "src", "runtime-manifest.json");
+    try {
+      const existingManifest = JSON.parse(await readFile(existingManifestPath, "utf8")) as RuntimeManifest;
+      if (!runtimeManifestsCanBeReused(existingManifest, manifest, bundledNodeRequired)) {
+        installDirectory = await nextRuntimeSlot(baseInstallDirectory, manifest);
+      }
+    } catch {
+      // Preserve the immutable-slot guard below for a directory that exists
+      // but is not a complete runtime installation.
+    }
+  }
   const installedManifestPath = path.join(installDirectory, "dist", "src", "runtime-manifest.json");
   const alreadyInstalled = await exists(installedManifestPath);
   const runtimeAction: SetupResult["runtimeAction"] = alreadyInstalled
     ? "reused"
     : installDirectory === baseInstallDirectory ? "installed" : "installed-side-by-side";
   if (!alreadyInstalled || options.force) {
-    await installRuntimeAtomically(packageRoot, installDirectory, manifest, nodeModulesAbi);
+    await installRuntimeAtomically(packageRoot, installDirectory);
   }
   const installedManifest = JSON.parse(await readFile(installedManifestPath, "utf8")) as RuntimeManifest;
-  validateRuntimeManifest(installedManifest, { platform, arch, nodeModulesAbi });
+  validateRuntimeManifest(
+    installedManifest,
+    { platform, arch, nodeModulesAbi },
+    { allowAbiMismatch: !bundledNodeRequired }
+  );
 
   const runtimeDirectory = path.join(installRoot, "runtime");
+  const dataDirectory = path.join(installRoot, "runtime-data");
   await mkdir(runtimeDirectory, { recursive: true });
+  await mkdir(dataDirectory, { recursive: true });
+  let installedNodeExecutable = executablePath;
+  if (bundledNodeRequired) {
+    const sourceNodePath = await findBundledNodePath(packageRoot);
+    if (!sourceNodePath) throw new Error("The offline MCP bundle is missing its private Node runtime.");
+    const sourceRuntimeDirectory = path.dirname(sourceNodePath);
+    await installBundledNodeAtomically(sourceRuntimeDirectory, runtimeDirectory, installedManifest);
+    installedNodeExecutable = path.join(runtimeDirectory, process.platform === "win32" ? "node.exe" : "node");
+    await access(installedNodeExecutable);
+  }
   const installedConfigPath = path.join(installRoot, "config", `${options.serverName}.json`);
   await mkdir(path.dirname(installedConfigPath), { recursive: true });
   if (options.configPath) {
@@ -248,7 +338,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
       await cp(sourceConfig, installedConfigPath);
     }
   } else {
-    const config = createInstalledConfig(path.resolve(options.workspace ?? cwd), runtimeDirectory);
+    const config = createInstalledConfig(path.resolve(options.workspace ?? cwd), dataDirectory);
     await writeFile(installedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 
@@ -267,28 +357,11 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     }
   }
 
-  let registration: SetupResult["registration"] = "skipped";
-  let codexConfigPath: string | undefined;
-  if (options.register) {
-    const registrationResult = registerCodexServer({
-      serverName: options.serverName,
-      entrypoint,
-      configPath: installedConfigPath,
-      scope: options.scope,
-      cwd,
-      homeDirectory,
-      env,
-      spawn: dependencies.spawn ?? spawnSync
-    });
-    registration = registrationResult.method;
-    codexConfigPath = registrationResult.codexConfigPath;
-  }
-
   let doctorPassed = false;
   if (options.doctor) {
     const doctorScript = path.join(installDirectory, "scripts", "c2000-mcp-doctor.mjs");
     const result = (dependencies.spawn ?? spawnSync)(
-      process.execPath,
+      installedNodeExecutable,
       [doctorScript],
       {
         cwd: installDirectory,
@@ -307,6 +380,35 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     doctorPassed = true;
   }
 
+  await writeCurrentPointer(installRoot, {
+    schemaVersion: 1,
+    version: installedManifest.version,
+    installDirectory,
+    entrypoint,
+    runtimeExecutable: installedNodeExecutable,
+    configPath: installedConfigPath,
+    runtimeManifest: installedManifestPath
+  });
+
+  let registration: SetupResult["registration"] = "skipped";
+  let codexConfigPath: string | undefined;
+  if (options.register) {
+    const registrationResult = registerCodexServer({
+      serverName: options.serverName,
+      entrypoint,
+      nodeExecutable: installedNodeExecutable,
+      configPath: installedConfigPath,
+      scope: options.scope,
+      cwd,
+      homeDirectory,
+      env,
+      platform,
+      spawn: dependencies.spawn ?? spawnSync
+    });
+    registration = registrationResult.method;
+    codexConfigPath = registrationResult.codexConfigPath;
+  }
+
   return {
     version: installedManifest.version,
     builtAt: installedManifest.builtAt,
@@ -317,6 +419,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     arch,
     installDirectory,
     entrypoint,
+    runtimeExecutable: installedNodeExecutable,
     configPath: installedConfigPath,
     registration,
     codexConfigPath,
@@ -328,11 +431,13 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
 interface RegisterOptions {
   serverName: string;
   entrypoint: string;
+  nodeExecutable: string;
   configPath: string;
   scope: "user" | "project";
   cwd: string;
   homeDirectory: string;
   env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
   spawn: typeof spawnSync;
 }
 
@@ -342,8 +447,8 @@ function registerCodexServer(options: RegisterOptions): {
 } {
   let lastResult: SpawnSyncReturns<string> | undefined;
   if (options.scope === "user") {
-    const args = buildCodexMcpAddArgs(options.serverName, options.entrypoint, options.configPath);
-    const commands = process.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
+    const args = buildCodexMcpAddArgs(options.serverName, options.entrypoint, options.configPath, options.nodeExecutable);
+    const commands = options.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
     for (const command of commands) {
       const result = options.spawn(command, args, {
         cwd: options.cwd,
@@ -363,7 +468,7 @@ function registerCodexServer(options: RegisterOptions): {
   const codexConfigPath = options.scope === "project"
     ? path.join(options.cwd, ".codex", "config.toml")
     : path.join(path.resolve(options.env.CODEX_HOME ?? path.join(options.homeDirectory, ".codex")), "config.toml");
-  writeManagedCodexConfigSync(codexConfigPath, options.serverName, options.entrypoint, options.configPath, reason);
+  writeManagedCodexConfigSync(codexConfigPath, options.serverName, options.entrypoint, options.nodeExecutable, options.configPath, reason);
   return { method: "config-file", codexConfigPath };
 }
 
@@ -371,6 +476,7 @@ function writeManagedCodexConfigSync(
   configFile: string,
   serverName: string,
   entrypoint: string,
+  nodeExecutable: string,
   configPath: string,
   cliFailure: string
 ): void {
@@ -381,7 +487,7 @@ function writeManagedCodexConfigSync(
     MANAGED_BLOCK_START,
     `# Codex CLI fallback reason: ${cliFailure.replace(/[\r\n]+/g, " ").slice(0, 240)}`,
     `[mcp_servers.${tomlKey(serverName)}]`,
-    `command = ${tomlString(process.execPath)}`,
+    `command = ${tomlString(nodeExecutable)}`,
     `args = [${tomlString(entrypoint)}]`,
     "",
     `[mcp_servers.${tomlKey(serverName)}.env]`,
@@ -420,68 +526,187 @@ function removeServerTables(content: string, serverName: string): string {
 
 async function installRuntimeAtomically(
   packageRoot: string,
-  installDirectory: string,
-  manifest: RuntimeManifest,
-  activeNodeModulesAbi: string
+  installDirectory: string
 ): Promise<void> {
   const parent = path.dirname(installDirectory);
   const temporary = path.join(parent, `.installing-${process.pid}-${Date.now()}`);
   await mkdir(parent, { recursive: true });
   await rm(temporary, { recursive: true, force: true });
   try {
-    await mkdir(path.join(temporary, "dist"), { recursive: true });
-    await cp(path.join(packageRoot, "dist", "src"), path.join(temporary, "dist", "src"), { recursive: true });
-    if (manifest.nodeModulesAbi !== activeNodeModulesAbi) {
-      const binding = manifest.nativeBindings?.find(candidate => candidate.name === "better_sqlite3.node");
-      if (!binding) throw new Error("Runtime manifest does not declare the better_sqlite3.node binding");
-      const dependencyBinding = path.join(
-        packageRoot,
-        "node_modules",
-        "better-sqlite3",
-        "build",
-        "Release",
-        "better_sqlite3.node"
-      );
-      try {
-        const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
-        const Database = requireFromPackage("better-sqlite3") as new (filename: string) => { close(): void };
-        const database = new Database(":memory:");
-        database.close();
-        await access(dependencyBinding);
-      } catch (error) {
-        throw new Error(
-          `This release was built for Node ABI ${manifest.nodeModulesAbi}, and npm did not install a usable `
-          + `better-sqlite3 binding for active ABI ${activeNodeModulesAbi}: ${error instanceof Error ? error.message : String(error)}`
-        );
-      }
-      const installedBinding = path.join(temporary, "dist", "src", binding.path);
-      await cp(dependencyBinding, installedBinding);
-      const bindingContent = await readFile(installedBinding);
-      const installedManifest = {
-        ...manifest,
-        nodeVersion: process.version,
-        nodeModulesAbi: activeNodeModulesAbi,
-        adaptedAt: new Date().toISOString(),
-        nativeBindings: manifest.nativeBindings!.map(candidate => candidate.name === binding.name
-          ? { ...candidate, sha256: createHash("sha256").update(bindingContent).digest("hex") }
-          : candidate)
-      };
-      await writeFile(
-        path.join(temporary, "dist", "src", "runtime-manifest.json"),
-        `${JSON.stringify(installedManifest, null, 2)}\n`
-      );
+    await cp(packageRoot, temporary, { recursive: true });
+    if (await exists(installDirectory)) {
+      throw new Error(`The immutable runtime slot already exists but has no usable manifest: ${installDirectory}`);
     }
-    await mkdir(path.join(temporary, "scripts"), { recursive: true });
-    await cp(
-      path.join(packageRoot, "scripts", "c2000-mcp-doctor.mjs"),
-      path.join(temporary, "scripts", "c2000-mcp-doctor.mjs")
-    );
-    await cp(path.join(packageRoot, "package.json"), path.join(temporary, "package.json"));
-    await rm(installDirectory, { recursive: true, force: true });
     await rename(temporary, installDirectory);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
+}
+
+async function findBundledNodePath(packageRoot: string): Promise<string | undefined> {
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  const candidates = [
+    path.join(packageRoot, "runtime", nodeName),
+    path.join(path.dirname(packageRoot), "runtime", nodeName),
+    path.join(path.dirname(path.dirname(packageRoot)), "runtime", nodeName)
+  ];
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+async function verifyNativeBindings(packageRoot: string, manifest: RuntimeManifest): Promise<void> {
+  const runtimeRoot = path.join(packageRoot, "dist", "src");
+  const bindings = manifest.nativeBindings ?? [];
+  if (bindings.length === 0) throw new Error("The offline runtime manifest declares no native bindings.");
+  const sqliteBinding = bindings.find(binding => binding.name === "better_sqlite3.node");
+  if (!sqliteBinding) {
+    throw new Error("The offline runtime manifest does not declare better_sqlite3.node.");
+  }
+  const runtimeAbi = manifest.runtime?.modulesAbi ?? manifest.nodeModulesAbi;
+  if (String(sqliteBinding.abi) !== String(runtimeAbi)) {
+    throw new Error(`better_sqlite3.node ABI ${sqliteBinding.abi ?? "missing"} does not match the bundled Node ABI ${runtimeAbi}.`);
+  }
+  for (const binding of bindings) {
+    if (!/^[0-9a-f]{64}$/i.test(binding.sha256)) {
+      throw new Error(`Invalid SHA-256 in the runtime manifest for ${binding.name}.`);
+    }
+    const bindingPath = path.resolve(runtimeRoot, binding.path);
+    if (!isPathInside(bindingPath, runtimeRoot)) {
+      throw new Error(`Native binding path escapes the MCP runtime: ${binding.path}`);
+    }
+    await access(bindingPath);
+    const actual = createHash("sha256").update(await readFile(bindingPath)).digest("hex");
+    if (actual.toLowerCase() !== binding.sha256.toLowerCase()) {
+      throw new Error(`Native binding SHA-256 mismatch for ${binding.path}.`);
+    }
+  }
+}
+
+async function verifyRuntimeCheck(
+  packageRoot: string,
+  executablePath: string,
+  manifest: RuntimeManifest,
+  spawn: typeof spawnSync,
+  env: NodeJS.ProcessEnv
+): Promise<void> {
+  const relative = manifest.entrypoints.runtimeCheck;
+  if (!relative) return;
+  const checkPath = path.resolve(packageRoot, "dist", "src", relative);
+  const runtimeRoot = path.join(packageRoot, "dist", "src");
+  if (!isPathInside(checkPath, runtimeRoot)) throw new Error(`Runtime check path escapes the MCP runtime: ${relative}`);
+  const result = spawn(executablePath, [checkPath], {
+    cwd: packageRoot,
+    env,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  if (result.error || result.status !== 0) {
+    const details = `${result.stderr ?? result.stdout ?? result.error?.message ?? "unknown failure"}`.trim();
+    throw new Error(`Bundled better-sqlite3 :memory: verification failed: ${details}`);
+  }
+}
+
+async function installBundledNodeAtomically(
+  sourceRuntimeDirectory: string,
+  destinationRuntimeDirectory: string,
+  manifest: RuntimeManifest
+): Promise<void> {
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  const sourceNode = path.join(sourceRuntimeDirectory, nodeName);
+  const destinationNode = path.join(destinationRuntimeDirectory, nodeName);
+  const sourceLicense = path.join(sourceRuntimeDirectory, "LICENSE");
+  const destinationLicense = path.join(destinationRuntimeDirectory, "LICENSE");
+  await access(sourceNode);
+  await access(sourceLicense);
+  await mkdir(destinationRuntimeDirectory, { recursive: true });
+
+  const sourceNodeHash = createHash("sha256").update(await readFile(sourceNode)).digest("hex");
+  if (manifest.runtime?.executableSha256 && sourceNodeHash.toLowerCase() !== manifest.runtime.executableSha256.toLowerCase()) {
+    throw new Error("The bundled Node executable does not match the offline manifest SHA-256.");
+  }
+  if (await exists(destinationNode)) {
+    const installedHash = createHash("sha256").update(await readFile(destinationNode)).digest("hex");
+    if (installedHash.toLowerCase() !== sourceNodeHash.toLowerCase()) {
+      throw new Error(`Installed private Node runtime differs from the fixed release runtime: ${destinationNode}`);
+    }
+  } else {
+    await copyFileAtomically(sourceNode, destinationNode);
+  }
+  if (!(await exists(destinationLicense))) await copyFileAtomically(sourceLicense, destinationLicense);
+  await writeJsonAtomically(path.join(destinationRuntimeDirectory, "runtime-manifest.json"), {
+    schemaVersion: 1,
+    runtime: manifest.runtime ? { ...manifest.runtime, executable: nodeName } : manifest.runtime,
+    executable: nodeName,
+    executableSha256: sourceNodeHash
+  });
+}
+
+async function copyFileAtomically(source: string, destination: string): Promise<void> {
+  const temporary = `${destination}.installing-${process.pid}-${Date.now()}`;
+  await rm(temporary, { force: true });
+  try {
+    await copyFile(source, temporary);
+    await rename(temporary, destination);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+async function writeCurrentPointer(installRoot: string, pointer: Record<string, unknown>): Promise<void> {
+  await writeJsonAtomically(path.join(installRoot, "current.json"), pointer);
+}
+
+async function writeJsonAtomically(filePath: string, value: unknown): Promise<void> {
+  const temporary = `${filePath}.installing-${process.pid}-${Date.now()}`;
+  await mkdir(path.dirname(filePath), { recursive: true });
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`);
+    await rename(temporary, filePath);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+function normalizeNodeVersion(value: string): string {
+  return value.trim().replace(/^v/, "");
+}
+
+function samePath(left: string, right: string): boolean {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function runtimeManifestsCanBeReused(
+  installed: RuntimeManifest,
+  incoming: RuntimeManifest,
+  bundledNodeRequired: boolean
+): boolean {
+  if (installed.version !== incoming.version
+    || installed.platform !== incoming.platform
+    || installed.arch !== incoming.arch
+    || installed.nodeModulesAbi !== incoming.nodeModulesAbi) {
+    return false;
+  }
+  if (!bundledNodeRequired) return true;
+  if (installed.runtime?.bundledNode !== true
+    || installed.runtime.nodeVersion !== incoming.runtime?.nodeVersion
+    || installed.runtime.modulesAbi !== incoming.runtime?.modulesAbi
+    || installed.runtime.executableSha256 !== incoming.runtime?.executableSha256) {
+    return false;
+  }
+  const incomingBindings = new Map((incoming.nativeBindings ?? []).map(binding => [binding.name, binding.sha256.toLowerCase()]));
+  const installedBindings = new Map((installed.nativeBindings ?? []).map(binding => [binding.name, binding.sha256.toLowerCase()]));
+  if (incomingBindings.size !== installedBindings.size) return false;
+  for (const [name, hash] of incomingBindings) {
+    if (installedBindings.get(name) !== hash) return false;
+  }
+  return true;
 }
 
 async function nextRuntimeSlot(baseInstallDirectory: string, manifest: RuntimeManifest): Promise<string> {
@@ -532,6 +757,9 @@ function tomlString(value: string): string {
 export class SetupHelpRequested extends Error {}
 
 export const setupHelp = `C2000 Multicore MCP one-command installer
+
+The Windows offline package supplies its private Node.js runtime; source/npm
+installation is a developer-only path.
 
 Usage:
   c2000-multicore-setup install [options]

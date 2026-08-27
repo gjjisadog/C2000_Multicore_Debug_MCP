@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "name": "node",
+    "version": "22.12.0",
+    "nodeVersion": "v22.12.0",
+    "platform": "win32",
+    "arch": "x64",
+    "modulesAbi": "127",
+    "archiveName": "node-v22.12.0-win-x64.zip",
+    "source": "https://nodejs.org/dist/v22.12.0/node-v22.12.0-win-x64.zip",
+    "checksumSource": "https://nodejs.org/dist/v22.12.0/SHASUMS256.txt",
+    "archiveSha256": "2b8f2256382f97ad51e29ff71f702961af466c4616393f767455501e6aece9b8"
+  },
+  "developer": {
+    "node": "22.12.0",
+    "npm": "10.x",
+    "purpose": "Build, test, package, and release only; not an installed-runtime prerequisite."
+  }
+}

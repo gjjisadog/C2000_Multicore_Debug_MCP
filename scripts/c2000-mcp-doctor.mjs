@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { access, cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +27,9 @@ let entrypoint = sourceEntrypoint;
 for (const requiredEntry of [
   sourceEntrypoint,
   path.join(sourceRuntimeDirectory, "daemon", "index.js"),
-  path.join(sourceRuntimeDirectory, "worker", "index.js")
+  path.join(sourceRuntimeDirectory, "worker", "index.js"),
+  path.join(sourceRuntimeDirectory, "can-worker", "index.js"),
+  path.join(sourceRuntimeDirectory, "installer", "runtime-check.js")
 ]) {
   try {
     await access(requiredEntry);
@@ -34,7 +37,7 @@ for (const requiredEntry of [
     fail("RuntimeArtifactMissing", `Built runtime entrypoint does not exist: ${requiredEntry}`, "Run npm run build before npm run doctor.");
   }
 }
-await verifyRuntimeManifest(sourceRuntimeDirectory);
+const runtimeDetails = await verifyRuntimeManifest(sourceRuntimeDirectory);
 
 if (isolated) {
   isolatedDirectory = await mkdtemp(path.join(os.tmpdir(), "c2000-mcp-doctor-"));
@@ -132,6 +135,9 @@ try {
   if (health.runtime?.bundled !== true) {
     throw new Error("The active MCP artifact is not self-contained (runtime.bundled !== true). Run npm run build.");
   }
+  if (runtimeDetails.bundledNode && health.runtime?.bundledNode !== true) {
+    throw new Error(`The active MCP artifact was not launched by its private Node runtime: ${JSON.stringify(health.runtime)}`);
+  }
   let workerCheck;
   if (verifyWorker) {
     const boardResult = await request("tools/call", { name: "c2000_listBoards", arguments: {} });
@@ -148,11 +154,15 @@ try {
     entrypoint,
     toolCount: names.length,
     requiredTools,
+    runtime: runtimeDetails,
     health,
     ...(workerCheck ? { workerCheck } : {})
   }, null, 2)}\n`);
 } catch (error) {
-  fail("McpHandshakeFailed", error instanceof Error ? error.message : String(error), "Run npm ci, npm run build, then npm run doctor. Inspect serverStderr for the failing startup phase.", stderr);
+  const remediation = runtimeDetails?.bundledNode
+    ? "Reinstall the Windows offline bundle and re-run its private-runtime doctor. Inspect serverStderr for the failing startup phase."
+    : "Run npm ci, npm run build, then npm run doctor. Inspect serverStderr for the failing startup phase.";
+  fail("McpHandshakeFailed", error instanceof Error ? error.message : String(error), remediation, stderr);
 } finally {
   child.kill("SIGTERM");
   await stopDoctorDaemon(daemonRuntimeDirectory);
@@ -198,24 +208,113 @@ async function verifyRuntimeManifest(runtimeDirectory) {
   } catch {
     fail("RuntimeNativeBindingMismatch", `Runtime manifest is missing or invalid: ${manifestPath}`, "Run npm run build on the target platform.");
   }
-  if (manifest.platform !== process.platform) {
-    fail("RuntimePlatformMismatch", `Runtime was built for ${manifest.platform}, current platform is ${process.platform}.`, "Rebuild the runtime on this platform.");
+  const manifestPlatform = manifest.runtime?.platform ?? manifest.platform;
+  const manifestArch = manifest.runtime?.arch ?? manifest.arch;
+  const manifestAbi = manifest.runtime?.modulesAbi ?? manifest.nodeModulesAbi;
+  const bundledNode = manifest.runtime?.bundledNode === true;
+  if (bundledNode && (manifest.runtime?.name !== "node"
+    || !/^\d+\.\d+\.\d+$/.test(String(manifest.runtime?.version))
+    || manifest.runtime?.nodeVersion !== `v${manifest.runtime?.version}`
+    || manifest.runtime?.modulesAbi !== manifest.nodeModulesAbi
+    || manifest.runtime?.executable !== "runtime/node.exe")) {
+    fail("RuntimeManifestInvalid", "Bundled runtime metadata is incomplete or inconsistent.", "Reinstall the Windows offline bundle.");
   }
-  if (manifest.arch !== process.arch) {
-    fail("RuntimeArchitectureMismatch", `Runtime was built for ${manifest.arch}, current architecture is ${process.arch}.`, "Rebuild the runtime for this architecture.");
+  if (manifestPlatform !== process.platform) {
+    fail("RuntimePlatformMismatch", `Runtime was built for ${manifestPlatform}, current platform is ${process.platform}.`, "Rebuild the runtime on this platform.");
   }
-  if (String(manifest.nodeModulesAbi) !== String(process.versions.modules)) {
-    fail("RuntimeAbiMismatch", `Runtime ABI ${manifest.nodeModulesAbi} does not match current Node ABI ${process.versions.modules}.`, "Run npm ci and npm run build with the active Node version.");
+  if (manifestArch !== process.arch) {
+    fail("RuntimeArchitectureMismatch", `Runtime was built for ${manifestArch}, current architecture is ${process.arch}.`, "Rebuild the runtime for this architecture.");
   }
-  for (const binding of manifest.nativeBindings ?? []) {
+  if (String(manifestAbi) !== String(process.versions.modules)) {
+    fail("RuntimeAbiMismatch", `Runtime ABI ${manifestAbi} does not match current Node ABI ${process.versions.modules}.`, "Use the private Node runtime from the offline bundle or rebuild the developer artifact.");
+  }
+  const expectedNodePath = bundledNode ? findBundledNodePath(manifestPath) : undefined;
+  if (bundledNode && !expectedNodePath) {
+    fail("RuntimeBundledNodeMissing", `The private Node executable is missing beside ${manifestPath}.`, "Reinstall the complete Windows offline bundle.");
+  }
+  if (bundledNode && !samePath(process.execPath, expectedNodePath)) {
+    fail("RuntimeBundledNodeMismatch", `The MCP was launched by ${process.execPath}, expected ${expectedNodePath}.`, "Register the MCP with the installed runtime\\node.exe.");
+  }
+  if (bundledNode && normalizeNodeVersion(manifest.runtime.nodeVersion) !== normalizeNodeVersion(process.version)) {
+    fail("RuntimeVersionMismatch", `Runtime version ${manifest.runtime.nodeVersion} does not match ${process.version}.`, "Reinstall the fixed Windows runtime.");
+  }
+  const bindings = manifest.nativeBindings ?? [];
+  if (bindings.length === 0) {
+    fail(
+      "RuntimeNativeBindingMismatch",
+      "The runtime manifest declares no native bindings.",
+      bundledNode ? "Reinstall the Windows offline bundle." : "Run npm run build with the native dependencies installed."
+    );
+  }
+  const sqliteBinding = bindings.find(binding => binding.name === "better_sqlite3.node");
+  if (!sqliteBinding || String(sqliteBinding.abi) !== String(manifestAbi)) {
+    fail(
+      "RuntimeNativeBindingMismatch",
+      `better_sqlite3.node ABI ${sqliteBinding?.abi ?? "missing"} does not match runtime ABI ${manifestAbi}.`,
+      bundledNode ? "Reinstall the Windows offline bundle." : "Run npm run build with the matching developer Node."
+    );
+  }
+  for (const binding of bindings) {
     try {
-      const data = await readFile(path.join(runtimeDirectory, binding.path));
+      const bindingPath = path.resolve(runtimeDirectory, binding.path);
+      if (!isPathInside(bindingPath, runtimeDirectory)) throw new Error("binding path escapes runtime directory");
+      const data = await readFile(bindingPath);
       const actual = createHash("sha256").update(data).digest("hex");
       if (actual !== binding.sha256) throw new Error(`SHA-256 ${actual} != ${binding.sha256}`);
     } catch (error) {
-      fail("RuntimeNativeBindingMismatch", `Native binding verification failed for ${binding.path}: ${error instanceof Error ? error.message : String(error)}`, "Run npm ci and npm run build on this platform.");
+      fail(
+        "RuntimeNativeBindingMismatch",
+        `Native binding verification failed for ${binding.path}: ${error instanceof Error ? error.message : String(error)}`,
+        bundledNode ? "Reinstall the Windows offline bundle." : "Run npm ci and npm run build on this platform."
+      );
     }
   }
+  const runtimeCheckRelative = manifest.entrypoints?.runtimeCheck ?? "installer/runtime-check.js";
+  const runtimeCheckPath = path.resolve(runtimeDirectory, runtimeCheckRelative);
+  if (!isPathInside(runtimeCheckPath, runtimeDirectory)) {
+    fail("RuntimeNativeBindingMismatch", `Runtime check path escapes the runtime directory: ${runtimeCheckRelative}`, "Rebuild or reinstall the matching runtime.");
+  }
+  const runtimeCheck = spawnSync(process.execPath, [runtimeCheckPath], { cwd: runtimeDirectory, encoding: "utf8", windowsHide: true });
+  if (runtimeCheck.error || runtimeCheck.status !== 0) {
+    fail("RuntimeNativeBindingMismatch", `better-sqlite3 :memory: verification failed: ${runtimeCheck.stderr || runtimeCheck.stdout || runtimeCheck.error?.message || runtimeCheck.status}`, "Rebuild or reinstall the matching native runtime.");
+  }
+  let sqliteMemory = false;
+  try { sqliteMemory = JSON.parse(runtimeCheck.stdout.trim()).sqliteMemory === true; } catch { /* child health will provide the detailed failure */ }
+  return {
+    bundledNode,
+    nodePath: process.execPath,
+    expectedNodePath: expectedNodePath ?? null,
+    nodeVersion: process.version,
+    nodeModulesAbi: process.versions.modules,
+    platform: process.platform,
+    arch: process.arch,
+    nativeBindingsValid: true,
+    sqliteMemory,
+    runtimeManifestPath: manifestPath,
+    declaredRuntime: manifest.runtime ?? null
+  };
+}
+
+function findBundledNodePath(manifestPath) {
+  const packageRoot = path.dirname(path.dirname(path.dirname(manifestPath)));
+  const nodeName = process.platform === "win32" ? "node.exe" : "node";
+  const candidates = [
+    path.join(packageRoot, "runtime", nodeName),
+    path.join(path.dirname(packageRoot), "runtime", nodeName),
+    path.join(path.dirname(path.dirname(packageRoot)), "runtime", nodeName)
+  ];
+  return candidates.find(candidate => pathExists(candidate));
+}
+
+function pathExists(filePath) {
+  return existsSync(filePath);
+}
+
+function samePath(left, right) { return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase(); }
+function normalizeNodeVersion(value) { return String(value).trim().replace(/^v/, ""); }
+function isPathInside(child, parent) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function stopDoctorDaemon(runtimeDirectory) {

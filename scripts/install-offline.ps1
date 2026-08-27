@@ -1,184 +1,163 @@
 [CmdletBinding()]
 param(
-  [Parameter(Position = 0)]
-  [string]$PackagePath,
-
-  [Parameter(Position = 1)]
-  [string]$ChecksumPath,
-
   [Parameter(ValueFromRemainingArguments = $true)]
   [string[]]$InstallerArguments
 )
 
 $ErrorActionPreference = "Stop"
 
-function Assert-LastExitCode([string]$Message) {
-  if ($LASTEXITCODE -ne 0) { throw $Message }
-}
-
-function Resolve-SingleFile([string]$Description, [object[]]$Candidates) {
-  $files = @($Candidates)
-  if ($files.Count -eq 0) { throw "No $Description was found." }
-  if ($files.Count -gt 1) {
-    throw "Multiple $Description files were found; pass -PackagePath and -ChecksumPath explicitly."
-  }
-  return $files[0].FullName
-}
-
-function Resolve-ExistingFile([string]$Description, [string]$Path) {
-  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-    throw "$Description does not exist: $Path"
-  }
-  return (Resolve-Path -LiteralPath $Path).Path
-}
-
-function Assert-SafeArchiveEntries([string]$TarCommand, [string]$ArchivePath) {
-  $entries = @(& $TarCommand -tzf $ArchivePath)
-  Assert-LastExitCode "Failed to inspect the offline package archive."
-  if ($entries.Count -eq 0) { throw "The offline package archive is empty." }
-  foreach ($entry in $entries) {
-    $normalized = "$entry".Replace("\", "/").TrimEnd("/")
-    if (
-      -not ($normalized -eq "package" -or $normalized.StartsWith("package/")) -or
-      $normalized.StartsWith("/") -or
-      $normalized -match "(^|/)\.\.(/|$)" -or
-      $normalized -match "^[A-Za-z]:"
-    ) {
-      throw "Unsafe archive entry rejected: $entry"
-    }
-  }
-}
-
 function Assert-PathInside([string]$ChildPath, [string]$ParentPath, [string]$Description) {
   $child = [System.IO.Path]::GetFullPath($ChildPath)
   $parent = [System.IO.Path]::GetFullPath($ParentPath).TrimEnd("\", "/")
-  if (-not $child.StartsWith("$parent\", [System.StringComparison]::OrdinalIgnoreCase)) {
+  if (-not $child.StartsWith("$parent\", [System.StringComparison]::OrdinalIgnoreCase) -and
+      $child -ne $parent) {
     throw "$Description escapes its expected directory: $child"
   }
 }
 
-$architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
-if ($architecture -ne "x64") {
-  throw "Windows offline installation supports x64; detected $architecture."
-}
-if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-  throw "Node.js was not found. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS."
-}
-
-$nodeVersionText = & node -p "process.versions.node"
-Assert-LastExitCode "Failed to read the active Node.js version."
-$nodeVersion = [version]$nodeVersionText
-$nodeSupported = ($nodeVersion.Major -eq 20 -and $nodeVersion.Minor -ge 19) -or
-  ($nodeVersion.Major -eq 22 -and $nodeVersion.Minor -ge 12) -or
-  ($nodeVersion.Major -eq 24)
-if (-not $nodeSupported) {
-  throw "Node.js $nodeVersionText is unsupported. Install Node.js 22.12+ LTS (recommended), 24.x, or 20.19+ LTS."
+function Resolve-RequiredFile([string]$Description, [string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "$Description is missing: $Path"
+  }
+  return (Resolve-Path -LiteralPath $Path).Path
 }
 
-$nodeAbi = & node -p "process.versions.modules"
-Assert-LastExitCode "Failed to read the active Node modules ABI."
-$expectedTarget = "win32-x64-abi$nodeAbi"
-$searchRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-
-if ($PackagePath) {
-  $PackagePath = Resolve-ExistingFile "Offline package" $PackagePath
-} else {
-  $PackagePath = Resolve-SingleFile "package for $expectedTarget" @(
-    Get-ChildItem -LiteralPath $searchRoot -File -Filter "c2000-multicore-mcp-*-$expectedTarget.tgz"
-  )
+function Assert-SafeRelativePath([string]$Path, [string]$Description) {
+  $normalized = "$Path".Replace("\", "/")
+  if ([string]::IsNullOrWhiteSpace($normalized) -or
+      $normalized.StartsWith("/") -or
+      $normalized -match "^[A-Za-z]:" -or
+      $normalized -match "(^|/)\.\.(/|$)" -or
+      $normalized -match "//") {
+    throw "$Description contains an unsafe path: $Path"
+  }
+  return $normalized.TrimStart("./")
 }
 
-if ($ChecksumPath) {
-  $ChecksumPath = Resolve-ExistingFile "Checksum metadata" $ChecksumPath
-} else {
-  $packageDirectory = Split-Path -Parent $PackagePath
-  $preferredChecksum = Join-Path $packageDirectory "SHA256SUMS-$expectedTarget.json"
-  if (Test-Path -LiteralPath $preferredChecksum -PathType Leaf) {
-    $ChecksumPath = (Resolve-Path -LiteralPath $preferredChecksum).Path
-  } else {
-    $ChecksumPath = Resolve-SingleFile "checksum metadata for $expectedTarget" @(
-      Get-ChildItem -LiteralPath $packageDirectory -File -Filter "SHA256SUMS-*.json"
-    )
+function Read-JsonFile([string]$Description, [string]$Path) {
+  try {
+    return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
+  } catch {
+    throw "$Description is missing or invalid: $Path ($($_.Exception.Message))"
   }
 }
 
-$assetName = Split-Path -Leaf $PackagePath
-$metadata = Get-Content -Raw -LiteralPath $ChecksumPath | ConvertFrom-Json
-$expected = @($metadata.files) | Where-Object { $_.file -eq $assetName } | Select-Object -First 1
-if (-not $expected) {
-  throw "Checksum metadata does not contain $assetName."
-}
-if ("$($metadata.target)" -ne $expectedTarget) {
-  throw "Checksum metadata targets $($metadata.target), but active Node requires $expectedTarget."
-}
-if ("$($expected.sha256)" -notmatch "^[0-9a-fA-F]{64}$") {
-  throw "Checksum metadata contains an invalid SHA-256 value for $assetName."
-}
-if ($null -ne $expected.size -and [int64]$expected.size -ne (Get-Item -LiteralPath $PackagePath).Length) {
-  throw "Offline package size does not match the checksum metadata for $assetName."
+function Assert-ChecksumManifest([string]$BundleRoot, [object]$Checksums) {
+  if ("$($Checksums.target)" -ne "win32-x64") {
+    throw "Checksum metadata targets $($Checksums.target), but this installer requires win32-x64."
+  }
+  $entries = @($Checksums.files)
+  if ($entries.Count -eq 0) { throw "SHA256SUMS.json contains no file entries." }
+  $seen = @{}
+  foreach ($entry in $entries) {
+    $relative = Assert-SafeRelativePath "$($entry.file)" "Checksum metadata"
+    if ($relative -eq "SHA256SUMS.json") { throw "SHA256SUMS.json cannot contain a self-referential checksum." }
+    if ($seen.ContainsKey($relative)) { throw "Checksum metadata contains a duplicate path: $relative" }
+    $seen[$relative] = $true
+    if ("$($entry.sha256)" -notmatch "^[0-9a-fA-F]{64}$") {
+      throw "Checksum metadata contains an invalid SHA-256 value for $relative."
+    }
+    $filePath = Join-Path $BundleRoot $relative.Replace("/", "\")
+    Assert-PathInside $filePath $BundleRoot "Checksum entry"
+    if (-not (Test-Path -LiteralPath $filePath -PathType Leaf)) {
+      throw "Checksum entry points to a missing file: $relative"
+    }
+    $item = Get-Item -LiteralPath $filePath
+    if ($null -ne $entry.size -and [int64]$entry.size -ne $item.Length) {
+      throw "Size mismatch for $relative."
+    }
+    $actual = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne "$($entry.sha256)".ToLowerInvariant()) {
+      throw "SHA-256 mismatch for $relative."
+    }
+  }
+  foreach ($required in @("manifest.json", "install.ps1", "runtime/node.exe", "runtime/LICENSE", "mcp/dist/src/runtime-manifest.json", "mcp/dist/src/installer/index.js")) {
+    if (-not $seen.ContainsKey($required)) { throw "SHA256SUMS.json does not cover required file: $required" }
+  }
+  $checksumPath = [System.IO.Path]::GetFullPath((Join-Path $BundleRoot "SHA256SUMS.json"))
+  $bundlePrefix = $BundleRoot.TrimEnd("\", "/") + "\"
+  foreach ($file in Get-ChildItem -LiteralPath $BundleRoot -Recurse -File) {
+    if ([System.IO.Path]::GetFullPath($file.FullName) -eq $checksumPath) { continue }
+    $relative = $file.FullName.Substring($bundlePrefix.Length).Replace("\", "/")
+    if (-not $seen.ContainsKey($relative)) { throw "Bundle file is not covered by SHA256SUMS.json: $relative" }
+  }
 }
 
-Write-Host "Verifying SHA-256 for $assetName..."
-$actualHash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actualHash -ne "$($expected.sha256)".ToLowerInvariant()) {
-  throw "SHA-256 mismatch for $assetName."
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+  throw "The C2000 MCP offline package supports Windows only."
+}
+if (-not [Environment]::Is64BitOperatingSystem) {
+  throw "The C2000 MCP offline package supports Windows x64 only."
 }
 
-$tar = Get-Command tar.exe -ErrorAction SilentlyContinue
-if (-not $tar) { $tar = Get-Command tar -ErrorAction SilentlyContinue }
-if (-not $tar) { throw "tar was not found. Windows 10/11 includes tar.exe; enable it and retry." }
-Assert-SafeArchiveEntries $tar.Source $PackagePath
+$scriptRoot = $PSScriptRoot
+if (-not $scriptRoot) { $scriptRoot = (Get-Location).Path }
+$bundleRoot = (Resolve-Path -LiteralPath $scriptRoot).Path
+$manifestPath = Resolve-RequiredFile "Offline bundle manifest" (Join-Path $bundleRoot "manifest.json")
+$checksumPath = Resolve-RequiredFile "Offline checksum metadata" (Join-Path $bundleRoot "SHA256SUMS.json")
+$manifest = Read-JsonFile "Offline bundle manifest" $manifestPath
+$checksums = Read-JsonFile "Offline checksum metadata" $checksumPath
+Assert-ChecksumManifest $bundleRoot $checksums
 
-$temporaryBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd("\", "/")
-$stagingRoot = Join-Path $temporaryBase "c2000-offline-install-$([guid]::NewGuid().ToString('N'))"
-Assert-PathInside $stagingRoot $temporaryBase "Temporary staging path"
-New-Item -ItemType Directory -Path $stagingRoot | Out-Null
+if ("$($manifest.schemaVersion)" -ne "1") { throw "Unsupported offline bundle manifest schema: $($manifest.schemaVersion)" }
+if ("$($manifest.artifact.target)" -ne "offline-win32-x64" -and "$($manifest.artifact.target)" -ne "win32-x64") {
+  throw "This package is not the Windows x64 C2000 MCP offline artifact."
+}
+$runtime = $manifest.runtime
+if (-not $runtime -or "$($runtime.name)" -ne "node" -or "$($runtime.platform)" -ne "win32" -or "$($runtime.arch)" -ne "x64") {
+  throw "Offline bundle runtime metadata is not win32-x64 Node."
+}
+if ("$($runtime.version)" -notmatch '^\d+\.\d+\.\d+$' -or "$($runtime.nodeVersion)" -ne "v$($runtime.version)") {
+  throw "Offline bundle must declare a complete Node runtime version."
+}
+if ("$($runtime.modulesAbi)" -notmatch '^\d+$') { throw "Offline bundle Node ABI metadata is invalid." }
+if ("$($runtime.sha256)" -notmatch "^[0-9a-fA-F]{64}$") { throw "Offline bundle Node SHA-256 metadata is invalid." }
+if ("$($runtime.distribution.archiveSha256)" -notmatch "^[0-9a-fA-F]{64}$") { throw "Offline bundle distribution SHA-256 metadata is invalid." }
+if ("$($runtime.distribution.source)" -notmatch '^https://nodejs\.org/') { throw "Offline bundle runtime source is not the official Node distribution." }
+if ("$($runtime.executable)" -ne "runtime/node.exe") { throw "Offline bundle runtime executable metadata is invalid." }
 
+$nodePath = Resolve-RequiredFile "Bundled Node executable" (Join-Path $bundleRoot "runtime\node.exe")
+$nodeHash = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($nodeHash -ne "$($runtime.sha256)".ToLowerInvariant()) { throw "Bundled Node executable SHA-256 does not match manifest." }
+
+$nodeProbeText = & $nodePath -p "JSON.stringify({nodeVersion:process.version,nodeModulesAbi:process.versions.modules,platform:process.platform,arch:process.arch})"
+if ($LASTEXITCODE -ne 0) { throw "The bundled Node executable could not be started." }
+try { $nodeProbe = $nodeProbeText | ConvertFrom-Json } catch { throw "Bundled Node version probe returned invalid JSON." }
+if ("$($nodeProbe.nodeVersion)" -ne "$($runtime.nodeVersion)" -or
+    "$($nodeProbe.nodeModulesAbi)" -ne "$($runtime.modulesAbi)" -or
+    "$($nodeProbe.platform)" -ne "win32" -or
+    "$($nodeProbe.arch)" -ne "x64") {
+  throw "Bundled Node version/ABI/platform does not match manifest."
+}
+
+$mcpRoot = (Resolve-Path -LiteralPath (Join-Path $bundleRoot "mcp")).Path
+$mcpManifestPath = Resolve-RequiredFile "MCP runtime manifest" (Join-Path $mcpRoot "dist\src\runtime-manifest.json")
+$mcpManifest = Read-JsonFile "MCP runtime manifest" $mcpManifestPath
+if ($mcpManifest.runtime.bundledNode -ne $true) { throw "MCP runtime manifest is not marked as using the private Node runtime." }
+if ("$($mcpManifest.runtime.nodeVersion)" -ne "$($runtime.nodeVersion)" -or
+    "$($mcpManifest.runtime.modulesAbi)" -ne "$($runtime.modulesAbi)") {
+  throw "MCP runtime manifest and offline runtime metadata disagree."
+}
+if ("$($mcpManifest.runtime.executable)" -ne "runtime/node.exe") { throw "MCP runtime executable metadata is invalid." }
+$sqliteBindings = @($mcpManifest.nativeBindings | Where-Object { "$($_.name)" -eq "better_sqlite3.node" })
+if ($sqliteBindings.Count -ne 1 -or "$($sqliteBindings[0].abi)" -ne "$($runtime.modulesAbi)") {
+  throw "better_sqlite3.node ABI metadata does not match the bundled Node ABI."
+}
+foreach ($binding in @($mcpManifest.nativeBindings)) {
+  $relativeBinding = Assert-SafeRelativePath "$($binding.path)" "MCP native binding"
+  $bindingPath = Join-Path $mcpRoot "dist\src\$($relativeBinding.Replace('/', '\'))"
+  Assert-PathInside $bindingPath (Join-Path $mcpRoot "dist\src") "MCP native binding"
+  if (-not (Test-Path -LiteralPath $bindingPath -PathType Leaf)) { throw "MCP native binding is missing: $relativeBinding" }
+  $actualBindingHash = (Get-FileHash -LiteralPath $bindingPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualBindingHash -ne "$($binding.sha256)".ToLowerInvariant()) { throw "MCP native binding SHA-256 mismatch: $relativeBinding" }
+}
+
+$installerPath = Resolve-RequiredFile "Offline MCP installer" (Join-Path $mcpRoot "dist\src\installer\index.js")
+$previousBundleRoot = $env:C2000_MCP_OFFLINE_BUNDLE_ROOT
 try {
-  Write-Host "Extracting verified runtime..."
-  & $tar.Source -xzf $PackagePath -C $stagingRoot
-  Assert-LastExitCode "Failed to extract the offline package archive."
-
-  $packageRoot = Join-Path $stagingRoot "package"
-  $runtimeRoot = Join-Path $packageRoot "dist\src"
-  $manifestPath = Join-Path $runtimeRoot "runtime-manifest.json"
-  $installerPath = Join-Path $runtimeRoot "installer\index.js"
-  if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
-    throw "Offline package is missing dist/src/runtime-manifest.json."
-  }
-  if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
-    throw "Offline package is missing dist/src/installer/index.js."
-  }
-
-  $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-  if ($manifest.platform -ne "win32" -or $manifest.arch -ne "x64") {
-    throw "Runtime package is for $($manifest.platform)-$($manifest.arch), but this machine is win32-x64."
-  }
-  if ("$($manifest.nodeModulesAbi)" -ne "$nodeAbi") {
-    throw "Runtime package ABI $($manifest.nodeModulesAbi) does not match active Node ABI $nodeAbi. Use the $expectedTarget package; npm adaptation is intentionally disabled offline."
-  }
-
-  foreach ($binding in @($manifest.nativeBindings)) {
-    if ("$($binding.sha256)" -notmatch "^[0-9a-fA-F]{64}$") {
-      throw "Runtime manifest contains an invalid native binding SHA-256 value."
-    }
-    $bindingPath = Join-Path $runtimeRoot "$($binding.path)"
-    Assert-PathInside $bindingPath $runtimeRoot "Native binding path"
-    if (-not (Test-Path -LiteralPath $bindingPath -PathType Leaf)) {
-      throw "Runtime native binding is missing: $($binding.path)"
-    }
-    $bindingHash = (Get-FileHash -LiteralPath $bindingPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($bindingHash -ne "$($binding.sha256)".ToLowerInvariant()) {
-      throw "Runtime native binding SHA-256 mismatch: $($binding.path)"
-    }
-  }
-
-  Write-Host "Installing C2000 Multicore MCP for Node $nodeVersionText (ABI $nodeAbi)..."
-  & node $installerPath install @InstallerArguments
-  Assert-LastExitCode "C2000 Multicore MCP offline installation or doctor verification failed."
+  $env:C2000_MCP_OFFLINE_BUNDLE_ROOT = $bundleRoot
+  & $nodePath $installerPath install @InstallerArguments
+  if ($LASTEXITCODE -ne 0) { throw "C2000 MCP installation or doctor verification failed." }
 } finally {
-  if (Test-Path -LiteralPath $stagingRoot) {
-    Assert-PathInside $stagingRoot $temporaryBase "Temporary cleanup path"
-    Remove-Item -LiteralPath $stagingRoot -Recurse -Force
-  }
+  $env:C2000_MCP_OFFLINE_BUNDLE_ROOT = $previousBundleRoot
 }

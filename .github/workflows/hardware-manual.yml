@@ -23,9 +23,18 @@ jobs:
     runs-on: [self-hosted, windows, c2000-rig]
     steps:
       - uses: actions/checkout@v4
+      - name: Read fixed developer runtime
+        id: runtime
+        shell: pwsh
+        run: |
+          $config = Get-Content -Raw config/runtime-manifest.json | ConvertFrom-Json
+          if (-not $config.runtime.version -or $config.runtime.platform -ne 'win32' -or $config.runtime.arch -ne 'x64') {
+            throw 'config/runtime-manifest.json must contain the fixed win32-x64 runtime.'
+          }
+          "version=$($config.runtime.version)" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ steps.runtime.outputs.version }}
           cache: npm
       - run: npm ci
       - run: npm run build
