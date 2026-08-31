@@ -1,162 +1,88 @@
 ---
 name: c2000-multicore-debug
-description: Safely run F28P65x CPU1/CPU2 and multi-board CAN workflows through the daemon, with global board permits and lease fencing.
+description: Safely debug TI C2000 F28P65x CPU1/CPU2 and multi-board workflows through the daemon, with explicit core identity, durable jobs, lease fencing, hardware evidence, and deterministic engineering verification.
 ---
 
 # C2000 Multicore Debug
 
-Use server-side workflows. Preserve explicit `sessionId` and `coreId`; never
-depend on CCS focus or use TI MCP active-target controls. F28P65x uses
-`coreId = 0` for `C28xx_CPU1` and `coreId = 2` for `C28xx_CPU2`.
-Use those exact CCS names for `corePattern`; do not send regular expressions.
+Use this skill for F28P65x CPU1/CPU2 debug, IPC acceptance, CPU2 boot handoff,
+RAMGS ownership, stale program/map diagnosis, CAN evidence, and engineering
+verification through `c2000-multicore-mcp`.
 
-Before any board-bound work:
+## Core principles
 
-1. Read server health once. Use `configuration.profile.effective`, `source`,
-   `configPath`, and `appliedAt` as the authoritative frontend profile state.
-   Never repeat `c2000_getToolContracts` to guess whether safe/full changed.
-   `configuration.reload` explains that tool registration is fixed at frontend
-   startup: update config and reconnect only that frontend; do not restart the
-   daemon or board workers.
-2. Read daemon health and verify `boardConcurrency.limit` can fit the requested
-   physical boards.
-3. List boards. If the list is empty or health reports
-   `boards.registrationRequired`, stop and call `c2000_registerBoard` with a
-   serial-bound `.ccxml`; do not try alternate launch tools or direct DSS.
-4. Require distinct `boardId` and `probeSerial`; do not select leased or
-   quarantined boards.
-5. Keep `.ccxml`, `.out`, and `.map` under `allowedReadRoots`, and evidence
-   `outputDir` under `allowedWriteRoots`.
-6. Submit one durable job and retain its `jobId`.
+- Use server-side workflow tools and preserve explicit `sessionId`, `boardId`,
+  and `coreId`; never depend on CCS focus or TI active-target controls.
+- F28P65x uses `coreId: 0` / `C28xx_CPU1` and `coreId: 2` / `C28xx_CPU2`.
+  `corePattern` is an exact CCS selector, not a regular expression.
+- Keep `.ccxml`, `.out`, and `.map` inputs inside `allowedReadRoots`; keep
+  evidence and build output inside `allowedWriteRoots`.
+- Mock is simulation evidence only. It never proves XDS110, PCAN, firmware,
+  target timing, or physical wiring.
+- Preserve daemon ownership, worker identity, board permits, lease/fencing
+  context, safety guards, and durable `jobId` semantics. Never add a second
+  target job engine or a general shell tool.
 
-For Hybrid30K A–E safety regressions, prefer strict durable steps over client-
-side tool sequences: `assignExpressions`, `injectFaults`,
-`captureExpressions`, `waitForExpressions`, `runCores`, `haltCores`,
-`reconnectAfterTargetReset`, `restorePrograms`, and `resetReconnectCapture`.
-Every expression entry must name `coreId` 0 or 2.
-Put them after `launchMulticore` in the same plan. Use
-`launchMulticore.loadPrograms: false` for a connect-only launch, or declare its
-`loadSequence` explicitly when CPU1 must run before CPU2 RAM load.
+## Workflow priority
 
-The `safe` frontend intentionally hides direct `c2000_assignExpression(s)`
-tools. Use `c2000_submitTestPlan` for target writes that must remain inside the
-daemon lease and safety boundary. Durable `assignExpressions` entries execute
-in declared order and stop on the first failed write or verification. Put all
-mailbox payload fields first and the nonce/commit expression last; it will not
-be attempted after an earlier payload failure.
+1. Inspect environment, server/daemon health, board registration, filesystem
+   roots, and the applicable tool contract.
+2. For target work, use one server-side workflow or one durable job. Register a
+   serial-bound board and wait for its worker before touching a target.
+3. For code/project changes, prefer `c2000_runEngineeringVerification` so the
+   server evaluates Build → Map → Regression → Review and persists evidence.
+   Atomic `c2000_verifyBuild`, `c2000_verifyMap`, `c2000_verifyRegression`,
+   and `c2000_verifyReview` are for focused checks.
+4. Read `c2000_getVerificationResult` or the job artifact manifest before
+   concluding. A Build PASS is not task completion.
 
-For Hybrid30K runtime acceptance, do not require
-`g_stCpu1RuntimeAcceptWatch.uiRuntimeValid == 1` in the OFF-state startup
-baseline. OFF-state `uiRuntimeValid == 0` is expected; require `1` only after
-the formal control mode and mailbox command have been accepted.
+## Safety hard rules
 
-Never configure retry or automatic recovery for `assignExpressions`,
-`injectFaults`, `runCores`, `reconnectAfterTargetReset`, `restorePrograms`, or
-`resetReconnectCapture`; the daemon classifies them as non-idempotent and
-requires manual intervention after interruption. `haltCores` is safe to retry.
-A reset
-reconnect step must explicitly choose `reload: none`, `symbols`, or `programs`.
-Choose `symbols` for resident Flash. Consume custom expression evidence from
-the job's atomic `expression-snapshots.json` and its manifest hash.
+- Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,
+  `disconnectTarget`, or active-target tools for dual-core automation.
+- Do not retry an expired, invalidated, worker-mismatched, or fenced lease;
+  stop and inspect durable evidence.
+- Do not automatically kill external CCS/DebugServer processes. Recovery is
+  limited to daemon-owned identities and remains dry-run by default.
+- Do not repeat CPU2 Flash programming without explicit destructive reload
+  authorization; use symbol loading for resident Flash.
+- Do not assign PWM, contactor, power-stage, or HV control variables as part of
+  generic verification. Target writes and fault injection remain in existing
+  safe/full and durable-job boundaries.
+- A parser failure, missing required evidence, stale `.out`/`.map`, unsupported
+  required verifier, or incomplete artifact must not be reported as PASS.
 
-Use `reconnectAfterTargetReset` only for a reset initiated outside the durable
-job. It must observe `Disconnected` through the adapter or match an explicit,
-firmware-defined reset-cause latch expression. `Halted` state or a changed PC
-alone is not reset evidence. This step reconnects the same session, optionally
-loads symbols, and may run CPU1 before CPU2; it must never reset, program Flash,
-or write PC.
+## Intent routing
 
-Plan `safetyGuards` are explicit `{ coreId, expression, operator: "eq",
-expected }` conditions. The daemon checks them only after the current session
-exists, serializes their polling with all other worker commands, and on the
-first mismatch uses the same fenced lease to halt the declared cores and fail
-the job without retry. An unreadable guard also halts and fails; an unconfirmed
-halt quarantines the board. Guard evaluation pauses only while
-`reconnectAfterTargetReset` is proving/recovering an expected disconnect and
-resumes after reconnect. Use `restorePrograms` only as an `on: always`
-isolation step. Supply
-both CPU1 and CPU2 out/map SHA-256 values; the daemon validates allowed roots
-and hashes before halt → map-aware load → halt. It never runs or writes PC.
+- IPC/acceptance: `c2000_launchAndRunIpcAcceptance` or
+  `c2000_runIpcAcceptance` when a session already exists.
+- CPU2 boot/illegal PC: `c2000_runBootHandoffDiagnosis`.
+- Reload/reset/run/diagnose: `c2000_runReloadAndDiagnose`.
+- Evidence package: `c2000_runFullDebugBundle`.
+- RAMGS ownership: diagnose first, then `c2000_analyzeRamOwnership`.
+- Resident Flash symbols: `c2000_loadSymbols`, not `c2000_loadProgram`.
+- Multi-board CAN: use the durable two-board workflow; `mock` remains
+  simulation-only and hardware mode is explicit.
 
-Do not manually restart or re-port the daemon to repair a stale MCP proxy.
-The proxy rediscovers a restarted daemon after connection/authentication
-failure. A request timeout is not automatically retried because the target
-operation may already have started.
+## Completion contract
 
-For a CPU2 RAM image whose GS ownership or release is initialized by CPU1, set
-`loadSequence.mode` to `cpu1-run-before-cpu2` and choose an explicit
-`cpu1SettleMs`. Leave the default sequence unchanged for ordinary or Flash
-loads.
+For engineering changes, follow:
 
-When CPU1 firmware owns the CPU2 boot handoff, set
-`runSequence.runMode` to `cpu1_boots_cpu2`. MCP disconnects CPU2 while CPU1
-runs and reconnects it before readiness polling/diagnosis, recording the
-`cpu2Release` evidence. Keep this inside the server-side workflow.
+`Inspect → Modify → Build → Map → Regression → Review → runtime verification when required → Conclude`
 
-For the validated Hybrid30K DK9 owner-first path, use
-`startupPreset: hybrid30k-dk9-owner-first`. It resolves and persists the exact
-parameters `resetType=cpu`, CPU1-run-before-CPU2 load with 250 ms settle, and
-debugger-runs-both with CPU1 first and 500 ms settle. Explicit conflicting
-values fail before target access. Durable plans persist all effective startup
-parameters; failures report `workflowStage` and `effectiveStartup`. Polling is
-bounded to 10,000 iterations; increase the interval instead of creating an
-unbounded wait.
+Record the `jobId`/`verificationId`, status, evidence classification,
+completeness, hard-gate failures, and paths to durable artifacts. Distinguish
+real hardware, Mock, host-only, blocked, unsupported, and not-run results.
 
-When the program is already resident in Flash and only debug symbols are
-needed, use `c2000_loadSymbols`. Never substitute `c2000_loadProgram`, because
-that can erase or reprogram target Flash.
+Do not declare completion solely because compilation succeeds. Respect the
+configured map hard gates and review requirements; thresholds belong in
+verification configuration, not in this Skill.
 
-Repeated CPU2 Flash programming is fail-closed with
-`DestructiveFlashReloadBlocked` before CCS erase/program activity. Use
-`c2000_loadSymbols` for a resident image; set
-`allowDestructiveFlashReload: true` only for an intentional, ownership-checked
-erase/reprogram.
+## References
 
-Treat `verify-mcp-registry` as same-session load-record verification only; it
-never verifies resident Flash. `verify-only` is a deprecated alias. After
-fresh Flash programming, use `c2000_runReloadAndDiagnose.postLoadBoot` for an
-explicit post-load reset and CPU1-first start. This sequence does not write PC;
-if firmware needs a nonstandard entry address, stop and require a target-
-specific, explicitly approved procedure.
-
-Two-board CAN requires an atomic pair permit. Treat
-`InsufficientBoardConcurrency` as a configuration error, not a barrier timeout.
-
-Every board-bound command must carry a current lease context containing
-`leaseId`, secret `leaseToken`, monotonically increasing `fencingToken` and
-`leaseGeneration`, owner, board/probe, and worker identity. Never retry
-`LeaseExpired`, `LeaseInvalidated`, or `LeaseFencingRejected` with the old
-context. After repeated renewal failure, stop target commands and recover from
-persisted metadata only; never claim the old DSS session was restored.
-
-Durable worker routing is a separate invariant from the persisted board row:
-
-- Before acquiring a durable lease, require the daemon supervisor to resolve
-  the live `workerInstanceId` and bind that exact identity into the lease.
-  `listBoards.currentWorkerInstanceId` is diagnostic state, not a substitute
-  for the live supervisor route.
-- Before every target-bound durable step, re-check that the live worker still
-  matches the lease. `LeaseWorkerMismatch` or `WorkerIdentityMismatch` is a
-  fencing/infrastructure failure: stop, inspect `c2000_getTestRun` evidence,
-  and do not retry the old context or hide the failure with a new target call.
-- Treat `c2000_getAcceptanceReadiness` and XDSDFU output as host/probe
-  readiness only. They do not prove DebugServer target access or a valid
-  session; preserve the exact failing stage and `targetAccessAttempted` value.
-- `c2000_submitTestPlan` only queues work. Poll `c2000_getTestRun` until a
-  terminal status and retain the error, event, and artifact evidence.
-- If multiple calls are needed after a launch, keep the debug session alive
-  for that sequence (`autoCloseOnComplete: false`); otherwise request the
-  snapshot/diagnosis inside the same workflow or durable job before auto-close.
-
-PCAN rules:
-
-- Mock is simulation evidence only.
-- `pcan-basic` is Windows x64 hardware evidence and must fail closed.
-- Never redistribute PCANBasic.dll or silently fall back to Mock.
-- `verify:pcan:hardware` is opt-in and proves preflight only.
-- Claim two-board acceptance only after an explicit hardware acceptance run.
-
-Recovery is ownership-safe: default to dry-run and terminate only daemon-owned
-processes whose PID, start time, daemon/worker identity, board, and probe all
-match. Never kill external CCS, DSLite, DebugServer, or an ambiguous/PID-reused
-process.
+- [Debugging workflows](references/debugging.md)
+- [Durable jobs and leases](references/durable-jobs.md)
+- [Hardware safety and evidence](references/hardware-safety.md)
+- [Engineering verification](references/verification.md)
+- [Artifacts and metrics](references/artifacts.md)
+- [Skill evolution boundary](references/evolution.md)

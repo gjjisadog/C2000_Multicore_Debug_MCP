@@ -31,6 +31,8 @@
     "verify:host": "tsx scripts/verify-host-gate.ts",
     "verify:daemon-proxy": "vitest run tests/daemonProxyLifecycle.test.ts tests/jobPersistence.test.ts",
     "verify:daemon-restart": "vitest run tests/daemonProcessRecoveryE2E.test.ts",
+    "sync:skills": "node scripts/sync-skills.mjs",
+    "verify:skill-sync": "node scripts/sync-skills.mjs --check",
     "verify:can:mock": "vitest run tests/boardGroupBarrier.test.ts tests/canAcceptanceService.test.ts tests/canProfileEvidence.test.ts tests/canCampaignJob.test.ts tests/canGroupReconciler.test.ts tests/canJobPersistence.test.ts",
     "acceptance:can:mock": "npm run verify:can:mock",
     "acceptance:can:fault-campaign": "vitest run tests/canCampaignJob.test.ts",
@@ -102,6 +104,7 @@
     "python/README.md",
     "python/src/c2000_hil/*.py",
     "skills/c2000-multicore-debug/**",
+    "skills/c2000-skill-improver/**",
     "README.md",
     "CHANGELOG.md"
   ],

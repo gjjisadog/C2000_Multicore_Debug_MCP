@@ -1,0 +1,3 @@
+error #10099-D: program will not fit into available memory. run placement fails for section ".cla1Prog"
+error #10265: section .stack requires 0x900 bytes but only 0x100 bytes remain
+Build failed.

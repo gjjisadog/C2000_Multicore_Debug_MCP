@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Add deterministic Build, TI C2000 Map, declared host/Mock Regression, and
+  diff/contract Review verifiers with one versioned Verification Result
+  contract, atomic evidence manifests, freshness checks, and a high-level
+  Engineering Verification Suite.
+- Add additive verification configuration and six host-side MCP tools while
+  preserving the stdio proxy → daemon → worker, durable job, board lease,
+  fencing, safety, allowed-root, and Mock-versus-hardware boundaries.
+- Add versioned Skill evolution data, bounded candidate edits, strict
+  validation/promotion gates, and a durable rejected-edit buffer without any
+  automatic production Skill rewrite or model API dependency.
+- Make `skills/c2000-multicore-debug/SKILL.md` canonical, generate the `.skills`
+  mirror, add progressive-disclosure references, and package/install the
+  independent `c2000-skill-improver` Skill.
 - Harden CPU2 boot handoff workflows by disconnecting CPU2 while CPU1 performs
   the firmware-owned release, reconnecting it before readiness/diagnosis, and
   recording the release evidence in workflow results.

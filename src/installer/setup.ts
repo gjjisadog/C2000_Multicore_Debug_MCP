@@ -74,6 +74,7 @@ export interface SetupResult {
   registration: "codex-cli" | "config-file" | "skipped";
   codexConfigPath?: string;
   skillDirectory?: string;
+  skillDirectories?: string[];
   doctorPassed: boolean;
 }
 
@@ -346,14 +347,18 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   await access(entrypoint);
 
   let skillDirectory: string | undefined;
+  const skillDirectories: string[] = [];
   if (options.installSkill) {
-    const skillSource = path.join(packageRoot, "skills", "c2000-multicore-debug");
-    if (await exists(skillSource)) {
+    for (const skillName of ["c2000-multicore-debug", "c2000-skill-improver"]) {
+      const skillSource = path.join(packageRoot, "skills", skillName);
+      if (!await exists(skillSource)) continue;
       const codexHome = path.resolve(env.CODEX_HOME ?? path.join(homeDirectory, ".codex"));
-      skillDirectory = path.join(codexHome, "skills", "c2000-multicore-debug");
-      await rm(skillDirectory, { recursive: true, force: true });
-      await mkdir(path.dirname(skillDirectory), { recursive: true });
-      await cp(skillSource, skillDirectory, { recursive: true });
+      const destination = path.join(codexHome, "skills", skillName);
+      await rm(destination, { recursive: true, force: true });
+      await mkdir(path.dirname(destination), { recursive: true });
+      await cp(skillSource, destination, { recursive: true });
+      skillDirectories.push(destination);
+      if (skillName === "c2000-multicore-debug") skillDirectory = destination;
     }
   }
 
@@ -424,6 +429,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     registration,
     codexConfigPath,
     skillDirectory,
+    ...(skillDirectories.length > 0 ? { skillDirectories } : {}),
     doctorPassed
   };
 }

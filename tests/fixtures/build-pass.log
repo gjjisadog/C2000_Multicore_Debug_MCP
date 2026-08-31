@@ -1,0 +1,5 @@
+**** Build of configuration FLASH for project cpu1 ****
+Finished building target: cpu1.out
+Build Finished. 0 errors, 2 warnings.
+warning #10247-D: creating output section ".sysmem" without a SECTIONS specification
+warning: map output generated at cpu1.map

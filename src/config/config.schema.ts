@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { coreConfigSchema } from "../mcp/toolSchemas.js";
+import { verificationConfigSchema } from "../verification/VerificationConfigSchemas.js";
+import { skillEvolutionConfigSchema } from "../evolution/EvolutionSchemas.js";
 
 const boardConfigSchema = z.object({
   boardId: z.string().min(1),
@@ -50,6 +52,8 @@ export const c2000McpConfigSchema = z.object({
     allowedReadRoots: z.array(z.string().min(1)).default([]),
     allowedWriteRoots: z.array(z.string().min(1)).default([])
   }).default({ allowedReadRoots: [], allowedWriteRoots: [] }),
+  verification: verificationConfigSchema.default({}),
+  skillEvolution: skillEvolutionConfigSchema.default({}),
   debugProbe: z.object({
     queueDir: z.string().min(1).default("runtime/debug-probe-queue"),
     queueTimeoutMs: z.number().int().positive().default(600000),

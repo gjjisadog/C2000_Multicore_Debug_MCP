@@ -1,0 +1,3 @@
+error #10010: symbol type mismatch for _shared_buffer
+error: ABI mismatch between object files compiled with COFF and EABI
+Build failed.

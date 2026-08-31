@@ -68,6 +68,33 @@ Supported first-version rules are upper/lower bound, absolute difference,
 relative increase, and p95/p99 upper bounds. Comparisons are artifacts and
 never modify the original job verdict.
 
+## Engineering verification and Skill evolution
+
+Code/project changes can use `c2000_runEngineeringVerification`, the preferred
+high-level workflow for deterministic Build → Map → Regression → Review
+verification. Focused tools are `c2000_verifyBuild`, `c2000_verifyMap`,
+`c2000_verifyRegression`, and `c2000_verifyReview`; use
+`c2000_getVerificationResult` to retrieve durable results by
+`verificationId`. Results preserve structured checks, hard gates, map metrics,
+complete logs/evidence, freshness metadata, evidence classification, and
+artifact completeness. Build PASS alone is not task completion.
+
+The verification layer is host-side and sits above the existing daemon,
+durable-job, worker, board-lease, and safety boundaries. It does not invoke an
+LLM or accept arbitrary shell commands. Host regression is the default;
+hardware regression requires explicit hardware mode and the existing durable
+boundary. Mock remains simulation evidence only. See
+[docs/engineering-verification.md](docs/engineering-verification.md).
+
+The base Skill is canonical at `skills/c2000-multicore-debug/`; `.skills/` is a
+generated mirror checked by `npm run verify:skill-sync`. The independent
+`c2000-skill-improver` Skill and `src/evolution/` data layer support bounded
+ADD/DELETE/REPLACE candidate edits, separated validation sets, promotion gates,
+and a rejected-edit buffer. No evolution run overwrites production
+`SKILL.md`; see [docs/skill-evolution.md](docs/skill-evolution.md).
+Project-specific verification thresholds may be supplied through the configured
+`verification.rulesFile`, subject to the existing allowed read roots.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.

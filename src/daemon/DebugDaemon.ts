@@ -46,6 +46,7 @@ import { FailureBundleService } from "../observability/FailureBundleService.js";
 import { RunMetricsService } from "../analytics/RunMetricsService.js";
 import { BaselineService } from "../analytics/BaselineService.js";
 import { AcceptanceClosureService } from "../artifacts/AcceptanceClosureService.js";
+import { VerificationService } from "../verification/VerificationService.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -147,6 +148,17 @@ export class DebugDaemon {
       exports: artifactExports,
       metrics
     });
+    const verification = new VerificationService({
+      rootDirectory: path.join(observabilityRoot, "verification"),
+      filesystem: this.config.filesystem,
+      config: this.config.verification,
+      registerArtifact: artifact => {
+        // Host-only verification can be correlated with a durable job without
+        // pretending that a standalone verification is itself a target job.
+        if (!this.testRuns?.get(artifact.jobId)) return;
+        artifacts.upsert(artifact);
+      }
+    });
     this.registry = new BoardRegistry(boards, events, store, new LeaseRepository(store));
     this.registry.registerAll((this.config.boards ?? []).map(board => ({
       boardId: board.boardId,
@@ -174,6 +186,7 @@ export class DebugDaemon {
       collectFailureBundle: input => failureBundles.collect(input),
       createRunBaseline: input => baselines.create(input),
       compareRunWithBaseline: input => baselines.compare(input),
+      verification,
       submitMultiBoardIpcAcceptance: input => this.requireJobEngine().submit({
         planVersion: 1,
         name: "multi-board-ipc-acceptance",

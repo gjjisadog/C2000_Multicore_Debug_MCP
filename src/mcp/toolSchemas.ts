@@ -2,6 +2,11 @@ import { z } from "zod";
 import { canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
+import { buildVerificationInputSchema } from "../verification/build/BuildSchemas.js";
+import { mapVerificationInputSchema } from "../verification/map/MapSchemas.js";
+import { regressionPlanSchema } from "../verification/regression/RegressionSchemas.js";
+import { reviewVerificationInputSchema } from "../verification/review/ReviewSchemas.js";
+import { engineeringVerificationInputSchema } from "../verification/VerificationService.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -85,6 +90,15 @@ export const ramOwnershipAnalysisSchema = z.object({
 });
 
 export const toolContractsSchema = z.object({});
+
+export const verifyBuildSchema = buildVerificationInputSchema;
+export const verifyMapSchema = mapVerificationInputSchema;
+export const verifyRegressionSchema = regressionPlanSchema;
+export const verifyReviewSchema = reviewVerificationInputSchema;
+export const runEngineeringVerificationSchema = engineeringVerificationInputSchema;
+export const getVerificationResultSchema = z.object({
+  verificationId: z.string().regex(/^[A-Za-z0-9._/-]+$/)
+});
 
 export const serverHealthSchema = z.object({});
 

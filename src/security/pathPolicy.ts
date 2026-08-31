@@ -76,7 +76,7 @@ export async function validateToolPaths(input: unknown, policy: FilesystemPolicy
   await visit(input, async (key, value) => {
     const operation = ["outputDir", "logFile", "outputPath"].includes(key)
       ? "write"
-      : ["ccxmlPath", "programUri", "mapUri", "mapPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath", "offlineJsonPath", "offlineCsvPath", "offlineMarkdownPath", "searchRoots"].includes(key)
+      : ["ccxmlPath", "programUri", "mapUri", "mapPath", "baselineMapPath", "buildLogPath", "diffPath", "projectPath", "repositoryPath", "workingDirectory", "outPath", "cpu1Program", "cpu2Program", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "ccsInstallPath", "offlineJsonPath", "offlineCsvPath", "offlineMarkdownPath", "searchRoots"].includes(key)
         ? "read"
         : undefined;
     if (!operation) return;

@@ -1,0 +1,4 @@
+warning #10366-D: automatic inline expansion disabled
+error #10099-D: program will not fit into available memory. placement with alignment fails for section ".text"
+error #10234-D: unresolved symbol _ipc_start
+Build failed: linker returned 1

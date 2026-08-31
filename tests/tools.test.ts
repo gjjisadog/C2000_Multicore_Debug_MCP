@@ -78,6 +78,12 @@ describe("MCP tool registration contract", () => {
       "c2000_discoverAcceptancePrograms",
       "c2000_getAcceptanceReadiness",
       "c2000_analyzeRamOwnership",
+      "c2000_verifyBuild",
+      "c2000_verifyMap",
+      "c2000_verifyRegression",
+      "c2000_verifyReview",
+      "c2000_runEngineeringVerification",
+      "c2000_getVerificationResult",
       "c2000_continue",
       "c2000_pause",
       "c2000_reset",
@@ -368,6 +374,32 @@ describe("MCP tool registration contract", () => {
     expect(byName.get("c2000_runBootHandoffDiagnosis")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runReloadAndDiagnose")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runFullDebugBundle")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
+    for (const name of [
+      "c2000_verifyBuild",
+      "c2000_verifyMap",
+      "c2000_verifyRegression",
+      "c2000_verifyReview",
+      "c2000_runEngineeringVerification",
+      "c2000_getVerificationResult"
+    ]) {
+      expect(byName.get(name), name).toEqual(expect.objectContaining({
+        inputScope: "host",
+        touchesTarget: false
+      }));
+    }
+    expect(byName.get("c2000_verifyMap")).toEqual(expect.objectContaining({
+      effects: ["host-read", "bundle-write"],
+      writesHostFiles: true
+    }));
+    expect(byName.get("c2000_verifyReview")).toEqual(expect.objectContaining({
+      effects: ["host-read", "bundle-write"],
+      writesHostFiles: true
+    }));
+    expect(byName.get("c2000_getVerificationResult")).toEqual(expect.objectContaining({
+      targetEffect: "host-read",
+      effects: ["host-read"],
+      writesHostFiles: false
+    }));
   });
 
   test("target-touching tool contracts expose every per-core identity path", () => {

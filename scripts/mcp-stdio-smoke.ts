@@ -19,6 +19,12 @@ const requiredTools = [
   "c2000_discoverAcceptancePrograms",
   "c2000_getAcceptanceReadiness",
   "c2000_analyzeRamOwnership",
+  "c2000_verifyBuild",
+  "c2000_verifyMap",
+  "c2000_verifyRegression",
+  "c2000_verifyReview",
+  "c2000_runEngineeringVerification",
+  "c2000_getVerificationResult",
   "c2000_createDebugSession",
   "c2000_getSessionTopology",
   "c2000_connectCores",
@@ -147,6 +153,27 @@ async function main() {
     assert.equal(readinessContract.inputScope, "host");
     assert.equal(readinessContract.targetEffect, "host-read");
     assert.deepEqual(readinessContract.requiredInputFields, []);
+    for (const name of [
+      "c2000_verifyBuild",
+      "c2000_verifyMap",
+      "c2000_verifyRegression",
+      "c2000_verifyReview",
+      "c2000_runEngineeringVerification",
+      "c2000_getVerificationResult"
+    ]) {
+      const contract = (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === name);
+      assert(contract, `${name} contract must be exposed`);
+      assert.equal(contract.inputScope, "host");
+      assert.equal(contract.touchesTarget, false);
+    }
+    assert.deepEqual(
+      (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_verifyMap")?.effects,
+      ["host-read", "bundle-write"]
+    );
+    assert.deepEqual(
+      (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_verifyReview")?.effects,
+      ["host-read", "bundle-write"]
+    );
     const ramOwnershipContract = (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_analyzeRamOwnership");
     assert(ramOwnershipContract, "c2000_analyzeRamOwnership contract must be exposed");
     assert.equal(ramOwnershipContract.inputScope, "host");

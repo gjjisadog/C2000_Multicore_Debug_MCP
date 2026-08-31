@@ -80,10 +80,16 @@ import {
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
   waitForExpressionSetSchema,
-  waitUntilExpressionSchema
+  waitUntilExpressionSchema,
+  verifyBuildSchema,
+  verifyMapSchema,
+  verifyRegressionSchema,
+  verifyReviewSchema,
+  runEngineeringVerificationSchema,
+  getVerificationResultSchema
 } from "./toolSchemas.js";
 
-type ZodObjectSchema = z.AnyZodObject;
+type ZodObjectSchema = z.ZodTypeAny;
 type Handler = (input: any) => Promise<Record<string, unknown>>;
 type ToolInputScope = "host" | "session" | "core" | "batch" | "launch";
 type ToolTargetEffect =
@@ -114,7 +120,8 @@ type ToolFamily =
   | "wait"
   | "diagnosis"
   | "workflow"
-  | "observability";
+  | "observability"
+  | "verification";
 
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
@@ -232,6 +239,12 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_compareRunWithBaseline", title: "Compare C2000 Run With Baseline", description: "Compare deterministic run metrics with a compatible baseline using explicit thresholds. Identity mismatches fail closed unless explicitly overridden.", schema: compareRunWithBaselineSchema, handlerName: "compareRunWithBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_verifyBuild", title: "Verify C2000 Build", description: "Run or inspect a trusted, configured build provider and persist structured diagnostics, build identity, and complete logs. MCP input cannot submit arbitrary shell commands.", schema: verifyBuildSchema, handlerName: "verifyBuild", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
+  { name: "c2000_verifyMap", title: "Verify C2000 Linker Map", description: "Parse a TI C2000 linker map, emit deterministic memory/section metrics, enforce configured hard gates, and reject stale build artifacts.", schema: verifyMapSchema, handlerName: "verifyMap", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
+  { name: "c2000_verifyRegression", title: "Verify C2000 Regression Plan", description: "Execute a declared host/mock regression plan through allowlisted runners and persist per-suite results and full logs. Hardware suites require explicit hardware mode and a durable runner.", schema: verifyRegressionSchema, handlerName: "verifyRegression", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
+  { name: "c2000_verifyReview", title: "Verify C2000 Change Review", description: "Run deterministic diff metadata, path, pattern, and configured companion-evidence checks without requiring Git or an LLM.", schema: verifyReviewSchema, handlerName: "verifyReview", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
+  { name: "c2000_runEngineeringVerification", title: "Run C2000 Engineering Verification", description: "Preferred high-level verification workflow: Build, Map, Regression, Review, durable evidence, and a hard-gate final decision. Failed builds never fall through to stale maps or falsely passing regression.", schema: runEngineeringVerificationSchema, handlerName: "runEngineeringVerification", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "verification" },
+  { name: "c2000_getVerificationResult", title: "Get C2000 Verification Result", description: "Read a persisted structured verification result and its atomic artifact manifest by verificationId without touching a target.", schema: getVerificationResultSchema, handlerName: "getVerificationResult", inputScope: "host", targetEffect: "host-read", role: "primary", family: "verification" },
   { name: "c2000_startVariableStream", title: "Start C2000 Slow Variable Stream", description: "Start one bounded, low-priority host-polled variable stream for one explicit board/session/core. This does not halt the target and is not a high-rate waveform sampler. Prefer variables as {symbol,typeName} objects for deterministic C28x width validation; bare symbol strings are accepted only when the adapter exposes a reliable type.", schema: startVariableStreamSchema, handlerName: "startVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_stopVariableStream", title: "Stop C2000 Slow Variable Stream", description: "Idempotently stop or cancel an explicitly identified variable stream.", schema: stopVariableStreamSchema, handlerName: "stopVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_getVariableStreamStatus", title: "Get C2000 Variable Stream Status", description: "Read persisted stream identity, metadata, statistics, status, and artifact status without touching the target.", schema: getVariableStreamStatusSchema, handlerName: "getVariableStreamStatus", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
@@ -376,7 +389,7 @@ export function registerC2000Tools(
       {
         title: definition.title,
         description: definition.description,
-        inputSchema: definition.schema.shape,
+        inputSchema: objectShape(definition.schema),
         annotations: definition.annotations
       },
       async (input: any) => {
@@ -418,7 +431,7 @@ function failedInvocation(error: unknown, sessionId?: string): Record<string, un
 
 export function getToolContracts(profile: ToolProfile = "full") {
   return definitionsForProfile(profile).map(definition => {
-    const inputFields = Object.keys(definition.schema.shape);
+    const inputFields = Object.keys(objectShape(definition.schema));
     return {
       name: definition.name,
       title: definition.title,
@@ -460,7 +473,7 @@ export function getToolSurfaceGuide() {
     .map(tool => tool.name);
   return {
     guidance: [
-      "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle) over long atomic chains.",
+      "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle, c2000_runEngineeringVerification) over long atomic chains.",
       "For single-step control prefer primary tools: c2000_runCore / c2000_haltCore (not c2000_continue / c2000_pause aliases).",
       "c2000_continue and c2000_pause remain registered for TI MCP naming familiarity and acceptance scripts; they are aliases, not separate semantics.",
       "Use host tools (readiness/preflight/boundary) before target-touching acceptance.",
@@ -475,7 +488,9 @@ export function getToolSurfaceGuide() {
       "For one-shot firmware hooks, set assignment.verification=write-only; ordinary assignments keep readback verification by default.",
       "If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute.",
       "Repeated CPU2 Flash programming is blocked before erase; use c2000_loadSymbols for resident images or explicitly set allowDestructiveFlashReload=true after confirming the intentional reprogram.",
-      "outputDir must be inside a configured allowedWriteRoots path; when omitted, workflow bundles use a timestamped directory under the first allowedWriteRoots entry. Program, map, and ccxml files must be inside allowedReadRoots."
+      "outputDir must be inside a configured allowedWriteRoots path; when omitted, workflow bundles use a timestamped directory under the first allowedWriteRoots entry. Program, map, and ccxml files must be inside allowedReadRoots.",
+      "Use c2000_runEngineeringVerification after code changes; treat Build, Map, Regression, Review, artifact completeness, and hard-gate failures as separate facts. Build PASS alone is not task completion.",
+      "Verification is deterministic and host-observable; it never calls an LLM, accepts arbitrary shell text, or upgrades Mock evidence to Hardware evidence."
     ],
     families,
     preferredWorkflows,
@@ -515,6 +530,7 @@ function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annota
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
   if (targetEffect === "observation-control") {
+    if (name === "c2000_verifyMap" || name === "c2000_verifyReview") return ["host-read", "bundle-write"];
     if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];
     if (name === "c2000_startVariableStream") return ["target-read", "bundle-write"];
     if (name === "c2000_exportVariableStream") return ["bundle-write"];
@@ -536,7 +552,7 @@ function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] 
   if (targetEffect === "memory-write") return name.includes("injectFault") ? ["target-memory-write", "fault-injection"] : ["target-memory-write"];
   if (targetEffect === "job-control") {
     if (name === "c2000_recoverBoard") return ["host-process-terminate"];
-    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];
+    if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure" || name === "c2000_verifyMap" || name === "c2000_verifyReview") return ["host-read", "bundle-write"];
     return ["host-write"];
   }
   if (targetEffect === "execution-control") return [name.includes("halt") || name.includes("pause") ? "target-halt" : "target-run"];
@@ -556,4 +572,12 @@ function requiredInputFields(schema: ZodObjectSchema): string[] {
   return Array.from(new Set(parsed.error.issues
     .filter(issue => issue.path.length === 1)
     .map(issue => String(issue.path[0]))));
+}
+
+function objectShape(schema: ZodObjectSchema): z.AnyZodObject["shape"] {
+  const value = schema as z.AnyZodObject & { _def?: { schema?: ZodObjectSchema; innerType?: ZodObjectSchema } };
+  if (value.shape) return value.shape;
+  if (value._def?.schema) return objectShape(value._def.schema);
+  if (value._def?.innerType) return objectShape(value._def.innerType);
+  return {};
 }

@@ -29,6 +29,7 @@ import { DebugMcpError } from "./utils/errors.js";
 import { Logger } from "./utils/logger.js";
 import { normalizeWorkspacePath } from "./utils/pathUtils.js";
 import { withAdditionalReadRoots } from "./security/pathPolicy.js";
+import { VerificationService } from "./verification/VerificationService.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -123,6 +124,15 @@ function buildRuntime(
     files: [config.ccs.ccxmlPath]
   });
   const getServerHealth = () => buildServerHealth(config, startedAt, registeredToolNames);
+  const verificationRoot = path.join(
+    config.filesystem?.allowedWriteRoots?.[0] ?? path.join(process.cwd(), "runtime"),
+    "verification"
+  );
+  const verification = toolHandlerDeps.verification ?? new VerificationService({
+    rootDirectory: verificationRoot,
+    filesystem,
+    config: config.verification
+  });
   const adapter = createAdapterFromMode(adapterResolution.mode, config, effectiveInstallPath, workspacePath, runtimeIdentity);
   const manager = new DebugSessionManager(
     adapter,
@@ -142,6 +152,7 @@ function buildRuntime(
   );
   const toolInvoker = createC2000ToolInvoker(manager, {
     ...toolHandlerDeps,
+    verification,
     effectiveAdapterType: adapterResolution.mode,
     filesystem,
     programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,

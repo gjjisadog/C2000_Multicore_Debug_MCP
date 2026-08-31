@@ -18,6 +18,7 @@ import { sleep as sleepCore } from "../utils/async.js";
 import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
+import type { VerificationService } from "../verification/VerificationService.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -99,7 +100,13 @@ import {
   verifyRunPauseIsolationSchema,
   waitForIpcReadySchema,
   waitForExpressionSetSchema,
-  waitUntilExpressionSchema
+  waitUntilExpressionSchema,
+  verifyBuildSchema,
+  verifyMapSchema,
+  verifyRegressionSchema,
+  verifyReviewSchema,
+  runEngineeringVerificationSchema,
+  getVerificationResultSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -138,6 +145,13 @@ export interface ToolHandlerDeps {
   collectFailureBundle?: (input: z.infer<typeof collectFailureBundleSchema>) => Promise<ToolResult> | ToolResult;
   createRunBaseline?: (input: z.infer<typeof createRunBaselineSchema>) => Promise<ToolResult> | ToolResult;
   compareRunWithBaseline?: (input: z.infer<typeof compareRunWithBaselineSchema>) => Promise<ToolResult> | ToolResult;
+  verification?: VerificationService;
+  verifyBuild?: (input: z.input<typeof verifyBuildSchema>) => Promise<ToolResult> | ToolResult;
+  verifyMap?: (input: z.input<typeof verifyMapSchema>) => Promise<ToolResult> | ToolResult;
+  verifyRegression?: (input: z.input<typeof verifyRegressionSchema>) => Promise<ToolResult> | ToolResult;
+  verifyReview?: (input: z.input<typeof verifyReviewSchema>) => Promise<ToolResult> | ToolResult;
+  runEngineeringVerification?: (input: z.input<typeof runEngineeringVerificationSchema>) => Promise<ToolResult> | ToolResult;
+  getVerificationResult?: (input: z.infer<typeof getVerificationResultSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardIpcAcceptance?: (input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
   submitMultiBoardCanAcceptance?: (input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) => Promise<ToolResult> | ToolResult;
   listCanProfiles?: (input: z.infer<typeof listCanProfilesSchema>) => Promise<ToolResult> | ToolResult;
@@ -183,6 +197,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const collectFailureBundle = deps.collectFailureBundle ?? unavailableTrace;
   const createRunBaseline = deps.createRunBaseline ?? unavailableJobEngine;
   const compareRunWithBaseline = deps.compareRunWithBaseline ?? unavailableJobEngine;
+  const unavailableVerification = () => { throw new DebugMcpError("DaemonUnavailable", "Engineering verification service is not configured"); };
+  const verifyBuild = deps.verifyBuild ?? (deps.verification ? (input: z.input<typeof verifyBuildSchema>) => deps.verification!.verifyBuild(input) : unavailableVerification);
+  const verifyMap = deps.verifyMap ?? (deps.verification ? (input: z.input<typeof verifyMapSchema>) => deps.verification!.verifyMap(input) : unavailableVerification);
+  const verifyRegression = deps.verifyRegression ?? (deps.verification ? (input: z.input<typeof verifyRegressionSchema>) => deps.verification!.verifyRegression(input) : unavailableVerification);
+  const verifyReview = deps.verifyReview ?? (deps.verification ? (input: z.input<typeof verifyReviewSchema>) => deps.verification!.verifyReview(input) : unavailableVerification);
+  const runEngineeringVerification = deps.runEngineeringVerification ?? (deps.verification ? (input: z.input<typeof runEngineeringVerificationSchema>) => deps.verification!.runEngineeringVerification(input) : unavailableVerification);
+  const getVerificationResult = deps.getVerificationResult ?? (deps.verification ? (input: z.infer<typeof getVerificationResultSchema>) => deps.verification!.getVerificationResult(input) : unavailableVerification);
   const submitMultiBoardIpcAcceptance = deps.submitMultiBoardIpcAcceptance ?? unavailableJobEngine;
   const submitMultiBoardCanAcceptance = deps.submitMultiBoardCanAcceptance ?? unavailableJobEngine;
   const listCanProfiles = deps.listCanProfiles ?? unavailableJobEngine;
@@ -274,6 +295,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async collectFailureBundle(input: z.input<typeof collectFailureBundleSchema>) { try { return ok(await collectFailureBundle(collectFailureBundleSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async createRunBaseline(input: z.input<typeof createRunBaselineSchema>) { try { return ok(await createRunBaseline(createRunBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId }); } },
     async compareRunWithBaseline(input: z.input<typeof compareRunWithBaselineSchema>) { try { return ok(await compareRunWithBaseline(compareRunWithBaselineSchema.parse(input))); } catch (error) { return fail(error, { jobId: input.jobId, baselineId: input.baselineId }); } },
+    async verifyBuild(input: z.input<typeof verifyBuildSchema>) { try { return ok(await verifyBuild(verifyBuildSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId, jobId: input.jobId }); } },
+    async verifyMap(input: z.input<typeof verifyMapSchema>) { try { return ok(await verifyMap(verifyMapSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId, jobId: input.jobId }); } },
+    async verifyRegression(input: z.input<typeof verifyRegressionSchema>) { try { return ok(await verifyRegression(verifyRegressionSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId, jobId: input.jobId }); } },
+    async verifyReview(input: z.input<typeof verifyReviewSchema>) { try { return ok(await verifyReview(verifyReviewSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId, jobId: input.jobId }); } },
+    async runEngineeringVerification(input: z.input<typeof runEngineeringVerificationSchema>) { try { return ok(await runEngineeringVerification(runEngineeringVerificationSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId, jobId: input.jobId }); } },
+    async getVerificationResult(input: z.infer<typeof getVerificationResultSchema>) { try { return ok(await getVerificationResult(getVerificationResultSchema.parse(input))); } catch (error) { return fail(error, { verificationId: input.verificationId }); } },
     async submitMultiBoardIpcAcceptance(input: z.infer<typeof submitMultiBoardIpcAcceptanceSchema>) { try { return ok(await submitMultiBoardIpcAcceptance(input)); } catch (error) { return fail(error); } },
     async submitMultiBoardCanAcceptance(input: z.infer<typeof submitMultiBoardCanAcceptanceSchema>) { try { return ok(await submitMultiBoardCanAcceptance(input)); } catch (error) { return fail(error); } },
     async listCanProfiles(input: z.infer<typeof listCanProfilesSchema>) { try { return ok(await listCanProfiles(input)); } catch (error) { return fail(error); } },
