@@ -39,7 +39,10 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
         ...(config.debugProbe?.probes ?? []).map(probe => path.dirname(probe.ccxmlPath))
       ],
       files: [config.ccs.ccxmlPath]
-    })
+    }),
+    {},
+    {},
+    config.toolSurfaceProfile ?? "agent"
   );
   return {
     server,

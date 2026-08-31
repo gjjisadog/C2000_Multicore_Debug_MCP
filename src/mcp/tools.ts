@@ -125,6 +125,7 @@ type ToolFamily =
 
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
+export type ToolSurfaceProfile = "agent" | "advanced" | "compatibility";
 type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
 
 export interface ToolDefinition {
@@ -144,6 +145,17 @@ export interface ToolDefinition {
   effects: ToolEffect[];
   annotations: ToolAnnotations;
   approvalClass: "read-only" | "session-lifecycle" | "target-control" | "program-load" | "target-mutation" | "workflow-confirmation";
+}
+
+export interface ToolExposureSummary {
+  profile: ToolProfile;
+  surface: ToolSurfaceProfile;
+  registered: ToolDefinition[];
+  registeredToolCount: number;
+  hiddenBySafetyCount: number;
+  hiddenBySurfaceCount: number;
+  hiddenTools: string[];
+  hiddenAliases: string[];
 }
 
 const singleCoreResponseIdentity = ["coreId", "coreName"] as const;
@@ -328,6 +340,30 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
 
 export const c2000ToolDefinitions: ToolDefinition[] = baseToolDefinitions.map(definition => decorateDefinition(definition));
 
+/**
+ * The agent surface is intentionally small and task-oriented. Role/family
+ * metadata carries the broad policy; these sets are only the explicit
+ * exceptions needed to keep low-level launch/control tools out of the default
+ * MCP schema while retaining a few high-value reads.
+ */
+const agentExcludedWorkflowNames = new Set([
+  "c2000_reloadResetRunToMain",
+  "c2000_launchMulticoreDebug",
+  "c2000_launchMulticoreDebugWithActions"
+]);
+const agentPrimaryAtomicNames = new Set([
+  "c2000_getSessionTopology",
+  "c2000_getTargetState",
+  "c2000_getMulticoreSnapshot",
+  "c2000_evaluateMany",
+  "c2000_getLoadedProgramInfo",
+  "c2000_resolvePc",
+  "c2000_resolveAddress",
+  "c2000_waitForExpressionSet",
+  "c2000_waitForIpcReady",
+  "c2000_collectFailureBundle"
+]);
+
 export interface C2000ToolInvoker {
   invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>>;
 }
@@ -370,13 +406,25 @@ export function registerC2000Tools(
   profile: ToolProfile = toolProfileFromEnv(),
   filesystem: FilesystemPolicy = { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] },
   tiEnvironment: ResolveTiEnvironmentOptions = {},
-  runtime: { getServerHealth?: () => Record<string, any> } = {}
+  runtime: { getServerHealth?: () => Record<string, any> } = {},
+  surface: ToolSurfaceProfile = toolSurfaceProfileFromEnv()
 ) {
-  const registered = definitionsForProfile(profile);
+  const exposure = getToolExposureSummary(profile, surface);
+  const registered = exposure.registered;
   const effectiveDeps: ToolHandlerDeps = {
-    getToolContracts: () => getToolContracts(profile),
-    getToolSurfaceGuide: () => getToolSurfaceGuide(),
-    getToolProfile: () => ({ activeToolProfile: profile, hiddenTools: c2000ToolDefinitions.filter(tool => !registered.includes(tool)).map(tool => tool.name), profileReason: `C2000_MCP_TOOL_PROFILE=${profile}` }),
+    getToolContracts: () => getToolContracts(profile, surface),
+    getToolSurfaceGuide: () => getToolSurfaceGuide(profile, surface),
+    getToolProfile: () => ({
+      activeToolProfile: profile,
+      activeToolSurfaceProfile: surface,
+      registeredToolCount: exposure.registeredToolCount,
+      hiddenBySafetyCount: exposure.hiddenBySafetyCount,
+      hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
+      hiddenTools: exposure.hiddenTools,
+      hiddenAliases: exposure.hiddenAliases,
+      surface,
+      profileReason: `Configured tool profile: ${profile}; configured tool surface: ${surface}`
+    }),
     getServerHealth: runtime.getServerHealth,
     tiEnvironment,
     ...deps
@@ -429,8 +477,8 @@ function failedInvocation(error: unknown, sessionId?: string): Record<string, un
   };
 }
 
-export function getToolContracts(profile: ToolProfile = "full") {
-  return definitionsForProfile(profile).map(definition => {
+export function getToolContracts(profile: ToolProfile = "full", surface: ToolSurfaceProfile = "compatibility") {
+  return definitionsForExposure(profile, surface).map(definition => {
     const inputFields = Object.keys(objectShape(definition.schema));
     return {
       name: definition.name,
@@ -461,21 +509,25 @@ export function getToolContracts(profile: ToolProfile = "full") {
 }
 
 /** Compact tool-surface guide for agents: prefer workflows, then primary atomics, avoid aliases when possible. */
-export function getToolSurfaceGuide() {
-  const tools = getToolContracts();
+export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: ToolSurfaceProfile = "compatibility") {
+  const tools = getToolContracts(profile, surface);
   const families = Array.from(new Set(tools.map(tool => tool.family))).sort();
   const aliases = tools
     .filter(tool => tool.role === "alias")
     .map(tool => ({ name: tool.name, useInstead: tool.aliasOf }));
+  const hiddenAliases = c2000ToolDefinitions
+    .filter(tool => tool.role === "alias" && !tools.some(registered => registered.name === tool.name))
+    .map(tool => tool.name);
   const preferredWorkflows = tools.filter(tool => tool.role === "workflow").map(tool => tool.name);
   const preferredAtomics = tools
     .filter(tool => tool.role === "primary")
     .map(tool => tool.name);
   return {
+    surface,
     guidance: [
       "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle, c2000_runEngineeringVerification) over long atomic chains.",
       "For single-step control prefer primary tools: c2000_runCore / c2000_haltCore (not c2000_continue / c2000_pause aliases).",
-      "c2000_continue and c2000_pause remain registered for TI MCP naming familiarity and acceptance scripts; they are aliases, not separate semantics.",
+      "c2000_continue and c2000_pause are compatibility aliases, not separate semantics; they are registered only on the compatibility surface.",
       "Use host tools (readiness/preflight/boundary) before target-touching acceptance.",
       "For daemon-routed hardware, call c2000_getDaemonHealth and c2000_listBoards first. If no board is registered, stop and call c2000_registerBoard; do not try alternate launch tools.",
       "Use F28P65x coreId 0 for C28xx_CPU1 and coreId 2 for C28xx_CPU2.",
@@ -496,6 +548,7 @@ export function getToolSurfaceGuide() {
     preferredWorkflows,
     preferredAtomics,
     aliases,
+    hiddenAliases,
     counts: {
       total: tools.length,
       primary: tools.filter(tool => tool.role === "primary").length,
@@ -507,13 +560,74 @@ export function getToolSurfaceGuide() {
   };
 }
 
+/** Backwards-compatible helper: this function intentionally remains safety-only. */
 export function definitionsForProfile(profile: ToolProfile): ToolDefinition[] {
-  return c2000ToolDefinitions.filter(tool => profile === "full" || (profile === "readonly" ? tool.annotations.readOnlyHint : !tool.effects.includes("fault-injection") && !tool.effects.includes("target-memory-write")));
+  return definitionsForSafetyProfile(profile);
+}
+
+export function definitionsForSafetyProfile(profile: ToolProfile): ToolDefinition[] {
+  if (profile === "full") return [...c2000ToolDefinitions];
+  if (profile === "readonly") return c2000ToolDefinitions.filter(tool => tool.annotations.readOnlyHint);
+  if (profile === "safe") {
+    return c2000ToolDefinitions.filter(tool => !tool.effects.includes("fault-injection") && !tool.effects.includes("target-memory-write"));
+  }
+  throw new Error(`Invalid C2000 tool profile: ${String(profile)}`);
+}
+
+export function definitionsForSurfaceProfile(surface: ToolSurfaceProfile): ToolDefinition[] {
+  if (surface === "compatibility") return [...c2000ToolDefinitions];
+  if (surface === "advanced") return c2000ToolDefinitions.filter(tool => tool.role !== "alias");
+  if (surface === "agent") {
+    return c2000ToolDefinitions.filter(tool => {
+      if (tool.role === "alias") return false;
+      if (tool.role === "workflow" && agentExcludedWorkflowNames.has(tool.name)) return false;
+      if (tool.role === "host" || tool.role === "workflow" || tool.role === "diagnostic") return true;
+      if (tool.family === "verification") return true;
+      return agentPrimaryAtomicNames.has(tool.name);
+    });
+  }
+  throw new Error(`Invalid C2000 tool surface profile: ${String(surface)}`);
+}
+
+/** Apply safety first, then intersect with the requested MCP surface. */
+export function definitionsForExposure(profile: ToolProfile, surface: ToolSurfaceProfile): ToolDefinition[] {
+  const safetyDefinitions = definitionsForSafetyProfile(profile);
+  const surfaceNames = new Set(definitionsForSurfaceProfile(surface).map(tool => tool.name));
+  return safetyDefinitions.filter(tool => surfaceNames.has(tool.name));
+}
+
+export function getToolExposureSummary(profile: ToolProfile, surface: ToolSurfaceProfile): ToolExposureSummary {
+  const safetyDefinitions = definitionsForSafetyProfile(profile);
+  const registered = definitionsForExposure(profile, surface);
+  const safetyNames = new Set(safetyDefinitions.map(tool => tool.name));
+  const registeredNames = new Set(registered.map(tool => tool.name));
+  const hiddenBySafetyCount = c2000ToolDefinitions.filter(tool => !safetyNames.has(tool.name)).length;
+  const hiddenBySurfaceCount = safetyDefinitions.filter(tool => !registeredNames.has(tool.name)).length;
+  const hiddenTools = c2000ToolDefinitions.filter(tool => !registeredNames.has(tool.name)).map(tool => tool.name);
+  return {
+    profile,
+    surface,
+    registered,
+    registeredToolCount: registered.length,
+    hiddenBySafetyCount,
+    hiddenBySurfaceCount,
+    hiddenTools,
+    hiddenAliases: c2000ToolDefinitions
+      .filter(tool => tool.role === "alias" && !registeredNames.has(tool.name))
+      .map(tool => tool.name)
+  };
 }
 
 export function toolProfileFromEnv(): ToolProfile {
   const value = process.env.C2000_MCP_TOOL_PROFILE ?? "safe";
   return value === "readonly" || value === "full" ? value : "safe";
+}
+
+export function toolSurfaceProfileFromEnv(): ToolSurfaceProfile {
+  const value = process.env.C2000_MCP_TOOL_SURFACE;
+  if (value === undefined) return "agent";
+  if (value === "agent" || value === "advanced" || value === "compatibility") return value;
+  throw new Error(`Invalid C2000_MCP_TOOL_SURFACE value: ${value}. Expected agent, advanced, or compatibility.`);
 }
 
 function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">): ToolDefinition {

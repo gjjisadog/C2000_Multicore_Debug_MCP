@@ -19,6 +19,33 @@ describe("loadConfig", () => {
     expect(config.ccs.dssTimeoutMs).toBe(60000);
   });
 
+  test("defaults to the safe agent tool surface", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    delete process.env.C2000_MCP_TOOL_PROFILE;
+    delete process.env.C2000_MCP_TOOL_SURFACE;
+
+    const config = await loadConfig();
+
+    expect(config.toolProfile).toBe("safe");
+    expect(config.toolSurfaceProfile).toBe("agent");
+  });
+
+  test("loads and validates the tool surface environment override", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    process.env.C2000_MCP_TOOL_SURFACE = "advanced";
+
+    const config = await loadConfig();
+
+    expect(config.toolSurfaceProfile).toBe("advanced");
+  });
+
+  test("rejects an invalid tool surface environment override", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    process.env.C2000_MCP_TOOL_SURFACE = "legacy-all";
+
+    await expect(loadConfig()).rejects.toThrow(/toolSurfaceProfile|Invalid enum value/);
+  });
+
   test("loads the cross-process probe queue and automatic recovery policy", async () => {
     process.env.C2000_MCP_PROBE_QUEUE_DIR = "/tmp/c2000-shared-probe";
     process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS = "120000";

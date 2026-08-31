@@ -158,7 +158,17 @@ export interface ToolHandlerDeps {
   getBoardGroupSnapshot?: (input: z.infer<typeof getBoardGroupSnapshotSchema>) => Promise<ToolResult> | ToolResult;
   submitCanFaultCampaign?: (input: z.infer<typeof submitCanFaultCampaignSchema>) => Promise<ToolResult> | ToolResult;
   submitCanSoakTest?: (input: z.infer<typeof submitCanSoakTestSchema>) => Promise<ToolResult> | ToolResult;
-  getToolProfile?: () => { activeToolProfile: string; hiddenTools: string[]; profileReason: string };
+  getToolProfile?: () => {
+    activeToolProfile: string;
+    activeToolSurfaceProfile?: string;
+    registeredToolCount?: number;
+    hiddenBySafetyCount?: number;
+    hiddenBySurfaceCount?: number;
+    hiddenTools: string[];
+    hiddenAliases?: string[];
+    surface?: string;
+    profileReason: string;
+  };
   getServerHealth?: () => ToolResult;
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
@@ -210,7 +220,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getBoardGroupSnapshot = deps.getBoardGroupSnapshot ?? unavailableJobEngine;
   const submitCanFaultCampaign = deps.submitCanFaultCampaign ?? unavailableJobEngine;
   const submitCanSoakTest = deps.submitCanSoakTest ?? unavailableJobEngine;
-  const getToolProfile = deps.getToolProfile ?? (() => ({ activeToolProfile: "full", hiddenTools: [], profileReason: "All tools are available." }));
+  const getToolProfile = deps.getToolProfile ?? (() => ({
+    activeToolProfile: "full",
+    activeToolSurfaceProfile: "compatibility",
+    hiddenTools: [],
+    hiddenAliases: [],
+    surface: "compatibility",
+    profileReason: "All tools are available."
+  }));
   const getServerHealth = deps.getServerHealth ?? (() => ({ status: "ready" }));
   const daemonRoutingConfigured = Boolean(deps.getDaemonHealth && deps.listBoards);
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;

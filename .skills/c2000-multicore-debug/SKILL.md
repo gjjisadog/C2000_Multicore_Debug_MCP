@@ -36,6 +36,15 @@ verification through `c2000-multicore-mcp`.
 4. Read `c2000_getVerificationResult` or the job artifact manifest before
    concluding. A Build PASS is not task completion.
 
+The default MCP connection uses `safe` + `agent`. Prefer the agent surface in
+this order: Workflow → Diagnostic → read-only atomics. Switch explicitly to
+the `advanced` surface only for manual core control, single-step reset/load,
+DLOG lifecycle, ERAD profiling, Variable Stream lifecycle, or other low-level
+debugging. Use `compatibility` only for legacy scripts, migration, or
+acceptance compatibility. If an atomic tool is not visible on the current
+surface, do not bypass MCP or call TI active-target controls; choose the
+appropriate workflow or explicitly change the configured surface.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,

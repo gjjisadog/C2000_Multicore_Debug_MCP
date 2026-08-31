@@ -30,6 +30,7 @@ const transport = new StdioClientTransport({
     ...getDefaultEnvironment(),
     C2000_MCP_ADAPTER: "ccs",
     C2000_MCP_TOOL_PROFILE: "full",
+    C2000_MCP_TOOL_SURFACE: "compatibility",
     C2000_MCP_CCS_INSTALL_PATH: process.env.C2000_MCP_CCS_INSTALL_PATH!,
     C2000_MCP_CCXML_PATH: process.env.C2000_MCP_CCXML_PATH!,
     C2000_MCP_ALLOWED_READ_ROOTS: [

@@ -17,11 +17,13 @@ import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware
 import { recoverDebugProbe, runHardwarePreflight } from "./hardware/preflight.js";
 import {
   createC2000ToolInvoker,
-  definitionsForProfile,
+  getToolExposureSummary,
   getToolContracts,
   getToolSurfaceGuide,
   registerC2000Tools,
-  type C2000ToolInvoker
+  type C2000ToolInvoker,
+  type ToolProfile,
+  type ToolSurfaceProfile
 } from "./mcp/tools.js";
 import type { ToolHandlerDeps } from "./mcp/toolHandlers.js";
 import { buildServerHealth, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
@@ -83,7 +85,10 @@ function buildRuntime(
   runtimeIdentity?: { boardId?: string; probeSerial?: string; workerInstanceId?: string; daemonInstanceId?: string }
 ): C2000McpRuntime {
   const startedAt = new Date().toISOString();
-  const registeredToolNames = definitionsForProfile(config.toolProfile).map(tool => tool.name);
+  const toolProfile = (config.toolProfile ?? "safe") as ToolProfile;
+  const toolSurfaceProfile = (config.toolSurfaceProfile ?? "agent") as ToolSurfaceProfile;
+  const exposure = getToolExposureSummary(toolProfile, toolSurfaceProfile);
+  const registeredToolNames = exposure.registered.map(tool => tool.name);
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
@@ -156,17 +161,23 @@ function buildRuntime(
     effectiveAdapterType: adapterResolution.mode,
     filesystem,
     programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,
-    getToolContracts: () => getToolContracts(config.toolProfile),
-    getToolSurfaceGuide,
+    getToolContracts: () => getToolContracts(toolProfile, toolSurfaceProfile),
+    getToolSurfaceGuide: () => getToolSurfaceGuide(toolProfile, toolSurfaceProfile),
     getToolProfile: () => ({
-      activeToolProfile: config.toolProfile,
-      hiddenTools: definitionsForProfile("full").filter(tool => !registeredToolNames.includes(tool.name)).map(tool => tool.name),
-      profileReason: `Configured tool profile: ${config.toolProfile}`
+      activeToolProfile: toolProfile,
+      activeToolSurfaceProfile: toolSurfaceProfile,
+      registeredToolCount: exposure.registeredToolCount,
+      hiddenBySafetyCount: exposure.hiddenBySafetyCount,
+      hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
+      hiddenTools: exposure.hiddenTools,
+      hiddenAliases: exposure.hiddenAliases,
+      surface: toolSurfaceProfile,
+      profileReason: `Configured tool profile: ${toolProfile}; configured tool surface: ${toolSurfaceProfile}`
     }),
     getServerHealth,
     tiEnvironment
   });
-  registerC2000Tools(server, toolInvoker, {}, config.toolProfile, filesystem, tiEnvironment, { getServerHealth });
+  registerC2000Tools(server, toolInvoker, {}, toolProfile, filesystem, tiEnvironment, { getServerHealth }, toolSurfaceProfile);
 
   let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
   return {

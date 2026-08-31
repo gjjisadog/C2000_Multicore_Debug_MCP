@@ -13,6 +13,7 @@ const boardConfigSchema = z.object({
 
 export const c2000McpConfigSchema = z.object({
   toolProfile: z.enum(["readonly", "safe", "full"]).default("safe"),
+  toolSurfaceProfile: z.enum(["agent", "advanced", "compatibility"]).default("agent"),
   adapter: z.enum(["auto", "mock", "ccs"]).default("auto"),
   ccs: z.object({
     installPath: z.string().optional(),

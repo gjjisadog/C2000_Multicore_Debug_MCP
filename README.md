@@ -838,13 +838,15 @@ There are many tools by design (host gates, atomics, batches, workflows). Semant
 | `c2000_runCore` | `c2000_continue` |
 | `c2000_haltCore` | `c2000_pause` |
 
-Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` reports the effective frontend profile, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
+Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` and `configuration.surfaceProfile` report the effective frontend profiles, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
 
 Hybrid30K DK9 RAM acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
 
 Environment overrides:
 
 - `C2000_MCP_CONFIG`
+- `C2000_MCP_TOOL_PROFILE=readonly|safe|full`
+- `C2000_MCP_TOOL_SURFACE=agent|advanced|compatibility`
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
 - `C2000_MCP_C2000WARE_PATH`
@@ -929,7 +931,7 @@ Phase 3:
 
 All tool responses include `success`, `timestamp`, and scoped fields such as `sessionId`, `coreId`, `coreName`.
 
-`c2000_getServerHealth` is available in `readonly`, `safe`, and `full` profiles. It reports server/runtime version, whether the active artifact is bundled, process uptime, selected adapter and tool profile, configured TI path presence, and the exact registered tool names. It is host-read only and never enumerates or controls the target.
+`c2000_getServerHealth` is available in every safety/surface combination. It reports server/runtime version, whether the active artifact is bundled, process uptime, selected adapter, active safety/surface profiles, configured TI path presence, and the exact registered tool names. It is host-read only and never enumerates or controls the target.
 
 Each registered tool definition also declares `inputScope` and `targetEffect` contracts. Core-scoped debug tools use `inputScope: "core"` and must expose both `sessionId` and `coreId`; host-only tools such as `c2000_getDebugBoundary`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, `c2000_getAcceptanceReadiness`, and `c2000_analyzeRamOwnership` use `inputScope: "host"` and do not connect to the target. MCP clients can call `c2000_getToolContracts` to inspect each tool's `inputScope`, `targetEffect`, `inputFields`, `requiredInputFields`, `coreIdentityFields`, and `responseCoreIdentityFields`. Single-core debug controls declare response identity fields `["coreId", "coreName"]`; batch tools declare per-result identity fields; multicore snapshots declare `["cores[].coreId", "cores[].coreName"]`; and `c2000_verifyRunPauseIsolation` declares `["acceptanceSummary.steps[].commandCoreId", "acceptanceSummary.steps[].commandCoreName"]`. Advanced IPC, MSGRAM, parameter-sync, CPU2 bring-up, and fault-injection tools also declare response identity paths, for example `c2000_assignExpressions` and `c2000_injectFaults` use `["results[].coreId", "results[].coreName"]`, `c2000_compareExpressions` uses `["comparisons[].left.coreId", "comparisons[].right.coreId"]`, `c2000_waitForExpressionSet` and `c2000_waitForIpcReady` use `["conditions[].coreId"]`, `c2000_analyzeRamOwnership` uses `["maps[].coreId", "ownershipActions[].targetCoreId"]`, `c2000_diagnoseCpu2Boot` uses `["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"]`, and `c2000_diagnoseBootHandoff` also includes `["ramOwnership.maps[].coreId"]` when map evidence is supplied. `c2000_reloadResetRunToMain` declares `["coreId", "coreName"]` and reports the current adapter limitation for true breakpoint/run-to-symbol behavior. Workflow tools such as `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, and `c2000_runFullDebugBundle` declare `targetEffect: "launch-workflow"` because they perform multi-step orchestration inside the MCP server. `c2000_launchMulticoreDebug` declares response identity paths for its snapshot, post-launch actions, post-launch checks, and nested run/pause isolation summary. The readiness and hardware acceptance scripts assert these response identity contracts before any target connection or launch step, so weak contracts fail fast before touching the board.
 
@@ -1667,7 +1669,24 @@ Recommended approval policy:
 
 ## Tool Profiles
 
-Set `C2000_MCP_TOOL_PROFILE=readonly|safe|full` (default `safe`). `readonly` exposes only tools whose annotations are read-only. `safe` adds session lifecycle, target control, loading, and safe workflows but hides direct arbitrary expression writes and fault injection. Guarded target writes remain available through `c2000_submitTestPlan`: use one fenced durable flow with `safetyGuards`, `launchMulticore`, and strict `assignExpressions` / `captureExpressions` / `waitForExpressions` steps. Durable assignments execute in array order and stop at the first failed write or readback; for mailbox protocols, place the nonce/commit expression last so it is never attempted after a payload failure. `full` exposes every direct tool. `c2000_getToolContracts` reports only the active set together with `activeToolProfile`, `hiddenTools`, and `profileReason`.
+Tool exposure is two-dimensional:
+
+| Dimension | Values | Meaning |
+| --- | --- | --- |
+| Safety Profile | `readonly` / `safe` / `full` | Which side effects are allowed |
+| Surface Profile | `agent` / `advanced` / `compatibility` | Which registered tools are shown |
+
+The default is `safe` + `agent`. `agent` is the task-level surface for normal Codex/Claude use; `advanced` adds canonical low-level debug and observability tools; `compatibility` restores the historical aliases and full surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
+
+| Use case | Safety | Surface |
+| --- | --- | --- |
+| Ordinary Codex / Claude | `safe` | `agent` |
+| Advanced manual debugging | `safe` | `advanced` |
+| Dangerous experiments | `full` | `advanced` |
+| Legacy scripts / migration | `full` or `safe` | `compatibility` |
+| Read-only audit | `readonly` | `agent` |
+
+`c2000_getToolContracts` reports the active profiles, registered count, safety/surface hidden counts, and compact alias visibility. Guarded target writes remain available through `c2000_submitTestPlan`; use one fenced durable flow with `safetyGuards`, `launchMulticore`, and strict `assignExpressions` / `captureExpressions` / `waitForExpressions` steps.
 
 For Hybrid30K runtime acceptance, the OFF-state startup baseline must not require `g_stCpu1RuntimeAcceptWatch.uiRuntimeValid == 1`; its expected OFF-state value is `0`. Wait for `uiRuntimeValid == 1` only after the formal control mode and mailbox command have been accepted.
 

@@ -26,6 +26,11 @@ describe("server runtime health", () => {
       effective: config.toolProfile,
       appliedAt: "2026-07-11T00:00:00.000Z"
     }));
+    expect(health.configuration.toolSurfaceProfile).toBe(config.toolSurfaceProfile);
+    expect(health.configuration.surfaceProfile).toEqual(expect.objectContaining({
+      effective: config.toolSurfaceProfile,
+      appliedAt: "2026-07-11T00:00:00.000Z"
+    }));
     expect(health.configuration.reload).toEqual(expect.objectContaining({
       supported: false,
       daemonRestartRequired: false,

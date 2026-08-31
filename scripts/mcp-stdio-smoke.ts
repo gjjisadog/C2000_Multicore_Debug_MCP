@@ -91,6 +91,7 @@ async function main() {
       C2000_MCP_ADAPTER: "mock",
       C2000_MCP_LOG_LEVEL: "error",
       C2000_MCP_TOOL_PROFILE: "full",
+      C2000_MCP_TOOL_SURFACE: "compatibility",
       C2000_MCP_CONFIG: smokeConfigPath,
       C2000_MCP_ALLOWED_READ_ROOTS: tmpdir(),
       C2000_MCP_ALLOWED_WRITE_ROOTS: tmpdir()

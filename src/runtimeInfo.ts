@@ -57,6 +57,8 @@ export function inspectRuntime() {
 
 export function buildServerHealth(config: C2000McpConfig, startedAt: string, registeredToolNames: string[]) {
   const adapterMode = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
+  const toolProfile = config.toolProfile ?? "safe";
+  const toolSurfaceProfile = config.toolSurfaceProfile ?? "agent";
   return {
     status: "ready",
     server: { name: SERVER_NAME, version: SERVER_VERSION },
@@ -71,10 +73,19 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
     },
     configuration: {
       adapterMode,
-      toolProfile: config.toolProfile,
+      toolProfile,
+      toolSurfaceProfile,
       profile: {
-        effective: config.toolProfile,
+        effective: toolProfile,
         source: process.env.C2000_MCP_TOOL_PROFILE
+          ? "environment"
+          : process.env.C2000_MCP_CONFIG ? "config-file" : "default",
+        configPath: process.env.C2000_MCP_CONFIG ?? null,
+        appliedAt: startedAt
+      },
+      surfaceProfile: {
+        effective: toolSurfaceProfile,
+        source: process.env.C2000_MCP_TOOL_SURFACE
           ? "environment"
           : process.env.C2000_MCP_CONFIG ? "config-file" : "default",
         configPath: process.env.C2000_MCP_CONFIG ?? null,

@@ -51,6 +51,7 @@ async function main() {
     bundled: isBundledRuntime(),
     adapterMode: config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter,
     toolProfile: config.toolProfile,
+    toolSurfaceProfile: config.toolSurfaceProfile,
     pid: process.pid
   }));
 }

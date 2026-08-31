@@ -18,6 +18,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     diagnostics: {},
     logging: { level: "info" },
     toolProfile: "safe",
+    toolSurfaceProfile: "agent",
     filesystem: { allowedReadRoots: [process.cwd()], allowedWriteRoots: [path.join(process.cwd(), "runtime")] },
     debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 600000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
     daemon: {
@@ -60,6 +61,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   const filesystem = { ...objectAt(config, "filesystem") };
   const debugProbe = { ...objectAt(config, "debugProbe") };
   if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
+  if (process.env.C2000_MCP_TOOL_SURFACE) config.toolSurfaceProfile = process.env.C2000_MCP_TOOL_SURFACE;
   if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_ALLOWED_WRITE_ROOTS) filesystem.allowedWriteRoots = process.env.C2000_MCP_ALLOWED_WRITE_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_PROGRAM_SEARCH_ROOTS) config.programSearchRoots = process.env.C2000_PROGRAM_SEARCH_ROOTS.split(path.delimiter).filter(Boolean);

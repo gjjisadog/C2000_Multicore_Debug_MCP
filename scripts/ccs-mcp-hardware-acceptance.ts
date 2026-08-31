@@ -44,6 +44,8 @@ const transport = new StdioClientTransport({
     C2000_MCP_CCXML_PATH: ccxmlPath,
     C2000_MCP_DSS_TIMEOUT_MS: dssTimeoutMs,
     C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
+    C2000_MCP_TOOL_PROFILE: "full",
+    C2000_MCP_TOOL_SURFACE: "compatibility",
     ...(process.env.C2000_MCP_LOG_FILE ? { C2000_MCP_LOG_FILE: process.env.C2000_MCP_LOG_FILE } : {})
   }
 });

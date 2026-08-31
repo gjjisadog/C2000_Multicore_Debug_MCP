@@ -15,13 +15,13 @@ describe("MCP tool registration contract", () => {
     } as unknown as McpServer;
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
     registerC2000Tools(server, manager);
-    const listCores = handlers.get("c2000_listCores");
-    expect(listCores).toBeDefined();
+    const getSessionTopology = handlers.get("c2000_getSessionTopology");
+    expect(getSessionTopology).toBeDefined();
 
-    const missing = await listCores!({ sessionId: "missing-session" });
+    const missing = await getSessionTopology!({ sessionId: "missing-session" });
     const created = await manager.createDebugSession({ sessionName: "closed-session" });
     await manager.closeDebugSession(created.sessionId);
-    const closed = await listCores!({ sessionId: created.sessionId });
+    const closed = await getSessionTopology!({ sessionId: created.sessionId });
 
     for (const response of [missing, closed]) {
       expect(response).toEqual(expect.objectContaining({

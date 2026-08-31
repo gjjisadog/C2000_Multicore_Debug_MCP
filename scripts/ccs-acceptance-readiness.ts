@@ -32,6 +32,7 @@ const transport = new StdioClientTransport({
     C2000_MCP_CCXML_PATH: ccxmlPath,
     C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
     C2000_MCP_TOOL_PROFILE: "full",
+    C2000_MCP_TOOL_SURFACE: "compatibility",
     C2000_MCP_ALLOWED_READ_ROOTS: [ccsInstallPath, ccxmlPath ? path.dirname(ccxmlPath) : "", os.homedir()].filter(Boolean).join(path.delimiter)
   }
 });
