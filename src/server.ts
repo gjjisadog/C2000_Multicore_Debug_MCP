@@ -169,6 +169,15 @@ function buildRuntime(
       registeredToolCount: exposure.registeredToolCount,
       hiddenBySafetyCount: exposure.hiddenBySafetyCount,
       hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
+      advancedOnlyCount: exposure.advancedOnlyCount,
+      compatibilityOnlyCount: exposure.compatibilityOnlyCount,
+      counts: {
+        registered: exposure.registeredToolCount,
+        hiddenBySafety: exposure.hiddenBySafetyCount,
+        hiddenBySurface: exposure.hiddenBySurfaceCount,
+        advancedOnly: exposure.advancedOnlyCount,
+        compatibilityOnly: exposure.compatibilityOnlyCount
+      },
       hiddenTools: exposure.hiddenTools,
       hiddenAliases: exposure.hiddenAliases,
       surface: toolSurfaceProfile,

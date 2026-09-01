@@ -126,6 +126,7 @@ type ToolFamily =
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
 export type ToolProfile = "readonly" | "safe" | "full";
 export type ToolSurfaceProfile = "agent" | "advanced" | "compatibility";
+export type AgentExposure = "default" | "advanced" | "compatibility";
 type ToolAnnotations = { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean };
 
 export interface ToolDefinition {
@@ -138,6 +139,8 @@ export interface ToolDefinition {
   targetEffect: ToolTargetEffect;
   role: ToolRole;
   family: ToolFamily;
+  /** The intended MCP exposure tier; safety still controls whether it can register. */
+  exposure: AgentExposure;
   /** When role is alias, the preferred primary tool name. */
   aliasOf?: string;
   coreIdentityFields?: string[];
@@ -154,6 +157,8 @@ export interface ToolExposureSummary {
   registeredToolCount: number;
   hiddenBySafetyCount: number;
   hiddenBySurfaceCount: number;
+  advancedOnlyCount: number;
+  compatibilityOnlyCount: number;
   hiddenTools: string[];
   hiddenAliases: string[];
 }
@@ -230,25 +235,36 @@ const multiBoardLaunchResponseIdentity = [
   "results[].snapshot.cores[].coreName"
 ] as const;
 
-const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">> = [
-  { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_recoverBoard", title: "Recover C2000 Board Worker", description: "Dry-run or restart only the daemon-owned worker for one registered board. It never kills external CCS/DSS processes.", schema: recoverBoardSchema, handlerName: "recoverBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_submitTestPlan", title: "Submit C2000 Test Plan", description: "Persist and schedule a structured background test plan; returns immediately with a stable jobId. In the safe profile, use guarded durable assign/capture/wait steps for lease-fenced target workflows while direct expression-write tools remain hidden.", schema: submitTestPlanSchema, handlerName: "submitTestPlan", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_submitMultiBoardIpcAcceptance", title: "Submit Multi-Board IPC Acceptance", description: "Create and submit a structured multi-board IPC job without waiting for test completion.", schema: submitMultiBoardIpcAcceptanceSchema, handlerName: "submitMultiBoardIpcAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", coreIdentityFields: ["ipcReadyExpressions[].coreId"] },
-  { name: "c2000_submitMultiBoardCanAcceptance", title: "Submit Two-Board CAN Acceptance", description: "Persist a CAN pair and schedule a background two-board CAN test. Hardware mode fails closed until a physical CAN adapter is configured; mock mode is simulation only.", schema: submitMultiBoardCanAcceptanceSchema, handlerName: "submitMultiBoardCanAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+/**
+ * Base entries may omit exposure only so additions fail closed to advanced.
+ * decorateDefinition always emits the required, explicit ToolDefinition field.
+ */
+type BaseToolDefinition = Omit<ToolDefinition, "effects" | "annotations" | "approvalClass" | "exposure"> & { exposure?: AgentExposure };
+
+/**
+ * Only high-frequency task-level tools explicitly opt into the default
+ * surface. Any new definition omitted from `exposure` fails closed to
+ * `advanced`.
+ */
+const baseToolDefinitions: BaseToolDefinition[] = [
+  { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
+  { name: "c2000_recoverBoard", title: "Recover C2000 Board Worker", description: "Dry-run or restart only the daemon-owned worker for one registered board. It never kills external CCS/DSS processes.", schema: recoverBoardSchema, handlerName: "recoverBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
+  { name: "c2000_submitTestPlan", title: "Submit C2000 Test Plan", description: "Persist and schedule a structured background test plan; returns immediately with a stable jobId. In the safe profile, use guarded durable assign/capture/wait steps for lease-fenced target workflows while direct expression-write tools remain hidden.", schema: submitTestPlanSchema, handlerName: "submitTestPlan", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
+  { name: "c2000_submitMultiBoardIpcAcceptance", title: "Submit Multi-Board IPC Acceptance", description: "Create and submit a structured multi-board IPC job without waiting for test completion.", schema: submitMultiBoardIpcAcceptanceSchema, handlerName: "submitMultiBoardIpcAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", coreIdentityFields: ["ipcReadyExpressions[].coreId"], exposure: "default" },
+  { name: "c2000_submitMultiBoardCanAcceptance", title: "Submit Two-Board CAN Acceptance", description: "Persist a CAN pair and schedule a background two-board CAN test. Hardware mode fails closed until a physical CAN adapter is configured; mock mode is simulation only.", schema: submitMultiBoardCanAcceptanceSchema, handlerName: "submitMultiBoardCanAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
   { name: "c2000_getBoardGroupSnapshot", title: "Get Board Group Snapshot", description: "Read durable CAN group lifecycle, member lease/session snapshots, named barriers, and evidence without touching a target.", schema: getBoardGroupSnapshotSchema, handlerName: "getBoardGroupSnapshot", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_listCanProfiles", title: "List CAN Profiles", description: "List versioned, hash-addressable CAN profile declarations without touching a target.", schema: listCanProfilesSchema, handlerName: "listCanProfiles", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_submitCanFaultCampaign", title: "Submit CAN Fault Campaign", description: "Submit a finite, durable two-board CAN fault campaign. Reset/rejoin recovery is never blindly replayed after interruption.", schema: submitCanFaultCampaignSchema, handlerName: "submitCanFaultCampaign", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
   { name: "c2000_submitCanSoakTest", title: "Submit CAN Soak Test", description: "Submit a finite duration/iteration CAN soak job with durable checkpoints; it never runs indefinitely.", schema: submitCanSoakTestSchema, handlerName: "submitCanSoakTest", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId. Set waitForTerminalMs up to 30 seconds to avoid repeated client-side polling.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId. Set waitForTerminalMs up to 30 seconds to avoid repeated client-side polling.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
+  { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_createAcceptanceClosure", title: "Create C2000 Acceptance Closure", description: "Create a detached, hash-bound acceptance attestation for canonical run artifacts and independently generated offline analysis without mutating the canonical manifest or touching a target.", schema: createAcceptanceClosureSchema, handlerName: "createAcceptanceClosure", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
-  { name: "c2000_exportTrace", title: "Export C2000 Perfetto Trace", description: "Atomically export an offline Perfetto timeline from durable SQLite and/or completed artifacts. It never reconnects to a target or changes a job result.", schema: exportTraceSchema, handlerName: "exportTrace", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
-  { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_exportTrace", title: "Export C2000 Perfetto Trace", description: "Atomically export an offline Perfetto timeline from durable SQLite and/or completed artifacts. It never reconnects to a target or changes a job result.", schema: exportTraceSchema, handlerName: "exportTrace", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", exposure: "default" },
+  { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", exposure: "default" },
   { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_compareRunWithBaseline", title: "Compare C2000 Run With Baseline", description: "Compare deterministic run metrics with a compatible baseline using explicit thresholds. Identity mismatches fail closed unless explicitly overridden.", schema: compareRunWithBaselineSchema, handlerName: "compareRunWithBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
   { name: "c2000_verifyBuild", title: "Verify C2000 Build", description: "Run or inspect a trusted, configured build provider and persist structured diagnostics, build identity, and complete logs. MCP input cannot submit arbitrary shell commands.", schema: verifyBuildSchema, handlerName: "verifyBuild", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
@@ -272,25 +288,25 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_stopEradProfile", title: "Stop F28P65x ERAD Profile", description: "Idempotently stop or cancel an ERAD profile, read counters, and restore the prior selected-resource configuration.", schema: stopEradProfileSchema, handlerName: "stopEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_readEradProfile", title: "Read F28P65x ERAD Profile", description: "Read persisted ERAD profile status and completed statistics without touching the target.", schema: readEradProfileSchema, handlerName: "readEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_exportEradProfile", title: "Export F28P65x ERAD Profile", description: "Idempotently export erad.json and the standardized atomic evidence snapshot for a terminal profile.", schema: exportEradProfileSchema, handlerName: "exportEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return tool taxonomy: families, preferred atomic tools vs aliases, and input scope metadata.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return runtime and adapter health without touching a target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Resolve CCS, C2000Ware, and target configuration paths without touching a target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return active tool contracts and the current exposure policy; use this once when contract discovery is needed.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return runtime, adapter, safety profile, and tool-surface health without touching a target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Resolve CCS, C2000Ware, and target configuration paths without touching a target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_getDebugBoundary", title: "Get C2000 Debug Boundary", description: "Return read-only guarantees that F28P65x debug control uses explicit per-core c2000 tools, not TI official MCP active-target controls.", schema: debugBoundarySchema, handlerName: "getDebugBoundary", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getAcceptanceEvidence", title: "Get C2000 Acceptance Evidence", description: "Return a read-only map from final F28P65x acceptance requirements to the c2000 tools and evidence fields that prove them.", schema: acceptanceEvidenceSchema, handlerName: "getAcceptanceEvidence", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_getHardwarePreflight", title: "Get C2000 Hardware Preflight", description: "Run read-only host checks for XDS110 enumeration and existing CCS debug owner processes before target control.", schema: hardwarePreflightSchema, handlerName: "getHardwarePreflight", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getHardwarePreflight", title: "Get C2000 Hardware Preflight", description: "Run read-only host checks for XDS110 enumeration and existing CCS debug owner processes before target control.", schema: hardwarePreflightSchema, handlerName: "getHardwarePreflight", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_discoverAcceptancePrograms", title: "Discover C2000 Acceptance Programs", description: "Find CPU1 and CPU2 .out files for F28P65x hardware acceptance without touching the target.", schema: acceptanceProgramDiscoverySchema, handlerName: "discoverAcceptancePrograms", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getAcceptanceReadiness", title: "Get C2000 Acceptance Readiness", description: "Return a read-only hardware acceptance readiness report that combines ccxml, CPU program discovery, XDS110 preflight, debug ownership, and debug boundary checks.", schema: acceptanceReadinessSchema, handlerName: "getAcceptanceReadiness", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_analyzeRamOwnership", title: "Analyze C2000 RAM Ownership", description: "Parse C2000 linker .map files and report GS RAM ownership handoff writes required before CPU2 loads.", schema: ramOwnershipAnalysisSchema, handlerName: "analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: [...ramOwnershipResponseIdentity] },
   { name: "c2000_createDebugSession", title: "Create C2000 Debug Session", description: "Create a logical multicore debug session with explicit core mapping.", schema: createDebugSessionSchema, handlerName: "createDebugSession", inputScope: "launch", targetEffect: "session-lifecycle", role: "primary", family: "session" },
   { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session" },
-  { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session" },
+  { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", exposure: "default" },
   { name: "c2000_closeDebugSession", title: "Close C2000 Debug Session", description: "Close a logical debug session and dispose its adapter resources.", schema: sessionSchema, handlerName: "closeDebugSession", inputScope: "session", targetEffect: "session-lifecycle", role: "primary", family: "session" },
   { name: "c2000_connectTarget", title: "Connect C2000 Target", description: "Connect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "connectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_disconnectTarget", title: "Disconnect C2000 Target", description: "Disconnect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "disconnectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_runCore", title: "Run C2000 Core", description: "Primary run control: run a specific core by sessionId and coreId. Prefer this over c2000_continue for new clients.", schema: sessionCoreSchema, handlerName: "runCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_continue", title: "Continue C2000 Core", description: "Alias of c2000_runCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_runCore.", schema: sessionCoreSchema, handlerName: "continue", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", aliasOf: "c2000_runCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_continue", title: "Continue C2000 Core", description: "Alias of c2000_runCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_runCore.", schema: sessionCoreSchema, handlerName: "continue", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", exposure: "compatibility", aliasOf: "c2000_runCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_haltCore", title: "Halt C2000 Core", description: "Primary halt control: halt a specific core by sessionId and coreId. Prefer this over c2000_pause for new clients.", schema: sessionCoreSchema, handlerName: "haltCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_pause", title: "Pause C2000 Core", description: "Alias of c2000_haltCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_haltCore.", schema: sessionCoreSchema, handlerName: "pause", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", aliasOf: "c2000_haltCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_pause", title: "Pause C2000 Core", description: "Alias of c2000_haltCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_haltCore.", schema: sessionCoreSchema, handlerName: "pause", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", exposure: "compatibility", aliasOf: "c2000_haltCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_reset", title: "Reset C2000 Core", description: "Reset a specific core by sessionId, coreId, and resetType.", schema: resetCoreSchema, handlerName: "resetCore", inputScope: "core", targetEffect: "reset-control", role: "primary", family: "reset", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_getTargetState", title: "Get C2000 Target State", description: "Read connection state, run state and PC for one explicit core.", schema: sessionCoreSchema, handlerName: "getTargetState", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_loadProgram", title: "Load C2000 Program", description: "Load a .out program to one explicit core and record file metadata. Repeated CPU2 Flash loads fail closed before erase unless allowDestructiveFlashReload=true.", schema: loadProgramSchema, handlerName: "loadProgram", inputScope: "core", targetEffect: "program-load", role: "primary", family: "program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
@@ -300,8 +316,8 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_haltCores", title: "Halt C2000 Cores", description: "Halt multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "haltCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_resetCores", title: "Reset C2000 Cores", description: "Reset multiple cores by explicit coreIds.", schema: resetCoresSchema, handlerName: "resetCores", inputScope: "batch", targetEffect: "reset-control", role: "primary", family: "reset", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_runCores", title: "Run C2000 Cores", description: "Run multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "runCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
-  { name: "c2000_getMulticoreSnapshot", title: "Get C2000 Multicore Snapshot", description: "Read state, PC and loaded program for explicit coreIds, defaulting to every core in a session.", schema: multicoreSnapshotSchema, handlerName: "getMulticoreSnapshot", inputScope: "session", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...snapshotCoreResponseIdentity] },
-  { name: "c2000_evaluateMany", title: "Evaluate C2000 Expressions", description: "Evaluate multiple expressions on one explicit core with independent results.", schema: evaluateManySchema, handlerName: "evaluateMany", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
+  { name: "c2000_getMulticoreSnapshot", title: "Get C2000 Multicore Snapshot", description: "Read state, PC and loaded program for explicit coreIds, defaulting to every core in a session.", schema: multicoreSnapshotSchema, handlerName: "getMulticoreSnapshot", inputScope: "session", targetEffect: "target-read", role: "primary", family: "read", exposure: "default", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...snapshotCoreResponseIdentity] },
+  { name: "c2000_evaluateMany", title: "Evaluate C2000 Expressions", description: "Evaluate multiple expressions on one explicit core with independent results.", schema: evaluateManySchema, handlerName: "evaluateMany", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", exposure: "default", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
   { name: "c2000_assignExpression", title: "Assign C2000 Expression", description: "Assign a value expression on one explicit core for fault injection or parameter synchronization checks. Use verification=write-only for a one-shot firmware hook that consumes the value immediately.", schema: assignExpressionSchema, handlerName: "assignExpression", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_assignExpressions", title: "Assign C2000 Expressions", description: "Assign multiple explicit per-core expressions for fault injection, MSGRAM, IPC, or parameter synchronization setup. Each item may use verification=write-only for a one-shot hook.", schema: assignExpressionsSchema, handlerName: "assignExpressions", inputScope: "batch", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["assignments[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_injectFaults", title: "Inject C2000 Faults", description: "Inject labeled fault values through explicit per-core expressions and optional readback verification.", schema: injectFaultsSchema, handlerName: "injectFaults", inputScope: "batch", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["faults[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
@@ -315,11 +331,11 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
   { name: "c2000_diagnoseBootHandoff", title: "Diagnose C2000 Boot Handoff", description: "Collect CPU1/CPU2 boot diagnostics plus RAM ownership map evidence and a compact handoff verdict. Prefer workflow c2000_runBootHandoffDiagnosis when available.", schema: diagnoseBootHandoffSchema, handlerName: "diagnoseBootHandoff", inputScope: "session", targetEffect: "target-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...diagnoseBootHandoffResponseIdentity] },
   { name: "c2000_waitForIpcReady", title: "Wait For C2000 IPC Ready", description: "Poll default or supplied CPU1/CPU2 IPC-ready expressions until all match or timeout.", schema: waitForIpcReadySchema, handlerName: "waitForIpcReady", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
   { name: "c2000_reloadResetRunToMain", title: "Reload Reset Run C2000 Core", description: "Reload one explicit core, reset it, run it, and report that true breakpoint run-to-main is not supported by the current adapter.", schema: reloadResetRunToMainSchema, handlerName: "reloadResetRunToMain", inputScope: "core", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_launchAndRunIpcAcceptance", title: "Launch And Run C2000 IPC Acceptance", description: "Preferred one-shot after c2000_listBoards confirms a registered worker: create and connect CPU1/CPU2 (standard coreIds 0 and 2), then run full IPC acceptance. The server validates the load/run contract and real-map IPC symbols before target mutation. For RAM builds that initialize ownership from CPU1, use loadSequence.mode=cpu1-run-before-cpu2; for firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: launchAndRunIpcAcceptanceSchema, handlerName: "launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...launchAndRunIpcAcceptanceResponseIdentity] },
-  { name: "c2000_runIpcAcceptance", title: "Run C2000 IPC Acceptance Workflow", description: "Preferred when session already exists: full F28P65x CPU1/CPU2 IPC acceptance in one server-side call. The server validates the load/run contract and real-map IPC symbols before target mutation; use this workflow instead of launchMulticoreDebug followed by generic runCores for an IPC handshake. For firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: runIpcAcceptanceSchema, handlerName: "runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...workflowIpcAcceptanceResponseIdentity] },
-  { name: "c2000_runBootHandoffDiagnosis", title: "Run C2000 Boot Handoff Diagnosis Workflow", description: "Preferred boot diagnosis: snapshot, programs, expressions, PC, RAM ownership, ELF freshness, and CPU2 handoff in one workflow.", schema: runBootHandoffDiagnosisSchema, handlerName: "runBootHandoffDiagnosis", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"], responseCoreIdentityFields: [...workflowBootHandoffResponseIdentity] },
-  { name: "c2000_runReloadAndDiagnose", title: "Run C2000 Reload And Diagnose Workflow", description: "Preferred reload path: halt/reset/load, optionally perform a controlled post-load reset and CPU1-first boot, wait, then diagnose in one workflow. Set postLoadBoot.releaseCpu2BeforeCpu1=true when firmware owns CPU2 release; repeated CPU2 Flash loads remain blocked unless explicitly authorized. The post-load boot does not write PC or claim Flash verification.", schema: runReloadAndDiagnoseSchema, handlerName: "runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: [...workflowReloadAndDiagnoseResponseIdentity] },
-  { name: "c2000_runFullDebugBundle", title: "Run C2000 Full Debug Bundle Workflow", description: "Preferred evidence capture: full multicore debug bundle with summary files in one workflow.", schema: runFullDebugBundleSchema, handlerName: "runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: [...workflowFullBundleResponseIdentity] },
+  { name: "c2000_launchAndRunIpcAcceptance", title: "Launch And Run C2000 IPC Acceptance", description: "Preferred task-level one-shot after c2000_listBoards confirms a registered worker: create and connect CPU1/CPU2 (standard coreIds 0 and 2), then run full IPC acceptance. The server validates the load/run contract and real-map IPC symbols before target mutation. For RAM builds that initialize ownership from CPU1, use loadSequence.mode=cpu1-run-before-cpu2; for firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: launchAndRunIpcAcceptanceSchema, handlerName: "launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...launchAndRunIpcAcceptanceResponseIdentity] },
+  { name: "c2000_runIpcAcceptance", title: "Run C2000 IPC Acceptance Workflow", description: "Preferred task-level workflow when a session already exists: full F28P65x CPU1/CPU2 IPC acceptance in one server-side call. The server validates the load/run contract and real-map IPC symbols before target mutation; use this instead of launchMulticoreDebug followed by generic runCores for an IPC handshake. For firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: runIpcAcceptanceSchema, handlerName: "runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...workflowIpcAcceptanceResponseIdentity] },
+  { name: "c2000_runBootHandoffDiagnosis", title: "Run C2000 Boot Handoff Diagnosis Workflow", description: "Preferred task-level boot diagnosis: snapshot, programs, expressions, PC, RAM ownership, ELF freshness, and CPU2 handoff in one workflow.", schema: runBootHandoffDiagnosisSchema, handlerName: "runBootHandoffDiagnosis", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"], responseCoreIdentityFields: [...workflowBootHandoffResponseIdentity] },
+  { name: "c2000_runReloadAndDiagnose", title: "Run C2000 Reload And Diagnose Workflow", description: "Preferred task-level reload path: halt/reset/load, optionally perform a controlled post-load reset and CPU1-first boot, wait, then diagnose in one workflow. Set postLoadBoot.releaseCpu2BeforeCpu1=true when firmware owns CPU2 release; repeated CPU2 Flash loads remain blocked unless explicitly authorized. The post-load boot does not write PC or claim Flash verification.", schema: runReloadAndDiagnoseSchema, handlerName: "runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: [...workflowReloadAndDiagnoseResponseIdentity] },
+  { name: "c2000_runFullDebugBundle", title: "Run C2000 Full Debug Bundle Workflow", description: "Preferred task-level evidence capture: full multicore debug bundle with summary files in one workflow.", schema: runFullDebugBundleSchema, handlerName: "runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: [...workflowFullBundleResponseIdentity] },
   { name: "c2000_verifyRunPauseIsolation", title: "Verify C2000 Run/Pause Isolation", description: "Run and pause CPU1/CPU2 one at a time, proving each command affects only the requested core.", schema: verifyRunPauseIsolationSchema, handlerName: "verifyRunPauseIsolation", inputScope: "session", targetEffect: "execution-control", role: "diagnostic", family: "execution", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...runPauseAcceptanceResponseIdentity] },
   { name: "c2000_launchMultiBoardDebug", title: "Launch C2000 Multi-Board Debug", description: "Allocate explicit XDS110 serial numbers to independently bound .ccxml configurations, then create isolated multicore sessions for every connected board in one MCP call. Sessions auto-close after the requested idle timeout by default.", schema: launchMultiBoardDebugSchema, handlerName: "launchMultiBoardDebug", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["boards[].cores[].coreId"], responseCoreIdentityFields: [...multiBoardLaunchResponseIdentity] },
   { name: "c2000_launchMulticoreDebug", title: "Launch C2000 Multicore Debug", description: "Create, connect, load and snapshot a multicore debug flow. The session and its DSS process auto-close after the requested idle timeout by default; set autoCloseOnComplete=false for an interactive session. Prefer workflow tools for IPC/boot diagnosis after launch.", schema: launchMulticoreDebugSchema, handlerName: "launchMulticoreDebug", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: [
@@ -339,30 +355,6 @@ const baseToolDefinitions: Array<Omit<ToolDefinition, "effects" | "annotations" 
 ];
 
 export const c2000ToolDefinitions: ToolDefinition[] = baseToolDefinitions.map(definition => decorateDefinition(definition));
-
-/**
- * The agent surface is intentionally small and task-oriented. Role/family
- * metadata carries the broad policy; these sets are only the explicit
- * exceptions needed to keep low-level launch/control tools out of the default
- * MCP schema while retaining a few high-value reads.
- */
-const agentExcludedWorkflowNames = new Set([
-  "c2000_reloadResetRunToMain",
-  "c2000_launchMulticoreDebug",
-  "c2000_launchMulticoreDebugWithActions"
-]);
-const agentPrimaryAtomicNames = new Set([
-  "c2000_getSessionTopology",
-  "c2000_getTargetState",
-  "c2000_getMulticoreSnapshot",
-  "c2000_evaluateMany",
-  "c2000_getLoadedProgramInfo",
-  "c2000_resolvePc",
-  "c2000_resolveAddress",
-  "c2000_waitForExpressionSet",
-  "c2000_waitForIpcReady",
-  "c2000_collectFailureBundle"
-]);
 
 export interface C2000ToolInvoker {
   invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>>;
@@ -420,6 +412,15 @@ export function registerC2000Tools(
       registeredToolCount: exposure.registeredToolCount,
       hiddenBySafetyCount: exposure.hiddenBySafetyCount,
       hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
+      advancedOnlyCount: exposure.advancedOnlyCount,
+      compatibilityOnlyCount: exposure.compatibilityOnlyCount,
+      counts: {
+        registered: exposure.registeredToolCount,
+        hiddenBySafety: exposure.hiddenBySafetyCount,
+        hiddenBySurface: exposure.hiddenBySurfaceCount,
+        advancedOnly: exposure.advancedOnlyCount,
+        compatibilityOnly: exposure.compatibilityOnlyCount
+      },
       hiddenTools: exposure.hiddenTools,
       hiddenAliases: exposure.hiddenAliases,
       surface,
@@ -488,6 +489,9 @@ export function getToolContracts(profile: ToolProfile = "full", surface: ToolSur
       targetEffect: definition.targetEffect,
       role: definition.role,
       family: definition.family,
+      exposure: definition.exposure,
+      safetyAllowed: true,
+      surfaceVisible: true,
       aliasOf: definition.aliasOf,
       preferred: definition.role !== "alias",
       effects: definition.effects,
@@ -510,6 +514,7 @@ export function getToolContracts(profile: ToolProfile = "full", surface: ToolSur
 
 /** Compact tool-surface guide for agents: prefer workflows, then primary atomics, avoid aliases when possible. */
 export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: ToolSurfaceProfile = "compatibility") {
+  const exposure = getToolExposureSummary(profile, surface);
   const tools = getToolContracts(profile, surface);
   const families = Array.from(new Set(tools.map(tool => tool.family))).sort();
   const aliases = tools
@@ -522,11 +527,19 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
   const preferredAtomics = tools
     .filter(tool => tool.role === "primary")
     .map(tool => tool.name);
+  const surfaceGuidance = surface === "agent"
+    ? [
+        "Use the registered task-level workflow for the job first; the agent surface intentionally omits raw core control, program/load primitives, generic waits, and observability lifecycle tools.",
+        "If the task genuinely needs manual core control, symbol/load control, generic waits, or profiling, select the advanced surface explicitly; do not bypass this MCP through shell, CCS, or daemon RPC calls."
+      ]
+    : [
+        "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle) over long atomic chains.",
+        "For single-step control prefer primary tools: c2000_runCore / c2000_haltCore (not c2000_continue / c2000_pause aliases)."
+      ];
   return {
     surface,
     guidance: [
-      "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle, c2000_runEngineeringVerification) over long atomic chains.",
-      "For single-step control prefer primary tools: c2000_runCore / c2000_haltCore (not c2000_continue / c2000_pause aliases).",
+      ...surfaceGuidance,
       "c2000_continue and c2000_pause are compatibility aliases, not separate semantics; they are registered only on the compatibility surface.",
       "Use host tools (readiness/preflight/boundary) before target-touching acceptance.",
       "For daemon-routed hardware, call c2000_getDaemonHealth and c2000_listBoards first. If no board is registered, stop and call c2000_registerBoard; do not try alternate launch tools.",
@@ -536,13 +549,25 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
       "When CPU1 firmware owns the CPU2 boot handoff, use runSequence.runMode=cpu1_boots_cpu2; MCP disconnects CPU2 while CPU1 runs and reconnects it before diagnosis.",
       "Set runSequence.runMode (or durable runIpcAcceptance.runMode) explicitly; when present it is authoritative and contradictory legacy runCpu1First/runCpu2 values are rejected.",
       "Do not combine runMode=cpu2_pre_running with loadSequence.mode=cpu1-run-before-cpu2; the server rejects this before target mutation.",
-      "Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; launchMulticoreDebug followed by generic runCores does not perform the boot-handoff contract.",
-      "For one-shot firmware hooks, set assignment.verification=write-only; ordinary assignments keep readback verification by default.",
-      "If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute.",
-      "Repeated CPU2 Flash programming is blocked before erase; use c2000_loadSymbols for resident images or explicitly set allowDestructiveFlashReload=true after confirming the intentional reprogram.",
+      ...(surface === "agent"
+        ? ["Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; the task-level workflow performs the boot-handoff contract."]
+        : ["Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; launchMulticoreDebug followed by generic runCores does not perform the boot-handoff contract."]),
+      ...(surface === "agent"
+        ? []
+        : ["For one-shot firmware hooks, set assignment.verification=write-only; ordinary assignments keep readback verification by default."]),
+      ...(surface === "agent"
+        ? ["If firmware is already resident in Flash, use the resident-image symbol path provided by the selected workflow; never substitute a program load for symbol-only loading."]
+        : ["If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute."]),
+      ...(surface === "agent"
+        ? ["Repeated CPU2 Flash programming remains blocked before erase; use the selected workflow's resident-image path or explicitly authorize an intentional reprogram only through the advanced surface."]
+        : ["Repeated CPU2 Flash programming is blocked before erase; use c2000_loadSymbols for resident images or explicitly set allowDestructiveFlashReload=true after confirming the intentional reprogram."]),
       "outputDir must be inside a configured allowedWriteRoots path; when omitted, workflow bundles use a timestamped directory under the first allowedWriteRoots entry. Program, map, and ccxml files must be inside allowedReadRoots.",
-      "Use c2000_runEngineeringVerification after code changes; treat Build, Map, Regression, Review, artifact completeness, and hard-gate failures as separate facts. Build PASS alone is not task completion.",
-      "Verification is deterministic and host-observable; it never calls an LLM, accepts arbitrary shell text, or upgrades Mock evidence to Hardware evidence."
+      ...(surface === "agent"
+        ? []
+        : [
+            "Use c2000_runEngineeringVerification after code changes; treat Build, Map, Regression, Review, artifact completeness, and hard-gate failures as separate facts. Build PASS alone is not task completion.",
+            "Verification is deterministic and host-observable; it never calls an LLM, accepts arbitrary shell text, or upgrades Mock evidence to Hardware evidence."
+          ])
     ],
     families,
     preferredWorkflows,
@@ -556,7 +581,9 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
       workflow: preferredWorkflows.length,
       host: tools.filter(tool => tool.role === "host").length,
       diagnostic: tools.filter(tool => tool.role === "diagnostic").length
-    }
+    },
+    advancedOnly: exposure.advancedOnlyCount,
+    compatibilityOnly: exposure.compatibilityOnlyCount
   };
 }
 
@@ -576,16 +603,8 @@ export function definitionsForSafetyProfile(profile: ToolProfile): ToolDefinitio
 
 export function definitionsForSurfaceProfile(surface: ToolSurfaceProfile): ToolDefinition[] {
   if (surface === "compatibility") return [...c2000ToolDefinitions];
-  if (surface === "advanced") return c2000ToolDefinitions.filter(tool => tool.role !== "alias");
-  if (surface === "agent") {
-    return c2000ToolDefinitions.filter(tool => {
-      if (tool.role === "alias") return false;
-      if (tool.role === "workflow" && agentExcludedWorkflowNames.has(tool.name)) return false;
-      if (tool.role === "host" || tool.role === "workflow" || tool.role === "diagnostic") return true;
-      if (tool.family === "verification") return true;
-      return agentPrimaryAtomicNames.has(tool.name);
-    });
-  }
+  if (surface === "advanced") return c2000ToolDefinitions.filter(tool => tool.exposure !== "compatibility");
+  if (surface === "agent") return c2000ToolDefinitions.filter(tool => tool.exposure === "default");
   throw new Error(`Invalid C2000 tool surface profile: ${String(surface)}`);
 }
 
@@ -604,6 +623,8 @@ export function getToolExposureSummary(profile: ToolProfile, surface: ToolSurfac
   const hiddenBySafetyCount = c2000ToolDefinitions.filter(tool => !safetyNames.has(tool.name)).length;
   const hiddenBySurfaceCount = safetyDefinitions.filter(tool => !registeredNames.has(tool.name)).length;
   const hiddenTools = c2000ToolDefinitions.filter(tool => !registeredNames.has(tool.name)).map(tool => tool.name);
+  const advancedOnlyCount = safetyDefinitions.filter(tool => tool.exposure === "advanced" && !registeredNames.has(tool.name)).length;
+  const compatibilityOnlyCount = safetyDefinitions.filter(tool => tool.exposure === "compatibility" && !registeredNames.has(tool.name)).length;
   return {
     profile,
     surface,
@@ -611,6 +632,8 @@ export function getToolExposureSummary(profile: ToolProfile, surface: ToolSurfac
     registeredToolCount: registered.length,
     hiddenBySafetyCount,
     hiddenBySurfaceCount,
+    advancedOnlyCount,
+    compatibilityOnlyCount,
     hiddenTools,
     hiddenAliases: c2000ToolDefinitions
       .filter(tool => tool.role === "alias" && !registeredNames.has(tool.name))
@@ -630,16 +653,49 @@ export function toolSurfaceProfileFromEnv(): ToolSurfaceProfile {
   throw new Error(`Invalid C2000_MCP_TOOL_SURFACE value: ${value}. Expected agent, advanced, or compatibility.`);
 }
 
-function decorateDefinition(definition: Omit<ToolDefinition, "effects" | "annotations" | "approvalClass">): ToolDefinition {
+function decorateDefinition(definition: BaseToolDefinition): ToolDefinition {
   const effects = effectsFor(definition.name, definition.targetEffect);
   const readOnlyHint = effects.every(effect => ["host-read", "target-read"].includes(effect));
   const destructiveHint = effects.some(effect => ["host-process-terminate", "target-reset", "target-memory-write", "ram-ownership-change", "fault-injection"].includes(effect));
+  const exposure = exposureForDefinition(definition);
   return {
     ...definition,
+    description: descriptionForExposure(definition, exposure),
+    exposure,
     effects,
     annotations: { readOnlyHint, destructiveHint, idempotentHint: readOnlyHint, openWorldHint: false },
     approvalClass: readOnlyHint ? "read-only" : definition.targetEffect === "session-lifecycle" ? "session-lifecycle" : effects.includes("program-load") ? "program-load" : destructiveHint ? "target-mutation" : definition.targetEffect === "launch-workflow" ? "workflow-confirmation" : "target-control"
   };
+}
+
+function exposureForDefinition(definition: BaseToolDefinition): AgentExposure {
+  if (definition.exposure) return definition.exposure;
+  if (definition.role === "alias") return "compatibility";
+  return "advanced";
+}
+
+function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentExposure): string {
+  if (exposure === "default") {
+    return definition.role === "workflow" && !definition.description.startsWith("Preferred")
+      ? `Preferred task-level entry point. ${definition.description}`
+      : definition.description;
+  }
+  if (exposure === "compatibility") {
+    return `Compatibility surface tool. ${definition.description}`;
+  }
+  if (definition.family === "observability") {
+    return `Advanced observability tool. ${definition.description}`;
+  }
+  if (definition.family === "verification") {
+    return `Advanced verification tool. ${definition.description}`;
+  }
+  if (definition.role === "diagnostic") {
+    return `Advanced diagnostic tool. Prefer the task-level workflow when available. ${definition.description}`;
+  }
+  if (["session", "connectivity", "execution", "reset", "program", "write", "wait"].includes(definition.family)) {
+    return `Advanced manual debug primitive. Prefer the task-level workflow when available. ${definition.description}`;
+  }
+  return `Advanced task-specific tool. Prefer the task-level workflow when available. ${definition.description}`;
 }
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {

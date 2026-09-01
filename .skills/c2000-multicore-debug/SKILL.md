@@ -29,21 +29,29 @@ verification through `c2000-multicore-mcp`.
    roots, and the applicable tool contract.
 2. For target work, use one server-side workflow or one durable job. Register a
    serial-bound board and wait for its worker before touching a target.
-3. For code/project changes, prefer `c2000_runEngineeringVerification` so the
-   server evaluates Build → Map → Regression → Review and persists evidence.
-   Atomic `c2000_verifyBuild`, `c2000_verifyMap`, `c2000_verifyRegression`,
-   and `c2000_verifyReview` are for focused checks.
-4. Read `c2000_getVerificationResult` or the job artifact manifest before
+3. Route normal tasks through the default `safe` + `agent` surface:
+   - CPU1/CPU2 IPC startup and acceptance → `c2000_launchAndRunIpcAcceptance`.
+   - IPC acceptance with an existing session → `c2000_runIpcAcceptance`.
+   - CPU2 not starting or boot handoff diagnosis →
+     `c2000_runBootHandoffDiagnosis`.
+   - Reload firmware and diagnose → `c2000_runReloadAndDiagnose`.
+   - Collect complete failure evidence → `c2000_runFullDebugBundle`.
+   - Long-running HIL/test execution → `c2000_submitTestPlan`.
+4. For engineering verification, explicitly select `advanced` and use
+   `c2000_runEngineeringVerification`; read
+   `c2000_getVerificationResult` or the job artifact manifest before
    concluding. A Build PASS is not task completion.
 
-The default MCP connection uses `safe` + `agent`. Prefer the agent surface in
-this order: Workflow → Diagnostic → read-only atomics. Switch explicitly to
-the `advanced` surface only for manual core control, single-step reset/load,
-DLOG lifecycle, ERAD profiling, Variable Stream lifecycle, or other low-level
-debugging. Use `compatibility` only for legacy scripts, migration, or
-acceptance compatibility. If an atomic tool is not visible on the current
-surface, do not bypass MCP or call TI active-target controls; choose the
-appropriate workflow or explicitly change the configured surface.
+The default MCP connection uses `safe` + `agent`. It intentionally exposes a
+small task-level API rather than every safe atomic. Raw `runCore`, `loadProgram`,
+`loadSymbols`, generic waits, DLOG, ERAD, and Variable Stream lifecycle tools
+are advanced-only; their backend capability remains available to workflows.
+Switch explicitly to `advanced` for manual core control, single-step
+reset/load, profiling, specialized HIL campaigns, or low-level diagnostics.
+Use `compatibility` only for legacy scripts, migration, or acceptance
+compatibility. If a tool is not visible on the current surface, do not bypass
+MCP or call TI active-target controls; choose the appropriate workflow or
+explicitly change the configured surface.
 
 ## Safety hard rules
 
@@ -65,13 +73,16 @@ appropriate workflow or explicitly change the configured surface.
 
 - IPC/acceptance: `c2000_launchAndRunIpcAcceptance` or
   `c2000_runIpcAcceptance` when a session already exists.
-- CPU2 boot/illegal PC: `c2000_runBootHandoffDiagnosis`.
+- CPU2 boot/illegal PC: `c2000_runBootHandoffDiagnosis`; its structured result
+  includes the handoff and RAM ownership evidence.
 - Reload/reset/run/diagnose: `c2000_runReloadAndDiagnose`.
 - Evidence package: `c2000_runFullDebugBundle`.
-- RAMGS ownership: diagnose first, then `c2000_analyzeRamOwnership`.
-- Resident Flash symbols: `c2000_loadSymbols`, not `c2000_loadProgram`.
-- Multi-board CAN: use the durable two-board workflow; `mock` remains
-  simulation-only and hardware mode is explicit.
+- Resident Flash symbols: use the workflow's resident-image path by default;
+  on `advanced`, use `c2000_loadSymbols`, never `c2000_loadProgram` as a
+  symbol-only substitute.
+- Multi-board CAN: use `c2000_submitMultiBoardCanAcceptance`; specialized
+  fault/soak campaigns are advanced. `mock` remains simulation-only and
+  hardware mode is explicit.
 
 ## Completion contract
 

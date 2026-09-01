@@ -1676,7 +1676,18 @@ Tool exposure is two-dimensional:
 | Safety Profile | `readonly` / `safe` / `full` | Which side effects are allowed |
 | Surface Profile | `agent` / `advanced` / `compatibility` | Which registered tools are shown |
 
-The default is `safe` + `agent`. `agent` is the task-level surface for normal Codex/Claude use; `advanced` adds canonical low-level debug and observability tools; `compatibility` restores the historical aliases and full surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
+The default is `safe` + `agent`. The agent surface is intentionally task-oriented (currently 25 tools): it keeps runtime, board/job entry points, focused read evidence, and the recommended workflows, while hiding raw core control, program/load primitives, generic waits, and DLOG/ERAD/Variable Stream lifecycle tools. Every definition declares an exposure tier; omitted exposure fails closed to `advanced`, so new backend capability cannot silently enlarge the default surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
+
+Recommended Agent Workflows:
+
+- `c2000_launchAndRunIpcAcceptance` — launch CPU1/CPU2 and run IPC acceptance.
+- `c2000_runIpcAcceptance` — run IPC acceptance with an existing session.
+- `c2000_runBootHandoffDiagnosis` — diagnose CPU2 boot handoff.
+- `c2000_runReloadAndDiagnose` — reload safely, wait, and diagnose.
+- `c2000_runFullDebugBundle` — collect a complete debug evidence bundle.
+- `c2000_submitTestPlan` — submit a durable long-running HIL/test job.
+
+Advanced Debug Tools add canonical session/core control, load/reset, generic diagnostics and waits, specialized CAN campaigns, and Variable Stream/DLOG/ERAD lifecycle. Compatibility Tools additionally expose historical aliases such as `c2000_continue` and `c2000_pause`; they remain aliases of the canonical `runCore`/`haltCore` semantics and are not part of the default or advanced surface.
 
 | Use case | Safety | Surface |
 | --- | --- | --- |
@@ -1686,7 +1697,7 @@ The default is `safe` + `agent`. `agent` is the task-level surface for normal Co
 | Legacy scripts / migration | `full` or `safe` | `compatibility` |
 | Read-only audit | `readonly` | `agent` |
 
-`c2000_getToolContracts` reports the active profiles, registered count, safety/surface hidden counts, and compact alias visibility. Guarded target writes remain available through `c2000_submitTestPlan`; use one fenced durable flow with `safetyGuards`, `launchMulticore`, and strict `assignExpressions` / `captureExpressions` / `waitForExpressions` steps.
+`c2000_getToolContracts` reports the active profiles, exposure metadata for registered tools, registered count, safety/surface hidden counts, advanced/compatibility-only counts, and compact alias visibility. Guarded target writes remain available through `c2000_submitTestPlan`; use one fenced durable flow with `safetyGuards`, `launchMulticore`, and strict `assignExpressions` / `captureExpressions` / `waitForExpressions` steps.
 
 For Hybrid30K runtime acceptance, the OFF-state startup baseline must not require `g_stCpu1RuntimeAcceptWatch.uiRuntimeValid == 1`; its expected OFF-state value is `0`. Wait for `uiRuntimeValid == 1` only after the formal control mode and mailbox command have been accepted.
 

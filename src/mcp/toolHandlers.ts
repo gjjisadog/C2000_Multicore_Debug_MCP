@@ -164,6 +164,15 @@ export interface ToolHandlerDeps {
     registeredToolCount?: number;
     hiddenBySafetyCount?: number;
     hiddenBySurfaceCount?: number;
+    advancedOnlyCount?: number;
+    compatibilityOnlyCount?: number;
+    counts?: {
+      registered: number;
+      hiddenBySafety: number;
+      hiddenBySurface: number;
+      advancedOnly: number;
+      compatibilityOnly: number;
+    };
     hiddenTools: string[];
     hiddenAliases?: string[];
     surface?: string;
@@ -225,6 +234,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     activeToolSurfaceProfile: "compatibility",
     hiddenTools: [],
     hiddenAliases: [],
+    counts: { registered: 0, hiddenBySafety: 0, hiddenBySurface: 0, advancedOnly: 0, compatibilityOnly: 0 },
     surface: "compatibility",
     profileReason: "All tools are available."
   }));
