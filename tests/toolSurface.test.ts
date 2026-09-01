@@ -53,9 +53,9 @@ describe("MCP tool surface profiles", () => {
       "c2000_listCapabilities",
       "c2000_openCapabilitySession",
       "c2000_closeCapabilitySession",
+      "c2000_getEscalationRecommendations",
       "c2000_getEnvironment",
       "c2000_getHardwarePreflight",
-      "c2000_getSessionTopology",
       "c2000_getMulticoreSnapshot",
       "c2000_evaluateMany",
       "c2000_collectFailureBundle",
@@ -78,6 +78,9 @@ describe("MCP tool surface profiles", () => {
       "c2000_getAcceptanceEvidence",
       "c2000_discoverAcceptancePrograms",
       "c2000_getAcceptanceReadiness",
+      "c2000_getWorkflowAnalytics",
+      "c2000_getCapabilityAnalytics",
+      "c2000_getToolAnalytics",
       "c2000_analyzeRamOwnership",
       "c2000_runEngineeringVerification",
       "c2000_createRunBaseline",
@@ -129,6 +132,20 @@ describe("MCP tool surface profiles", () => {
     ]) {
       expect(visible, name).not.toContain(name);
     }
+  });
+
+  test("analytics exposure is bounded: only recommendations enter agent and all summaries stay advanced", () => {
+    const agent = names("safe", "agent");
+    const advanced = names("safe", "advanced");
+    expect(agent).toContain("c2000_getEscalationRecommendations");
+    expect(agent).not.toContain("c2000_getWorkflowAnalytics");
+    expect(agent).not.toContain("c2000_getCapabilityAnalytics");
+    expect(agent).not.toContain("c2000_getToolAnalytics");
+    for (const name of ["c2000_getWorkflowAnalytics", "c2000_getCapabilityAnalytics", "c2000_getToolAnalytics", "c2000_getEscalationRecommendations"]) {
+      expect(advanced, name).toContain(name);
+    }
+    expect(c2000ToolDefinitions.filter(tool => tool.family === "analytics")).toHaveLength(4);
+    expect(c2000ToolDefinitions.filter(tool => tool.family === "analytics").every(tool => tool.effects.every(effect => effect === "host-read" || effect === "bundle-write"))).toBe(true);
   });
 
   test("advanced exposes canonical engineering and observability tools but not aliases", () => {
@@ -207,8 +224,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 61,
-      advancedOnlyCount: 59,
+      hiddenBySurfaceCount: 65,
+      advancedOnlyCount: 63,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -223,7 +240,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(59);
+    expect(guide.advancedOnly).toBe(63);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -246,14 +263,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 61,
-      advancedOnlyCount: 59,
+      hiddenBySurfaceCount: 65,
+      advancedOnlyCount: 63,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 28,
         hiddenBySafety: 8,
-        hiddenBySurface: 61,
-        advancedOnly: 59,
+        hiddenBySurface: 65,
+        advancedOnly: 63,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -295,8 +312,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(89);
-    expect(fullCompatibility.count).toBe(97);
+    expect(safeCompatibility.count).toBe(93);
+    expect(fullCompatibility.count).toBe(101);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

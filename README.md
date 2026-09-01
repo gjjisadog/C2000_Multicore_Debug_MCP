@@ -1691,6 +1691,19 @@ Advanced Debug Tools add canonical session/core control, load/reset, generic dia
 
 When the default surface needs a specialized operation, use `c2000_listCapabilities`, then open only the required short-lived, reason-bound capability with `c2000_openCapabilitySession`. Capability groups cover manual debug, program loading, waits, Variables, DLOG, ERAD, metrics, and advanced CAN. Sessions default to 15 minutes and are capped at 30 minutes; they expire automatically and can be closed explicitly. They only add tools allowed by the active Safety Profile, and the MCP server rejects cached calls after expiry. `advanced` exposes canonical engineering tools directly, while `compatibility` remains the complete historical surface. Capability state is frontend-process-local and is lost when the MCP frontend restarts; a reconnect is required only when the MCP client does not support the standard `tools/list_changed` refresh.
 
+### Analytics and capability escalation
+
+The daemon records bounded, redacted outcome events in the existing SQLite
+database (separate from formal acceptance evidence) and retains them for a
+limited horizon. Advanced users can query workflow, tool, and capability
+summaries with `c2000_getWorkflowAnalytics`, `c2000_getToolAnalytics`, and
+`c2000_getCapabilityAnalytics`. The default surface adds only the read-only
+`c2000_getEscalationRecommendations` guide: after a structured workflow
+failure, ask for the smallest safety-allowed capability, open it explicitly
+with a reason, and close it when finished. Recommendations are deterministic
+guidance only; they never open a capability, select `full`, mutate the Tool
+Surface, or replace approval/effects/lease checks.
+
 | Use case | Safety | Surface |
 | --- | --- | --- |
 | Ordinary Codex / Claude | `safe` | `agent` |

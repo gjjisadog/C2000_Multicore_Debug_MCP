@@ -14,7 +14,7 @@ describe("MCP tool registration contract", () => {
       }
     } as unknown as McpServer;
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
-    registerC2000Tools(server, manager);
+    registerC2000Tools(server, manager, {}, "safe", { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] }, {}, {}, "advanced");
     const getSessionTopology = handlers.get("c2000_getSessionTopology");
     expect(getSessionTopology).toBeDefined();
 

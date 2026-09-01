@@ -8,6 +8,7 @@ import path from "node:path";
 import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 import { CapabilitySessionManager } from "../mcp/capabilities.js";
 import { Logger } from "../utils/logger.js";
+import { capabilityAuditToOutcomeEvent } from "../analytics/OutcomeAnalyticsService.js";
 
 export interface C2000McpProxyRuntime {
   server: McpServer;
@@ -24,8 +25,20 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
   );
+  const logger = new Logger(config.logging.level, config.logging.logFile);
   const capabilitySessions = new CapabilitySessionManager({
-    logger: new Logger(config.logging.level, config.logging.logFile)
+    logger,
+    onAudit: event => {
+      const analyticsEvent = capabilityAuditToOutcomeEvent(
+        event,
+        config.toolProfile ?? "safe",
+        config.toolSurfaceProfile ?? "agent",
+        capabilitySessions.activeCapabilities()
+      );
+      void client.recordOutcomeEvent(analyticsEvent).catch(error => {
+        logger.warn("c2000 capability analytics audit forwarding failed", { error });
+      });
+    }
   });
   const registration = registerC2000Tools(
     server,

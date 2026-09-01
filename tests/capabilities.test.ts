@@ -157,14 +157,23 @@ describe("C2000 task-aware capability exposure", () => {
     const audit: CapabilityAuditEvent[] = [];
     const sessions = new CapabilitySessionManager({ now: () => clock.now, onAudit: event => audit.push(event) });
 
-    const opened = sessions.open("debug.manual", "Need one manual CPU1 halt check", 10, "test-agent");
+    const opened = sessions.open(
+      "debug.manual",
+      "Need one manual CPU1 halt check",
+      10,
+      "test-agent",
+      { workflow: "c2000_runBootHandoffDiagnosis", failureClass: "boot-handoff", jobId: "job-1" },
+      "recommendation-1"
+    );
     expect(opened.created).toBe(true);
     expect(opened.session).toEqual(expect.objectContaining({
       capability: "debug.manual",
       reason: "Need one manual CPU1 halt check",
       requestedBy: "test-agent",
       active: true,
-      expiresAt: "2026-09-01T00:00:10.000Z"
+      expiresAt: "2026-09-01T00:00:10.000Z",
+      openedFrom: { workflow: "c2000_runBootHandoffDiagnosis", failureClass: "boot-handoff", jobId: "job-1" },
+      recommendationId: "recommendation-1"
     }));
 
     const duplicate = sessions.open("debug.manual", "A different reason must not replace the active grant", 20);
@@ -180,6 +189,10 @@ describe("C2000 task-aware capability exposure", () => {
     expect(sessions.activeCapabilities()).toEqual([]);
     expect(audit.map(event => event.action)).toEqual(["open", "expire"]);
     expect(audit.every(event => event.reason.length > 0 && event.actor === "test-agent")).toBe(true);
+    expect(audit[0]).toEqual(expect.objectContaining({
+      recommendationId: "recommendation-1",
+      openedFrom: { workflow: "c2000_runBootHandoffDiagnosis", failureClass: "boot-handoff", jobId: "job-1" }
+    }));
     sessions.dispose();
   });
 

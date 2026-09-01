@@ -8,6 +8,7 @@ import type { BoardLeaseContext } from "../boards/types.js";
 import type { VariableStreamService } from "../observability/VariableStreamService.js";
 import type { DlogService } from "../observability/DlogService.js";
 import type { EradService } from "../observability/EradService.js";
+import type { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
 
 /** Routes board-bound tools to a single worker without changing sessionId/coreId semantics. */
 export class DaemonToolRouter implements C2000ToolInvoker {
@@ -19,7 +20,8 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     private readonly local: C2000ToolInvoker,
     private readonly registry: BoardRegistry,
     private readonly workers: BoardWorkerSupervisor,
-    private readonly sessions: SessionRepository
+    private readonly sessions: SessionRepository,
+    private readonly analytics?: OutcomeAnalyticsService
   ) {}
 
   setVariableStreamService(service: VariableStreamService): void {
@@ -66,6 +68,26 @@ export class DaemonToolRouter implements C2000ToolInvoker {
   }
 
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
+    const startedAt = Date.now();
+    try {
+      const result = await this.invokeToolInternal(toolName, input);
+      this.recordAnalytics({ toolName, input, result, durationMs: Date.now() - startedAt });
+      return result;
+    } catch (error) {
+      this.recordAnalytics({ toolName, input, error, durationMs: Date.now() - startedAt });
+      throw error;
+    }
+  }
+
+  private recordAnalytics(input: { toolName: string; input?: unknown; result?: Record<string, unknown>; error?: unknown; durationMs: number }): void {
+    try {
+      this.analytics?.recordToolInvocation(input);
+    } catch {
+      // Analytics is best effort and must never alter target/debug semantics.
+    }
+  }
+
+  private async invokeToolInternal(toolName: string, input: unknown): Promise<Record<string, unknown>> {
     if (this.variableStreams) {
       if (toolName === "c2000_startVariableStream") return this.variableStreams.start(input);
       if (toolName === "c2000_stopVariableStream") return this.variableStreams.stop(input);
