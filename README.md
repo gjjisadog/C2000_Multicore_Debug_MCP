@@ -1676,7 +1676,7 @@ Tool exposure is two-dimensional:
 | Safety Profile | `readonly` / `safe` / `full` | Which side effects are allowed |
 | Surface Profile | `agent` / `advanced` / `compatibility` | Which registered tools are shown |
 
-The default is `safe` + `agent`. The agent surface is intentionally task-oriented (currently 25 tools): it keeps runtime, board/job entry points, focused read evidence, and the recommended workflows, while hiding raw core control, program/load primitives, generic waits, and DLOG/ERAD/Variable Stream lifecycle tools. Every definition declares an exposure tier; omitted exposure fails closed to `advanced`, so new backend capability cannot silently enlarge the default surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
+The default is `safe` + `agent`. The agent surface is intentionally task-oriented (currently 28 base tools): it keeps runtime, board/job entry points, focused read evidence, capability controls, and the recommended workflows, while hiding raw core control, program/load primitives, generic waits, and DLOG/ERAD/Variable Stream lifecycle tools. Every definition declares an exposure tier; omitted exposure fails closed to `advanced`, so new backend capability cannot silently enlarge the default surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
 
 Recommended Agent Workflows:
 
@@ -1688,6 +1688,8 @@ Recommended Agent Workflows:
 - `c2000_submitTestPlan` — submit a durable long-running HIL/test job.
 
 Advanced Debug Tools add canonical session/core control, load/reset, generic diagnostics and waits, specialized CAN campaigns, and Variable Stream/DLOG/ERAD lifecycle. Compatibility Tools additionally expose historical aliases such as `c2000_continue` and `c2000_pause`; they remain aliases of the canonical `runCore`/`haltCore` semantics and are not part of the default or advanced surface.
+
+When the default surface needs a specialized operation, use `c2000_listCapabilities`, then open only the required short-lived, reason-bound capability with `c2000_openCapabilitySession`. Capability groups cover manual debug, program loading, waits, Variables, DLOG, ERAD, metrics, and advanced CAN. Sessions default to 15 minutes and are capped at 30 minutes; they expire automatically and can be closed explicitly. They only add tools allowed by the active Safety Profile, and the MCP server rejects cached calls after expiry. `advanced` exposes canonical engineering tools directly, while `compatibility` remains the complete historical surface. Capability state is frontend-process-local and is lost when the MCP frontend restarts; a reconnect is required only when the MCP client does not support the standard `tools/list_changed` refresh.
 
 | Use case | Safety | Surface |
 | --- | --- | --- |

@@ -55,7 +55,12 @@ export function inspectRuntime() {
   };
 }
 
-export function buildServerHealth(config: C2000McpConfig, startedAt: string, registeredToolNames: string[]) {
+export function buildServerHealth(
+  config: C2000McpConfig,
+  startedAt: string,
+  registeredToolNames: string[],
+  dynamicCapabilities: { activeCapabilityCount?: number; capabilityMode?: "dynamic" | "static" } = {}
+) {
   const adapterMode = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
   const toolProfile = config.toolProfile ?? "safe";
   const toolSurfaceProfile = config.toolSurfaceProfile ?? "agent";
@@ -75,6 +80,8 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
       adapterMode,
       toolProfile,
       toolSurfaceProfile,
+      capabilityMode: dynamicCapabilities.capabilityMode ?? "dynamic",
+      activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0,
       profile: {
         effective: toolProfile,
         source: process.env.C2000_MCP_TOOL_PROFILE
@@ -95,7 +102,7 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
         supported: false,
         daemonRestartRequired: false,
         frontendReconnectRequired: true,
-        message: "Tool registration is fixed when this MCP frontend starts. Update configuration, then reconnect only this frontend; do not restart c2000-debugd or board workers."
+        message: "Safety and base surface configuration are fixed when this MCP frontend starts; short-lived capability sessions update dynamically. Update JSON/env profiles, then reconnect only this frontend; do not restart c2000-debugd or board workers."
       },
       configFileConfigured: Boolean(process.env.C2000_MCP_CONFIG),
       loggingToFile: Boolean(config.logging.logFile),
@@ -108,7 +115,8 @@ export function buildServerHealth(config: C2000McpConfig, startedAt: string, reg
     },
     tools: {
       registeredCount: registeredToolNames.length,
-      registeredNames: registeredToolNames
+      registeredNames: registeredToolNames,
+      activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0
     }
   };
 }

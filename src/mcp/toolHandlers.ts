@@ -106,7 +106,10 @@ import {
   verifyRegressionSchema,
   verifyReviewSchema,
   runEngineeringVerificationSchema,
-  getVerificationResultSchema
+  getVerificationResultSchema,
+  listCapabilitiesSchema,
+  openCapabilitySessionSchema,
+  closeCapabilitySessionSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -131,6 +134,9 @@ export interface ToolHandlerDeps {
   analyzeRamOwnership?: typeof analyzeRamOwnershipDefault;
   getToolContracts?: () => ToolResult[];
   getToolSurfaceGuide?: () => ToolResult;
+  listCapabilities?: () => Promise<ToolResult> | ToolResult;
+  openCapabilitySession?: (input: z.input<typeof openCapabilitySessionSchema>) => Promise<ToolResult> | ToolResult;
+  closeCapabilitySession?: (input: z.input<typeof closeCapabilitySessionSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -166,19 +172,26 @@ export interface ToolHandlerDeps {
     hiddenBySurfaceCount?: number;
     advancedOnlyCount?: number;
     compatibilityOnlyCount?: number;
+    baseVisibleToolCount?: number;
+    capabilityVisibleToolCount?: number;
+    activeCapabilities?: string[];
+    activeCapabilityCount?: number;
+    capabilityMode?: string;
     counts?: {
       registered: number;
       hiddenBySafety: number;
       hiddenBySurface: number;
       advancedOnly: number;
       compatibilityOnly: number;
+      baseVisible?: number;
+      capabilityVisible?: number;
     };
     hiddenTools: string[];
     hiddenAliases?: string[];
     surface?: string;
     profileReason: string;
   };
-  getServerHealth?: () => ToolResult;
+  getServerHealth?: () => Promise<ToolResult> | ToolResult;
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
   programSearchRoots?: string[];
@@ -191,6 +204,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const analyzeRamOwnership = deps.analyzeRamOwnership ?? analyzeRamOwnershipDefault;
   const getToolContracts = deps.getToolContracts ?? (() => []);
   const getToolSurfaceGuide = deps.getToolSurfaceGuide ?? (() => ({}));
+  const unavailableCapabilities = () => { throw new DebugMcpError("CapabilityUnknown", "Capability sessions are not configured in this runtime"); };
+  const listCapabilities = deps.listCapabilities ?? unavailableCapabilities;
+  const openCapabilitySession = deps.openCapabilitySession ?? unavailableCapabilities;
+  const closeCapabilitySession = deps.closeCapabilitySession ?? unavailableCapabilities;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -286,6 +303,30 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   };
 
   return {
+    async listCapabilities(_input: z.infer<typeof listCapabilitiesSchema>) {
+      try {
+        return ok(await listCapabilities());
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async openCapabilitySession(input: z.input<typeof openCapabilitySessionSchema>) {
+      try {
+        return ok(await openCapabilitySession(openCapabilitySessionSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async closeCapabilitySession(input: z.input<typeof closeCapabilitySessionSchema>) {
+      try {
+        return ok(await closeCapabilitySession(closeCapabilitySessionSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
     async getDaemonHealth(_input: z.infer<typeof daemonHealthSchema>) {
       try {
         return ok(await getDaemonHealth());
@@ -351,7 +392,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async exportEradProfile(input: z.input<typeof exportEradProfileSchema>) { try { exportEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
     async getServerHealth(_input: z.infer<typeof serverHealthSchema>) {
       try {
-        return ok(getServerHealth());
+        return ok(await getServerHealth());
       } catch (error) {
         return fail(error);
       }

@@ -46,12 +46,14 @@ The default MCP connection uses `safe` + `agent`. It intentionally exposes a
 small task-level API rather than every safe atomic. Raw `runCore`, `loadProgram`,
 `loadSymbols`, generic waits, DLOG, ERAD, and Variable Stream lifecycle tools
 are advanced-only; their backend capability remains available to workflows.
-Switch explicitly to `advanced` for manual core control, single-step
-reset/load, profiling, specialized HIL campaigns, or low-level diagnostics.
-Use `compatibility` only for legacy scripts, migration, or acceptance
-compatibility. If a tool is not visible on the current surface, do not bypass
-MCP or call TI active-target controls; choose the appropriate workflow or
-explicitly change the configured surface.
+When a task genuinely needs one of these groups, call
+`c2000_listCapabilities`, then open only the required short-lived capability
+with a specific reason. Use `c2000_closeCapabilitySession` when finished; the
+15-minute default TTL and 30-minute maximum also expire sessions automatically.
+Use `advanced` when a complete canonical engineering toolbox is needed, and
+`compatibility` only for legacy scripts, migration, or acceptance compatibility.
+If a tool is not visible on the current surface, do not bypass MCP or call TI
+active-target controls; choose the appropriate workflow or capability instead.
 
 ## Safety hard rules
 
@@ -83,6 +85,32 @@ explicitly change the configured surface.
 - Multi-board CAN: use `c2000_submitMultiBoardCanAcceptance`; specialized
   fault/soak campaigns are advanced. `mock` remains simulation-only and
   hardware mode is explicit.
+
+## On-demand capabilities
+
+Route specialized work through a capability session instead of switching to
+`full` compatibility:
+
+- Manual per-core connect/run/halt/reset → `debug.manual`.
+- Manual program or resident-image symbol loading → `debug.program`.
+- Generic expression waits → `debug.wait`.
+- Bounded variable monitoring → `observability.variables`.
+- Existing target-side DLOG capture → `observability.dlog`.
+- ERAD profiling → `observability.erad`.
+- Baseline/closure/metrics evidence → `observability.metrics`.
+- Specialized CAN profiles, fault campaigns, and soak jobs → `can.advanced`.
+
+For example, ISR cycle analysis is:
+`c2000_getServerHealth` → `c2000_listCapabilities` → open
+`observability.erad` with a reason → inspect/configure/start/read/stop/export
+the ERAD profile → close the capability session. The capability only changes
+MCP tool visibility; the configured Safety Profile and every tool's effects,
+approval class, lease fencing, and core identity checks remain in force.
+
+Do not use shell, CCS GUI, TI active-target commands, or internal daemon RPCs
+when an atomic is hidden. If the default workflow is insufficient, request the
+smallest matching capability explicitly; never open a broad capability merely
+because a workflow is available.
 
 ## Completion contract
 

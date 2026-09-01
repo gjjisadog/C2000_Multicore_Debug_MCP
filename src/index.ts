@@ -52,6 +52,7 @@ async function main() {
     adapterMode: config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter,
     toolProfile: config.toolProfile,
     toolSurfaceProfile: config.toolSurfaceProfile,
+    capabilityMode: "dynamic",
     pid: process.pid
   }));
 }

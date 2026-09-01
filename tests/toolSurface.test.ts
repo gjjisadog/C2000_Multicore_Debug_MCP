@@ -18,7 +18,7 @@ import {
   registerC2000Tools
 } from "../src/mcp/tools.js";
 
-const MAX_AGENT_TOOL_COUNT = 25;
+const MAX_AGENT_TOOL_COUNT = 28;
 
 function names(profile: "readonly" | "safe" | "full", surface: "agent" | "advanced" | "compatibility") {
   return new Set(definitionsForExposure(profile, surface).map(tool => tool.name));
@@ -50,6 +50,9 @@ describe("MCP tool surface profiles", () => {
       "c2000_getTestArtifacts",
       "c2000_getToolContracts",
       "c2000_getServerHealth",
+      "c2000_listCapabilities",
+      "c2000_openCapabilitySession",
+      "c2000_closeCapabilitySession",
       "c2000_getEnvironment",
       "c2000_getHardwarePreflight",
       "c2000_getSessionTopology",
@@ -202,7 +205,7 @@ describe("MCP tool surface profiles", () => {
     expect(summary).toEqual(expect.objectContaining({
       profile: "safe",
       surface: "agent",
-      registeredToolCount: 25,
+      registeredToolCount: 28,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 61,
       advancedOnlyCount: 59,
@@ -241,18 +244,18 @@ describe("MCP tool surface profiles", () => {
       activeToolProfile: "safe",
       activeToolSurfaceProfile: "agent",
       surface: "agent",
-      registeredToolCount: 25,
+      registeredToolCount: 28,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 61,
       advancedOnlyCount: 59,
       compatibilityOnlyCount: 2,
-      counts: {
-        registered: 25,
+      counts: expect.objectContaining({
+        registered: 28,
         hiddenBySafety: 8,
         hiddenBySurface: 61,
         advancedOnly: 59,
         compatibilityOnly: 2
-      },
+      }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
   });
@@ -292,8 +295,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(86);
-    expect(fullCompatibility.count).toBe(94);
+    expect(safeCompatibility.count).toBe(89);
+    expect(fullCompatibility.count).toBe(97);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

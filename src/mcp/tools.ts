@@ -1,7 +1,15 @@
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import {
+  CAPABILITY_DESCRIPTORS,
+  CapabilitySessionManager,
+  type CapabilitySession,
+  type ToolCapability
+} from "./capabilities.js";
+import type { Logger } from "../utils/logger.js";
 import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
 import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy.js";
 import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
@@ -86,7 +94,10 @@ import {
   verifyRegressionSchema,
   verifyReviewSchema,
   runEngineeringVerificationSchema,
-  getVerificationResultSchema
+  getVerificationResultSchema,
+  listCapabilitiesSchema,
+  openCapabilitySessionSchema,
+  closeCapabilitySessionSchema
 } from "./toolSchemas.js";
 
 type ZodObjectSchema = z.ZodTypeAny;
@@ -105,7 +116,8 @@ type ToolTargetEffect =
   | "memory-write"
   | "launch-workflow"
   | "job-control"
-  | "observation-control";
+  | "observation-control"
+  | "capability-control";
 
 type ToolRole = "primary" | "alias" | "workflow" | "host" | "diagnostic";
 type ToolFamily =
@@ -141,6 +153,8 @@ export interface ToolDefinition {
   family: ToolFamily;
   /** The intended MCP exposure tier; safety still controls whether it can register. */
   exposure: AgentExposure;
+  /** Optional semantic capability grant required when this advanced tool is on agent surface. */
+  capability?: ToolCapability;
   /** When role is alias, the preferred primary tool name. */
   aliasOf?: string;
   coreIdentityFields?: string[];
@@ -161,6 +175,10 @@ export interface ToolExposureSummary {
   compatibilityOnlyCount: number;
   hiddenTools: string[];
   hiddenAliases: string[];
+  baseVisibleToolCount: number;
+  capabilityVisibleToolCount: number;
+  activeCapabilities: ToolCapability[];
+  activeCapabilitySessions: CapabilitySession[];
 }
 
 const singleCoreResponseIdentity = ["coreId", "coreName"] as const;
@@ -247,6 +265,9 @@ type BaseToolDefinition = Omit<ToolDefinition, "effects" | "annotations" | "appr
  * `advanced`.
  */
 const baseToolDefinitions: BaseToolDefinition[] = [
+  { name: "c2000_listCapabilities", title: "List C2000 Capabilities", description: "List temporary advanced capability groups, their safety-derived availability, and active capability sessions without touching a target.", schema: listCapabilitiesSchema, handlerName: "listCapabilities", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_openCapabilitySession", title: "Open C2000 Capability Session", description: "Open one short-lived, reason-bound advanced capability group. This never expands the configured safety profile; only tools still allowed by safety can become visible.", schema: openCapabilitySessionSchema, handlerName: "openCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_closeCapabilitySession", title: "Close C2000 Capability Session", description: "Close a temporary advanced capability session and remove its tools from the MCP surface.", schema: closeCapabilitySessionSchema, handlerName: "closeCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
@@ -254,40 +275,40 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_submitTestPlan", title: "Submit C2000 Test Plan", description: "Persist and schedule a structured background test plan; returns immediately with a stable jobId. In the safe profile, use guarded durable assign/capture/wait steps for lease-fenced target workflows while direct expression-write tools remain hidden.", schema: submitTestPlanSchema, handlerName: "submitTestPlan", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
   { name: "c2000_submitMultiBoardIpcAcceptance", title: "Submit Multi-Board IPC Acceptance", description: "Create and submit a structured multi-board IPC job without waiting for test completion.", schema: submitMultiBoardIpcAcceptanceSchema, handlerName: "submitMultiBoardIpcAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", coreIdentityFields: ["ipcReadyExpressions[].coreId"], exposure: "default" },
   { name: "c2000_submitMultiBoardCanAcceptance", title: "Submit Two-Board CAN Acceptance", description: "Persist a CAN pair and schedule a background two-board CAN test. Hardware mode fails closed until a physical CAN adapter is configured; mock mode is simulation only.", schema: submitMultiBoardCanAcceptanceSchema, handlerName: "submitMultiBoardCanAcceptance", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
-  { name: "c2000_getBoardGroupSnapshot", title: "Get Board Group Snapshot", description: "Read durable CAN group lifecycle, member lease/session snapshots, named barriers, and evidence without touching a target.", schema: getBoardGroupSnapshotSchema, handlerName: "getBoardGroupSnapshot", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_listCanProfiles", title: "List CAN Profiles", description: "List versioned, hash-addressable CAN profile declarations without touching a target.", schema: listCanProfilesSchema, handlerName: "listCanProfiles", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_submitCanFaultCampaign", title: "Submit CAN Fault Campaign", description: "Submit a finite, durable two-board CAN fault campaign. Reset/rejoin recovery is never blindly replayed after interruption.", schema: submitCanFaultCampaignSchema, handlerName: "submitCanFaultCampaign", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
-  { name: "c2000_submitCanSoakTest", title: "Submit CAN Soak Test", description: "Submit a finite duration/iteration CAN soak job with durable checkpoints; it never runs indefinitely.", schema: submitCanSoakTestSchema, handlerName: "submitCanSoakTest", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow" },
+  { name: "c2000_getBoardGroupSnapshot", title: "Get Board Group Snapshot", description: "Read durable CAN group lifecycle, member lease/session snapshots, named barriers, and evidence without touching a target.", schema: getBoardGroupSnapshotSchema, handlerName: "getBoardGroupSnapshot", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", capability: "can.advanced" },
+  { name: "c2000_listCanProfiles", title: "List CAN Profiles", description: "List versioned, hash-addressable CAN profile declarations without touching a target.", schema: listCanProfilesSchema, handlerName: "listCanProfiles", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", capability: "can.advanced" },
+  { name: "c2000_submitCanFaultCampaign", title: "Submit CAN Fault Campaign", description: "Submit a finite, durable two-board CAN fault campaign. Reset/rejoin recovery is never blindly replayed after interruption.", schema: submitCanFaultCampaignSchema, handlerName: "submitCanFaultCampaign", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", capability: "can.advanced" },
+  { name: "c2000_submitCanSoakTest", title: "Submit CAN Soak Test", description: "Submit a finite duration/iteration CAN soak job with durable checkpoints; it never runs indefinitely.", schema: submitCanSoakTestSchema, handlerName: "submitCanSoakTest", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", capability: "can.advanced" },
   { name: "c2000_getTestRun", title: "Get C2000 Test Run", description: "Read a durable background test run by jobId. Set waitForTerminalMs up to 30 seconds to avoid repeated client-side polling.", schema: getTestRunSchema, handlerName: "getTestRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listTestRuns", title: "List C2000 Test Runs", description: "List durable C2000 background test runs.", schema: listTestRunsSchema, handlerName: "listTestRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_cancelTestRun", title: "Cancel C2000 Test Run", description: "Request safe cancellation at the next job step boundary.", schema: cancelTestRunSchema, handlerName: "cancelTestRun", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
   { name: "c2000_getTestArtifacts", title: "Get C2000 Test Artifacts", description: "List durable artifacts attached to a background test run.", schema: getTestArtifactsSchema, handlerName: "getTestArtifacts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
-  { name: "c2000_createAcceptanceClosure", title: "Create C2000 Acceptance Closure", description: "Create a detached, hash-bound acceptance attestation for canonical run artifacts and independently generated offline analysis without mutating the canonical manifest or touching a target.", schema: createAcceptanceClosureSchema, handlerName: "createAcceptanceClosure", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_createAcceptanceClosure", title: "Create C2000 Acceptance Closure", description: "Create a detached, hash-bound acceptance attestation for canonical run artifacts and independently generated offline analysis without mutating the canonical manifest or touching a target.", schema: createAcceptanceClosureSchema, handlerName: "createAcceptanceClosure", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", capability: "observability.metrics" },
   { name: "c2000_exportTrace", title: "Export C2000 Perfetto Trace", description: "Atomically export an offline Perfetto timeline from durable SQLite and/or completed artifacts. It never reconnects to a target or changes a job result.", schema: exportTraceSchema, handlerName: "exportTrace", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", exposure: "default" },
   { name: "c2000_collectFailureBundle", title: "Collect C2000 Failure Bundle", description: "Best-effort, timeout-bounded collection of historical job, session, CAN, variable, DLOG, ERAD, and Trace evidence. This is read-only and does not access the target.", schema: collectFailureBundleSchema, handlerName: "collectFailureBundle", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", exposure: "default" },
-  { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
-  { name: "c2000_compareRunWithBaseline", title: "Compare C2000 Run With Baseline", description: "Compare deterministic run metrics with a compatible baseline using explicit thresholds. Identity mismatches fail closed unless explicitly overridden.", schema: compareRunWithBaselineSchema, handlerName: "compareRunWithBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability" },
+  { name: "c2000_createRunBaseline", title: "Create C2000 Run Baseline", description: "Generate deterministic metrics from durable job evidence and atomically create a firmware/test-plan-bound baseline. This never touches a target.", schema: createRunBaselineSchema, handlerName: "createRunBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", capability: "observability.metrics" },
+  { name: "c2000_compareRunWithBaseline", title: "Compare C2000 Run With Baseline", description: "Compare deterministic run metrics with a compatible baseline using explicit thresholds. Identity mismatches fail closed unless explicitly overridden.", schema: compareRunWithBaselineSchema, handlerName: "compareRunWithBaseline", inputScope: "host", targetEffect: "job-control", role: "primary", family: "observability", capability: "observability.metrics" },
   { name: "c2000_verifyBuild", title: "Verify C2000 Build", description: "Run or inspect a trusted, configured build provider and persist structured diagnostics, build identity, and complete logs. MCP input cannot submit arbitrary shell commands.", schema: verifyBuildSchema, handlerName: "verifyBuild", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
   { name: "c2000_verifyMap", title: "Verify C2000 Linker Map", description: "Parse a TI C2000 linker map, emit deterministic memory/section metrics, enforce configured hard gates, and reject stale build artifacts.", schema: verifyMapSchema, handlerName: "verifyMap", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
   { name: "c2000_verifyRegression", title: "Verify C2000 Regression Plan", description: "Execute a declared host/mock regression plan through allowlisted runners and persist per-suite results and full logs. Hardware suites require explicit hardware mode and a durable runner.", schema: verifyRegressionSchema, handlerName: "verifyRegression", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
   { name: "c2000_verifyReview", title: "Verify C2000 Change Review", description: "Run deterministic diff metadata, path, pattern, and configured companion-evidence checks without requiring Git or an LLM.", schema: verifyReviewSchema, handlerName: "verifyReview", inputScope: "host", targetEffect: "job-control", role: "primary", family: "verification" },
   { name: "c2000_runEngineeringVerification", title: "Run C2000 Engineering Verification", description: "Preferred high-level verification workflow: Build, Map, Regression, Review, durable evidence, and a hard-gate final decision. Failed builds never fall through to stale maps or falsely passing regression.", schema: runEngineeringVerificationSchema, handlerName: "runEngineeringVerification", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "verification" },
   { name: "c2000_getVerificationResult", title: "Get C2000 Verification Result", description: "Read a persisted structured verification result and its atomic artifact manifest by verificationId without touching a target.", schema: getVerificationResultSchema, handlerName: "getVerificationResult", inputScope: "host", targetEffect: "host-read", role: "primary", family: "verification" },
-  { name: "c2000_startVariableStream", title: "Start C2000 Slow Variable Stream", description: "Start one bounded, low-priority host-polled variable stream for one explicit board/session/core. This does not halt the target and is not a high-rate waveform sampler. Prefer variables as {symbol,typeName} objects for deterministic C28x width validation; bare symbol strings are accepted only when the adapter exposes a reliable type.", schema: startVariableStreamSchema, handlerName: "startVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_stopVariableStream", title: "Stop C2000 Slow Variable Stream", description: "Idempotently stop or cancel an explicitly identified variable stream.", schema: stopVariableStreamSchema, handlerName: "stopVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_getVariableStreamStatus", title: "Get C2000 Variable Stream Status", description: "Read persisted stream identity, metadata, statistics, status, and artifact status without touching the target.", schema: getVariableStreamStatusSchema, handlerName: "getVariableStreamStatus", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_readVariableSamples", title: "Read C2000 Variable Samples", description: "Page through ordered variable samples persisted by c2000-debugd without touching the target.", schema: readVariableSamplesSchema, handlerName: "readVariableSamples", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName", "samples[].coreId", "samples[].coreName"] },
-  { name: "c2000_exportVariableStream", title: "Export C2000 Variable Stream", description: "Idempotently generate the portable variable-stream evidence snapshot from SQLite.", schema: exportVariableStreamSchema, handlerName: "exportVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_describeDlogBuffer", title: "Describe C2000 DLOG Buffer", description: "Resolve and validate a read-only structure-of-arrays DLOG buffer on one explicit board/session/core without reading its samples.", schema: dlogBufferRequestSchema, handlerName: "describeDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_getDlogStatus", title: "Get C2000 DLOG Status", description: "Read DLOG state, write index, trigger index, optional capture generation, and sample rate from one explicit core.", schema: dlogBufferRequestSchema, handlerName: "getDlogStatus", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_readDlogBuffer", title: "Read C2000 DLOG Buffer", description: "Read and normalize an existing target-side DLOG capture with bounded consistency retries. This never arms or modifies firmware.", schema: dlogBufferRequestSchema, handlerName: "readDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_exportDlog", title: "Export C2000 DLOG", description: "Read a consistent target-side DLOG capture and atomically export dlog.json, dlog.csv, and the standard evidence snapshot.", schema: dlogBufferRequestSchema, handlerName: "exportDlog", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_getEradCapabilities", title: "Get F28P65x ERAD Capabilities", description: "Inspect F28P65x ERAD ownership, occupied resources, and supported first-version profiling features on one explicit board/session/core.", schema: getEradCapabilitiesSchema, handlerName: "getEradCapabilities", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_configureEradProfile", title: "Configure F28P65x ERAD Profile", description: "Resolve a PC range and configure explicitly fenced F28P65x ERAD resources. This writes ERAD registers and never silently overwrites occupied resources.", schema: configureEradProfileSchema, handlerName: "configureEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_startEradProfile", title: "Start F28P65x ERAD Profile", description: "Enable a previously configured ERAD profile on its frozen board/session/core and resource set.", schema: startEradProfileSchema, handlerName: "startEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_stopEradProfile", title: "Stop F28P65x ERAD Profile", description: "Idempotently stop or cancel an ERAD profile, read counters, and restore the prior selected-resource configuration.", schema: stopEradProfileSchema, handlerName: "stopEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_readEradProfile", title: "Read F28P65x ERAD Profile", description: "Read persisted ERAD profile status and completed statistics without touching the target.", schema: readEradProfileSchema, handlerName: "readEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-  { name: "c2000_exportEradProfile", title: "Export F28P65x ERAD Profile", description: "Idempotently export erad.json and the standardized atomic evidence snapshot for a terminal profile.", schema: exportEradProfileSchema, handlerName: "exportEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_startVariableStream", title: "Start C2000 Slow Variable Stream", description: "Start one bounded, low-priority host-polled variable stream for one explicit board/session/core. This does not halt the target and is not a high-rate waveform sampler. Prefer variables as {symbol,typeName} objects for deterministic C28x width validation; bare symbol strings are accepted only when the adapter exposes a reliable type.", schema: startVariableStreamSchema, handlerName: "startVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.variables", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_stopVariableStream", title: "Stop C2000 Slow Variable Stream", description: "Idempotently stop or cancel an explicitly identified variable stream.", schema: stopVariableStreamSchema, handlerName: "stopVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.variables", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getVariableStreamStatus", title: "Get C2000 Variable Stream Status", description: "Read persisted stream identity, metadata, statistics, status, and artifact status without touching the target.", schema: getVariableStreamStatusSchema, handlerName: "getVariableStreamStatus", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.variables", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readVariableSamples", title: "Read C2000 Variable Samples", description: "Page through ordered variable samples persisted by c2000-debugd without touching the target.", schema: readVariableSamplesSchema, handlerName: "readVariableSamples", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.variables", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName", "samples[].coreId", "samples[].coreName"] },
+  { name: "c2000_exportVariableStream", title: "Export C2000 Variable Stream", description: "Idempotently generate the portable variable-stream evidence snapshot from SQLite.", schema: exportVariableStreamSchema, handlerName: "exportVariableStream", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.variables", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_describeDlogBuffer", title: "Describe C2000 DLOG Buffer", description: "Resolve and validate a read-only structure-of-arrays DLOG buffer on one explicit board/session/core without reading its samples.", schema: dlogBufferRequestSchema, handlerName: "describeDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", capability: "observability.dlog", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getDlogStatus", title: "Get C2000 DLOG Status", description: "Read DLOG state, write index, trigger index, optional capture generation, and sample rate from one explicit core.", schema: dlogBufferRequestSchema, handlerName: "getDlogStatus", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", capability: "observability.dlog", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readDlogBuffer", title: "Read C2000 DLOG Buffer", description: "Read and normalize an existing target-side DLOG capture with bounded consistency retries. This never arms or modifies firmware.", schema: dlogBufferRequestSchema, handlerName: "readDlogBuffer", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", capability: "observability.dlog", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_exportDlog", title: "Export C2000 DLOG", description: "Read a consistent target-side DLOG capture and atomically export dlog.json, dlog.csv, and the standard evidence snapshot.", schema: dlogBufferRequestSchema, handlerName: "exportDlog", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.dlog", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_getEradCapabilities", title: "Get F28P65x ERAD Capabilities", description: "Inspect F28P65x ERAD ownership, occupied resources, and supported first-version profiling features on one explicit board/session/core.", schema: getEradCapabilitiesSchema, handlerName: "getEradCapabilities", inputScope: "core", targetEffect: "target-read", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_configureEradProfile", title: "Configure F28P65x ERAD Profile", description: "Resolve a PC range and configure explicitly fenced F28P65x ERAD resources. This writes ERAD registers and never silently overwrites occupied resources.", schema: configureEradProfileSchema, handlerName: "configureEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_startEradProfile", title: "Start F28P65x ERAD Profile", description: "Enable a previously configured ERAD profile on its frozen board/session/core and resource set.", schema: startEradProfileSchema, handlerName: "startEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_stopEradProfile", title: "Stop F28P65x ERAD Profile", description: "Idempotently stop or cancel an ERAD profile, read counters, and restore the prior selected-resource configuration.", schema: stopEradProfileSchema, handlerName: "stopEradProfile", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_readEradProfile", title: "Read F28P65x ERAD Profile", description: "Read persisted ERAD profile status and completed statistics without touching the target.", schema: readEradProfileSchema, handlerName: "readEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+  { name: "c2000_exportEradProfile", title: "Export F28P65x ERAD Profile", description: "Idempotently export erad.json and the standardized atomic evidence snapshot for a terminal profile.", schema: exportEradProfileSchema, handlerName: "exportEradProfile", inputScope: "core", targetEffect: "observation-control", role: "primary", family: "observability", capability: "observability.erad", coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
   { name: "c2000_getToolContracts", title: "Get C2000 Tool Contracts", description: "Return active tool contracts and the current exposure policy; use this once when contract discovery is needed.", schema: toolContractsSchema, handlerName: "getToolContracts", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_getServerHealth", title: "Get C2000 Server Health", description: "Return runtime, adapter, safety profile, and tool-surface health without touching a target.", schema: serverHealthSchema, handlerName: "getServerHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_getEnvironment", title: "Get C2000 Environment", description: "Resolve CCS, C2000Ware, and target configuration paths without touching a target.", schema: environmentSchema, handlerName: "getEnvironment", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
@@ -297,39 +318,39 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_discoverAcceptancePrograms", title: "Discover C2000 Acceptance Programs", description: "Find CPU1 and CPU2 .out files for F28P65x hardware acceptance without touching the target.", schema: acceptanceProgramDiscoverySchema, handlerName: "discoverAcceptancePrograms", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getAcceptanceReadiness", title: "Get C2000 Acceptance Readiness", description: "Return a read-only hardware acceptance readiness report that combines ccxml, CPU program discovery, XDS110 preflight, debug ownership, and debug boundary checks.", schema: acceptanceReadinessSchema, handlerName: "getAcceptanceReadiness", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_analyzeRamOwnership", title: "Analyze C2000 RAM Ownership", description: "Parse C2000 linker .map files and report GS RAM ownership handoff writes required before CPU2 loads.", schema: ramOwnershipAnalysisSchema, handlerName: "analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: [...ramOwnershipResponseIdentity] },
-  { name: "c2000_createDebugSession", title: "Create C2000 Debug Session", description: "Create a logical multicore debug session with explicit core mapping.", schema: createDebugSessionSchema, handlerName: "createDebugSession", inputScope: "launch", targetEffect: "session-lifecycle", role: "primary", family: "session" },
-  { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session" },
+  { name: "c2000_createDebugSession", title: "Create C2000 Debug Session", description: "Create a logical multicore debug session with explicit core mapping.", schema: createDebugSessionSchema, handlerName: "createDebugSession", inputScope: "launch", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
+  { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", capability: "debug.manual" },
   { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", exposure: "default" },
-  { name: "c2000_closeDebugSession", title: "Close C2000 Debug Session", description: "Close a logical debug session and dispose its adapter resources.", schema: sessionSchema, handlerName: "closeDebugSession", inputScope: "session", targetEffect: "session-lifecycle", role: "primary", family: "session" },
-  { name: "c2000_connectTarget", title: "Connect C2000 Target", description: "Connect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "connectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_disconnectTarget", title: "Disconnect C2000 Target", description: "Disconnect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "disconnectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_runCore", title: "Run C2000 Core", description: "Primary run control: run a specific core by sessionId and coreId. Prefer this over c2000_continue for new clients.", schema: sessionCoreSchema, handlerName: "runCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_closeDebugSession", title: "Close C2000 Debug Session", description: "Close a logical debug session and dispose its adapter resources.", schema: sessionSchema, handlerName: "closeDebugSession", inputScope: "session", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
+  { name: "c2000_connectTarget", title: "Connect C2000 Target", description: "Connect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "connectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_disconnectTarget", title: "Disconnect C2000 Target", description: "Disconnect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "disconnectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_runCore", title: "Run C2000 Core", description: "Primary run control: run a specific core by sessionId and coreId. Prefer this over c2000_continue for new clients.", schema: sessionCoreSchema, handlerName: "runCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_continue", title: "Continue C2000 Core", description: "Alias of c2000_runCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_runCore.", schema: sessionCoreSchema, handlerName: "continue", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", exposure: "compatibility", aliasOf: "c2000_runCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_haltCore", title: "Halt C2000 Core", description: "Primary halt control: halt a specific core by sessionId and coreId. Prefer this over c2000_pause for new clients.", schema: sessionCoreSchema, handlerName: "haltCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_haltCore", title: "Halt C2000 Core", description: "Primary halt control: halt a specific core by sessionId and coreId. Prefer this over c2000_pause for new clients.", schema: sessionCoreSchema, handlerName: "haltCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_pause", title: "Pause C2000 Core", description: "Alias of c2000_haltCore (same handler path). Kept for TI MCP naming familiarity; prefer c2000_haltCore.", schema: sessionCoreSchema, handlerName: "pause", inputScope: "core", targetEffect: "execution-control", role: "alias", family: "execution", exposure: "compatibility", aliasOf: "c2000_haltCore", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_reset", title: "Reset C2000 Core", description: "Reset a specific core by sessionId, coreId, and resetType.", schema: resetCoreSchema, handlerName: "resetCore", inputScope: "core", targetEffect: "reset-control", role: "primary", family: "reset", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_getTargetState", title: "Get C2000 Target State", description: "Read connection state, run state and PC for one explicit core.", schema: sessionCoreSchema, handlerName: "getTargetState", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_loadProgram", title: "Load C2000 Program", description: "Load a .out program to one explicit core and record file metadata. Repeated CPU2 Flash loads fail closed before erase unless allowDestructiveFlashReload=true.", schema: loadProgramSchema, handlerName: "loadProgram", inputScope: "core", targetEffect: "program-load", role: "primary", family: "program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_loadSymbols", title: "Load C2000 Symbols Only", description: "Load debug symbols from a .out file into one explicit core session without erasing, programming, or writing target memory. Use for an image already resident in Flash.", schema: loadSymbolsSchema, handlerName: "loadSymbols", inputScope: "core", targetEffect: "symbol-load", role: "primary", family: "program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
-  { name: "c2000_loadPrograms", title: "Load C2000 Programs", description: "Load multiple core programs and return independent per-core results. The batch is preflighted so a repeated CPU2 Flash load is blocked before any target memory write unless explicitly authorized.", schema: loadProgramsSchema, handlerName: "loadPrograms", inputScope: "batch", targetEffect: "program-load", role: "primary", family: "program", coreIdentityFields: ["programs[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
-  { name: "c2000_connectCores", title: "Connect C2000 Cores", description: "Connect multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "connectCores", inputScope: "batch", targetEffect: "connectivity-control", role: "primary", family: "connectivity", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
-  { name: "c2000_haltCores", title: "Halt C2000 Cores", description: "Halt multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "haltCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
-  { name: "c2000_resetCores", title: "Reset C2000 Cores", description: "Reset multiple cores by explicit coreIds.", schema: resetCoresSchema, handlerName: "resetCores", inputScope: "batch", targetEffect: "reset-control", role: "primary", family: "reset", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
-  { name: "c2000_runCores", title: "Run C2000 Cores", description: "Run multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "runCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
+  { name: "c2000_reset", title: "Reset C2000 Core", description: "Reset a specific core by sessionId, coreId, and resetType.", schema: resetCoreSchema, handlerName: "resetCore", inputScope: "core", targetEffect: "reset-control", role: "primary", family: "reset", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_getTargetState", title: "Get C2000 Target State", description: "Read connection state, run state and PC for one explicit core.", schema: sessionCoreSchema, handlerName: "getTargetState", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_loadProgram", title: "Load C2000 Program", description: "Load a .out program to one explicit core and record file metadata. Repeated CPU2 Flash loads fail closed before erase unless allowDestructiveFlashReload=true.", schema: loadProgramSchema, handlerName: "loadProgram", inputScope: "core", targetEffect: "program-load", role: "primary", family: "program", capability: "debug.program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_loadSymbols", title: "Load C2000 Symbols Only", description: "Load debug symbols from a .out file into one explicit core session without erasing, programming, or writing target memory. Use for an image already resident in Flash.", schema: loadSymbolsSchema, handlerName: "loadSymbols", inputScope: "core", targetEffect: "symbol-load", role: "primary", family: "program", capability: "debug.program", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
+  { name: "c2000_loadPrograms", title: "Load C2000 Programs", description: "Load multiple core programs and return independent per-core results. The batch is preflighted so a repeated CPU2 Flash load is blocked before any target memory write unless explicitly authorized.", schema: loadProgramsSchema, handlerName: "loadPrograms", inputScope: "batch", targetEffect: "program-load", role: "primary", family: "program", capability: "debug.program", coreIdentityFields: ["programs[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
+  { name: "c2000_connectCores", title: "Connect C2000 Cores", description: "Connect multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "connectCores", inputScope: "batch", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
+  { name: "c2000_haltCores", title: "Halt C2000 Cores", description: "Halt multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "haltCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", capability: "debug.manual", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
+  { name: "c2000_resetCores", title: "Reset C2000 Cores", description: "Reset multiple cores by explicit coreIds.", schema: resetCoresSchema, handlerName: "resetCores", inputScope: "batch", targetEffect: "reset-control", role: "primary", family: "reset", capability: "debug.manual", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
+  { name: "c2000_runCores", title: "Run C2000 Cores", description: "Run multiple cores by explicit coreIds.", schema: batchCoresSchema, handlerName: "runCores", inputScope: "batch", targetEffect: "execution-control", role: "primary", family: "execution", capability: "debug.manual", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_getMulticoreSnapshot", title: "Get C2000 Multicore Snapshot", description: "Read state, PC and loaded program for explicit coreIds, defaulting to every core in a session.", schema: multicoreSnapshotSchema, handlerName: "getMulticoreSnapshot", inputScope: "session", targetEffect: "target-read", role: "primary", family: "read", exposure: "default", coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: [...snapshotCoreResponseIdentity] },
   { name: "c2000_evaluateMany", title: "Evaluate C2000 Expressions", description: "Evaluate multiple expressions on one explicit core with independent results.", schema: evaluateManySchema, handlerName: "evaluateMany", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", exposure: "default", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
   { name: "c2000_assignExpression", title: "Assign C2000 Expression", description: "Assign a value expression on one explicit core for fault injection or parameter synchronization checks. Use verification=write-only for a one-shot firmware hook that consumes the value immediately.", schema: assignExpressionSchema, handlerName: "assignExpression", inputScope: "core", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_assignExpressions", title: "Assign C2000 Expressions", description: "Assign multiple explicit per-core expressions for fault injection, MSGRAM, IPC, or parameter synchronization setup. Each item may use verification=write-only for a one-shot hook.", schema: assignExpressionsSchema, handlerName: "assignExpressions", inputScope: "batch", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["assignments[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_injectFaults", title: "Inject C2000 Faults", description: "Inject labeled fault values through explicit per-core expressions and optional readback verification.", schema: injectFaultsSchema, handlerName: "injectFaults", inputScope: "batch", targetEffect: "memory-write", role: "primary", family: "write", coreIdentityFields: ["faults[].coreId"], responseCoreIdentityFields: [...batchCoreResponseIdentity] },
   { name: "c2000_compareExpressions", title: "Compare C2000 Expressions", description: "Compare explicit per-core expression pairs for IPC, MSGRAM and parameter synchronization checks.", schema: compareExpressionsSchema, handlerName: "compareExpressions", inputScope: "session", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["comparisons[].left.coreId", "comparisons[].right.coreId"], responseCoreIdentityFields: [...comparisonResponseIdentity] },
-  { name: "c2000_getLoadedProgramInfo", title: "Get C2000 Loaded Program Info", description: "Return trusted metadata for programs loaded through this MCP.", schema: sessionCoreSchema, handlerName: "getLoadedProgramInfo", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
-  { name: "c2000_resolvePc", title: "Resolve C2000 PC", description: "Resolve current PC for one core, returning partial data when source mapping is unavailable.", schema: sessionCoreSchema, handlerName: "resolvePc", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
-  { name: "c2000_resolveAddress", title: "Resolve C2000 Address", description: "Resolve a code address for one explicit core (honest partial when symbol map unavailable).", schema: resolveAddressSchema, handlerName: "resolveAddress", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
-  { name: "c2000_waitUntilExpression", title: "Wait Until C2000 Expression", description: "Poll one expression until it matches the expected value or times out.", schema: waitUntilExpressionSchema, handlerName: "waitUntilExpression", inputScope: "core", targetEffect: "target-read", role: "primary", family: "wait", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
-  { name: "c2000_waitForExpressionSet", title: "Wait For C2000 Expression Set", description: "Poll explicit per-core expressions until all conditions match or the timeout expires.", schema: waitForExpressionSetSchema, handlerName: "waitForExpressionSet", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", coreIdentityFields: ["conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
+  { name: "c2000_getLoadedProgramInfo", title: "Get C2000 Loaded Program Info", description: "Return trusted metadata for programs loaded through this MCP.", schema: sessionCoreSchema, handlerName: "getLoadedProgramInfo", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
+  { name: "c2000_resolvePc", title: "Resolve C2000 PC", description: "Resolve current PC for one core, returning partial data when source mapping is unavailable.", schema: sessionCoreSchema, handlerName: "resolvePc", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
+  { name: "c2000_resolveAddress", title: "Resolve C2000 Address", description: "Resolve a code address for one explicit core (honest partial when symbol map unavailable).", schema: resolveAddressSchema, handlerName: "resolveAddress", inputScope: "core", targetEffect: "target-read", role: "primary", family: "read", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
+  { name: "c2000_waitUntilExpression", title: "Wait Until C2000 Expression", description: "Poll one expression until it matches the expected value or times out.", schema: waitUntilExpressionSchema, handlerName: "waitUntilExpression", inputScope: "core", targetEffect: "target-read", role: "primary", family: "wait", capability: "debug.wait", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...coreOnlyResponseIdentity] },
+  { name: "c2000_waitForExpressionSet", title: "Wait For C2000 Expression Set", description: "Poll explicit per-core expressions until all conditions match or the timeout expires.", schema: waitForExpressionSetSchema, handlerName: "waitForExpressionSet", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", capability: "debug.wait", coreIdentityFields: ["conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
   { name: "c2000_diagnoseCpu2Boot", title: "Diagnose C2000 CPU2 Boot", description: "Collect CPU1/CPU2 snapshot, PC and boot/IPC expressions for F28P65x CPU2 bring-up debugging. Prefer c2000_runBootHandoffDiagnosis for full handoff workflow.", schema: diagnoseCpu2BootSchema, handlerName: "diagnoseCpu2Boot", inputScope: "session", targetEffect: "target-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...diagnoseCpu2BootResponseIdentity] },
   { name: "c2000_diagnoseBootHandoff", title: "Diagnose C2000 Boot Handoff", description: "Collect CPU1/CPU2 boot diagnostics plus RAM ownership map evidence and a compact handoff verdict. Prefer workflow c2000_runBootHandoffDiagnosis when available.", schema: diagnoseBootHandoffSchema, handlerName: "diagnoseBootHandoff", inputScope: "session", targetEffect: "target-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: [...diagnoseBootHandoffResponseIdentity] },
-  { name: "c2000_waitForIpcReady", title: "Wait For C2000 IPC Ready", description: "Poll default or supplied CPU1/CPU2 IPC-ready expressions until all match or timeout.", schema: waitForIpcReadySchema, handlerName: "waitForIpcReady", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
+  { name: "c2000_waitForIpcReady", title: "Wait For C2000 IPC Ready", description: "Poll default or supplied CPU1/CPU2 IPC-ready expressions until all match or timeout.", schema: waitForIpcReadySchema, handlerName: "waitForIpcReady", inputScope: "session", targetEffect: "target-read", role: "primary", family: "wait", capability: "debug.wait", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: [...waitSetResponseIdentity] },
   { name: "c2000_reloadResetRunToMain", title: "Reload Reset Run C2000 Core", description: "Reload one explicit core, reset it, run it, and report that true breakpoint run-to-main is not supported by the current adapter.", schema: reloadResetRunToMainSchema, handlerName: "reloadResetRunToMain", inputScope: "core", targetEffect: "launch-workflow", role: "workflow", family: "workflow", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_launchAndRunIpcAcceptance", title: "Launch And Run C2000 IPC Acceptance", description: "Preferred task-level one-shot after c2000_listBoards confirms a registered worker: create and connect CPU1/CPU2 (standard coreIds 0 and 2), then run full IPC acceptance. The server validates the load/run contract and real-map IPC symbols before target mutation. For RAM builds that initialize ownership from CPU1, use loadSequence.mode=cpu1-run-before-cpu2; for firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: launchAndRunIpcAcceptanceSchema, handlerName: "launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...launchAndRunIpcAcceptanceResponseIdentity] },
   { name: "c2000_runIpcAcceptance", title: "Run C2000 IPC Acceptance Workflow", description: "Preferred task-level workflow when a session already exists: full F28P65x CPU1/CPU2 IPC acceptance in one server-side call. The server validates the load/run contract and real-map IPC symbols before target mutation; use this instead of launchMulticoreDebug followed by generic runCores for an IPC handshake. For firmware-owned CPU2 release, use runSequence.runMode=cpu1_boots_cpu2.", schema: runIpcAcceptanceSchema, handlerName: "runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: [...workflowIpcAcceptanceResponseIdentity] },
@@ -358,6 +379,15 @@ export const c2000ToolDefinitions: ToolDefinition[] = baseToolDefinitions.map(de
 
 export interface C2000ToolInvoker {
   invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>>;
+}
+
+export interface C2000ToolRegistration {
+  invoker: C2000ToolInvoker;
+  capabilitySessions: CapabilitySessionManager;
+  dynamicToolListSupported: boolean;
+  visibleDefinitions(): ToolDefinition[];
+  getExposureSummary(): ToolExposureSummary;
+  dispose(): void;
 }
 
 export function createC2000ToolInvoker(
@@ -398,42 +428,32 @@ export function registerC2000Tools(
   profile: ToolProfile = toolProfileFromEnv(),
   filesystem: FilesystemPolicy = { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] },
   tiEnvironment: ResolveTiEnvironmentOptions = {},
-  runtime: { getServerHealth?: () => Record<string, any> } = {},
-  surface: ToolSurfaceProfile = toolSurfaceProfileFromEnv()
-) {
-  const exposure = getToolExposureSummary(profile, surface);
-  const registered = exposure.registered;
+  runtime: { getServerHealth?: () => Record<string, any> | Promise<Record<string, any>> } = {},
+  surface: ToolSurfaceProfile = toolSurfaceProfileFromEnv(),
+  options: { capabilitySessions?: CapabilitySessionManager; logger?: Pick<Logger, "info"> } = {}
+): C2000ToolRegistration {
+  const capabilitySessions = options.capabilitySessions ?? new CapabilitySessionManager({ logger: options.logger });
+  const controller = new ToolCapabilityController(profile, surface, capabilitySessions);
+  const dynamicMcpCandidate = supportsDynamicMcpServer(server);
+  const definitionsToRegister = dynamicMcpCandidate
+    ? definitionsForSafetyProfile(profile)
+    : controller.visibleDefinitions();
   const effectiveDeps: ToolHandlerDeps = {
-    getToolContracts: () => getToolContracts(profile, surface),
-    getToolSurfaceGuide: () => getToolSurfaceGuide(profile, surface),
-    getToolProfile: () => ({
-      activeToolProfile: profile,
-      activeToolSurfaceProfile: surface,
-      registeredToolCount: exposure.registeredToolCount,
-      hiddenBySafetyCount: exposure.hiddenBySafetyCount,
-      hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
-      advancedOnlyCount: exposure.advancedOnlyCount,
-      compatibilityOnlyCount: exposure.compatibilityOnlyCount,
-      counts: {
-        registered: exposure.registeredToolCount,
-        hiddenBySafety: exposure.hiddenBySafetyCount,
-        hiddenBySurface: exposure.hiddenBySurfaceCount,
-        advancedOnly: exposure.advancedOnlyCount,
-        compatibilityOnly: exposure.compatibilityOnlyCount
-      },
-      hiddenTools: exposure.hiddenTools,
-      hiddenAliases: exposure.hiddenAliases,
-      surface,
-      profileReason: `Configured tool profile: ${profile}; configured tool surface: ${surface}`
-    }),
-    getServerHealth: runtime.getServerHealth,
+    ...deps,
+    getToolContracts: () => getToolContracts(profile, surface, capabilitySessions.activeCapabilities()),
+    getToolSurfaceGuide: () => getToolSurfaceGuide(profile, surface, capabilitySessions.activeCapabilities()),
+    getToolProfile: () => toolProfilePayload(controller.getExposureSummary()),
+    listCapabilities: () => controller.listCapabilities(),
+    openCapabilitySession: input => controller.openCapabilitySession(input),
+    closeCapabilitySession: input => controller.closeCapabilitySession(input),
+    getServerHealth: runtime.getServerHealth ?? deps.getServerHealth,
     tiEnvironment,
-    ...deps
   };
   const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, effectiveDeps);
 
-  for (const definition of registered) {
-    server.registerTool(
+  const registeredTools = new Map<string, { enabled: boolean; enable(): void; disable(): void }>();
+  for (const definition of definitionsToRegister) {
+    const registered = server.registerTool(
       definition.name,
       {
         title: definition.title,
@@ -444,8 +464,9 @@ export function registerC2000Tools(
       async (input: any) => {
         let result: Record<string, unknown>;
         try {
+          controller.assertToolVisible(definition.name);
           await validateToolPaths(input, filesystem);
-          result = await invoker.invokeTool(definition.name, input);
+          result = await invokeRegisteredDefinition(definition, input, invoker, controller, runtime);
         } catch (error) {
           result = failedInvocation(error, getInputSessionId(input));
         }
@@ -456,7 +477,345 @@ export function registerC2000Tools(
         };
       }
     );
+    registeredTools.set(definition.name, registered);
   }
+
+  const dynamicToolListSupported = dynamicMcpCandidate
+    && installDynamicMcpDispatch(server, controller, registeredTools);
+  controller.setDynamicToolListSupported(dynamicToolListSupported);
+  const unsubscribe = capabilitySessions.subscribe(() => {
+    if (dynamicToolListSupported) server.sendToolListChanged();
+  });
+  return {
+    invoker,
+    capabilitySessions,
+    dynamicToolListSupported,
+    visibleDefinitions: () => controller.visibleDefinitions(),
+    getExposureSummary: () => controller.getExposureSummary(),
+    dispose: () => {
+      unsubscribe();
+      capabilitySessions.dispose();
+    }
+  };
+}
+
+class ToolCapabilityController {
+  private readonly byName = new Map(c2000ToolDefinitions.map(definition => [definition.name, definition]));
+  private dynamicToolListSupported = false;
+
+  constructor(
+    private readonly profile: ToolProfile,
+    private readonly surface: ToolSurfaceProfile,
+    private readonly sessions: CapabilitySessionManager
+  ) {}
+
+  setDynamicToolListSupported(value: boolean): void {
+    this.dynamicToolListSupported = value;
+  }
+
+  visibleDefinitions(): ToolDefinition[] {
+    return definitionsForDynamicExposure(this.profile, this.surface, this.sessions.activeCapabilities());
+  }
+
+  getExposureSummary(): ToolExposureSummary {
+    return getToolExposureSummary(
+      this.profile,
+      this.surface,
+      this.sessions.activeCapabilities(),
+      this.sessions.listActiveSessions()
+    );
+  }
+
+  listCapabilities(): Record<string, unknown> {
+    const safetyDefinitions = definitionsForSafetyProfile(this.profile);
+    const safetyNames = new Set(safetyDefinitions.map(definition => definition.name));
+    const active = new Set(this.sessions.activeCapabilities());
+    return {
+      activeToolProfile: this.profile,
+      activeToolSurfaceProfile: this.surface,
+      capabilityMode: "dynamic",
+      available: CAPABILITY_DESCRIPTORS.map(descriptor => {
+        const members = c2000ToolDefinitions.filter(tool => tool.capability === descriptor.name);
+        const allowed = members.filter(tool => safetyNames.has(tool.name));
+        return {
+          name: descriptor.name,
+          description: descriptor.description,
+          requiresSafety: minimumProfileFor(members),
+          active: this.surface === "agent" && active.has(descriptor.name),
+          implicitlyVisible: this.surface !== "agent",
+          toolCount: allowed.length,
+          blockedBySafety: members.filter(tool => !safetyNames.has(tool.name)).map(tool => tool.name)
+        };
+      }),
+      activeSessions: this.sessions.listActiveSessions()
+    };
+  }
+
+  openCapabilitySession(input: { capability: string; reason: string; ttlSeconds?: number }): Record<string, unknown> {
+    const descriptor = CAPABILITY_DESCRIPTORS.find(candidate => candidate.name === input.capability.trim());
+    if (!descriptor) {
+      throw new DebugMcpError("CapabilityUnknown", `Unknown C2000 capability: ${input.capability}`, {
+        capability: input.capability,
+        availableCapabilities: CAPABILITY_DESCRIPTORS.map(candidate => candidate.name)
+      });
+    }
+    const members = c2000ToolDefinitions.filter(tool => tool.capability === descriptor.name);
+    const safetyDefinitions = definitionsForSafetyProfile(this.profile);
+    const safetyNames = new Set(safetyDefinitions.map(definition => definition.name));
+    const allowed = members.filter(tool => safetyNames.has(tool.name));
+    const blockedBySafety = members.filter(tool => !safetyNames.has(tool.name)).map(tool => tool.name);
+    if (allowed.length === 0) {
+      throw new DebugMcpError("CapabilityNotAllowedBySafetyProfile", `Capability ${descriptor.name} is not allowed by tool profile ${this.profile}`, {
+        capability: descriptor.name,
+        activeToolProfile: this.profile,
+        activeSurface: this.surface,
+        requestedTools: members.map(tool => tool.name),
+        visibleTools: [],
+        blockedBySafety
+      });
+    }
+
+    if (this.surface !== "agent") {
+      return {
+        capability: descriptor.name,
+        session: null,
+        created: false,
+        implicitlyVisible: true,
+        requestedTools: members.map(tool => tool.name),
+        visibleTools: allowed.map(tool => tool.name),
+        blockedBySafety,
+        activeCapabilities: this.sessions.activeCapabilities(),
+        requiresReconnect: false,
+        toolsListChanged: false
+      };
+    }
+
+    const opened = this.sessions.open(descriptor.name, input.reason, input.ttlSeconds);
+    const summary = this.getExposureSummary();
+    return {
+      capability: descriptor.name,
+      session: opened.session,
+      created: opened.created,
+      requestedTools: members.map(tool => tool.name),
+      visibleTools: allowed.map(tool => tool.name),
+      blockedBySafety,
+      activeCapabilities: summary.activeCapabilities,
+      activeToolProfile: this.profile,
+      activeToolSurfaceProfile: this.surface,
+      requiresReconnect: !this.dynamicToolListSupported,
+      toolsListChanged: this.dynamicToolListSupported
+    };
+  }
+
+  closeCapabilitySession(input: { sessionId: string }): Record<string, unknown> {
+    const session = this.sessions.close(input.sessionId);
+    const summary = this.getExposureSummary();
+    return {
+      session,
+      activeCapabilities: summary.activeCapabilities,
+      visibleTools: summary.registered.map(tool => tool.name),
+      requiresReconnect: !this.dynamicToolListSupported,
+      toolsListChanged: this.dynamicToolListSupported
+    };
+  }
+
+  assertToolVisible(toolName: string): void {
+    const summary = this.getExposureSummary();
+    if (summary.registered.some(tool => tool.name === toolName)) return;
+    const definition = this.byName.get(toolName);
+    if (!definition) {
+      throw new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${toolName}`, { toolName });
+    }
+    const safetyAllowed = definitionsForSafetyProfile(this.profile).some(tool => tool.name === toolName);
+    if (!safetyAllowed) {
+      if (definition.capability) {
+        throw new DebugMcpError("CapabilityNotAllowedBySafetyProfile", `Tool ${toolName} is blocked by tool profile ${this.profile}`, {
+          tool: toolName,
+          requiredCapability: definition.capability,
+          activeSurface: this.surface,
+          activeToolProfile: this.profile
+        });
+      }
+      throw new DebugMcpError("ToolNotFound", `Tool ${toolName} is blocked by tool profile ${this.profile}`, {
+        tool: toolName,
+        activeToolProfile: this.profile
+      });
+    }
+    if (definition.capability && this.surface === "agent") {
+      const expired = this.sessions.lastEndedReason(definition.capability) === "expired";
+      throw new DebugMcpError(expired ? "CapabilityExpired" : "CapabilityRequired", `Tool ${toolName} requires capability ${definition.capability}`, {
+        tool: toolName,
+        requiredCapability: definition.capability,
+        activeSurface: this.surface,
+        activeToolProfile: this.profile,
+        activeCapabilities: summary.activeCapabilities,
+        ...(expired ? { remediation: "Open a new short-lived capability session with c2000_openCapabilitySession." } : {})
+      });
+    }
+    throw new DebugMcpError("ToolNotFound", `Tool ${toolName} is not visible on the ${this.surface} surface`, {
+      tool: toolName,
+      activeSurface: this.surface,
+      activeToolProfile: this.profile
+    });
+  }
+}
+
+async function invokeRegisteredDefinition(
+  definition: ToolDefinition,
+  input: unknown,
+  invoker: C2000ToolInvoker,
+  controller: ToolCapabilityController,
+  runtime: { getServerHealth?: () => Record<string, any> | Promise<Record<string, any>> }
+): Promise<Record<string, unknown>> {
+  if (definition.name === "c2000_listCapabilities") {
+    return successResult(controller.listCapabilities());
+  }
+  if (definition.name === "c2000_openCapabilitySession") {
+    return successResult(controller.openCapabilitySession(input as { capability: string; reason: string; ttlSeconds?: number }));
+  }
+  if (definition.name === "c2000_closeCapabilitySession") {
+    return successResult(controller.closeCapabilitySession(input as { sessionId: string }));
+  }
+  if (definition.name === "c2000_getToolContracts") {
+    return successResult({
+      tools: getToolContracts(controller.getExposureSummary().profile, controller.getExposureSummary().surface, controller.getExposureSummary().activeCapabilities),
+      toolSurface: getToolSurfaceGuide(controller.getExposureSummary().profile, controller.getExposureSummary().surface, controller.getExposureSummary().activeCapabilities),
+      ...toolProfilePayload(controller.getExposureSummary())
+    });
+  }
+  if (definition.name === "c2000_getServerHealth" && runtime.getServerHealth) {
+    const raw = await runtime.getServerHealth();
+    return augmentServerHealthResult(raw, controller.getExposureSummary());
+  }
+  return invoker.invokeTool(definition.name, input);
+}
+
+function supportsDynamicMcpServer(server: McpServer): boolean {
+  const underlying = server.server as unknown as {
+    _requestHandlers?: unknown;
+  };
+  return Boolean(underlying)
+    && underlying._requestHandlers instanceof Map
+    && typeof server.server.removeRequestHandler === "function"
+    && typeof server.server.setRequestHandler === "function";
+}
+
+function installDynamicMcpDispatch(
+  server: McpServer,
+  controller: ToolCapabilityController,
+  registeredTools: Map<string, { enabled: boolean; enable(): void; disable(): void }>
+): boolean {
+  const underlying = server.server as unknown as {
+    _requestHandlers: Map<string, (request: any, extra: any) => Promise<any>>;
+  };
+  const originalList = underlying._requestHandlers.get("tools/list");
+  const originalCall = underlying._requestHandlers.get("tools/call");
+  if (!originalList || !originalCall) return false;
+
+  server.server.removeRequestHandler("tools/list");
+  server.server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
+    const visibleNames = new Set(controller.visibleDefinitions().map(definition => definition.name));
+    const previousEnabled = new Map<string, boolean>();
+    for (const [name, registered] of registeredTools) {
+      previousEnabled.set(name, registered.enabled);
+      // RegisteredTool.enabled is the SDK's public list-membership state. Set
+      // it directly for this synchronous list snapshot so every temporary
+      // toggle does not emit its own tools/list_changed notification.
+      registered.enabled = visibleNames.has(name);
+    }
+    try {
+      return await originalList(request, extra);
+    } finally {
+      for (const [name, enabled] of previousEnabled) {
+        const registered = registeredTools.get(name);
+        if (!registered) continue;
+        registered.enabled = enabled;
+      }
+    }
+  });
+
+  server.server.removeRequestHandler("tools/call");
+  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    try {
+      controller.assertToolVisible(request.params.name);
+      return await originalCall(request, extra);
+    } catch (error) {
+      const result = failedInvocation(error, getInputSessionId(request.params.arguments));
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        structuredContent: result,
+        isError: true
+      };
+    }
+  });
+  return true;
+}
+
+function toolProfilePayload(exposure: ToolExposureSummary) {
+  return {
+    activeToolProfile: exposure.profile,
+    activeToolSurfaceProfile: exposure.surface,
+    registeredToolCount: exposure.registeredToolCount,
+    hiddenBySafetyCount: exposure.hiddenBySafetyCount,
+    hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
+    advancedOnlyCount: exposure.advancedOnlyCount,
+    compatibilityOnlyCount: exposure.compatibilityOnlyCount,
+    counts: {
+      registered: exposure.registeredToolCount,
+      hiddenBySafety: exposure.hiddenBySafetyCount,
+      hiddenBySurface: exposure.hiddenBySurfaceCount,
+      advancedOnly: exposure.advancedOnlyCount,
+      compatibilityOnly: exposure.compatibilityOnlyCount,
+      baseVisible: exposure.baseVisibleToolCount,
+      capabilityVisible: exposure.capabilityVisibleToolCount
+    },
+    baseVisibleToolCount: exposure.baseVisibleToolCount,
+    capabilityVisibleToolCount: exposure.capabilityVisibleToolCount,
+    activeCapabilities: exposure.activeCapabilities,
+    activeCapabilityCount: exposure.activeCapabilities.length,
+    capabilityMode: "dynamic",
+    hiddenTools: exposure.hiddenTools,
+    hiddenAliases: exposure.hiddenAliases,
+    surface: exposure.surface,
+    profileReason: `Configured tool profile: ${exposure.profile}; configured tool surface: ${exposure.surface}`
+  };
+}
+
+function successResult(body: Record<string, unknown>): Record<string, unknown> {
+  return { success: true, timestamp: new Date().toISOString(), ...body };
+}
+
+function augmentServerHealthResult(raw: Record<string, any>, exposure: ToolExposureSummary): Record<string, unknown> {
+  const result = raw.success === true ? { ...raw } : successResult(raw);
+  const configuration = asRecord(result.configuration);
+  const tools = asRecord(result.tools);
+  return {
+    ...result,
+    configuration: {
+      ...configuration,
+      capabilityMode: "dynamic",
+      activeCapabilityCount: exposure.activeCapabilities.length
+    },
+    tools: {
+      ...tools,
+      registeredCount: exposure.registeredToolCount,
+      registeredNames: exposure.registered.map(definition => definition.name),
+      activeCapabilityCount: exposure.activeCapabilities.length
+    }
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function minimumProfileFor(definitions: ToolDefinition[]): ToolProfile {
+  if (definitions.length === 0) return "full";
+  const readonlyNames = new Set(definitionsForSafetyProfile("readonly").map(definition => definition.name));
+  if (definitions.every(definition => readonlyNames.has(definition.name))) return "readonly";
+  const safeNames = new Set(definitionsForSafetyProfile("safe").map(definition => definition.name));
+  if (definitions.every(definition => safeNames.has(definition.name))) return "safe";
+  return "full";
 }
 
 function isToolInvoker(value: DebugSessionManager | C2000ToolInvoker): value is C2000ToolInvoker {
@@ -478,8 +837,12 @@ function failedInvocation(error: unknown, sessionId?: string): Record<string, un
   };
 }
 
-export function getToolContracts(profile: ToolProfile = "full", surface: ToolSurfaceProfile = "compatibility") {
-  return definitionsForExposure(profile, surface).map(definition => {
+export function getToolContracts(
+  profile: ToolProfile = "full",
+  surface: ToolSurfaceProfile = "compatibility",
+  activeCapabilities: readonly ToolCapability[] = []
+) {
+  return getToolExposureSummary(profile, surface, activeCapabilities).registered.map(definition => {
     const inputFields = Object.keys(objectShape(definition.schema));
     return {
       name: definition.name,
@@ -490,6 +853,7 @@ export function getToolContracts(profile: ToolProfile = "full", surface: ToolSur
       role: definition.role,
       family: definition.family,
       exposure: definition.exposure,
+      capability: definition.capability,
       safetyAllowed: true,
       surfaceVisible: true,
       aliasOf: definition.aliasOf,
@@ -513,9 +877,13 @@ export function getToolContracts(profile: ToolProfile = "full", surface: ToolSur
 }
 
 /** Compact tool-surface guide for agents: prefer workflows, then primary atomics, avoid aliases when possible. */
-export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: ToolSurfaceProfile = "compatibility") {
-  const exposure = getToolExposureSummary(profile, surface);
-  const tools = getToolContracts(profile, surface);
+export function getToolSurfaceGuide(
+  profile: ToolProfile = "full",
+  surface: ToolSurfaceProfile = "compatibility",
+  activeCapabilities: readonly ToolCapability[] = []
+) {
+  const exposure = getToolExposureSummary(profile, surface, activeCapabilities);
+  const tools = getToolContracts(profile, surface, activeCapabilities);
   const families = Array.from(new Set(tools.map(tool => tool.family))).sort();
   const aliases = tools
     .filter(tool => tool.role === "alias")
@@ -530,7 +898,7 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
   const surfaceGuidance = surface === "agent"
     ? [
         "Use the registered task-level workflow for the job first; the agent surface intentionally omits raw core control, program/load primitives, generic waits, and observability lifecycle tools.",
-        "If the task genuinely needs manual core control, symbol/load control, generic waits, or profiling, select the advanced surface explicitly; do not bypass this MCP through shell, CCS, or daemon RPC calls."
+        "If the task genuinely needs manual core control, symbol/load control, generic waits, or profiling, call c2000_listCapabilities and open only the required short-lived capability; do not bypass this MCP through shell, CCS, or daemon RPC calls."
       ]
     : [
         "Prefer one workflow tool (c2000_launchAndRunIpcAcceptance, c2000_runIpcAcceptance, c2000_runBootHandoffDiagnosis, c2000_runReloadAndDiagnose, c2000_runFullDebugBundle) over long atomic chains.",
@@ -550,7 +918,7 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
       "Set runSequence.runMode (or durable runIpcAcceptance.runMode) explicitly; when present it is authoritative and contradictory legacy runCpu1First/runCpu2 values are rejected.",
       "Do not combine runMode=cpu2_pre_running with loadSequence.mode=cpu1-run-before-cpu2; the server rejects this before target mutation.",
       ...(surface === "agent"
-        ? ["Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; the task-level workflow performs the boot-handoff contract."]
+        ? ["Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; the task-level workflow performs the boot-handoff contract.", "Capability sessions are temporary and reason-bound. Open observability.dlog, observability.erad, observability.variables, debug.manual, debug.program, or debug.wait only when the task requires it; the active safety profile still filters every member tool."]
         : ["Use c2000_runIpcAcceptance or c2000_launchAndRunIpcAcceptance for IPC startup; launchMulticoreDebug followed by generic runCores does not perform the boot-handoff contract."]),
       ...(surface === "agent"
         ? []
@@ -583,7 +951,9 @@ export function getToolSurfaceGuide(profile: ToolProfile = "full", surface: Tool
       diagnostic: tools.filter(tool => tool.role === "diagnostic").length
     },
     advancedOnly: exposure.advancedOnlyCount,
-    compatibilityOnly: exposure.compatibilityOnlyCount
+    compatibilityOnly: exposure.compatibilityOnlyCount,
+    activeCapabilities: exposure.activeCapabilities,
+    capabilityVisibleToolCount: exposure.capabilityVisibleToolCount
   };
 }
 
@@ -610,14 +980,39 @@ export function definitionsForSurfaceProfile(surface: ToolSurfaceProfile): ToolD
 
 /** Apply safety first, then intersect with the requested MCP surface. */
 export function definitionsForExposure(profile: ToolProfile, surface: ToolSurfaceProfile): ToolDefinition[] {
-  const safetyDefinitions = definitionsForSafetyProfile(profile);
-  const surfaceNames = new Set(definitionsForSurfaceProfile(surface).map(tool => tool.name));
-  return safetyDefinitions.filter(tool => surfaceNames.has(tool.name));
+  return definitionsForDynamicExposure(profile, surface, []);
 }
 
-export function getToolExposureSummary(profile: ToolProfile, surface: ToolSurfaceProfile): ToolExposureSummary {
+/**
+ * Apply safety first, then the configured base surface, then temporary
+ * capability grants. Compatibility aliases never participate in a grant.
+ */
+export function definitionsForDynamicExposure(
+  profile: ToolProfile,
+  surface: ToolSurfaceProfile,
+  activeCapabilities: readonly ToolCapability[] = []
+): ToolDefinition[] {
   const safetyDefinitions = definitionsForSafetyProfile(profile);
-  const registered = definitionsForExposure(profile, surface);
+  const active = new Set(activeCapabilities);
+  const baseNames = new Set(definitionsForSurfaceProfile(surface).map(tool => tool.name));
+  return safetyDefinitions.filter(tool => {
+    if (baseNames.has(tool.name)) return true;
+    return surface === "agent"
+      && tool.exposure === "advanced"
+      && tool.capability !== undefined
+      && active.has(tool.capability);
+  });
+}
+
+export function getToolExposureSummary(
+  profile: ToolProfile,
+  surface: ToolSurfaceProfile,
+  activeCapabilities: readonly ToolCapability[] = [],
+  activeCapabilitySessions: readonly CapabilitySession[] = []
+): ToolExposureSummary {
+  const safetyDefinitions = definitionsForSafetyProfile(profile);
+  const baseVisible = definitionsForExposure(profile, surface);
+  const registered = definitionsForDynamicExposure(profile, surface, activeCapabilities);
   const safetyNames = new Set(safetyDefinitions.map(tool => tool.name));
   const registeredNames = new Set(registered.map(tool => tool.name));
   const hiddenBySafetyCount = c2000ToolDefinitions.filter(tool => !safetyNames.has(tool.name)).length;
@@ -637,7 +1032,11 @@ export function getToolExposureSummary(profile: ToolProfile, surface: ToolSurfac
     hiddenTools,
     hiddenAliases: c2000ToolDefinitions
       .filter(tool => tool.role === "alias" && !registeredNames.has(tool.name))
-      .map(tool => tool.name)
+      .map(tool => tool.name),
+    baseVisibleToolCount: baseVisible.length,
+    capabilityVisibleToolCount: registered.filter(tool => !baseVisible.some(base => base.name === tool.name)).length,
+    activeCapabilities: Array.from(new Set(activeCapabilities)),
+    activeCapabilitySessions: activeCapabilitySessions.map(session => ({ ...session }))
   };
 }
 
@@ -699,6 +1098,7 @@ function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentE
 }
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
+  if (targetEffect === "capability-control") return ["host-read"];
   if (targetEffect === "observation-control") {
     if (name === "c2000_verifyMap" || name === "c2000_verifyReview") return ["host-read", "bundle-write"];
     if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];

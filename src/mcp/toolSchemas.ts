@@ -7,6 +7,7 @@ import { mapVerificationInputSchema } from "../verification/map/MapSchemas.js";
 import { regressionPlanSchema } from "../verification/regression/RegressionSchemas.js";
 import { reviewVerificationInputSchema } from "../verification/review/ReviewSchemas.js";
 import { engineeringVerificationInputSchema } from "../verification/VerificationService.js";
+import { TOOL_CAPABILITY_NAMES } from "./capabilities.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -90,6 +91,17 @@ export const ramOwnershipAnalysisSchema = z.object({
 });
 
 export const toolContractsSchema = z.object({});
+
+/** Capability controls are intentionally string-validated in the handler so unknown values return a structured MCP error. */
+export const listCapabilitiesSchema = z.object({});
+export const openCapabilitySessionSchema = z.object({
+  capability: z.string().min(1).describe(`Capability group. Known values: ${TOOL_CAPABILITY_NAMES.join(", ")}`),
+  reason: z.string().trim().min(1),
+  ttlSeconds: z.number().int().optional().describe("Temporary exposure lifetime in seconds; defaults to 900 and cannot exceed 1800.")
+});
+export const closeCapabilitySessionSchema = z.object({
+  sessionId: z.string().min(1)
+});
 
 export const verifyBuildSchema = buildVerificationInputSchema;
 export const verifyMapSchema = mapVerificationInputSchema;

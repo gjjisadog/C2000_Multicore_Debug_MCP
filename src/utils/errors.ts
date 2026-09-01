@@ -183,7 +183,14 @@ export type DebugErrorCode =
   | "EradCounterInvalid"
   | "EradSysclkInvalid"
   | "BaselineSchemaUnsupported"
-  | "BaselineIdentityMismatch";
+  | "BaselineIdentityMismatch"
+  | "CapabilityRequired"
+  | "CapabilityExpired"
+  | "CapabilityNotAllowedBySafetyProfile"
+  | "CapabilityUnknown"
+  | "CapabilityInvalidTtl"
+  | "CapabilityReasonRequired"
+  | "CapabilitySessionNotFound";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

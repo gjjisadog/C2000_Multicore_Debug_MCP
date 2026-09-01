@@ -16,15 +16,13 @@ import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
 import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware/debugProbeCoordinator.js";
 import { recoverDebugProbe, runHardwarePreflight } from "./hardware/preflight.js";
 import {
-  createC2000ToolInvoker,
   getToolExposureSummary,
-  getToolContracts,
-  getToolSurfaceGuide,
   registerC2000Tools,
   type C2000ToolInvoker,
   type ToolProfile,
   type ToolSurfaceProfile
 } from "./mcp/tools.js";
+import { CapabilitySessionManager } from "./mcp/capabilities.js";
 import type { ToolHandlerDeps } from "./mcp/toolHandlers.js";
 import { buildServerHealth, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
 import { DebugMcpError } from "./utils/errors.js";
@@ -87,8 +85,8 @@ function buildRuntime(
   const startedAt = new Date().toISOString();
   const toolProfile = (config.toolProfile ?? "safe") as ToolProfile;
   const toolSurfaceProfile = (config.toolSurfaceProfile ?? "agent") as ToolSurfaceProfile;
-  const exposure = getToolExposureSummary(toolProfile, toolSurfaceProfile);
-  const registeredToolNames = exposure.registered.map(tool => tool.name);
+  const capabilitySessions = new CapabilitySessionManager({ logger });
+  let getExposureSummary = () => getToolExposureSummary(toolProfile, toolSurfaceProfile);
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
@@ -128,7 +126,13 @@ function buildRuntime(
     ],
     files: [config.ccs.ccxmlPath]
   });
-  const getServerHealth = () => buildServerHealth(config, startedAt, registeredToolNames);
+  const getServerHealth = () => {
+    const exposure = getExposureSummary();
+    return buildServerHealth(config, startedAt, exposure.registered.map(tool => tool.name), {
+      activeCapabilityCount: exposure.activeCapabilities.length,
+      capabilityMode: "dynamic"
+    });
+  };
   const verificationRoot = path.join(
     config.filesystem?.allowedWriteRoots?.[0] ?? path.join(process.cwd(), "runtime"),
     "verification"
@@ -155,38 +159,25 @@ function buildRuntime(
       prepareProbe: isCcs ? createProbePreparer(config, effectiveInstallPath) : undefined
     }
   );
-  const toolInvoker = createC2000ToolInvoker(manager, {
-    ...toolHandlerDeps,
-    verification,
-    effectiveAdapterType: adapterResolution.mode,
+  const registration = registerC2000Tools(
+    server,
+    manager,
+    {
+      ...toolHandlerDeps,
+      verification,
+      effectiveAdapterType: adapterResolution.mode,
+      filesystem,
+      programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots
+    },
+    toolProfile,
     filesystem,
-    programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,
-    getToolContracts: () => getToolContracts(toolProfile, toolSurfaceProfile),
-    getToolSurfaceGuide: () => getToolSurfaceGuide(toolProfile, toolSurfaceProfile),
-    getToolProfile: () => ({
-      activeToolProfile: toolProfile,
-      activeToolSurfaceProfile: toolSurfaceProfile,
-      registeredToolCount: exposure.registeredToolCount,
-      hiddenBySafetyCount: exposure.hiddenBySafetyCount,
-      hiddenBySurfaceCount: exposure.hiddenBySurfaceCount,
-      advancedOnlyCount: exposure.advancedOnlyCount,
-      compatibilityOnlyCount: exposure.compatibilityOnlyCount,
-      counts: {
-        registered: exposure.registeredToolCount,
-        hiddenBySafety: exposure.hiddenBySafetyCount,
-        hiddenBySurface: exposure.hiddenBySurfaceCount,
-        advancedOnly: exposure.advancedOnlyCount,
-        compatibilityOnly: exposure.compatibilityOnlyCount
-      },
-      hiddenTools: exposure.hiddenTools,
-      hiddenAliases: exposure.hiddenAliases,
-      surface: toolSurfaceProfile,
-      profileReason: `Configured tool profile: ${toolProfile}; configured tool surface: ${toolSurfaceProfile}`
-    }),
-    getServerHealth,
-    tiEnvironment
-  });
-  registerC2000Tools(server, toolInvoker, {}, toolProfile, filesystem, tiEnvironment, { getServerHealth }, toolSurfaceProfile);
+    tiEnvironment,
+    { getServerHealth },
+    toolSurfaceProfile,
+    { capabilitySessions, logger }
+  );
+  const toolInvoker = registration.invoker;
+  getExposureSummary = registration.getExposureSummary;
 
   let disposal: Promise<Awaited<ReturnType<DebugSessionManager["disposeAllSessions"]>>> | undefined;
   return {
@@ -195,7 +186,10 @@ function buildRuntime(
     toolInvoker,
     adapterResolution,
     ownedProcesses: () => adapter.ownedProcesses?.() ?? [],
-    dispose: () => (disposal ??= manager.disposeAllSessions())
+    dispose: () => (disposal ??= (async () => {
+      registration.dispose();
+      return manager.disposeAllSessions();
+    })())
   };
 }
 

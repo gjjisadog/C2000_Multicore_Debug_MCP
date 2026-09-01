@@ -6,6 +6,8 @@ import { McpDaemonClient } from "./McpDaemonClient.js";
 import { SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
 import path from "node:path";
 import { withAdditionalReadRoots } from "../security/pathPolicy.js";
+import { CapabilitySessionManager } from "../mcp/capabilities.js";
+import { Logger } from "../utils/logger.js";
 
 export interface C2000McpProxyRuntime {
   server: McpServer;
@@ -22,7 +24,10 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
     { name: SERVER_NAME, version: SERVER_VERSION },
     { capabilities: { logging: {} } }
   );
-  registerC2000Tools(
+  const capabilitySessions = new CapabilitySessionManager({
+    logger: new Logger(config.logging.level, config.logging.logFile)
+  });
+  const registration = registerC2000Tools(
     server,
     client,
     {},
@@ -41,11 +46,17 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
       files: [config.ccs.ccxmlPath]
     }),
     {},
-    {},
-    config.toolSurfaceProfile ?? "agent"
+    {
+      getServerHealth: () => client.invokeTool("c2000_getServerHealth", {})
+    },
+    config.toolSurfaceProfile ?? "agent",
+    { capabilitySessions }
   );
   return {
     server,
-    dispose: () => client.close()
+    dispose: async () => {
+      registration.dispose();
+      await client.close();
+    }
   };
 }

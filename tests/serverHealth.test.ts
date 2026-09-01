@@ -17,7 +17,7 @@ describe("server runtime health", () => {
     expect(health).toEqual(expect.objectContaining({
       status: "ready",
       server: { name: "c2000-multicore-mcp", version: "0.7.0" },
-      tools: { registeredCount: 1, registeredNames: ["c2000_getServerHealth"] }
+      tools: expect.objectContaining({ registeredCount: 1, registeredNames: ["c2000_getServerHealth"] })
     }));
     expect(health.runtime.bundled).toBe(isBundledRuntime());
     expect(health.runtime.build).toEqual(runtimeBuildInfo());
@@ -27,6 +27,9 @@ describe("server runtime health", () => {
       appliedAt: "2026-07-11T00:00:00.000Z"
     }));
     expect(health.configuration.toolSurfaceProfile).toBe(config.toolSurfaceProfile);
+    expect(health.configuration.capabilityMode).toBe("dynamic");
+    expect(health.configuration.activeCapabilityCount).toBe(0);
+    expect(health.tools.activeCapabilityCount).toBe(0);
     expect(health.configuration.surfaceProfile).toEqual(expect.objectContaining({
       effective: config.toolSurfaceProfile,
       appliedAt: "2026-07-11T00:00:00.000Z"

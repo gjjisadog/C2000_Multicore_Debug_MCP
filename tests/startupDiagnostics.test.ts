@@ -15,12 +15,13 @@ describe("startup diagnostics", () => {
   });
 
   test("reports a machine-readable ready event", () => {
-    expect(startupReady({ bundled: true, toolProfile: "safe", toolSurfaceProfile: "agent" })).toEqual(expect.objectContaining({
+    expect(startupReady({ bundled: true, toolProfile: "safe", toolSurfaceProfile: "agent", capabilityMode: "dynamic" })).toEqual(expect.objectContaining({
       level: "info",
       event: "c2000_mcp_ready",
       bundled: true,
       toolProfile: "safe",
-      toolSurfaceProfile: "agent"
+      toolSurfaceProfile: "agent",
+      capabilityMode: "dynamic"
     }));
   });
 });
