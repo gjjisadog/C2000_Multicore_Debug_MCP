@@ -14,48 +14,65 @@ export const TOOL_CAPABILITY_NAMES = [
 ] as const;
 
 export type ToolCapability = typeof TOOL_CAPABILITY_NAMES[number];
+export type CapabilityRisk = "read-only" | "target-control" | "program-load" | "target-mutation" | "workflow-confirmation";
 
 export interface CapabilityDescriptor {
   name: ToolCapability;
   description: string;
+  risk: CapabilityRisk;
 }
 
 export const CAPABILITY_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   {
     name: "debug.manual",
-    description: "Manual per-core connect/run/halt/reset operations for deep interactive debugging. Prefer task-level workflows for normal IPC bring-up."
+    description: "Manual per-core connect/run/halt/reset operations for deep interactive debugging. Prefer task-level workflows for normal IPC bring-up.",
+    risk: "target-control"
   },
   {
     name: "debug.program",
-    description: "Manual program/symbol loading operations. Use only when workflow-level reload behavior is insufficient."
+    description: "Manual program/symbol loading operations. Use only when workflow-level reload behavior is insufficient.",
+    risk: "program-load"
   },
   {
     name: "debug.wait",
-    description: "Generic expression and IPC wait primitives for debugging outside a task-level workflow."
+    description: "Generic expression and IPC wait primitives for debugging outside a task-level workflow.",
+    risk: "read-only"
   },
   {
     name: "observability.variables",
-    description: "Bounded low-rate host-polled variable streaming. This is not a high-rate waveform acquisition tool."
+    description: "Bounded low-rate host-polled variable streaming. This is not a high-rate waveform acquisition tool.",
+    risk: "read-only"
   },
   {
     name: "observability.dlog",
-    description: "Read and export existing target-side DLOG captures. It does not arm firmware."
+    description: "Read and export existing target-side DLOG captures. It does not arm firmware.",
+    risk: "read-only"
   },
   {
     name: "observability.erad",
-    description: "Configure and run F28P65x ERAD profiling using fenced hardware resources. It may modify ERAD registers."
+    description: "Configure and run F28P65x ERAD profiling using fenced hardware resources. It may modify ERAD registers.",
+    risk: "target-mutation"
   },
   {
     name: "observability.metrics",
-    description: "Create and compare deterministic run metrics, baselines, and acceptance evidence for regression analysis."
+    description: "Create and compare deterministic run metrics, baselines, and acceptance evidence for regression analysis.",
+    risk: "workflow-confirmation"
   },
   {
     name: "can.advanced",
-    description: "Specialized multi-board CAN campaigns, soak execution, profiles, and board-group diagnostics."
+    description: "Specialized multi-board CAN campaigns, soak execution, profiles, and board-group diagnostics.",
+    risk: "target-control"
   }
 ];
 
 export type CapabilitySessionEndReason = "closed" | "expired";
+export type CapabilitySessionOutcome = "resolved" | "not-resolved" | "abandoned" | "unknown";
+
+export interface CapabilitySessionContext {
+  workflow?: string;
+  failureClass?: string;
+  jobId?: string;
+}
 
 export interface CapabilitySession {
   id: string;
@@ -65,6 +82,10 @@ export interface CapabilitySession {
   reason: string;
   requestedBy: string;
   active: boolean;
+  openedFrom?: CapabilitySessionContext;
+  recommendationId?: string;
+  endedAt?: string;
+  outcome?: CapabilitySessionOutcome;
 }
 
 export interface CapabilityAuditEvent {
@@ -76,6 +97,10 @@ export interface CapabilityAuditEvent {
   createdAt: string;
   expiresAt: string;
   actor: string;
+  timestamp: string;
+  openedFrom?: CapabilitySessionContext;
+  recommendationId?: string;
+  outcome?: CapabilitySessionOutcome;
 }
 
 export interface CapabilitySessionManagerOptions {
@@ -83,7 +108,7 @@ export interface CapabilitySessionManagerOptions {
   defaultTtlSeconds?: number;
   maxTtlSeconds?: number;
   requestedBy?: string;
-  logger?: Pick<Logger, "info">;
+  logger?: Pick<Logger, "info" | "warn">;
   onAudit?: (event: CapabilityAuditEvent) => void;
 }
 
@@ -108,7 +133,7 @@ export class CapabilitySessionManager {
   private readonly defaultTtlSeconds: number;
   private readonly maxTtlSeconds: number;
   private readonly requestedBy: string;
-  private readonly logger?: Pick<Logger, "info">;
+  private readonly logger?: Pick<Logger, "info" | "warn">;
   private readonly onAudit?: (event: CapabilityAuditEvent) => void;
 
   constructor(options: CapabilitySessionManagerOptions = {}) {
@@ -130,7 +155,14 @@ export class CapabilitySessionManager {
     return () => this.listeners.delete(listener);
   }
 
-  open(capability: string, reason: string, ttlSeconds?: number, requestedBy = this.requestedBy): OpenCapabilitySessionResult {
+  open(
+    capability: string,
+    reason: string,
+    ttlSeconds?: number,
+    requestedBy = this.requestedBy,
+    context?: CapabilitySessionContext,
+    recommendationId?: string
+  ): OpenCapabilitySessionResult {
     this.purgeExpired();
     const normalizedCapability = normalizeCapability(capability);
     const descriptor = CAPABILITY_DESCRIPTORS.find(candidate => candidate.name === normalizedCapability);
@@ -163,7 +195,9 @@ export class CapabilitySessionManager {
       expiresAt: new Date(createdAtMs + effectiveTtlSeconds * 1000).toISOString(),
       reason: normalizedReason,
       requestedBy: requestedBy.trim() || this.requestedBy,
-      active: true
+      active: true,
+      ...(context ? { openedFrom: { ...context } } : {}),
+      ...(recommendationId?.trim() ? { recommendationId: recommendationId.trim() } : {})
     };
     this.sessions.set(session.id, session);
     this.endedReasons.delete(knownCapability);
@@ -173,7 +207,7 @@ export class CapabilitySessionManager {
     return { session: { ...session }, created: true };
   }
 
-  close(sessionId: string): CapabilitySession {
+  close(sessionId: string, outcome: CapabilitySessionOutcome = "unknown"): CapabilitySession {
     this.purgeExpired();
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -184,7 +218,7 @@ export class CapabilitySessionManager {
     this.sessions.delete(sessionId);
     this.clearTimer(sessionId);
     this.endedReasons.set(session.capability, "closed");
-    const closed = { ...session, active: false };
+    const closed = { ...session, active: false, endedAt: new Date(this.now()).toISOString(), outcome };
     this.audit("close", closed);
     this.notifyChanged();
     return closed;
@@ -198,7 +232,7 @@ export class CapabilitySessionManager {
       this.sessions.delete(sessionId);
       this.clearTimer(sessionId);
       this.endedReasons.set(session.capability, "expired");
-      const expiredSession = { ...session, active: false };
+      const expiredSession = { ...session, active: false, endedAt: new Date(nowMs).toISOString(), outcome: "abandoned" as const };
       expired.push(expiredSession);
       this.audit("expire", expiredSession);
     }
@@ -274,10 +308,18 @@ export class CapabilitySessionManager {
       reason: session.reason,
       createdAt: session.createdAt,
       expiresAt: session.expiresAt,
-      actor: session.requestedBy
+      actor: session.requestedBy,
+      timestamp: session.endedAt ?? session.createdAt,
+      ...(session.openedFrom ? { openedFrom: { ...session.openedFrom } } : {}),
+      ...(session.recommendationId ? { recommendationId: session.recommendationId } : {}),
+      ...(session.outcome ? { outcome: session.outcome } : {})
     };
     this.logger?.info("c2000_capability_session", event);
-    this.onAudit?.(event);
+    try {
+      this.onAudit?.(event);
+    } catch (error) {
+      this.logger?.warn("c2000 capability analytics audit failed", { error });
+    }
   }
 
   private notifyChanged(): void {

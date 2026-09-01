@@ -7,6 +7,8 @@ import {
   CAPABILITY_DESCRIPTORS,
   CapabilitySessionManager,
   type CapabilitySession,
+  type CapabilitySessionContext,
+  type CapabilitySessionOutcome,
   type ToolCapability
 } from "./capabilities.js";
 import type { Logger } from "../utils/logger.js";
@@ -97,7 +99,11 @@ import {
   getVerificationResultSchema,
   listCapabilitiesSchema,
   openCapabilitySessionSchema,
-  closeCapabilitySessionSchema
+  closeCapabilitySessionSchema,
+  getWorkflowAnalyticsSchema,
+  getToolAnalyticsSchema,
+  getCapabilityAnalyticsSchema,
+  getEscalationRecommendationsSchema
 } from "./toolSchemas.js";
 
 type ZodObjectSchema = z.ZodTypeAny;
@@ -133,6 +139,7 @@ type ToolFamily =
   | "diagnosis"
   | "workflow"
   | "observability"
+  | "analytics"
   | "verification";
 
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
@@ -268,6 +275,10 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_listCapabilities", title: "List C2000 Capabilities", description: "List temporary advanced capability groups, their safety-derived availability, and active capability sessions without touching a target.", schema: listCapabilitiesSchema, handlerName: "listCapabilities", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
   { name: "c2000_openCapabilitySession", title: "Open C2000 Capability Session", description: "Open one short-lived, reason-bound advanced capability group. This never expands the configured safety profile; only tools still allowed by safety can become visible.", schema: openCapabilitySessionSchema, handlerName: "openCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
   { name: "c2000_closeCapabilitySession", title: "Close C2000 Capability Session", description: "Close a temporary advanced capability session and remove its tools from the MCP surface.", schema: closeCapabilitySessionSchema, handlerName: "closeCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
+  { name: "c2000_getEscalationRecommendations", title: "Get C2000 Escalation Recommendations", description: "Return deterministic, safety-aware next-capability recommendations for a structured workflow failure. This never opens a capability, selects full access, or changes the MCP surface.", schema: getEscalationRecommendationsSchema, handlerName: "getEscalationRecommendations", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "default" },
+  { name: "c2000_getWorkflowAnalytics", title: "Get C2000 Workflow Analytics", description: "Advanced host-only summary of workflow success, failure, timeout, duration, stage, and failure-class outcomes over a bounded retention window. It never returns raw events or touches a target.", schema: getWorkflowAnalyticsSchema, handlerName: "getWorkflowAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
+  { name: "c2000_getCapabilityAnalytics", title: "Get C2000 Capability Analytics", description: "Advanced host-only summary of temporary capability opens, closes, expiry, use, active duration, and correlated continuation outcomes. It never returns raw events or touches a target.", schema: getCapabilityAnalyticsSchema, handlerName: "getCapabilityAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
+  { name: "c2000_getToolAnalytics", title: "Get C2000 Tool Analytics", description: "Advanced host-only summary of tool invocation outcomes grouped by tool, family, role, effects, exposure, and capability. It distinguishes invocation outcome from domain verdict and never returns raw inputs.", schema: getToolAnalyticsSchema, handlerName: "getToolAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
@@ -320,7 +331,7 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_analyzeRamOwnership", title: "Analyze C2000 RAM Ownership", description: "Parse C2000 linker .map files and report GS RAM ownership handoff writes required before CPU2 loads.", schema: ramOwnershipAnalysisSchema, handlerName: "analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: [...ramOwnershipResponseIdentity] },
   { name: "c2000_createDebugSession", title: "Create C2000 Debug Session", description: "Create a logical multicore debug session with explicit core mapping.", schema: createDebugSessionSchema, handlerName: "createDebugSession", inputScope: "launch", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
   { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", capability: "debug.manual" },
-  { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", exposure: "default" },
+  { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", exposure: "advanced" },
   { name: "c2000_closeDebugSession", title: "Close C2000 Debug Session", description: "Close a logical debug session and dispose its adapter resources.", schema: sessionSchema, handlerName: "closeDebugSession", inputScope: "session", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
   { name: "c2000_connectTarget", title: "Connect C2000 Target", description: "Connect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "connectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_disconnectTarget", title: "Disconnect C2000 Target", description: "Disconnect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "disconnectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
@@ -396,13 +407,17 @@ export function createC2000ToolInvoker(
 ): C2000ToolInvoker {
   const handlers = createToolHandlers(manager, { getToolContracts, getToolSurfaceGuide, ...deps });
   const definitions = new Map(c2000ToolDefinitions.map(definition => [definition.name, definition]));
+  const outcomeAnalytics = deps.outcomeAnalytics;
 
   return {
     async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
+      const startedAt = Date.now();
       const definition = definitions.get(toolName);
       const sessionId = getInputSessionId(input);
       if (!definition) {
-        return failedInvocation(new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${toolName}`, { toolName }), sessionId);
+        const result = failedInvocation(new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${toolName}`, { toolName }), sessionId);
+        recordToolOutcome(outcomeAnalytics, { toolName, input, result, durationMs: Date.now() - startedAt });
+        return result;
       }
       try {
         // The daemon validates again even when a proxy has already checked this input.
@@ -411,11 +426,15 @@ export function createC2000ToolInvoker(
         // Several workflow wrappers intentionally call sibling handlers through
         // `this`; preserve the handler object when invoking through the generic router.
         const invoke = () => handler.call(handlers, parsedInput);
-        return typeof sessionId === "string" && definition.name !== "c2000_closeDebugSession"
+        const result = typeof sessionId === "string" && definition.name !== "c2000_closeDebugSession"
           ? await manager.withSessionActivity(sessionId, invoke)
           : await invoke();
+        recordToolOutcome(outcomeAnalytics, { toolName, input, result, durationMs: Date.now() - startedAt });
+        return result;
       } catch (error) {
-        return failedInvocation(error, sessionId);
+        const result = failedInvocation(error, sessionId);
+        recordToolOutcome(outcomeAnalytics, { toolName, input, result, durationMs: Date.now() - startedAt });
+        return result;
       }
     }
   };
@@ -430,7 +449,7 @@ export function registerC2000Tools(
   tiEnvironment: ResolveTiEnvironmentOptions = {},
   runtime: { getServerHealth?: () => Record<string, any> | Promise<Record<string, any>> } = {},
   surface: ToolSurfaceProfile = toolSurfaceProfileFromEnv(),
-  options: { capabilitySessions?: CapabilitySessionManager; logger?: Pick<Logger, "info"> } = {}
+  options: { capabilitySessions?: CapabilitySessionManager; logger?: Pick<Logger, "info" | "warn"> } = {}
 ): C2000ToolRegistration {
   const capabilitySessions = options.capabilitySessions ?? new CapabilitySessionManager({ logger: options.logger });
   const controller = new ToolCapabilityController(profile, surface, capabilitySessions);
@@ -540,6 +559,7 @@ class ToolCapabilityController {
         return {
           name: descriptor.name,
           description: descriptor.description,
+          risk: descriptor.risk,
           requiresSafety: minimumProfileFor(members),
           active: this.surface === "agent" && active.has(descriptor.name),
           implicitlyVisible: this.surface !== "agent",
@@ -551,7 +571,13 @@ class ToolCapabilityController {
     };
   }
 
-  openCapabilitySession(input: { capability: string; reason: string; ttlSeconds?: number }): Record<string, unknown> {
+  openCapabilitySession(input: {
+    capability: string;
+    reason: string;
+    ttlSeconds?: number;
+    openedFrom?: CapabilitySessionContext;
+    recommendationId?: string;
+  }): Record<string, unknown> {
     const descriptor = CAPABILITY_DESCRIPTORS.find(candidate => candidate.name === input.capability.trim());
     if (!descriptor) {
       throw new DebugMcpError("CapabilityUnknown", `Unknown C2000 capability: ${input.capability}`, {
@@ -590,7 +616,14 @@ class ToolCapabilityController {
       };
     }
 
-    const opened = this.sessions.open(descriptor.name, input.reason, input.ttlSeconds);
+    const opened = this.sessions.open(
+      descriptor.name,
+      input.reason,
+      input.ttlSeconds,
+      undefined,
+      input.openedFrom,
+      input.recommendationId
+    );
     const summary = this.getExposureSummary();
     return {
       capability: descriptor.name,
@@ -607,8 +640,8 @@ class ToolCapabilityController {
     };
   }
 
-  closeCapabilitySession(input: { sessionId: string }): Record<string, unknown> {
-    const session = this.sessions.close(input.sessionId);
+  closeCapabilitySession(input: { sessionId: string; outcome?: CapabilitySessionOutcome }): Record<string, unknown> {
+    const session = this.sessions.close(input.sessionId, input.outcome);
     const summary = this.getExposureSummary();
     return {
       session,
@@ -671,10 +704,10 @@ async function invokeRegisteredDefinition(
     return successResult(controller.listCapabilities());
   }
   if (definition.name === "c2000_openCapabilitySession") {
-    return successResult(controller.openCapabilitySession(input as { capability: string; reason: string; ttlSeconds?: number }));
+    return successResult(controller.openCapabilitySession(input as { capability: string; reason: string; ttlSeconds?: number; openedFrom?: CapabilitySessionContext; recommendationId?: string }));
   }
   if (definition.name === "c2000_closeCapabilitySession") {
-    return successResult(controller.closeCapabilitySession(input as { sessionId: string }));
+    return successResult(controller.closeCapabilitySession(input as { sessionId: string; outcome?: CapabilitySessionOutcome }));
   }
   if (definition.name === "c2000_getToolContracts") {
     return successResult({
@@ -835,6 +868,17 @@ function failedInvocation(error: unknown, sessionId?: string): Record<string, un
     ...(sessionId ? { sessionId } : {}),
     error: toStructuredError(error)
   };
+}
+
+function recordToolOutcome(
+  analytics: Pick<NonNullable<ToolHandlerDeps["outcomeAnalytics"]>, "recordToolInvocation"> | undefined,
+  input: { toolName: string; input?: unknown; result?: Record<string, unknown>; error?: unknown; durationMs: number }
+): void {
+  try {
+    analytics?.recordToolInvocation(input);
+  } catch {
+    // Optional analytics must never change a tool's functional result.
+  }
 }
 
 export function getToolContracts(
@@ -1087,6 +1131,9 @@ function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentE
   }
   if (definition.family === "verification") {
     return `Advanced verification tool. ${definition.description}`;
+  }
+  if (definition.family === "analytics") {
+    return `Advanced analytics tool. ${definition.description}`;
   }
   if (definition.role === "diagnostic") {
     return `Advanced diagnostic tool. Prefer the task-level workflow when available. ${definition.description}`;

@@ -19,6 +19,7 @@ import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../d
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
 import type { VerificationService } from "../verification/VerificationService.js";
+import type { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -109,7 +110,11 @@ import {
   getVerificationResultSchema,
   listCapabilitiesSchema,
   openCapabilitySessionSchema,
-  closeCapabilitySessionSchema
+  closeCapabilitySessionSchema,
+  getWorkflowAnalyticsSchema,
+  getToolAnalyticsSchema,
+  getCapabilityAnalyticsSchema,
+  getEscalationRecommendationsSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -127,6 +132,8 @@ function assertBoundedWorkflowPolling(timeoutMs: number, intervalMs: number): vo
 }
 
 export interface ToolHandlerDeps {
+  /** Optional process-local recorder for standalone runtimes; daemon routing records centrally. */
+  outcomeAnalytics?: Pick<OutcomeAnalyticsService, "recordToolInvocation">;
   runHardwarePreflight?: typeof runHardwarePreflight;
   /** Adapter mode resolved by the owning runtime; never infer it from config `auto`. */
   effectiveAdapterType?: "ccs" | "mock";
@@ -137,6 +144,10 @@ export interface ToolHandlerDeps {
   listCapabilities?: () => Promise<ToolResult> | ToolResult;
   openCapabilitySession?: (input: z.input<typeof openCapabilitySessionSchema>) => Promise<ToolResult> | ToolResult;
   closeCapabilitySession?: (input: z.input<typeof closeCapabilitySessionSchema>) => Promise<ToolResult> | ToolResult;
+  getWorkflowAnalytics?: (input: z.input<typeof getWorkflowAnalyticsSchema>) => Promise<ToolResult> | ToolResult;
+  getToolAnalytics?: (input: z.input<typeof getToolAnalyticsSchema>) => Promise<ToolResult> | ToolResult;
+  getCapabilityAnalytics?: (input: z.input<typeof getCapabilityAnalyticsSchema>) => Promise<ToolResult> | ToolResult;
+  getEscalationRecommendations?: (input: z.input<typeof getEscalationRecommendationsSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -208,6 +219,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listCapabilities = deps.listCapabilities ?? unavailableCapabilities;
   const openCapabilitySession = deps.openCapabilitySession ?? unavailableCapabilities;
   const closeCapabilitySession = deps.closeCapabilitySession ?? unavailableCapabilities;
+  const unavailableAnalytics = () => { throw new DebugMcpError("DaemonUnavailable", "Outcome analytics require the c2000-debugd analytics service"); };
+  const getWorkflowAnalytics = deps.getWorkflowAnalytics ?? unavailableAnalytics;
+  const getToolAnalytics = deps.getToolAnalytics ?? unavailableAnalytics;
+  const getCapabilityAnalytics = deps.getCapabilityAnalytics ?? unavailableAnalytics;
+  const getEscalationRecommendations = deps.getEscalationRecommendations ?? unavailableAnalytics;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -322,6 +338,38 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async closeCapabilitySession(input: z.input<typeof closeCapabilitySessionSchema>) {
       try {
         return ok(await closeCapabilitySession(closeCapabilitySessionSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getWorkflowAnalytics(input: z.input<typeof getWorkflowAnalyticsSchema>) {
+      try {
+        return ok(await getWorkflowAnalytics(getWorkflowAnalyticsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getToolAnalytics(input: z.input<typeof getToolAnalyticsSchema>) {
+      try {
+        return ok(await getToolAnalytics(getToolAnalyticsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getCapabilityAnalytics(input: z.input<typeof getCapabilityAnalyticsSchema>) {
+      try {
+        return ok(await getCapabilityAnalytics(getCapabilityAnalyticsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getEscalationRecommendations(input: z.input<typeof getEscalationRecommendationsSchema>) {
+      try {
+        return ok(await getEscalationRecommendations(getEscalationRecommendationsSchema.parse(input)));
       } catch (error) {
         return fail(error);
       }

@@ -3,6 +3,7 @@ import type { C2000ToolInvoker } from "../mcp/tools.js";
 import { c2000ToolDefinitions } from "../mcp/tools.js";
 import type { LocalRpcClient } from "../rpc/RpcServer.js";
 import { DebugMcpError } from "../utils/errors.js";
+import type { OutcomeEvent } from "../analytics/OutcomeSchemas.js";
 
 /** MCP-facing adapter that validates locally, then forwards to the daemon. */
 export class McpDaemonClient implements C2000ToolInvoker {
@@ -42,6 +43,10 @@ export class McpDaemonClient implements C2000ToolInvoker {
 
   async close(): Promise<void> {
     // LocalRpcClient is request-scoped; proxy shutdown never alters daemon state.
+  }
+
+  async recordOutcomeEvent(event: OutcomeEvent): Promise<void> {
+    await this.client.request("recordOutcomeEvent", { event });
   }
 }
 

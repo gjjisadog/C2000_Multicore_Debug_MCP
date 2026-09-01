@@ -8,6 +8,7 @@ import { regressionPlanSchema } from "../verification/regression/RegressionSchem
 import { reviewVerificationInputSchema } from "../verification/review/ReviewSchemas.js";
 import { engineeringVerificationInputSchema } from "../verification/VerificationService.js";
 import { TOOL_CAPABILITY_NAMES } from "./capabilities.js";
+import { ANALYTICS_WINDOWS, OUTCOME_FAILURE_CLASSES } from "../analytics/OutcomeSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -97,10 +98,44 @@ export const listCapabilitiesSchema = z.object({});
 export const openCapabilitySessionSchema = z.object({
   capability: z.string().min(1).describe(`Capability group. Known values: ${TOOL_CAPABILITY_NAMES.join(", ")}`),
   reason: z.string().trim().min(1),
-  ttlSeconds: z.number().int().optional().describe("Temporary exposure lifetime in seconds; defaults to 900 and cannot exceed 1800.")
+  ttlSeconds: z.number().int().optional().describe("Temporary exposure lifetime in seconds; defaults to 900 and cannot exceed 1800."),
+  openedFrom: z.object({
+    workflow: z.string().trim().min(1).max(128).optional(),
+    failureClass: z.enum(OUTCOME_FAILURE_CLASSES).optional(),
+    jobId: z.string().trim().min(1).max(128).optional()
+  }).optional(),
+  recommendationId: z.string().trim().min(1).max(128).optional()
 });
 export const closeCapabilitySessionSchema = z.object({
-  sessionId: z.string().min(1)
+  sessionId: z.string().min(1),
+  outcome: z.enum(["resolved", "not-resolved", "abandoned", "unknown"]).optional()
+});
+
+export const getWorkflowAnalyticsSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("7d"),
+  workflow: z.string().trim().min(1).max(128).optional()
+});
+
+export const getToolAnalyticsSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("7d"),
+  tool: z.string().trim().min(1).max(128).optional(),
+  family: z.string().trim().min(1).max(64).optional(),
+  role: z.string().trim().min(1).max(32).optional(),
+  exposure: z.string().trim().min(1).max(32).optional(),
+  capability: z.enum(TOOL_CAPABILITY_NAMES).optional()
+});
+
+export const getCapabilityAnalyticsSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("7d"),
+  capability: z.enum(TOOL_CAPABILITY_NAMES).optional()
+});
+
+export const getEscalationRecommendationsSchema = z.object({
+  workflow: z.string().trim().min(1).max(128).optional(),
+  stage: z.string().trim().min(1).max(96).optional(),
+  errorCode: z.string().trim().min(1).max(128).optional(),
+  failureClass: z.enum(OUTCOME_FAILURE_CLASSES).optional(),
+  jobId: z.string().trim().min(1).max(128).optional()
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;

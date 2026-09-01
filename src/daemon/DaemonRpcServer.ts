@@ -2,12 +2,14 @@ import { z } from "zod";
 import { LocalRpcServer } from "../rpc/RpcServer.js";
 import type { C2000ToolInvoker } from "../mcp/tools.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { outcomeEventSchema } from "../analytics/OutcomeSchemas.js";
 
 const invokeToolParamsSchema = z.object({
   requestId: z.string().uuid(),
   toolName: z.string().min(1),
   arguments: z.unknown()
 });
+const recordOutcomeEventParamsSchema = z.object({ event: z.unknown() });
 
 export class DaemonRpcServer {
   private readonly server: LocalRpcServer;
@@ -17,6 +19,7 @@ export class DaemonRpcServer {
     port: number;
     toolInvoker: C2000ToolInvoker;
     health: () => Record<string, unknown>;
+    recordOutcomeEvent?: (event: unknown) => void | Promise<void>;
     shutdown?: () => void;
   }) {
     this.server = new LocalRpcServer({
@@ -31,6 +34,11 @@ export class DaemonRpcServer {
           const request = invokeToolParamsSchema.parse(params);
           const result = await options.toolInvoker.invokeTool(request.toolName, request.arguments);
           return { requestId: request.requestId, result };
+        }
+        if (method === "recordOutcomeEvent" && options.recordOutcomeEvent) {
+          const event = outcomeEventSchema.parse(recordOutcomeEventParamsSchema.parse(params).event);
+          await options.recordOutcomeEvent(event);
+          return { accepted: true };
         }
         if (method === "shutdown" && options.shutdown) {
           setImmediate(options.shutdown);

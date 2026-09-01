@@ -47,6 +47,9 @@ import { RunMetricsService } from "../analytics/RunMetricsService.js";
 import { BaselineService } from "../analytics/BaselineService.js";
 import { AcceptanceClosureService } from "../artifacts/AcceptanceClosureService.js";
 import { VerificationService } from "../verification/VerificationService.js";
+import { OutcomeEventRepository } from "../analytics/OutcomeEventRepository.js";
+import { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
+import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
 export class DebugDaemon {
@@ -68,6 +71,7 @@ export class DebugDaemon {
   private erad?: EradService;
   private jobEngine?: TestJobEngine;
   private rpcServer?: DaemonRpcServer;
+  private analytics?: OutcomeAnalyticsService;
   private instance?: DebugDaemonInstance;
   private releaseSingleton?: () => Promise<void>;
   private stopping?: Promise<void>;
@@ -85,6 +89,14 @@ export class DebugDaemon {
     this.consistency = new DatabaseConsistencyChecker(store);
     const boards = new BoardRepository(store);
     const events = new EventRepository(store);
+    const analytics = new OutcomeAnalyticsService({
+      repository: new OutcomeEventRepository(store),
+      toolProfile: this.config.toolProfile ?? "safe",
+      toolSurfaceProfile: this.config.toolSurfaceProfile ?? "agent",
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
+    this.analytics = analytics;
+    void analytics.maintain();
     const artifacts = new ArtifactRepository(store);
     const artifactExports = new ArtifactExportRepository(store);
     const canReports = new CanReportService(artifacts, path.join(path.dirname(databasePath), "can-artifacts"));
@@ -169,6 +181,10 @@ export class DebugDaemon {
     })));
     const runtime = await createC2000McpRuntime(this.config, {
       getDaemonHealth: () => this.getHealth(),
+      getWorkflowAnalytics: input => analytics.getWorkflowAnalytics(input),
+      getCapabilityAnalytics: input => analytics.getCapabilityAnalytics(input),
+      getToolAnalytics: input => analytics.getToolAnalytics(input),
+      getEscalationRecommendations: input => analytics.getEscalationRecommendations(input),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),
@@ -257,7 +273,7 @@ export class DebugDaemon {
       events,
     });
     this.workerSupervisor = workerSupervisor;
-    const toolRouter = new DaemonToolRouter(runtime.toolInvoker, this.registry, workerSupervisor, this.sessions);
+    const toolRouter = new DaemonToolRouter(runtime.toolInvoker, this.registry, workerSupervisor, this.sessions, analytics);
     const variableStreams = new VariableStreamService({
       rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
       config: this.config,
@@ -336,6 +352,7 @@ export class DebugDaemon {
       port: this.daemonConfig.port,
       toolInvoker: toolRouter,
       health: () => this.getHealth(),
+      recordOutcomeEvent: event => { analytics.recordExternalEvent(event); },
       shutdown: () => { void this.stop(); }
     });
     this.rpcServer = rpcServer;
@@ -380,6 +397,7 @@ export class DebugDaemon {
       this.variableStreams = undefined;
       this.dlog = undefined;
       this.erad = undefined;
+      this.analytics = undefined;
       this.jobEngine = undefined;
       await this.releaseSingleton?.().catch(() => undefined);
       this.releaseSingleton = undefined;
@@ -421,6 +439,7 @@ export class DebugDaemon {
     await this.workerSupervisor?.stopAll().catch(() => undefined);
     await this.runtime?.dispose().catch(() => undefined);
     this.store?.close();
+    this.analytics = undefined;
     await removeDaemonInstance(this.paths, this.instance?.instanceId);
     await this.releaseSingleton?.().catch(() => undefined);
     this.releaseSingleton = undefined;

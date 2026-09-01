@@ -490,6 +490,45 @@ const migrations: Migration[] = [
           ON erad_profiles(session_id, core_id, configured_at);
       `);
     }
+  },
+  {
+    version: 9,
+    apply(store) {
+      // Analytics is additive and intentionally separate from formal debug
+      // evidence in `events`. Corrupt/optional analytics rows can be skipped
+      // without changing the durable job or target-control data model.
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS outcome_events (
+          event_id TEXT PRIMARY KEY,
+          timestamp TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          name TEXT NOT NULL,
+          outcome TEXT NOT NULL,
+          duration_ms REAL,
+          stage TEXT,
+          error_code TEXT,
+          failure_class TEXT,
+          tool_profile TEXT NOT NULL,
+          tool_surface_profile TEXT NOT NULL,
+          active_capabilities_json TEXT NOT NULL,
+          board_count INTEGER,
+          core_count INTEGER,
+          job_id TEXT,
+          session_id TEXT,
+          escalation_from TEXT,
+          escalation_to TEXT,
+          metadata_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_outcome_events_time
+          ON outcome_events(timestamp, kind, name);
+        CREATE INDEX IF NOT EXISTS idx_outcome_events_job
+          ON outcome_events(job_id, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_outcome_events_session
+          ON outcome_events(session_id, timestamp);
+        CREATE INDEX IF NOT EXISTS idx_outcome_events_failure
+          ON outcome_events(kind, failure_class, timestamp);
+      `);
+    }
   }
 ];
 

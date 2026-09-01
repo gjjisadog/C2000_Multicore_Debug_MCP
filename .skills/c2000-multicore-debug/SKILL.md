@@ -55,6 +55,14 @@ Use `advanced` when a complete canonical engineering toolbox is needed, and
 If a tool is not visible on the current surface, do not bypass MCP or call TI
 active-target controls; choose the appropriate workflow or capability instead.
 
+For a workflow failure, keep escalation structured: use the failure evidence,
+call `c2000_getEscalationRecommendations`, then open the smallest recommended
+capability with `openedFrom`/`recommendationId` when needed. Close it with a
+resolution outcome after the specialized work. Recommendations are bounded
+and safety-aware; they never open a capability, select `full`, or change the
+surface automatically. Do not call a hidden atomic through shell, CCS GUI,
+TI official active-target commands, or private daemon RPC.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,
@@ -106,6 +114,11 @@ For example, ISR cycle analysis is:
 the ERAD profile → close the capability session. The capability only changes
 MCP tool visibility; the configured Safety Profile and every tool's effects,
 approval class, lease fencing, and core identity checks remain in force.
+
+Use the same smallest-capability route for DLOG (`observability.dlog`), bounded
+variable monitoring (`observability.variables`), manual per-core control
+(`debug.manual`), and manual program/symbol loading (`debug.program`). Prefer
+the task workflow first; a recommendation is guidance, not authorization.
 
 Do not use shell, CCS GUI, TI active-target commands, or internal daemon RPCs
 when an atomic is hidden. If the default workflow is insufficient, request the

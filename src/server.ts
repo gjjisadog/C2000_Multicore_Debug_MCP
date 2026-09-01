@@ -30,6 +30,8 @@ import { Logger } from "./utils/logger.js";
 import { normalizeWorkspacePath } from "./utils/pathUtils.js";
 import { withAdditionalReadRoots } from "./security/pathPolicy.js";
 import { VerificationService } from "./verification/VerificationService.js";
+import { InMemoryOutcomeEventStore } from "./analytics/OutcomeEventRepository.js";
+import { OutcomeAnalyticsService } from "./analytics/OutcomeAnalyticsService.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -85,7 +87,20 @@ function buildRuntime(
   const startedAt = new Date().toISOString();
   const toolProfile = (config.toolProfile ?? "safe") as ToolProfile;
   const toolSurfaceProfile = (config.toolSurfaceProfile ?? "agent") as ToolSurfaceProfile;
-  const capabilitySessions = new CapabilitySessionManager({ logger });
+  let localAnalytics: OutcomeAnalyticsService | undefined;
+  const capabilitySessions = new CapabilitySessionManager({
+    logger,
+    onAudit: event => localAnalytics?.recordCapabilityAudit(event)
+  });
+  if (!toolHandlerDeps.getWorkflowAnalytics || !toolHandlerDeps.getToolAnalytics || !toolHandlerDeps.getCapabilityAnalytics || !toolHandlerDeps.getEscalationRecommendations) {
+    localAnalytics = new OutcomeAnalyticsService({
+      repository: new InMemoryOutcomeEventStore(),
+      toolProfile,
+      toolSurfaceProfile,
+      activeCapabilities: () => capabilitySessions.activeCapabilities(),
+      logger
+    });
+  }
   let getExposureSummary = () => getToolExposureSummary(toolProfile, toolSurfaceProfile);
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -165,6 +180,11 @@ function buildRuntime(
     {
       ...toolHandlerDeps,
       verification,
+      outcomeAnalytics: localAnalytics ?? toolHandlerDeps.outcomeAnalytics,
+      getWorkflowAnalytics: toolHandlerDeps.getWorkflowAnalytics ?? (input => localAnalytics!.getWorkflowAnalytics(input)),
+      getToolAnalytics: toolHandlerDeps.getToolAnalytics ?? (input => localAnalytics!.getToolAnalytics(input)),
+      getCapabilityAnalytics: toolHandlerDeps.getCapabilityAnalytics ?? (input => localAnalytics!.getCapabilityAnalytics(input)),
+      getEscalationRecommendations: toolHandlerDeps.getEscalationRecommendations ?? (input => localAnalytics!.getEscalationRecommendations(input)),
       effectiveAdapterType: adapterResolution.mode,
       filesystem,
       programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots
