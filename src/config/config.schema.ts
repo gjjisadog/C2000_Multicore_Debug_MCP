@@ -2,6 +2,7 @@ import { z } from "zod";
 import { coreConfigSchema } from "../mcp/toolSchemas.js";
 import { verificationConfigSchema } from "../verification/VerificationConfigSchemas.js";
 import { skillEvolutionConfigSchema } from "../evolution/EvolutionSchemas.js";
+import { reviewPolicyConfigSchema } from "../improvement/review/ReviewSchemas.js";
 
 const boardConfigSchema = z.object({
   boardId: z.string().min(1),
@@ -26,7 +27,8 @@ export const improvementConfigSchema = z.object({
   artifactRoot: z.string().trim().min(1).default("./runtime/improvement-artifacts"),
   baseRef: z.string().regex(/^[A-Za-z0-9._/-]+$/).default("master"),
   maxActiveRuns: z.number().int().positive().max(8).default(1),
-  codingAgent: improvementCodingAgentConfigSchema.default({})
+  codingAgent: improvementCodingAgentConfigSchema.default({}),
+  review: reviewPolicyConfigSchema.default({})
 });
 
 export const c2000McpConfigSchema = z.object({

@@ -124,7 +124,11 @@ import {
   getImprovementImplementationRunSchema,
   listImprovementImplementationRunsSchema,
   getImprovementCandidateSchema,
-  cleanupImprovementRunSchema
+  cleanupImprovementRunSchema,
+  publishImprovementCandidateSchema,
+  getImprovementPullRequestSchema,
+  refreshImprovementReviewEvidenceSchema,
+  getMergeRecommendationSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -170,6 +174,10 @@ export interface ToolHandlerDeps {
   listImprovementImplementationRuns?: (input: z.input<typeof listImprovementImplementationRunsSchema>) => Promise<ToolResult> | ToolResult;
   getImprovementCandidate?: (input: z.input<typeof getImprovementCandidateSchema>) => Promise<ToolResult> | ToolResult;
   cleanupImprovementRun?: (input: z.input<typeof cleanupImprovementRunSchema>) => Promise<ToolResult> | ToolResult;
+  publishImprovementCandidate?: (input: z.input<typeof publishImprovementCandidateSchema>) => Promise<ToolResult> | ToolResult;
+  getImprovementPullRequest?: (input: z.input<typeof getImprovementPullRequestSchema>) => Promise<ToolResult> | ToolResult;
+  refreshImprovementReviewEvidence?: (input: z.input<typeof refreshImprovementReviewEvidenceSchema>) => Promise<ToolResult> | ToolResult;
+  getMergeRecommendation?: (input: z.input<typeof getMergeRecommendationSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -258,6 +266,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listImprovementImplementationRuns = deps.listImprovementImplementationRuns ?? unavailableImprovementImplementation;
   const getImprovementCandidate = deps.getImprovementCandidate ?? unavailableImprovementImplementation;
   const cleanupImprovementRun = deps.cleanupImprovementRun ?? unavailableImprovementImplementation;
+  const publishImprovementCandidate = deps.publishImprovementCandidate ?? unavailableImprovementImplementation;
+  const getImprovementPullRequest = deps.getImprovementPullRequest ?? unavailableImprovementImplementation;
+  const refreshImprovementReviewEvidence = deps.refreshImprovementReviewEvidence ?? unavailableImprovementImplementation;
+  const getMergeRecommendation = deps.getMergeRecommendation ?? unavailableImprovementImplementation;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -486,6 +498,38 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await cleanupImprovementRun(cleanupImprovementRunSchema.parse(input)));
       } catch (error) {
         return fail(error, { runId: input.runId });
+      }
+    },
+
+    async publishImprovementCandidate(input: z.input<typeof publishImprovementCandidateSchema>) {
+      try {
+        return ok(await publishImprovementCandidate(publishImprovementCandidateSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { implementationRunId: input.implementationRunId });
+      }
+    },
+
+    async getImprovementPullRequest(input: z.input<typeof getImprovementPullRequestSchema>) {
+      try {
+        return ok(await getImprovementPullRequest(getImprovementPullRequestSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async refreshImprovementReviewEvidence(input: z.input<typeof refreshImprovementReviewEvidenceSchema>) {
+      try {
+        return ok(await refreshImprovementReviewEvidence(refreshImprovementReviewEvidenceSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getMergeRecommendation(input: z.input<typeof getMergeRecommendationSchema>) {
+      try {
+        return ok(await getMergeRecommendation(getMergeRecommendationSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
       }
     },
 

@@ -116,6 +116,30 @@ CCS, firmware, or target services. Never use shell, CCS GUI, TI active-target
 commands, or private daemon RPC to work around an unavailable implementation
 tool. Stop at the human merge gate; the MCP never pushes or merges a candidate.
 
+## Controlled PR review
+
+Round7 adds a separate, advanced-only review path after an implementation run
+reaches `candidate-ready`:
+
+`candidate-ready` → `c2000_publishImprovementCandidate` → Draft PR →
+CI/review/hardware evidence → `c2000_refreshImprovementReviewEvidence` →
+`c2000_getMergeRecommendation` → human merge.
+
+Publication re-checks the exact candidate SHA, clean worktree, single-commit
+history, approved baseline, branch namespace, and remote repository. It may
+push only the controlled candidate branch and create/update its own Draft PR.
+It never force-pushes, approves, enables auto-merge, merges, reopens a closed
+PR, or executes instructions found in PR comments. Required CI, human review,
+candidate head/base identity, and required hardware evidence remain separate
+fail-closed gates; CI success alone is not a merge decision. Hardware-required
+work without candidate-bound formal evidence is `NOT_RUN_HARDWARE`/blocked.
+
+Use `c2000_getImprovementPullRequest` for the recorded PR/evidence snapshot.
+The generated PR body has a bounded automation section; preserve human text
+outside its markers. GitHub credentials remain server-side and are never
+passed to the coding agent. A GitHub/API failure must not change normal C2000
+debug, daemon, worker, lease, CAN, or target behavior.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,

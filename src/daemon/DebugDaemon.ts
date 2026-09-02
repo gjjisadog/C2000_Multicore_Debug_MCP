@@ -57,6 +57,12 @@ import { ImplementationRunRepository } from "../improvement/implementation/Imple
 import { ImprovementImplementationService } from "../improvement/implementation/ImprovementImplementationService.js";
 import { ImprovementValidationService } from "../improvement/implementation/ImprovementValidationService.js";
 import { ImprovementWorktreeManager } from "../improvement/implementation/ImprovementWorktreeManager.js";
+import { reviewPolicyConfigSchema } from "../improvement/review/ReviewSchemas.js";
+import { ImprovementPullRequestRepository, ImprovementReviewEvidenceRepository, MergeRecommendationRepository } from "../improvement/review/ReviewRepositories.js";
+import { CandidateReviewService } from "../improvement/review/CandidateReviewService.js";
+import { CandidatePublishService } from "../improvement/review/CandidatePublishService.js";
+import { GitHubReviewProvider } from "../improvement/review/GitHubReviewProvider.js";
+import { ImprovementPullRequestService } from "../improvement/review/ImprovementPullRequestService.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -121,7 +127,8 @@ export class DebugDaemon {
       baseRef: this.config.improvement?.baseRef ?? "master",
       enabled: this.config.improvement?.enabled ?? false,
       maxActiveRuns: this.config.improvement?.maxActiveRuns ?? 1,
-      codingAgent: this.config.improvement?.codingAgent ?? {}
+      codingAgent: this.config.improvement?.codingAgent ?? {},
+      review: reviewPolicyConfigSchema.parse(this.config.improvement?.review ?? {})
     };
     const improvementRepositoryRoot = path.resolve(improvementConfig.repositoryRoot ?? process.cwd());
     const improvementWorktreeRoot = path.resolve(improvementRepositoryRoot, improvementConfig.worktreeRoot ?? "../.c2000-improvement-worktrees");
@@ -141,6 +148,45 @@ export class DebugDaemon {
       baseRef: improvementConfig.baseRef ?? "master",
       enabled: improvementConfig.enabled ?? false,
       maxActiveRuns: improvementConfig.maxActiveRuns ?? 1,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
+    const improvementPullRequests = new ImprovementPullRequestRepository(store);
+    const improvementReviewEvidence = new ImprovementReviewEvidenceRepository(store);
+    const mergeRecommendations = new MergeRecommendationRepository(store);
+    const candidateReview = new CandidateReviewService({
+      runs: improvementRuns,
+      proposals: proposalRecords,
+      worktrees: improvementWorktrees,
+      artifactRoot: improvementArtifactRoot,
+      baseRef: improvementConfig.baseRef,
+      currentBaseSha: () => improvementWorktrees.resolveRef(improvementConfig.baseRef),
+      revalidationPolicy: improvementConfig.review.revalidationPolicy
+    });
+    const candidatePublish = new CandidatePublishService({
+      runs: improvementRuns,
+      worktrees: improvementWorktrees,
+      candidateReview,
+      review: improvementConfig.review,
+      repositoryRoot: improvementRepositoryRoot
+    });
+    const githubReviewProvider = new GitHubReviewProvider({
+      repository: improvementConfig.review.repository,
+      apiBaseUrl: improvementConfig.review.apiBaseUrl,
+      githubTokenEnv: improvementConfig.review.githubTokenEnv,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
+    const improvementPullRequest = new ImprovementPullRequestService({
+      runs: improvementRuns,
+      proposals: proposalRecords,
+      proposalService: improvementProposals,
+      pullRequests: improvementPullRequests,
+      evidence: improvementReviewEvidence,
+      recommendations: mergeRecommendations,
+      candidateReview,
+      candidatePublish,
+      provider: githubReviewProvider,
+      review: improvementConfig.review,
+      artifactRoot: improvementArtifactRoot,
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     improvementImplementation.reconcileOnStartup();
@@ -244,6 +290,10 @@ export class DebugDaemon {
       listImprovementImplementationRuns: input => improvementImplementation.list(input),
       getImprovementCandidate: input => improvementImplementation.getCandidate(input.runId),
       cleanupImprovementRun: input => improvementImplementation.cleanup(input.runId),
+      publishImprovementCandidate: input => improvementPullRequest.publish(input),
+      getImprovementPullRequest: input => improvementPullRequest.get(input),
+      refreshImprovementReviewEvidence: input => improvementPullRequest.refresh(input),
+      getMergeRecommendation: input => improvementPullRequest.getMergeRecommendation(input),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),

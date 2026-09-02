@@ -14,6 +14,10 @@ export const PROPOSAL_STATUSES = [
   "implementing",
   "implementation-failed",
   "validated",
+  "pr-open",
+  "merge-recommended",
+  "merged",
+  "closed-without-merge",
   "failed",
   "superseded"
 ] as const;

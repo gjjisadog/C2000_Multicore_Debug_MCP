@@ -52,6 +52,36 @@ describe("loadConfig", () => {
       maxActiveRuns: 1
     }));
     expect(config.improvement?.codingAgent.command).toBeUndefined();
+    expect(config.improvement?.review).toEqual(expect.objectContaining({
+      repository: "gjjisadog/C2000_Multicore_Debug_MCP",
+      remote: "github",
+      baseBranch: "master",
+      revalidationPolicy: "on-significant-base-change"
+    }));
+  });
+
+  test("loads controlled improvement review policy environment overrides", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    process.env.C2000_MCP_IMPROVEMENT_GITHUB_REPOSITORY = "gjjisadog/C2000_Multicore_Debug_MCP";
+    process.env.C2000_MCP_IMPROVEMENT_GITHUB_REMOTE = "github";
+    process.env.C2000_MCP_IMPROVEMENT_BASE_BRANCH = "master";
+    process.env.C2000_MCP_IMPROVEMENT_REQUIRED_CHECKS_JSON = JSON.stringify(["host-tests"]);
+    process.env.C2000_MCP_IMPROVEMENT_OPTIONAL_CHECKS_JSON = JSON.stringify(["hardware-evidence"]);
+    process.env.C2000_MCP_IMPROVEMENT_REQUIRED_APPROVING_REVIEWS = "2";
+    process.env.C2000_MCP_IMPROVEMENT_REQUIRE_HUMAN_REVIEW = "true";
+    process.env.C2000_MCP_IMPROVEMENT_TRUSTED_REVIEWERS_JSON = JSON.stringify(["alice"]);
+    process.env.C2000_MCP_IMPROVEMENT_REVALIDATION_POLICY = "on-base-change";
+
+    const config = await loadConfig();
+
+    expect(config.improvement?.review).toEqual(expect.objectContaining({
+      requiredChecks: ["host-tests"],
+      optionalChecks: ["hardware-evidence"],
+      requiredApprovingReviews: 2,
+      requireHumanReview: true,
+      trustedReviewers: ["alice"],
+      revalidationPolicy: "on-base-change"
+    }));
   });
 
   test("loads approved improvement implementation environment overrides", async () => {

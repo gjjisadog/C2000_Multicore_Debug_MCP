@@ -37,7 +37,8 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
       artifactRoot: path.join(process.cwd(), "runtime", "improvement-artifacts"),
       baseRef: "master",
       maxActiveRuns: 1,
-      codingAgent: { provider: "configured-agent", args: [], timeoutMs: 15 * 60 * 1000 }
+      codingAgent: { provider: "configured-agent", args: [], timeoutMs: 15 * 60 * 1000 },
+      review: {}
     },
     workers: {
       heartbeatIntervalMs: 1000,
@@ -71,6 +72,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   const debugProbe = { ...objectAt(config, "debugProbe") };
   const improvement = { ...objectAt(config, "improvement") };
   const codingAgent = { ...objectAt(improvement, "codingAgent") };
+  const review = { ...objectAt(improvement, "review") };
   if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
   if (process.env.C2000_MCP_TOOL_SURFACE) config.toolSurfaceProfile = process.env.C2000_MCP_TOOL_SURFACE;
   if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
@@ -86,6 +88,17 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_IMPROVEMENT_WORKTREE_ROOT) improvement.worktreeRoot = process.env.C2000_MCP_IMPROVEMENT_WORKTREE_ROOT;
   if (process.env.C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT) improvement.artifactRoot = process.env.C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT;
   if (process.env.C2000_MCP_IMPROVEMENT_BASE_REF) improvement.baseRef = process.env.C2000_MCP_IMPROVEMENT_BASE_REF;
+  if (process.env.C2000_MCP_IMPROVEMENT_GITHUB_REPOSITORY) review.repository = process.env.C2000_MCP_IMPROVEMENT_GITHUB_REPOSITORY;
+  if (process.env.C2000_MCP_IMPROVEMENT_GITHUB_REMOTE) review.remote = process.env.C2000_MCP_IMPROVEMENT_GITHUB_REMOTE;
+  if (process.env.C2000_MCP_IMPROVEMENT_BASE_BRANCH) review.baseBranch = process.env.C2000_MCP_IMPROVEMENT_BASE_BRANCH;
+  if (process.env.C2000_MCP_IMPROVEMENT_REQUIRED_CHECKS_JSON) review.requiredChecks = parseJsonArray(process.env.C2000_MCP_IMPROVEMENT_REQUIRED_CHECKS_JSON, "C2000_MCP_IMPROVEMENT_REQUIRED_CHECKS_JSON");
+  if (process.env.C2000_MCP_IMPROVEMENT_OPTIONAL_CHECKS_JSON) review.optionalChecks = parseJsonArray(process.env.C2000_MCP_IMPROVEMENT_OPTIONAL_CHECKS_JSON, "C2000_MCP_IMPROVEMENT_OPTIONAL_CHECKS_JSON");
+  if (process.env.C2000_MCP_IMPROVEMENT_REQUIRED_APPROVING_REVIEWS) review.requiredApprovingReviews = parseIntegerOverride(process.env.C2000_MCP_IMPROVEMENT_REQUIRED_APPROVING_REVIEWS, "C2000_MCP_IMPROVEMENT_REQUIRED_APPROVING_REVIEWS");
+  if (process.env.C2000_MCP_IMPROVEMENT_REQUIRE_HUMAN_REVIEW) review.requireHumanReview = parseBooleanOverride(process.env.C2000_MCP_IMPROVEMENT_REQUIRE_HUMAN_REVIEW, "C2000_MCP_IMPROVEMENT_REQUIRE_HUMAN_REVIEW");
+  if (process.env.C2000_MCP_IMPROVEMENT_TRUSTED_REVIEWERS_JSON) review.trustedReviewers = parseJsonArray(process.env.C2000_MCP_IMPROVEMENT_TRUSTED_REVIEWERS_JSON, "C2000_MCP_IMPROVEMENT_TRUSTED_REVIEWERS_JSON");
+  if (process.env.C2000_MCP_IMPROVEMENT_REVALIDATION_POLICY) review.revalidationPolicy = process.env.C2000_MCP_IMPROVEMENT_REVALIDATION_POLICY;
+  if (process.env.C2000_MCP_IMPROVEMENT_GITHUB_API_BASE_URL) review.apiBaseUrl = process.env.C2000_MCP_IMPROVEMENT_GITHUB_API_BASE_URL;
+  if (process.env.C2000_MCP_IMPROVEMENT_GITHUB_TOKEN_ENV) review.githubTokenEnv = process.env.C2000_MCP_IMPROVEMENT_GITHUB_TOKEN_ENV;
   if (process.env.C2000_MCP_IMPROVEMENT_AGENT_PROVIDER) codingAgent.provider = process.env.C2000_MCP_IMPROVEMENT_AGENT_PROVIDER;
   if (process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND) codingAgent.command = process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND;
   if (process.env.C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON) codingAgent.args = JSON.parse(process.env.C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON);
@@ -122,13 +135,30 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
     daemon.autoStart = process.env.C2000_MCP_DAEMON_AUTO_START !== "0";
   }
   improvement.codingAgent = codingAgent;
+  improvement.review = review;
   return { ...config, ccs, logging, daemon, filesystem, debugProbe, improvement };
 }
 
-function parseBooleanOverride(value: string): boolean {
+function parseBooleanOverride(value: string, name = "C2000_MCP_IMPROVEMENT_ENABLED"): boolean {
   if (value === "1" || value === "true") return true;
   if (value === "0" || value === "false") return false;
-  throw new Error(`Invalid C2000_MCP_IMPROVEMENT_ENABLED value: ${value}. Expected true, false, 1, or 0.`);
+  throw new Error(`Invalid ${name} value: ${value}. Expected true, false, 1, or 0.`);
+}
+
+function parseIntegerOverride(value: string, name: string): number {
+  if (!/^\d+$/.test(value)) throw new Error(`Invalid ${name} value: ${value}. Expected a non-negative integer.`);
+  return Number.parseInt(value, 10);
+}
+
+function parseJsonArray(value: string, name: string): unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Invalid ${name}: expected a JSON array (${String(error)}).`);
+  }
+  if (!Array.isArray(parsed)) throw new Error(`Invalid ${name}: expected a JSON array.`);
+  return parsed;
 }
 
 function objectAt(config: Record<string, unknown>, key: string): Record<string, unknown> {

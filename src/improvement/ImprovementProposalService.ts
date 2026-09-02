@@ -340,6 +340,23 @@ export class ImprovementProposalService {
   }
 
   /**
+   * Record the external review lifecycle without changing the immutable
+   * Proposal evidence or implementation run. GitHub/CI state is governance
+   * metadata and must never be treated as a new implementation validation.
+   */
+  markReviewLifecycle(proposalId: string, status: Extract<ProposalStatus, "pr-open" | "merge-recommended" | "merged" | "closed-without-merge">, reason?: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (!["candidate-ready", "validated", "pr-open", "merge-recommended", "closed-without-merge", "merged"].includes(proposal.status)) {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot enter review lifecycle from ${proposal.status}`, {
+        proposalId,
+        status: proposal.status,
+        requiredStatuses: ["candidate-ready", "validated", "pr-open", "merge-recommended", "closed-without-merge", "merged"]
+      });
+    }
+    return this.persistLifecycle(proposal, status, reason);
+  }
+
+  /**
    * Record an externally executed candidate validation. This is intentionally
    * a service API rather than an MCP mutation tool: code changes and their
    * validation remain outside the MCP server's authority.

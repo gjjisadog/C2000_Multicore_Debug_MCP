@@ -15,6 +15,7 @@ import {
   PROPOSAL_REVIEW_DECISIONS
 } from "../improvement/ProposalSchemas.js";
 import { IMPLEMENTATION_RUN_STATUSES } from "../improvement/implementation/ImplementationSchemas.js";
+import { hardwareEvidenceSchema } from "../improvement/review/ReviewSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -192,6 +193,30 @@ export const getImprovementCandidateSchema = z.object({
 
 export const cleanupImprovementRunSchema = z.object({
   runId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const publishImprovementCandidateSchema = z.object({
+  implementationRunId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+const improvementPullRequestSelectorObject = z.object({
+  implementationRunId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  pullRequestId: z.string().trim().min(1).max(256).optional(),
+  pullRequestNumber: z.number().int().positive().optional()
+});
+
+const requireOnePullRequestSelector = <T extends { implementationRunId?: string; pullRequestId?: string; pullRequestNumber?: number }>(value: T) => [value.implementationRunId, value.pullRequestId, value.pullRequestNumber].filter(item => item !== undefined).length === 1;
+
+export const getImprovementPullRequestSchema = improvementPullRequestSelectorObject.refine(requireOnePullRequestSelector, {
+  message: "Exactly one implementationRunId, pullRequestId, or pullRequestNumber is required"
+});
+export const refreshImprovementReviewEvidenceSchema = improvementPullRequestSelectorObject.extend({
+  hardwareEvidence: hardwareEvidenceSchema.optional()
+}).refine(requireOnePullRequestSelector, {
+  message: "Exactly one implementationRunId, pullRequestId, or pullRequestNumber is required"
+});
+export const getMergeRecommendationSchema = improvementPullRequestSelectorObject.refine(requireOnePullRequestSelector, {
+  message: "Exactly one implementationRunId, pullRequestId, or pullRequestNumber is required"
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;

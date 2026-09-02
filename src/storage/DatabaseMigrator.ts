@@ -615,6 +615,73 @@ const migrations: Migration[] = [
           ADD COLUMN agent_attempts INTEGER NOT NULL DEFAULT 0;
       `);
     }
+  },
+  {
+    version: 13,
+    apply(store) {
+      // Round7 review state is intentionally separate from the immutable
+      // Proposal and Implementation Run records. GitHub/CI/hardware evidence
+      // can be refreshed without rewriting the candidate or its validation.
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS improvement_pull_requests (
+          pull_request_id TEXT PRIMARY KEY,
+          proposal_id TEXT NOT NULL,
+          implementation_run_id TEXT NOT NULL UNIQUE,
+          repository TEXT NOT NULL,
+          branch TEXT NOT NULL,
+          base_branch TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          baseline_sha TEXT NOT NULL,
+          number INTEGER,
+          url TEXT,
+          title TEXT NOT NULL,
+          status TEXT NOT NULL,
+          draft INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          original_base_sha TEXT,
+          current_base_sha TEXT,
+          current_head_sha TEXT,
+          merged_commit_sha TEXT,
+          merged_at TEXT,
+          generated_body_hash TEXT NOT NULL,
+          human_body_preserved INTEGER NOT NULL DEFAULT 1,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(proposal_id) REFERENCES improvement_proposals(proposal_id),
+          FOREIGN KEY(implementation_run_id) REFERENCES improvement_implementation_runs(run_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_improvement_pull_requests_status
+          ON improvement_pull_requests(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_improvement_pull_requests_candidate
+          ON improvement_pull_requests(repository, branch, candidate_sha);
+
+        CREATE TABLE IF NOT EXISTS improvement_review_evidence (
+          evidence_id TEXT PRIMARY KEY,
+          pull_request_id TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          checked_at TEXT NOT NULL,
+          evidence_hash TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(pull_request_id) REFERENCES improvement_pull_requests(pull_request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_improvement_review_evidence_latest
+          ON improvement_review_evidence(pull_request_id, candidate_sha, checked_at);
+
+        CREATE TABLE IF NOT EXISTS merge_recommendations (
+          recommendation_id TEXT PRIMARY KEY,
+          pull_request_id TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          generated_at TEXT NOT NULL,
+          evidence_hash TEXT NOT NULL,
+          verdict TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          UNIQUE(pull_request_id, evidence_hash),
+          FOREIGN KEY(pull_request_id) REFERENCES improvement_pull_requests(pull_request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_merge_recommendations_latest
+          ON merge_recommendations(pull_request_id, generated_at);
+      `);
+    }
   }
 ];
 

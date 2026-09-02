@@ -45,7 +45,11 @@ describe("MCP tool surface profiles", () => {
       "c2000_getImprovementImplementationRun",
       "c2000_listImprovementImplementationRuns",
       "c2000_getImprovementCandidate",
-      "c2000_cleanupImprovementRun"
+      "c2000_cleanupImprovementRun",
+      "c2000_publishImprovementCandidate",
+      "c2000_getImprovementPullRequest",
+      "c2000_refreshImprovementReviewEvidence",
+      "c2000_getMergeRecommendation"
     ];
     const agent = names("safe", "agent");
     const advanced = names("safe", "advanced");
@@ -249,8 +253,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 75,
-      advancedOnlyCount: 73,
+      hiddenBySurfaceCount: 79,
+      advancedOnlyCount: 77,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -265,7 +269,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(73);
+    expect(guide.advancedOnly).toBe(77);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -288,14 +292,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 75,
-      advancedOnlyCount: 73,
+      hiddenBySurfaceCount: 79,
+      advancedOnlyCount: 77,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 28,
         hiddenBySafety: 8,
-        hiddenBySurface: 75,
-        advancedOnly: 73,
+        hiddenBySurface: 79,
+        advancedOnly: 77,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -321,6 +325,21 @@ describe("MCP tool surface profiles", () => {
     expect(byName.get("c2000_startImprovementImplementation")?.approvalClass).toBe("repository-commit");
     expect(byName.get("c2000_cleanupImprovementRun")?.effects).toContain("repository-write");
     expect(byName.get("c2000_cleanupImprovementRun")?.approvalClass).toBe("repository-write");
+  });
+
+  test("Round7 review controls are advanced-only and never enter the default agent surface", () => {
+    const agent = names("safe", "agent");
+    const advanced = names("safe", "advanced");
+    for (const name of [
+      "c2000_publishImprovementCandidate",
+      "c2000_getImprovementPullRequest",
+      "c2000_refreshImprovementReviewEvidence",
+      "c2000_getMergeRecommendation"
+    ]) {
+      expect(agent, name).not.toContain(name);
+      expect(advanced, name).toContain(name);
+      expect(c2000ToolDefinitions.find(tool => tool.name === name), name).toEqual(expect.objectContaining({ family: "improvement", exposure: "advanced" }));
+    }
   });
 
   test("descriptions route normal work to workflows and label advanced primitives", () => {
@@ -358,8 +377,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(103);
-    expect(fullCompatibility.count).toBe(111);
+    expect(safeCompatibility.count).toBe(107);
+    expect(fullCompatibility.count).toBe(115);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

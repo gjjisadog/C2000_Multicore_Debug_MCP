@@ -141,10 +141,32 @@ An approved, `auto-eligible` Proposal can be run through the advanced-only
 and candidate branch outside the source checkout, invokes only the configured
 shell-free coding-agent command, replays the same host/mock validation on the
 baseline and candidate, and commits only a validated candidate branch. The
-MCP never edits `master`, pushes, merges, or publishes. The feature is disabled
+MCP never edits `master`, pushes, creates a PR, or merges during implementation;
+Round7 publication remains a separate explicit review-gated step. The feature is disabled
 by default; hardware-required validation remains `NOT_RUN_HARDWARE` and cannot
 produce a candidate commit. Use the companion get/list/candidate/cleanup tools
 for audit and review.
+
+## Controlled PR Review Pipeline
+
+Round7 keeps candidate publication behind the advanced-only
+`c2000_publishImprovementCandidate` tool. A candidate must remain a clean,
+single-commit, baseline-bound `candidate-ready` run before its controlled
+branch can be pushed and turned into a Draft PR:
+
+```text
+Candidate → Draft PR → CI / Review / Hardware Evidence
+          → Merge Recommendation → Human Merge
+```
+
+`c2000_getImprovementPullRequest` reads the recorded PR and evidence, while
+`c2000_refreshImprovementReviewEvidence` refreshes candidate-bound checks,
+reviews, base/head identity, mergeability, and optional hardware evidence.
+`c2000_getMergeRecommendation` is deterministic and fail-closed: missing or
+inconclusive gates block, failures reject, and a recommendation never merges,
+approves, force-pushes, enables auto-merge, or executes instructions from PR
+comments. GitHub credentials stay in the server process; the coding agent only
+receives its isolated worktree.
 
 ## 0.5 CAN evidence and job semantics
 
@@ -902,6 +924,9 @@ Environment overrides:
 - `C2000_MCP_IMPROVEMENT_ENABLED=true|false` (disabled by default)
 - `C2000_MCP_IMPROVEMENT_REPOSITORY_ROOT`, `C2000_MCP_IMPROVEMENT_WORKTREE_ROOT`, and `C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT`
 - `C2000_MCP_IMPROVEMENT_AGENT_COMMAND` and `C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON` (configured shell-free coding-agent entry point)
+- `C2000_MCP_IMPROVEMENT_GITHUB_REPOSITORY`, `C2000_MCP_IMPROVEMENT_GITHUB_REMOTE`, `C2000_MCP_IMPROVEMENT_BASE_BRANCH`
+- `C2000_MCP_IMPROVEMENT_REQUIRED_CHECKS_JSON`, `C2000_MCP_IMPROVEMENT_OPTIONAL_CHECKS_JSON`, `C2000_MCP_IMPROVEMENT_REQUIRED_APPROVING_REVIEWS`, and `C2000_MCP_IMPROVEMENT_REQUIRE_HUMAN_REVIEW`
+- `C2000_MCP_IMPROVEMENT_TRUSTED_REVIEWERS_JSON`, `C2000_MCP_IMPROVEMENT_REVALIDATION_POLICY`, `C2000_MCP_IMPROVEMENT_GITHUB_API_BASE_URL`, and `C2000_MCP_IMPROVEMENT_GITHUB_TOKEN_ENV` (the token value stays server-side)
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
 - `C2000_MCP_C2000WARE_PATH`
