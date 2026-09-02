@@ -9,6 +9,11 @@ import { reviewVerificationInputSchema } from "../verification/review/ReviewSche
 import { engineeringVerificationInputSchema } from "../verification/VerificationService.js";
 import { TOOL_CAPABILITY_NAMES } from "./capabilities.js";
 import { ANALYTICS_WINDOWS, OUTCOME_FAILURE_CLASSES } from "../analytics/OutcomeSchemas.js";
+import {
+  PROPOSAL_CATEGORIES,
+  PROPOSAL_STATUSES,
+  PROPOSAL_REVIEW_DECISIONS
+} from "../improvement/ProposalSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -136,6 +141,34 @@ export const getEscalationRecommendationsSchema = z.object({
   errorCode: z.string().trim().min(1).max(128).optional(),
   failureClass: z.enum(OUTCOME_FAILURE_CLASSES).optional(),
   jobId: z.string().trim().min(1).max(128).optional()
+});
+
+export const generateImprovementProposalsSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("30d"),
+  baselineSha: z.string().regex(/^[0-9a-f]{7,64}$/i).optional()
+});
+
+export const listImprovementProposalsSchema = z.object({
+  status: z.enum(PROPOSAL_STATUSES).optional(),
+  category: z.enum(PROPOSAL_CATEGORIES).optional(),
+  target: z.string().trim().min(1).max(192).optional(),
+  minConfidence: z.number().finite().min(0).max(1).optional(),
+  limit: z.number().int().positive().max(500).default(100)
+});
+
+export const getImprovementProposalSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const reviewImprovementProposalSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
+  decision: z.enum(PROPOSAL_REVIEW_DECISIONS),
+  reviewReason: z.string().trim().min(1).max(2048),
+  reviewer: z.string().trim().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
+});
+
+export const exportImprovementImplementationPromptSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;

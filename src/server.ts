@@ -32,6 +32,8 @@ import { withAdditionalReadRoots } from "./security/pathPolicy.js";
 import { VerificationService } from "./verification/VerificationService.js";
 import { InMemoryOutcomeEventStore } from "./analytics/OutcomeEventRepository.js";
 import { OutcomeAnalyticsService } from "./analytics/OutcomeAnalyticsService.js";
+import { InMemoryImprovementProposalStore } from "./improvement/ProposalRepository.js";
+import { ImprovementProposalService } from "./improvement/ImprovementProposalService.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -87,17 +89,36 @@ function buildRuntime(
   const startedAt = new Date().toISOString();
   const toolProfile = (config.toolProfile ?? "safe") as ToolProfile;
   const toolSurfaceProfile = (config.toolSurfaceProfile ?? "agent") as ToolSurfaceProfile;
+  const needsLocalAnalytics = !toolHandlerDeps.getWorkflowAnalytics
+    || !toolHandlerDeps.getToolAnalytics
+    || !toolHandlerDeps.getCapabilityAnalytics
+    || !toolHandlerDeps.getEscalationRecommendations;
+  const needsLocalProposals = !toolHandlerDeps.generateImprovementProposals
+    || !toolHandlerDeps.listImprovementProposals
+    || !toolHandlerDeps.getImprovementProposal
+    || !toolHandlerDeps.reviewImprovementProposal
+    || !toolHandlerDeps.exportImprovementImplementationPrompt;
+  const localOutcomeEvents = needsLocalAnalytics || needsLocalProposals ? new InMemoryOutcomeEventStore() : undefined;
   let localAnalytics: OutcomeAnalyticsService | undefined;
+  let localImprovementProposals: ImprovementProposalService | undefined;
   const capabilitySessions = new CapabilitySessionManager({
     logger,
-    onAudit: event => localAnalytics?.recordCapabilityAudit(event)
+    onAudit: event => (toolHandlerDeps.capabilityAudit ?? localAnalytics)?.recordCapabilityAudit(event)
   });
-  if (!toolHandlerDeps.getWorkflowAnalytics || !toolHandlerDeps.getToolAnalytics || !toolHandlerDeps.getCapabilityAnalytics || !toolHandlerDeps.getEscalationRecommendations) {
+  if (needsLocalAnalytics) {
     localAnalytics = new OutcomeAnalyticsService({
-      repository: new InMemoryOutcomeEventStore(),
+      repository: localOutcomeEvents!,
       toolProfile,
       toolSurfaceProfile,
       activeCapabilities: () => capabilitySessions.activeCapabilities(),
+      logger
+    });
+  }
+  if (needsLocalProposals) {
+    localImprovementProposals = new ImprovementProposalService({
+      events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
+      proposals: new InMemoryImprovementProposalStore(),
+      currentBaselineSha: () => process.env.C2000_MCP_BASELINE_SHA,
       logger
     });
   }
@@ -185,6 +206,11 @@ function buildRuntime(
       getToolAnalytics: toolHandlerDeps.getToolAnalytics ?? (input => localAnalytics!.getToolAnalytics(input)),
       getCapabilityAnalytics: toolHandlerDeps.getCapabilityAnalytics ?? (input => localAnalytics!.getCapabilityAnalytics(input)),
       getEscalationRecommendations: toolHandlerDeps.getEscalationRecommendations ?? (input => localAnalytics!.getEscalationRecommendations(input)),
+      generateImprovementProposals: toolHandlerDeps.generateImprovementProposals ?? (input => localImprovementProposals!.generate(input)),
+      listImprovementProposals: toolHandlerDeps.listImprovementProposals ?? (input => localImprovementProposals!.list(input)),
+      getImprovementProposal: toolHandlerDeps.getImprovementProposal ?? (input => localImprovementProposals!.get(input.proposalId)),
+      reviewImprovementProposal: toolHandlerDeps.reviewImprovementProposal ?? (input => localImprovementProposals!.review(input)),
+      exportImprovementImplementationPrompt: toolHandlerDeps.exportImprovementImplementationPrompt ?? (input => localImprovementProposals!.exportImplementationPrompt(input.proposalId)),
       effectiveAdapterType: adapterResolution.mode,
       filesystem,
       programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots

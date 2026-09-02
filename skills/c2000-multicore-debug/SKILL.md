@@ -63,6 +63,39 @@ and safety-aware; they never open a capability, select `full`, or change the
 surface automatically. Do not call a hidden atomic through shell, CCS GUI,
 TI official active-target commands, or private daemon RPC.
 
+## Evidence-driven improvement proposals
+
+Treat one runtime failure as a debugging case, not as evidence for changing
+the MCP. After a repeated, context-matched pattern is visible in Outcome
+Analytics, use the advanced governance tools in this order:
+
+`c2000_generateImprovementProposals` →
+`c2000_listImprovementProposals` → `c2000_getImprovementProposal` → explicit
+human review with `c2000_reviewImprovementProposal` →
+`c2000_exportImprovementImplementationPrompt`.
+
+Only an approved, low-risk, baseline-bound Proposal can produce an
+implementation prompt. The prompt must be executed by a developer/Codex in
+an isolated worktree and validated with the supplied replay, regression,
+safety, and before/after checks. Proposal generation, approval, and prompt
+export never edit source, modify `SKILL.md`, commit, push, merge, change
+production daemon state, or weaken Safety Profile semantics. Firmware-owned
+failures, probe/worker/environment failures, insufficient samples, and
+protected-invariant changes are not MCP implementation proposals.
+
+An implementation candidate is not a merge candidate merely because its tests
+run. Record baseline/candidate identities, test results, safety checks,
+regressions, metric deltas, and one of `improved`, `neutral`, `regressed`, or
+`inconclusive`. Only an approved, implementation-complete candidate with no
+regressions, passing tests and safety checks, and a non-regressed verdict may
+be handed to an owner for merge consideration; `inconclusive` and hardware
+not-run evidence remain non-merge evidence.
+
+Do not use the Proposal tools as a replacement for normal debugging, and do
+not treat a validated Proposal or Mock replay as hardware acceptance evidence.
+Reject or defer with a reason when the evidence, baseline, scope, or root-cause
+classification is not sufficient.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,

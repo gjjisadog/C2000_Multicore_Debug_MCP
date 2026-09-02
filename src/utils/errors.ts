@@ -190,7 +190,17 @@ export type DebugErrorCode =
   | "CapabilityUnknown"
   | "CapabilityInvalidTtl"
   | "CapabilityReasonRequired"
-  | "CapabilitySessionNotFound";
+  | "CapabilitySessionNotFound"
+  | "ImprovementAnalyticsUnavailable"
+  | "ProposalNotFound"
+  | "ProposalReviewReasonRequired"
+  | "ProposalNotReadyForReview"
+  | "ProposalInvalidState"
+  | "ProposalNotApproved"
+  | "ImplementationPromptNotAllowed"
+  | "BaselineDrift"
+  | "BaselineUnavailable"
+  | "BaselineInvalid";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

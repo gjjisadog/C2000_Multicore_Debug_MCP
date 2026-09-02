@@ -114,7 +114,12 @@ import {
   getWorkflowAnalyticsSchema,
   getToolAnalyticsSchema,
   getCapabilityAnalyticsSchema,
-  getEscalationRecommendationsSchema
+  getEscalationRecommendationsSchema,
+  generateImprovementProposalsSchema,
+  listImprovementProposalsSchema,
+  getImprovementProposalSchema,
+  reviewImprovementProposalSchema,
+  exportImprovementImplementationPromptSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -134,6 +139,8 @@ function assertBoundedWorkflowPolling(timeoutMs: number, intervalMs: number): vo
 export interface ToolHandlerDeps {
   /** Optional process-local recorder for standalone runtimes; daemon routing records centrally. */
   outcomeAnalytics?: Pick<OutcomeAnalyticsService, "recordToolInvocation">;
+  /** Capability lifecycle audit recorder; kept separate to avoid double-recording daemon tool calls. */
+  capabilityAudit?: Pick<OutcomeAnalyticsService, "recordCapabilityAudit">;
   runHardwarePreflight?: typeof runHardwarePreflight;
   /** Adapter mode resolved by the owning runtime; never infer it from config `auto`. */
   effectiveAdapterType?: "ccs" | "mock";
@@ -148,6 +155,11 @@ export interface ToolHandlerDeps {
   getToolAnalytics?: (input: z.input<typeof getToolAnalyticsSchema>) => Promise<ToolResult> | ToolResult;
   getCapabilityAnalytics?: (input: z.input<typeof getCapabilityAnalyticsSchema>) => Promise<ToolResult> | ToolResult;
   getEscalationRecommendations?: (input: z.input<typeof getEscalationRecommendationsSchema>) => Promise<ToolResult> | ToolResult;
+  generateImprovementProposals?: (input: z.input<typeof generateImprovementProposalsSchema>) => Promise<ToolResult> | ToolResult;
+  listImprovementProposals?: (input: z.input<typeof listImprovementProposalsSchema>) => Promise<ToolResult> | ToolResult;
+  getImprovementProposal?: (input: z.input<typeof getImprovementProposalSchema>) => Promise<ToolResult> | ToolResult;
+  reviewImprovementProposal?: (input: z.input<typeof reviewImprovementProposalSchema>) => Promise<ToolResult> | ToolResult;
+  exportImprovementImplementationPrompt?: (input: z.input<typeof exportImprovementImplementationPromptSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -224,6 +236,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getToolAnalytics = deps.getToolAnalytics ?? unavailableAnalytics;
   const getCapabilityAnalytics = deps.getCapabilityAnalytics ?? unavailableAnalytics;
   const getEscalationRecommendations = deps.getEscalationRecommendations ?? unavailableAnalytics;
+  const unavailableImprovement = () => { throw new DebugMcpError("ImprovementAnalyticsUnavailable", "Improvement Proposals require the Outcome Analytics and Proposal services"); };
+  const generateImprovementProposals = deps.generateImprovementProposals ?? unavailableImprovement;
+  const listImprovementProposals = deps.listImprovementProposals ?? unavailableImprovement;
+  const getImprovementProposal = deps.getImprovementProposal ?? unavailableImprovement;
+  const reviewImprovementProposal = deps.reviewImprovementProposal ?? unavailableImprovement;
+  const exportImprovementImplementationPrompt = deps.exportImprovementImplementationPrompt ?? unavailableImprovement;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -372,6 +390,46 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await getEscalationRecommendations(getEscalationRecommendationsSchema.parse(input)));
       } catch (error) {
         return fail(error);
+      }
+    },
+
+    async generateImprovementProposals(input: z.input<typeof generateImprovementProposalsSchema>) {
+      try {
+        return ok(await generateImprovementProposals(generateImprovementProposalsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async listImprovementProposals(input: z.input<typeof listImprovementProposalsSchema>) {
+      try {
+        return ok(await listImprovementProposals(listImprovementProposalsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getImprovementProposal(input: z.input<typeof getImprovementProposalSchema>) {
+      try {
+        return ok(await getImprovementProposal(getImprovementProposalSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { proposalId: input.proposalId });
+      }
+    },
+
+    async reviewImprovementProposal(input: z.input<typeof reviewImprovementProposalSchema>) {
+      try {
+        return ok(await reviewImprovementProposal(reviewImprovementProposalSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { proposalId: input.proposalId });
+      }
+    },
+
+    async exportImprovementImplementationPrompt(input: z.input<typeof exportImprovementImplementationPromptSchema>) {
+      try {
+        return ok(await exportImprovementImplementationPrompt(exportImprovementImplementationPromptSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { proposalId: input.proposalId });
       }
     },
 

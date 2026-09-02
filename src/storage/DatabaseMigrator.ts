@@ -529,6 +529,46 @@ const migrations: Migration[] = [
           ON outcome_events(kind, failure_class, timestamp);
       `);
     }
+  },
+  {
+    version: 10,
+    apply(store) {
+      // Improvement proposals are governance metadata, not target evidence.
+      // They retain history without coupling the Proposal lifecycle to jobs,
+      // sessions, workers, or formal acceptance records.
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS improvement_proposals (
+          proposal_id TEXT PRIMARY KEY,
+          fingerprint TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL,
+          category TEXT NOT NULL,
+          target TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          proposed_change_json TEXT NOT NULL,
+          expected_benefit_json TEXT NOT NULL,
+          risks_json TEXT NOT NULL,
+          validation_json TEXT NOT NULL,
+          validation_result_json TEXT,
+          confidence REAL NOT NULL,
+          priority TEXT NOT NULL,
+          generated_by TEXT NOT NULL,
+          source_window TEXT NOT NULL,
+          baseline_sha TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_observed_at TEXT NOT NULL,
+          review_reason TEXT,
+          reviewed_at TEXT,
+          reviewed_by TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_improvement_proposals_status
+          ON improvement_proposals(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_improvement_proposals_category
+          ON improvement_proposals(category, target, updated_at);
+      `);
+    }
   }
 ];
 

@@ -95,6 +95,27 @@ and a rejected-edit buffer. No evolution run overwrites production
 Project-specific verification thresholds may be supplied through the configured
 `verification.rulesFile`, subject to the existing allowed read roots.
 
+## Evidence-driven improvement proposals
+
+Outcome Analytics can produce deterministic, evidence-bound improvement
+proposals for repeated MCP-owned patterns. The governance tools are advanced
+only: `c2000_generateImprovementProposals`,
+`c2000_listImprovementProposals`, `c2000_getImprovementProposal`,
+`c2000_reviewImprovementProposal`, and
+`c2000_exportImprovementImplementationPrompt`. A Proposal remains `draft` or
+`ready-for-review` until an explicit reviewer approves it; approval only
+exports a baseline-bound implementation prompt and never edits source,
+`SKILL.md`, commits, pushes, or merges.
+
+The pipeline suppresses firmware/environment-owned and insufficient-evidence
+patterns, preserves protected safety/debug invariants, and requires an
+isolated worktree plus independent replay/regression validation. Proposal
+validation records baseline/candidate SHAs, tests, regressions, safety checks,
+metric deltas, and an `improved`/`neutral`/`regressed`/`inconclusive` verdict.
+Only a complete, non-regressed, safety-clean candidate is a merge candidate;
+an approved Proposal or engineering validation is never an automatic merge or
+hardware acceptance result.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.
@@ -847,6 +868,7 @@ Environment overrides:
 - `C2000_MCP_CONFIG`
 - `C2000_MCP_TOOL_PROFILE=readonly|safe|full`
 - `C2000_MCP_TOOL_SURFACE=agent|advanced|compatibility`
+- `C2000_MCP_BASELINE_SHA` (optional baseline binding for approved improvement prompts)
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
 - `C2000_MCP_C2000WARE_PATH`

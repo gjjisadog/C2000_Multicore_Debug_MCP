@@ -49,6 +49,8 @@ import { AcceptanceClosureService } from "../artifacts/AcceptanceClosureService.
 import { VerificationService } from "../verification/VerificationService.js";
 import { OutcomeEventRepository } from "../analytics/OutcomeEventRepository.js";
 import { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
+import { ProposalRepository } from "../improvement/ProposalRepository.js";
+import { ImprovementProposalService } from "../improvement/ImprovementProposalService.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -89,14 +91,21 @@ export class DebugDaemon {
     this.consistency = new DatabaseConsistencyChecker(store);
     const boards = new BoardRepository(store);
     const events = new EventRepository(store);
+    const outcomeEvents = new OutcomeEventRepository(store);
     const analytics = new OutcomeAnalyticsService({
-      repository: new OutcomeEventRepository(store),
+      repository: outcomeEvents,
       toolProfile: this.config.toolProfile ?? "safe",
       toolSurfaceProfile: this.config.toolSurfaceProfile ?? "agent",
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     this.analytics = analytics;
     void analytics.maintain();
+    const improvementProposals = new ImprovementProposalService({
+      events: outcomeEvents,
+      proposals: new ProposalRepository(store),
+      currentBaselineSha: () => process.env.C2000_MCP_BASELINE_SHA,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
     const artifacts = new ArtifactRepository(store);
     const artifactExports = new ArtifactExportRepository(store);
     const canReports = new CanReportService(artifacts, path.join(path.dirname(databasePath), "can-artifacts"));
@@ -181,10 +190,16 @@ export class DebugDaemon {
     })));
     const runtime = await createC2000McpRuntime(this.config, {
       getDaemonHealth: () => this.getHealth(),
+      capabilityAudit: analytics,
       getWorkflowAnalytics: input => analytics.getWorkflowAnalytics(input),
       getCapabilityAnalytics: input => analytics.getCapabilityAnalytics(input),
       getToolAnalytics: input => analytics.getToolAnalytics(input),
       getEscalationRecommendations: input => analytics.getEscalationRecommendations(input),
+      generateImprovementProposals: input => improvementProposals.generate(input),
+      listImprovementProposals: input => improvementProposals.list(input),
+      getImprovementProposal: input => improvementProposals.get(input.proposalId),
+      reviewImprovementProposal: input => improvementProposals.review(input),
+      exportImprovementImplementationPrompt: input => improvementProposals.exportImplementationPrompt(input.proposalId),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),

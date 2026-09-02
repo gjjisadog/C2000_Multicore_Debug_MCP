@@ -103,7 +103,12 @@ import {
   getWorkflowAnalyticsSchema,
   getToolAnalyticsSchema,
   getCapabilityAnalyticsSchema,
-  getEscalationRecommendationsSchema
+  getEscalationRecommendationsSchema,
+  generateImprovementProposalsSchema,
+  listImprovementProposalsSchema,
+  getImprovementProposalSchema,
+  reviewImprovementProposalSchema,
+  exportImprovementImplementationPromptSchema
 } from "./toolSchemas.js";
 
 type ZodObjectSchema = z.ZodTypeAny;
@@ -140,6 +145,7 @@ type ToolFamily =
   | "workflow"
   | "observability"
   | "analytics"
+  | "improvement"
   | "verification";
 
 export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
@@ -279,6 +285,11 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_getWorkflowAnalytics", title: "Get C2000 Workflow Analytics", description: "Advanced host-only summary of workflow success, failure, timeout, duration, stage, and failure-class outcomes over a bounded retention window. It never returns raw events or touches a target.", schema: getWorkflowAnalyticsSchema, handlerName: "getWorkflowAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
   { name: "c2000_getCapabilityAnalytics", title: "Get C2000 Capability Analytics", description: "Advanced host-only summary of temporary capability opens, closes, expiry, use, active duration, and correlated continuation outcomes. It never returns raw events or touches a target.", schema: getCapabilityAnalyticsSchema, handlerName: "getCapabilityAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
   { name: "c2000_getToolAnalytics", title: "Get C2000 Tool Analytics", description: "Advanced host-only summary of tool invocation outcomes grouped by tool, family, role, effects, exposure, and capability. It distinguishes invocation outcome from domain verdict and never returns raw inputs.", schema: getToolAnalyticsSchema, handlerName: "getToolAnalytics", inputScope: "host", targetEffect: "host-read", role: "host", family: "analytics", exposure: "advanced" },
+  { name: "c2000_generateImprovementProposals", title: "Generate C2000 Improvement Proposals", description: "Advanced host-only governance operation: analyze bounded Outcome Analytics and persist evidence-bound improvement proposals. It never edits source code, changes the target, or approves a proposal.", schema: generateImprovementProposalsSchema, handlerName: "generateImprovementProposals", inputScope: "host", targetEffect: "job-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_listImprovementProposals", title: "List C2000 Improvement Proposals", description: "Advanced host-only summary of reviewable or explicitly filtered improvement proposals; raw Outcome Events and source code are not returned.", schema: listImprovementProposalsSchema, handlerName: "listImprovementProposals", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_getImprovementProposal", title: "Get C2000 Improvement Proposal", description: "Advanced host-only read of one evidence-bound Proposal, including risks, validation plan, root-cause gate, and baseline binding.", schema: getImprovementProposalSchema, handlerName: "getImprovementProposal", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_reviewImprovementProposal", title: "Review C2000 Improvement Proposal", description: "Advanced host-only human review gate. Approve, reject, or defer a Proposal; approval records intent only and never edits, commits, pushes, or merges code.", schema: reviewImprovementProposalSchema, handlerName: "reviewImprovementProposal", inputScope: "host", targetEffect: "job-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_exportImprovementImplementationPrompt", title: "Export C2000 Improvement Implementation Prompt", description: "Advanced host-only operation that emits a deterministic, baseline-bound Coding Agent prompt for an approved low-risk Proposal. It requires an isolated worktree and never executes the prompt.", schema: exportImprovementImplementationPromptSchema, handlerName: "exportImprovementImplementationPrompt", inputScope: "host", targetEffect: "job-control", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
@@ -1134,6 +1145,9 @@ function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentE
   }
   if (definition.family === "analytics") {
     return `Advanced analytics tool. ${definition.description}`;
+  }
+  if (definition.family === "improvement") {
+    return `Advanced improvement governance tool. ${definition.description}`;
   }
   if (definition.role === "diagnostic") {
     return `Advanced diagnostic tool. Prefer the task-level workflow when available. ${definition.description}`;
