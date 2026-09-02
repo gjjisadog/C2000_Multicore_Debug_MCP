@@ -11,6 +11,24 @@ const boardConfigSchema = z.object({
   tags: z.array(z.string().min(1)).default([])
 });
 
+const improvementCodingAgentConfigSchema = z.object({
+  provider: z.string().trim().min(1).max(128).default("configured-agent"),
+  command: z.string().trim().min(1).max(1024).optional(),
+  args: z.array(z.string().max(2048)).max(64).default([]),
+  timeoutMs: z.number().int().min(1_000).max(60 * 60 * 1000).default(15 * 60 * 1000)
+});
+
+export const improvementConfigSchema = z.object({
+  /** Disabled by default until an administrator configures an agent command. */
+  enabled: z.boolean().default(false),
+  repositoryRoot: z.string().trim().min(1).optional(),
+  worktreeRoot: z.string().trim().min(1).default("../.c2000-improvement-worktrees"),
+  artifactRoot: z.string().trim().min(1).default("./runtime/improvement-artifacts"),
+  baseRef: z.string().regex(/^[A-Za-z0-9._/-]+$/).default("master"),
+  maxActiveRuns: z.number().int().positive().max(8).default(1),
+  codingAgent: improvementCodingAgentConfigSchema.default({})
+});
+
 export const c2000McpConfigSchema = z.object({
   toolProfile: z.enum(["readonly", "safe", "full"]).default("safe"),
   toolSurfaceProfile: z.enum(["agent", "advanced", "compatibility"]).default("agent"),
@@ -55,6 +73,7 @@ export const c2000McpConfigSchema = z.object({
   }).default({ allowedReadRoots: [], allowedWriteRoots: [] }),
   verification: verificationConfigSchema.default({}),
   skillEvolution: skillEvolutionConfigSchema.default({}),
+  improvement: improvementConfigSchema.optional(),
   debugProbe: z.object({
     queueDir: z.string().min(1).default("runtime/debug-probe-queue"),
     queueTimeoutMs: z.number().int().positive().default(600000),

@@ -108,7 +108,12 @@ import {
   listImprovementProposalsSchema,
   getImprovementProposalSchema,
   reviewImprovementProposalSchema,
-  exportImprovementImplementationPromptSchema
+  exportImprovementImplementationPromptSchema,
+  startImprovementImplementationSchema,
+  getImprovementImplementationRunSchema,
+  listImprovementImplementationRunsSchema,
+  getImprovementCandidateSchema,
+  cleanupImprovementRunSchema
 } from "./toolSchemas.js";
 
 type ZodObjectSchema = z.ZodTypeAny;
@@ -128,7 +133,8 @@ type ToolTargetEffect =
   | "launch-workflow"
   | "job-control"
   | "observation-control"
-  | "capability-control";
+  | "capability-control"
+  | "repository-control";
 
 type ToolRole = "primary" | "alias" | "workflow" | "host" | "diagnostic";
 type ToolFamily =
@@ -148,7 +154,7 @@ type ToolFamily =
   | "improvement"
   | "verification";
 
-export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write";
+export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write" | "repository-write" | "repository-commit";
 export type ToolProfile = "readonly" | "safe" | "full";
 export type ToolSurfaceProfile = "agent" | "advanced" | "compatibility";
 export type AgentExposure = "default" | "advanced" | "compatibility";
@@ -174,7 +180,7 @@ export interface ToolDefinition {
   responseCoreIdentityFields?: string[];
   effects: ToolEffect[];
   annotations: ToolAnnotations;
-  approvalClass: "read-only" | "session-lifecycle" | "target-control" | "program-load" | "target-mutation" | "workflow-confirmation";
+  approvalClass: "read-only" | "session-lifecycle" | "target-control" | "program-load" | "target-mutation" | "workflow-confirmation" | "repository-write" | "repository-commit";
 }
 
 export interface ToolExposureSummary {
@@ -290,6 +296,11 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_getImprovementProposal", title: "Get C2000 Improvement Proposal", description: "Advanced host-only read of one evidence-bound Proposal, including risks, validation plan, root-cause gate, and baseline binding.", schema: getImprovementProposalSchema, handlerName: "getImprovementProposal", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_reviewImprovementProposal", title: "Review C2000 Improvement Proposal", description: "Advanced host-only human review gate. Approve, reject, or defer a Proposal; approval records intent only and never edits, commits, pushes, or merges code.", schema: reviewImprovementProposalSchema, handlerName: "reviewImprovementProposal", inputScope: "host", targetEffect: "job-control", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_exportImprovementImplementationPrompt", title: "Export C2000 Improvement Implementation Prompt", description: "Advanced host-only operation that emits a deterministic, baseline-bound Coding Agent prompt for an approved low-risk Proposal. It requires an isolated worktree and never executes the prompt.", schema: exportImprovementImplementationPromptSchema, handlerName: "exportImprovementImplementationPrompt", inputScope: "host", targetEffect: "job-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_startImprovementImplementation", title: "Start C2000 Improvement Implementation", description: "Advanced governance operation: start an approved Proposal in a fresh isolated worktree using the configured coding-agent provider, independently validate the candidate, and create a candidate-branch commit only when all gates pass. It never edits master, pushes, merges, or publishes.", schema: startImprovementImplementationSchema, handlerName: "startImprovementImplementation", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_getImprovementImplementationRun", title: "Get C2000 Improvement Implementation Run", description: "Read the durable state, isolated worktree metadata, agent result, validation stages, and artifacts for one improvement implementation run.", schema: getImprovementImplementationRunSchema, handlerName: "getImprovementImplementationRun", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_listImprovementImplementationRuns", title: "List C2000 Improvement Implementation Runs", description: "List durable implementation attempts by Proposal or lifecycle status without exposing source contents or arbitrary command output.", schema: listImprovementImplementationRunsSchema, handlerName: "listImprovementImplementationRuns", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_getImprovementCandidate", title: "Get C2000 Improvement Candidate", description: "Return a validated candidate branch/commit and bounded artifact references for human review. The MCP never merges or pushes this candidate automatically.", schema: getImprovementCandidateSchema, handlerName: "getImprovementCandidate", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_cleanupImprovementRun", title: "Cleanup C2000 Improvement Run", description: "Remove a retained terminal improvement worktree after inspection. Active runs cannot be cleaned up and the candidate branch is retained for audit; this never touches master.", schema: cleanupImprovementRunSchema, handlerName: "cleanupImprovementRun", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
@@ -920,7 +931,9 @@ export function getToolContracts(
       writesTarget: definition.effects.some(effect => ["target-memory-write", "program-load", "ram-ownership-change"].includes(effect)),
       runsTarget: definition.effects.includes("target-run"),
       resetsTarget: definition.effects.includes("target-reset"),
-      writesHostFiles: definition.effects.some(effect => effect === "host-write" || effect === "bundle-write"),
+      writesHostFiles: definition.effects.some(effect => effect === "host-write" || effect === "bundle-write" || effect === "repository-write" || effect === "repository-commit"),
+      writesRepository: definition.effects.some(effect => effect === "repository-write" || effect === "repository-commit"),
+      createsRepositoryCommit: definition.effects.includes("repository-commit"),
       changesRamOwnership: definition.effects.includes("ram-ownership-change"),
       inputFields,
       requiredInputFields: requiredInputFields(definition.schema),
@@ -1118,7 +1131,14 @@ function decorateDefinition(definition: BaseToolDefinition): ToolDefinition {
     exposure,
     effects,
     annotations: { readOnlyHint, destructiveHint, idempotentHint: readOnlyHint, openWorldHint: false },
-    approvalClass: readOnlyHint ? "read-only" : definition.targetEffect === "session-lifecycle" ? "session-lifecycle" : effects.includes("program-load") ? "program-load" : destructiveHint ? "target-mutation" : definition.targetEffect === "launch-workflow" ? "workflow-confirmation" : "target-control"
+    approvalClass: readOnlyHint
+      ? "read-only"
+      : definition.targetEffect === "repository-control"
+        ? effects.includes("repository-commit") ? "repository-commit" : "repository-write"
+        : definition.targetEffect === "session-lifecycle" ? "session-lifecycle"
+          : effects.includes("program-load") ? "program-load"
+            : destructiveHint ? "target-mutation"
+              : definition.targetEffect === "launch-workflow" ? "workflow-confirmation" : "target-control"
   };
 }
 
@@ -1160,6 +1180,11 @@ function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentE
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
   if (targetEffect === "capability-control") return ["host-read"];
+  if (targetEffect === "repository-control") {
+    return name === "c2000_startImprovementImplementation"
+      ? ["host-write", "repository-write", "repository-commit"]
+      : ["host-write", "repository-write"];
+  }
   if (targetEffect === "observation-control") {
     if (name === "c2000_verifyMap" || name === "c2000_verifyReview") return ["host-read", "bundle-write"];
     if (name === "c2000_exportTrace" || name === "c2000_collectFailureBundle" || name === "c2000_createRunBaseline" || name === "c2000_compareRunWithBaseline" || name === "c2000_createAcceptanceClosure") return ["host-read", "bundle-write"];

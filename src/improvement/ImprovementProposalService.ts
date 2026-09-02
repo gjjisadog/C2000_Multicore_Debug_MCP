@@ -224,7 +224,7 @@ export class ImprovementProposalService {
         actionRequired: "Regenerate the Proposal with baselineSha or configure C2000_MCP_BASELINE_SHA."
       });
     }
-    if (input.decision !== "approve" && ["implementing", "validated", "superseded"].includes(proposal.status)) {
+    if (input.decision !== "approve" && ["implementation-queued", "implementing", "validation-pending", "candidate-ready", "validated", "superseded"].includes(proposal.status)) {
       throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot be reviewed from ${proposal.status}`, {
         proposalId: proposal.proposalId,
         status: proposal.status
@@ -270,6 +270,75 @@ export class ImprovementProposalService {
     return { proposal: implementing, mergeCandidate: false, executesAutomatically: false };
   }
 
+  /** Queue state is separate from the active implementation Run record. */
+  markImplementationQueued(proposalId: string, baselineSha?: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (proposal.status !== "approved") {
+      throw new DebugMcpError("ProposalNotApproved", `Proposal ${proposal.proposalId} must be approved before implementation can be queued`, {
+        proposalId: proposal.proposalId,
+        status: proposal.status,
+        requiredStatus: "approved"
+      });
+    }
+    this.assertCurrentBaseline(proposal, baselineSha);
+    return this.persistLifecycle(proposal, "implementation-queued");
+  }
+
+  markImplementationStarted(proposalId: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (proposal.status !== "approved" && proposal.status !== "implementation-queued") {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot start implementation from ${proposal.status}`, {
+        proposalId: proposal.proposalId,
+        status: proposal.status,
+        requiredStatuses: ["approved", "implementation-queued"]
+      });
+    }
+    return this.persistLifecycle(proposal, "implementing");
+  }
+
+  markValidationPending(proposalId: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (!["implementing", "validation-pending"].includes(proposal.status)) {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot enter validation-pending from ${proposal.status}`, {
+        proposalId: proposal.proposalId,
+        status: proposal.status,
+        requiredStatuses: ["implementing", "validation-pending"]
+      });
+    }
+    return this.persistLifecycle(proposal, "validation-pending");
+  }
+
+  markImplementationFailed(proposalId: string, reason: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (["candidate-ready", "rejected", "superseded"].includes(proposal.status)) return proposal;
+    return this.persistLifecycle(proposal, "implementation-failed", reason);
+  }
+
+  markCandidateRejected(proposalId: string, result?: ProposalValidationResult, reason?: string): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (proposal.status === "candidate-ready") return proposal;
+    return this.persistLifecycle(proposal, "candidate-rejected", reason, result);
+  }
+
+  markCandidateReady(proposalId: string, result: ProposalValidationResult): ImprovementProposal {
+    const proposal = this.requireProposal(proposalId);
+    if (proposal.status !== "implementing" && proposal.status !== "validation-pending" && proposal.status !== "validated") {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot become candidate-ready from ${proposal.status}`, {
+        proposalId: proposal.proposalId,
+        status: proposal.status,
+        requiredStatuses: ["implementing", "validation-pending", "validated"]
+      });
+    }
+    const parsed = proposalValidationResultSchema.parse(result);
+    if (!validationCanBeAccepted(parsed)) {
+      throw new DebugMcpError("CandidateNotReady", `Proposal ${proposal.proposalId} has not passed candidate validation`, {
+        proposalId: proposal.proposalId,
+        verdict: parsed.verdict
+      });
+    }
+    return this.persistLifecycle(proposal, "candidate-ready", undefined, parsed);
+  }
+
   /**
    * Record an externally executed candidate validation. This is intentionally
    * a service API rather than an MCP mutation tool: code changes and their
@@ -277,7 +346,7 @@ export class ImprovementProposalService {
    */
   recordValidation(input: RecordProposalValidationInput): Record<string, unknown> {
     const proposal = this.requireProposal(input.proposalId);
-    if (proposal.status !== "approved" && proposal.status !== "implementing") {
+    if (proposal.status !== "approved" && proposal.status !== "implementing" && proposal.status !== "validation-pending") {
       throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot accept validation from ${proposal.status}`, {
         proposalId: proposal.proposalId,
         status: proposal.status,
@@ -389,7 +458,7 @@ export class ImprovementProposalService {
     nowMs: number
   ): ImprovementProposal {
     const timestamp = new Date(nowMs).toISOString();
-    const status: ProposalStatus = existing && ["approved", "implementing", "validated", "superseded"].includes(existing.status)
+    const status: ProposalStatus = existing && ["approved", "implementation-queued", "implementing", "validation-pending", "candidate-ready", "candidate-rejected", "implementation-failed", "validated", "superseded"].includes(existing.status)
       ? existing.status
       : finding.evidence.sufficient ? "ready-for-review" : "draft";
     const proposal = improvementProposalSchema.parse({
@@ -412,7 +481,7 @@ export class ImprovementProposalService {
       priority: assessment.priority,
       generatedBy: finding.generatedBy,
       sourceWindow: finding.evidence.sampleWindow,
-      ...(existing && ["approved", "implementing", "validated", "superseded"].includes(existing.status)
+      ...(existing && ["approved", "implementation-queued", "implementing", "validation-pending", "candidate-ready", "candidate-rejected", "implementation-failed", "validated", "superseded"].includes(existing.status)
         ? (existing.baselineSha ? { baselineSha: existing.baselineSha } : {})
         : baselineSha ? { baselineSha } : existing?.baselineSha ? { baselineSha: existing.baselineSha } : {}),
       createdAt: existing?.createdAt ?? timestamp,
@@ -431,6 +500,23 @@ export class ImprovementProposalService {
     const proposal = this.options.proposals.get(proposalId);
     if (!proposal) throw new DebugMcpError("ProposalNotFound", `Improvement Proposal not found: ${proposalId}`, { proposalId });
     return proposal;
+  }
+
+  private persistLifecycle(
+    proposal: ImprovementProposal,
+    status: ProposalStatus,
+    reason?: string,
+    validationResult?: ProposalValidationResult
+  ): ImprovementProposal {
+    const updated = improvementProposalSchema.parse({
+      ...proposal,
+      status,
+      updatedAt: new Date(this.now()).toISOString(),
+      ...(reason ? { reviewReason: reason } : {}),
+      ...(validationResult ? { validationResult } : {})
+    });
+    this.options.proposals.upsert(updated);
+    return updated;
   }
 
   private resolveBaselineSha(explicit?: string): string | undefined {
@@ -517,7 +603,7 @@ function validationCanBeAccepted(result: ProposalValidationResult): boolean {
 }
 
 export function isMergeCandidate(proposal: ImprovementProposal): boolean {
-  return proposal.status === "validated"
+  return (proposal.status === "validated" || proposal.status === "candidate-ready")
     && proposal.validationResult !== undefined
     && validationCanBeAccepted(proposal.validationResult)
     && proposal.validationResult.baseline === proposal.baselineSha;

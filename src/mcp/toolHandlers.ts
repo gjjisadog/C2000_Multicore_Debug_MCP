@@ -119,7 +119,12 @@ import {
   listImprovementProposalsSchema,
   getImprovementProposalSchema,
   reviewImprovementProposalSchema,
-  exportImprovementImplementationPromptSchema
+  exportImprovementImplementationPromptSchema,
+  startImprovementImplementationSchema,
+  getImprovementImplementationRunSchema,
+  listImprovementImplementationRunsSchema,
+  getImprovementCandidateSchema,
+  cleanupImprovementRunSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -160,6 +165,11 @@ export interface ToolHandlerDeps {
   getImprovementProposal?: (input: z.input<typeof getImprovementProposalSchema>) => Promise<ToolResult> | ToolResult;
   reviewImprovementProposal?: (input: z.input<typeof reviewImprovementProposalSchema>) => Promise<ToolResult> | ToolResult;
   exportImprovementImplementationPrompt?: (input: z.input<typeof exportImprovementImplementationPromptSchema>) => Promise<ToolResult> | ToolResult;
+  startImprovementImplementation?: (input: z.input<typeof startImprovementImplementationSchema>) => Promise<ToolResult> | ToolResult;
+  getImprovementImplementationRun?: (input: z.input<typeof getImprovementImplementationRunSchema>) => Promise<ToolResult> | ToolResult;
+  listImprovementImplementationRuns?: (input: z.input<typeof listImprovementImplementationRunsSchema>) => Promise<ToolResult> | ToolResult;
+  getImprovementCandidate?: (input: z.input<typeof getImprovementCandidateSchema>) => Promise<ToolResult> | ToolResult;
+  cleanupImprovementRun?: (input: z.input<typeof cleanupImprovementRunSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -242,6 +252,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getImprovementProposal = deps.getImprovementProposal ?? unavailableImprovement;
   const reviewImprovementProposal = deps.reviewImprovementProposal ?? unavailableImprovement;
   const exportImprovementImplementationPrompt = deps.exportImprovementImplementationPrompt ?? unavailableImprovement;
+  const unavailableImprovementImplementation = () => { throw new DebugMcpError("ImprovementImplementationUnavailable", "Approved improvement implementation is not configured in this runtime"); };
+  const startImprovementImplementation = deps.startImprovementImplementation ?? unavailableImprovementImplementation;
+  const getImprovementImplementationRun = deps.getImprovementImplementationRun ?? unavailableImprovementImplementation;
+  const listImprovementImplementationRuns = deps.listImprovementImplementationRuns ?? unavailableImprovementImplementation;
+  const getImprovementCandidate = deps.getImprovementCandidate ?? unavailableImprovementImplementation;
+  const cleanupImprovementRun = deps.cleanupImprovementRun ?? unavailableImprovementImplementation;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -430,6 +446,46 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await exportImprovementImplementationPrompt(exportImprovementImplementationPromptSchema.parse(input)));
       } catch (error) {
         return fail(error, { proposalId: input.proposalId });
+      }
+    },
+
+    async startImprovementImplementation(input: z.input<typeof startImprovementImplementationSchema>) {
+      try {
+        return ok(await startImprovementImplementation(startImprovementImplementationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { proposalId: input.proposalId });
+      }
+    },
+
+    async getImprovementImplementationRun(input: z.input<typeof getImprovementImplementationRunSchema>) {
+      try {
+        return ok(await getImprovementImplementationRun(getImprovementImplementationRunSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { runId: input.runId });
+      }
+    },
+
+    async listImprovementImplementationRuns(input: z.input<typeof listImprovementImplementationRunsSchema>) {
+      try {
+        return ok(await listImprovementImplementationRuns(listImprovementImplementationRunsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getImprovementCandidate(input: z.input<typeof getImprovementCandidateSchema>) {
+      try {
+        return ok(await getImprovementCandidate(getImprovementCandidateSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { runId: input.runId });
+      }
+    },
+
+    async cleanupImprovementRun(input: z.input<typeof cleanupImprovementRunSchema>) {
+      try {
+        return ok(await cleanupImprovementRun(cleanupImprovementRunSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { runId: input.runId });
       }
     },
 

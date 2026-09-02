@@ -7,8 +7,13 @@ export interface ImprovementPrompt {
   sha256: string;
 }
 
+export interface ImplementationPromptContext {
+  runId?: string;
+  worktreePath?: string;
+}
+
 /** Builds a deterministic, evidence-bound prompt; evidence is data, not instructions. */
-export function buildImplementationPrompt(proposal: ImprovementProposal, baselineSha: string): ImprovementPrompt {
+export function buildImplementationPrompt(proposal: ImprovementProposal, baselineSha: string, context: ImplementationPromptContext = {}): ImprovementPrompt {
   const prompt = [
     "# C2000 MCP Approved Improvement Implementation",
     "",
@@ -21,6 +26,8 @@ export function buildImplementationPrompt(proposal: ImprovementProposal, baselin
     "## APPROVED CHANGE PLAN",
     `Repository: gjjisadog/C2000_Multicore_Debug_MCP`,
     `Proposal ID: ${proposal.proposalId}`,
+    ...(context.runId ? [`Implementation Run ID: ${context.runId}`] : []),
+    ...(context.worktreePath ? [`Isolated Worktree: ${context.worktreePath}`] : []),
     `Baseline SHA: ${baselineSha}`,
     `Category: ${proposal.category}`,
     `Target: ${proposal.target}`,

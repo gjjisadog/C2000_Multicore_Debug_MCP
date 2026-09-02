@@ -401,7 +401,7 @@ describe("C2000 improvement proposals", () => {
     roots.push(directory);
     const store = await SqliteStore.open(path.join(directory, "proposals.sqlite"));
     try {
-      expect(store.schemaVersion).toBe(10);
+      expect(store.schemaVersion).toBe(12);
       const eventStore = fixture();
       const proposalStore = new ProposalRepository(store);
       const svc = new ImprovementProposalService({ events: eventStore, proposals: proposalStore, currentBaselineSha: "abc1234", now: () => NOW });

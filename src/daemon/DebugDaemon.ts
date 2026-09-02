@@ -51,6 +51,12 @@ import { OutcomeEventRepository } from "../analytics/OutcomeEventRepository.js";
 import { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
 import { ProposalRepository } from "../improvement/ProposalRepository.js";
 import { ImprovementProposalService } from "../improvement/ImprovementProposalService.js";
+import { ConfiguredCodingAgent } from "../improvement/implementation/ImprovementAgentRunner.js";
+import { CandidateCommitService } from "../improvement/implementation/CandidateCommitService.js";
+import { ImplementationRunRepository } from "../improvement/implementation/ImplementationRunRepository.js";
+import { ImprovementImplementationService } from "../improvement/implementation/ImprovementImplementationService.js";
+import { ImprovementValidationService } from "../improvement/implementation/ImprovementValidationService.js";
+import { ImprovementWorktreeManager } from "../improvement/implementation/ImprovementWorktreeManager.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -74,6 +80,7 @@ export class DebugDaemon {
   private jobEngine?: TestJobEngine;
   private rpcServer?: DaemonRpcServer;
   private analytics?: OutcomeAnalyticsService;
+  private improvementImplementation?: ImprovementImplementationService;
   private instance?: DebugDaemonInstance;
   private releaseSingleton?: () => Promise<void>;
   private stopping?: Promise<void>;
@@ -100,12 +107,44 @@ export class DebugDaemon {
     });
     this.analytics = analytics;
     void analytics.maintain();
+    const proposalRecords = new ProposalRepository(store);
     const improvementProposals = new ImprovementProposalService({
       events: outcomeEvents,
-      proposals: new ProposalRepository(store),
+      proposals: proposalRecords,
       currentBaselineSha: () => process.env.C2000_MCP_BASELINE_SHA,
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
+    const improvementConfig = {
+      repositoryRoot: this.config.improvement?.repositoryRoot,
+      worktreeRoot: this.config.improvement?.worktreeRoot ?? "../.c2000-improvement-worktrees",
+      artifactRoot: this.config.improvement?.artifactRoot ?? "./runtime/improvement-artifacts",
+      baseRef: this.config.improvement?.baseRef ?? "master",
+      enabled: this.config.improvement?.enabled ?? false,
+      maxActiveRuns: this.config.improvement?.maxActiveRuns ?? 1,
+      codingAgent: this.config.improvement?.codingAgent ?? {}
+    };
+    const improvementRepositoryRoot = path.resolve(improvementConfig.repositoryRoot ?? process.cwd());
+    const improvementWorktreeRoot = path.resolve(improvementRepositoryRoot, improvementConfig.worktreeRoot ?? "../.c2000-improvement-worktrees");
+    const improvementArtifactRoot = path.resolve(improvementRepositoryRoot, improvementConfig.artifactRoot ?? "./runtime/improvement-artifacts");
+    const improvementWorktrees = new ImprovementWorktreeManager({ repositoryRoot: improvementRepositoryRoot, worktreeRoot: improvementWorktreeRoot });
+    const improvementRuns = new ImplementationRunRepository(store);
+    const improvementImplementation = new ImprovementImplementationService({
+      proposals: proposalRecords,
+      proposalService: improvementProposals,
+      runs: improvementRuns,
+      worktrees: improvementWorktrees,
+      agent: new ConfiguredCodingAgent(improvementConfig.codingAgent),
+      validation: new ImprovementValidationService({ worktrees: improvementWorktrees, artifactRoot: improvementArtifactRoot }),
+      candidateCommits: new CandidateCommitService(improvementWorktrees),
+      artifactRoot: improvementArtifactRoot,
+      currentMasterSha: () => improvementWorktrees.resolveRef(improvementConfig.baseRef ?? "master"),
+      baseRef: improvementConfig.baseRef ?? "master",
+      enabled: improvementConfig.enabled ?? false,
+      maxActiveRuns: improvementConfig.maxActiveRuns ?? 1,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
+    improvementImplementation.reconcileOnStartup();
+    this.improvementImplementation = improvementImplementation;
     const artifacts = new ArtifactRepository(store);
     const artifactExports = new ArtifactExportRepository(store);
     const canReports = new CanReportService(artifacts, path.join(path.dirname(databasePath), "can-artifacts"));
@@ -200,6 +239,11 @@ export class DebugDaemon {
       getImprovementProposal: input => improvementProposals.get(input.proposalId),
       reviewImprovementProposal: input => improvementProposals.review(input),
       exportImprovementImplementationPrompt: input => improvementProposals.exportImplementationPrompt(input.proposalId),
+      startImprovementImplementation: input => improvementImplementation.start(input.proposalId),
+      getImprovementImplementationRun: input => improvementImplementation.get(input.runId),
+      listImprovementImplementationRuns: input => improvementImplementation.list(input),
+      getImprovementCandidate: input => improvementImplementation.getCandidate(input.runId),
+      cleanupImprovementRun: input => improvementImplementation.cleanup(input.runId),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),
@@ -401,6 +445,7 @@ export class DebugDaemon {
     } catch (error) {
       await rpcServer.close().catch(() => undefined);
       await workerSupervisor.stopAll().catch(() => undefined);
+      await improvementImplementation.shutdown().catch(() => undefined);
       await runtime.dispose().catch(() => undefined);
       store.close();
       this.rpcServer = undefined;
@@ -421,7 +466,7 @@ export class DebugDaemon {
   }
 
   getHealth(): Record<string, unknown> {
-    return createDaemonHealth(
+    const health = createDaemonHealth(
       this.instance,
       this.startedAtMs,
       Boolean(this.store),
@@ -431,6 +476,17 @@ export class DebugDaemon {
       this.jobEngine?.boardConcurrencySnapshot(),
       this.registry?.list()
     );
+    const implementationRuns = this.improvementImplementation?.list({}).runs;
+    const activeImplementationRunCount = Array.isArray(implementationRuns)
+      ? implementationRuns.filter(run => run && typeof run === "object" && ["created", "agent-running", "agent-complete", "validating", "validation-pending", "validated"].includes(String((run as { status?: unknown }).status))).length
+      : 0;
+    return {
+      ...health,
+      toolProfile: this.config.toolProfile ?? "safe",
+      toolSurfaceProfile: this.config.toolSurfaceProfile ?? "agent",
+      capabilityMode: "dynamic",
+      activeImplementationRunCount
+    };
   }
 
   async stop(): Promise<void> {
@@ -439,6 +495,7 @@ export class DebugDaemon {
   }
 
   private async stopInternal(): Promise<void> {
+    await this.improvementImplementation?.shutdown().catch(() => undefined);
     this.jobEngine?.beginStop();
     if (this.testRuns) {
       const recovering = this.testRuns.markRecovering();
@@ -455,6 +512,7 @@ export class DebugDaemon {
     await this.runtime?.dispose().catch(() => undefined);
     this.store?.close();
     this.analytics = undefined;
+    this.improvementImplementation = undefined;
     await removeDaemonInstance(this.paths, this.instance?.instanceId);
     await this.releaseSingleton?.().catch(() => undefined);
     this.releaseSingleton = undefined;

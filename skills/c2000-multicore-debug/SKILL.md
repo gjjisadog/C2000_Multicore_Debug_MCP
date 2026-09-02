@@ -96,6 +96,26 @@ not treat a validated Proposal or Mock replay as hardware acceptance evidence.
 Reject or defer with a reason when the evidence, baseline, scope, or root-cause
 classification is not sufficient.
 
+## Approved implementation runs
+
+Round6 implementation is a separate, human-gated workflow. It may start only
+from an `approved`, `auto-eligible` Proposal whose baseline still matches the
+current `master`. Use the advanced-only
+`c2000_startImprovementImplementation`, then
+`c2000_getImprovementImplementationRun`,
+`c2000_getImprovementCandidate`, and the list/cleanup tools for audit. The run
+uses a fresh worktree and candidate branch outside the source checkout; the
+configured coding agent may edit that worktree but may not commit, push, merge,
+publish, or modify `master`. A candidate commit is created only after the same
+validation commands pass on baseline and candidate, protected invariants stay
+intact, and no hardware gate is inconclusive. Hardware-required validation is
+`NOT_RUN_HARDWARE`, not PASS.
+
+This implementation path does not replace normal debugging and does not call
+CCS, firmware, or target services. Never use shell, CCS GUI, TI active-target
+commands, or private daemon RPC to work around an unavailable implementation
+tool. Stop at the human merge gate; the MCP never pushes or merges a candidate.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,

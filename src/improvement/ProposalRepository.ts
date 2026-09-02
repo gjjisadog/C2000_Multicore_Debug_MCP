@@ -94,9 +94,13 @@ export class ProposalRepository implements ImprovementProposalStore {
       ORDER BY CASE status
         WHEN 'ready-for-review' THEN 0
         WHEN 'approved' THEN 1
-        WHEN 'draft' THEN 2
-        WHEN 'deferred' THEN 3
-        ELSE 4
+        WHEN 'implementation-queued' THEN 2
+        WHEN 'implementing' THEN 3
+        WHEN 'validation-pending' THEN 4
+        WHEN 'candidate-ready' THEN 5
+        WHEN 'draft' THEN 6
+        WHEN 'deferred' THEN 7
+        ELSE 8
       END, updated_at DESC, proposal_id ASC
       LIMIT ?
     `, [...parameters, limit]);

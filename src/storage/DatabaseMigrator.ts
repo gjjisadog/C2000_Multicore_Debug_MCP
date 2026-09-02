@@ -569,6 +569,52 @@ const migrations: Migration[] = [
           ON improvement_proposals(category, target, updated_at);
       `);
     }
+  },
+  {
+    version: 11,
+    apply(store) {
+      // Implementation Runs are temporary governance execution records. They
+      // are separate from Proposals so one approved Proposal can have several
+      // isolated attempts without overwriting its evidence-bound identity.
+      store.exec(`
+        CREATE TABLE IF NOT EXISTS improvement_implementation_runs (
+          run_id TEXT PRIMARY KEY,
+          proposal_id TEXT NOT NULL,
+          baseline_sha TEXT NOT NULL,
+          branch_name TEXT NOT NULL,
+          worktree_path TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          status TEXT NOT NULL,
+          agent_provider TEXT,
+          agent_run_id TEXT,
+          prompt_artifact_json TEXT,
+          pre_implementation_status_json TEXT NOT NULL,
+          post_implementation_status_json TEXT,
+          validation_result_json TEXT,
+          validation_commands_json TEXT,
+          artifacts_json TEXT,
+          candidate_commit_sha TEXT,
+          failure_reason TEXT,
+          coding_agent_result_json TEXT,
+          FOREIGN KEY(proposal_id) REFERENCES improvement_proposals(proposal_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_improvement_runs_proposal_status
+          ON improvement_implementation_runs(proposal_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_improvement_runs_status
+          ON improvement_implementation_runs(status, created_at);
+      `);
+    }
+  },
+  {
+    version: 12,
+    apply(store) {
+      store.exec(`
+        ALTER TABLE improvement_implementation_runs
+          ADD COLUMN agent_attempts INTEGER NOT NULL DEFAULT 0;
+      `);
+    }
   }
 ];
 

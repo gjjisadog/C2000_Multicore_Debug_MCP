@@ -30,6 +30,15 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
       startupTimeoutMs: 15000
     },
     storage: { sqlitePath: "./runtime/c2000-debugd.sqlite", wal: true },
+    improvement: {
+      enabled: false,
+      repositoryRoot: process.cwd(),
+      worktreeRoot: path.join(path.dirname(process.cwd()), ".c2000-improvement-worktrees"),
+      artifactRoot: path.join(process.cwd(), "runtime", "improvement-artifacts"),
+      baseRef: "master",
+      maxActiveRuns: 1,
+      codingAgent: { provider: "configured-agent", args: [], timeoutMs: 15 * 60 * 1000 }
+    },
     workers: {
       heartbeatIntervalMs: 1000,
       heartbeatTimeoutMs: 5000,
@@ -60,6 +69,8 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   const daemon = { ...objectAt(config, "daemon") };
   const filesystem = { ...objectAt(config, "filesystem") };
   const debugProbe = { ...objectAt(config, "debugProbe") };
+  const improvement = { ...objectAt(config, "improvement") };
+  const codingAgent = { ...objectAt(improvement, "codingAgent") };
   if (process.env.C2000_MCP_TOOL_PROFILE) config.toolProfile = process.env.C2000_MCP_TOOL_PROFILE;
   if (process.env.C2000_MCP_TOOL_SURFACE) config.toolSurfaceProfile = process.env.C2000_MCP_TOOL_SURFACE;
   if (process.env.C2000_MCP_ALLOWED_READ_ROOTS) filesystem.allowedReadRoots = process.env.C2000_MCP_ALLOWED_READ_ROOTS.split(path.delimiter).filter(Boolean);
@@ -70,6 +81,15 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_PROBE_RECOVERY_POLICY) debugProbe.recoveryPolicy = process.env.C2000_MCP_PROBE_RECOVERY_POLICY;
   if (process.env.C2000_MCP_PROBES_JSON) debugProbe.probes = JSON.parse(process.env.C2000_MCP_PROBES_JSON);
   if (process.env.C2000_MCP_MULTI_BOARD_ENABLED) debugProbe.multiBoardEnabled = process.env.C2000_MCP_MULTI_BOARD_ENABLED === "1" || process.env.C2000_MCP_MULTI_BOARD_ENABLED === "true";
+  if (process.env.C2000_MCP_IMPROVEMENT_ENABLED) improvement.enabled = parseBooleanOverride(process.env.C2000_MCP_IMPROVEMENT_ENABLED);
+  if (process.env.C2000_MCP_IMPROVEMENT_REPOSITORY_ROOT) improvement.repositoryRoot = process.env.C2000_MCP_IMPROVEMENT_REPOSITORY_ROOT;
+  if (process.env.C2000_MCP_IMPROVEMENT_WORKTREE_ROOT) improvement.worktreeRoot = process.env.C2000_MCP_IMPROVEMENT_WORKTREE_ROOT;
+  if (process.env.C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT) improvement.artifactRoot = process.env.C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT;
+  if (process.env.C2000_MCP_IMPROVEMENT_BASE_REF) improvement.baseRef = process.env.C2000_MCP_IMPROVEMENT_BASE_REF;
+  if (process.env.C2000_MCP_IMPROVEMENT_AGENT_PROVIDER) codingAgent.provider = process.env.C2000_MCP_IMPROVEMENT_AGENT_PROVIDER;
+  if (process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND) codingAgent.command = process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND;
+  if (process.env.C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON) codingAgent.args = JSON.parse(process.env.C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON);
+  if (process.env.C2000_MCP_IMPROVEMENT_AGENT_TIMEOUT_MS) codingAgent.timeoutMs = Number.parseInt(process.env.C2000_MCP_IMPROVEMENT_AGENT_TIMEOUT_MS, 10);
   if (process.env.C2000_MCP_ADAPTER) {
     config.adapter = process.env.C2000_MCP_ADAPTER;
     ccs.scriptingMode = process.env.C2000_MCP_ADAPTER;
@@ -101,7 +121,14 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_MCP_DAEMON_AUTO_START) {
     daemon.autoStart = process.env.C2000_MCP_DAEMON_AUTO_START !== "0";
   }
-  return { ...config, ccs, logging, daemon, filesystem, debugProbe };
+  improvement.codingAgent = codingAgent;
+  return { ...config, ccs, logging, daemon, filesystem, debugProbe, improvement };
+}
+
+function parseBooleanOverride(value: string): boolean {
+  if (value === "1" || value === "true") return true;
+  if (value === "0" || value === "false") return false;
+  throw new Error(`Invalid C2000_MCP_IMPROVEMENT_ENABLED value: ${value}. Expected true, false, 1, or 0.`);
 }
 
 function objectAt(config: Record<string, unknown>, key: string): Record<string, unknown> {

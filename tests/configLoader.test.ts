@@ -39,6 +39,48 @@ describe("loadConfig", () => {
     expect(config.toolSurfaceProfile).toBe("advanced");
   });
 
+  test("loads approved improvement implementation configuration without enabling it by default", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    delete process.env.C2000_MCP_IMPROVEMENT_ENABLED;
+    delete process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND;
+
+    const config = await loadConfig();
+
+    expect(config.improvement).toEqual(expect.objectContaining({
+      enabled: false,
+      baseRef: "master",
+      maxActiveRuns: 1
+    }));
+    expect(config.improvement?.codingAgent.command).toBeUndefined();
+  });
+
+  test("loads approved improvement implementation environment overrides", async () => {
+    delete process.env.C2000_MCP_CONFIG;
+    process.env.C2000_MCP_IMPROVEMENT_ENABLED = "true";
+    process.env.C2000_MCP_IMPROVEMENT_REPOSITORY_ROOT = "C:/approved/repository";
+    process.env.C2000_MCP_IMPROVEMENT_WORKTREE_ROOT = "C:/approved/worktrees";
+    process.env.C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT = "C:/approved/artifacts";
+    process.env.C2000_MCP_IMPROVEMENT_BASE_REF = "master";
+    process.env.C2000_MCP_IMPROVEMENT_AGENT_PROVIDER = "test-agent";
+    process.env.C2000_MCP_IMPROVEMENT_AGENT_COMMAND = "node";
+    process.env.C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON = JSON.stringify(["agent.mjs", "{worktreePath}"]);
+
+    const config = await loadConfig();
+
+    expect(config.improvement).toEqual(expect.objectContaining({
+      enabled: true,
+      repositoryRoot: "C:/approved/repository",
+      worktreeRoot: "C:/approved/worktrees",
+      artifactRoot: "C:/approved/artifacts",
+      baseRef: "master",
+      codingAgent: expect.objectContaining({
+        provider: "test-agent",
+        command: "node",
+        args: ["agent.mjs", "{worktreePath}"]
+      })
+    }));
+  });
+
   test("rejects an invalid tool surface environment override", async () => {
     delete process.env.C2000_MCP_CONFIG;
     process.env.C2000_MCP_TOOL_SURFACE = "legacy-all";

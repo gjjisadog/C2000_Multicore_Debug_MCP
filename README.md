@@ -19,6 +19,26 @@ Independent MCP server for explicit TI C2000 multicore debug control. The first 
 Automated Mock results are never classified as real XDS110, PCAN, DLOG, ERAD,
 or target-timing evidence.
 
+## Tool Profiles
+
+The MCP uses two independent profile dimensions. `ToolProfile` is the safety
+boundary (`readonly`, `safe`, or `full`); `toolSurfaceProfile` controls default
+exposure (`agent`, `advanced`, or `compatibility`). The normal Codex/Claude
+configuration is `safe` + `agent`.
+
+| Use case | Safety | Surface |
+| --- | --- | --- |
+| Normal Codex / Claude work | `safe` | `agent` |
+| Advanced manual debugging | `safe` | `advanced` |
+| Deliberately dangerous experiment | `full` | `advanced` |
+| Legacy scripts / migration | `safe` or `full` | `compatibility` |
+| Read-only audit | `readonly` | `agent` |
+
+Safety is applied before surface exposure, so a surface can never restore a
+tool blocked by the selected safety profile. The agent surface favors task
+workflows; canonical low-level controls and DLOG/ERAD/Variable Stream
+lifecycle tools remain available on `advanced`.
+
 ## pytest HIL SDK
 
 The package contains a pure-Python SDK under `python/`. Install it from a
@@ -115,6 +135,16 @@ metric deltas, and an `improved`/`neutral`/`regressed`/`inconclusive` verdict.
 Only a complete, non-regressed, safety-clean candidate is a merge candidate;
 an approved Proposal or engineering validation is never an automatic merge or
 hardware acceptance result.
+
+An approved, `auto-eligible` Proposal can be run through the advanced-only
+`c2000_startImprovementImplementation` control. It creates a fresh worktree
+and candidate branch outside the source checkout, invokes only the configured
+shell-free coding-agent command, replays the same host/mock validation on the
+baseline and candidate, and commits only a validated candidate branch. The
+MCP never edits `master`, pushes, merges, or publishes. The feature is disabled
+by default; hardware-required validation remains `NOT_RUN_HARDWARE` and cannot
+produce a candidate commit. Use the companion get/list/candidate/cleanup tools
+for audit and review.
 
 ## 0.5 CAN evidence and job semantics
 
@@ -869,6 +899,9 @@ Environment overrides:
 - `C2000_MCP_TOOL_PROFILE=readonly|safe|full`
 - `C2000_MCP_TOOL_SURFACE=agent|advanced|compatibility`
 - `C2000_MCP_BASELINE_SHA` (optional baseline binding for approved improvement prompts)
+- `C2000_MCP_IMPROVEMENT_ENABLED=true|false` (disabled by default)
+- `C2000_MCP_IMPROVEMENT_REPOSITORY_ROOT`, `C2000_MCP_IMPROVEMENT_WORKTREE_ROOT`, and `C2000_MCP_IMPROVEMENT_ARTIFACT_ROOT`
+- `C2000_MCP_IMPROVEMENT_AGENT_COMMAND` and `C2000_MCP_IMPROVEMENT_AGENT_ARGS_JSON` (configured shell-free coding-agent entry point)
 - `C2000_MCP_ADAPTER=mock|ccs|auto`
 - `C2000_MCP_CCS_INSTALL_PATH`
 - `C2000_MCP_C2000WARE_PATH`

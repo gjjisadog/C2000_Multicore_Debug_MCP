@@ -14,6 +14,7 @@ import {
   PROPOSAL_STATUSES,
   PROPOSAL_REVIEW_DECISIONS
 } from "../improvement/ProposalSchemas.js";
+import { IMPLEMENTATION_RUN_STATUSES } from "../improvement/implementation/ImplementationSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -169,6 +170,28 @@ export const reviewImprovementProposalSchema = z.object({
 
 export const exportImprovementImplementationPromptSchema = z.object({
   proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const startImprovementImplementationSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const getImprovementImplementationRunSchema = z.object({
+  runId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const listImprovementImplementationRunsSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  status: z.enum(IMPLEMENTATION_RUN_STATUSES).optional(),
+  limit: z.number().int().positive().max(500).default(100)
+});
+
+export const getImprovementCandidateSchema = z.object({
+  runId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const cleanupImprovementRunSchema = z.object({
+  runId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;
