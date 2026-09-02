@@ -1,5 +1,7 @@
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer, RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { normalizeObjectSchema } from "@modelcontextprotocol/sdk/server/zod-compat.js";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
@@ -117,7 +119,12 @@ import {
   publishImprovementCandidateSchema,
   getImprovementPullRequestSchema,
   refreshImprovementReviewEvidenceSchema,
-  getMergeRecommendationSchema
+  getMergeRecommendationSchema,
+  refreshReviewFeedbackSchema,
+  listReviewFeedbackSchema,
+  listRevisionProposalsSchema,
+  reviewRevisionProposalSchema,
+  publishRevisionCandidateSchema
 } from "./toolSchemas.js";
 
 type ZodObjectSchema = z.ZodTypeAny;
@@ -309,6 +316,11 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_getImprovementPullRequest", title: "Get C2000 Improvement Pull Request", description: "Read the locally recorded controlled improvement pull request, candidate identity, and the latest stored review evidence without contacting the target.", schema: getImprovementPullRequestSchema, handlerName: "getImprovementPullRequest", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_refreshImprovementReviewEvidence", title: "Refresh C2000 Improvement Review Evidence", description: "Refresh candidate-bound CI, human-review, base, head, mergeability, and optional hardware evidence for an existing improvement pull request. It never merges or changes implementation code.", schema: refreshImprovementReviewEvidenceSchema, handlerName: "refreshImprovementReviewEvidence", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_getMergeRecommendation", title: "Get C2000 Merge Recommendation", description: "Read the latest deterministic fail-closed merge recommendation for a controlled improvement pull request. This is evidence only; human merge remains required and no merge API is called.", schema: getMergeRecommendationSchema, handlerName: "getMergeRecommendation", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_refreshReviewFeedback", title: "Refresh C2000 Review Feedback", description: "Advanced governance operation: fetch and sanitize bounded PR review feedback as untrusted evidence. It never treats comments as instructions or changes source code.", schema: refreshReviewFeedbackSchema, handlerName: "refreshReviewFeedback", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_listReviewFeedback", title: "List C2000 Review Feedback", description: "Read normalized, sanitized review feedback and deterministic classifications for a controlled improvement PR. Raw review text is never returned.", schema: listReviewFeedbackSchema, handlerName: "listReviewFeedback", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_listRevisionProposals", title: "List C2000 Revision Proposals", description: "List evidence-bound revision proposals generated from untrusted PR feedback; set generate=true for one selected PR after c2000_refreshReviewFeedback to classify current feedback before listing. The original Improvement Proposal remains immutable.", schema: listRevisionProposalsSchema, handlerName: "listRevisionProposals", inputScope: "host", targetEffect: "host-read", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_reviewRevisionProposal", title: "Review C2000 Revision Proposal", description: "Human-gated approval, rejection, or deferral of a controlled review revision. Approval records intent only and never edits, commits, pushes, or merges code.", schema: reviewRevisionProposalSchema, handlerName: "reviewRevisionProposal", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
+  { name: "c2000_publishRevisionCandidate", title: "Publish C2000 Revision Candidate", description: "Publish one independently validated C(n+1) candidate to the existing PR branch with an ordinary fast-forward push. It never force-pushes, rebases, amends, auto-resolves review, or merges.", schema: publishRevisionCandidateSchema, handlerName: "publishRevisionCandidate", inputScope: "host", targetEffect: "repository-control", role: "host", family: "improvement", exposure: "advanced" },
   { name: "c2000_getDaemonHealth", title: "Get C2000 Debug Daemon Health", description: "Return local c2000-debugd health, worker, and background job counts without touching a target.", schema: daemonHealthSchema, handlerName: "getDaemonHealth", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_listBoards", title: "List C2000 Boards", description: "List persisted board registrations, health state, lease ownership, and quarantine evidence. If empty, call c2000_registerBoard before any daemon-routed launch.", schema: listBoardsSchema, handlerName: "listBoards", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_registerBoard", title: "Register C2000 Board", description: "Validate a serial-bound XDS110 .ccxml, persist the board registration, and start its isolated daemon worker without touching the target.", schema: registerBoardSchema, handlerName: "registerBoard", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
@@ -500,7 +512,7 @@ export function registerC2000Tools(
   };
   const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, effectiveDeps);
 
-  const registeredTools = new Map<string, { enabled: boolean; enable(): void; disable(): void }>();
+  const registeredTools = new Map<string, RegisteredTool>();
   for (const definition of definitionsToRegister) {
     const registered = server.registerTool(
       definition.name,
@@ -533,7 +545,9 @@ export function registerC2000Tools(
     && installDynamicMcpDispatch(server, controller, registeredTools);
   controller.setDynamicToolListSupported(dynamicToolListSupported);
   const unsubscribe = capabilitySessions.subscribe(() => {
-    if (dynamicToolListSupported) server.sendToolListChanged();
+    if (!dynamicToolListSupported) return;
+    syncRegisteredToolMembership(controller, registeredTools);
+    server.sendToolListChanged();
   });
   return {
     invoker,
@@ -754,54 +768,41 @@ async function invokeRegisteredDefinition(
 }
 
 function supportsDynamicMcpServer(server: McpServer): boolean {
-  const underlying = server.server as unknown as {
-    _requestHandlers?: unknown;
-  };
-  return Boolean(underlying)
-    && underlying._requestHandlers instanceof Map
-    && typeof server.server.removeRequestHandler === "function"
+  // The current MCP SDK exposes the list-changed notification and the
+  // underlying public request-handler API. Do not depend on private SDK maps:
+  // the registered tool's public `enabled` field controls tools/list, while
+  // the public call handler below preserves a structured capability error for
+  // clients that call a cached tool after its grant expires.
+  return typeof server.sendToolListChanged === "function"
     && typeof server.server.setRequestHandler === "function";
 }
 
 function installDynamicMcpDispatch(
   server: McpServer,
   controller: ToolCapabilityController,
-  registeredTools: Map<string, { enabled: boolean; enable(): void; disable(): void }>
+  registeredTools: Map<string, RegisteredTool>
 ): boolean {
-  const underlying = server.server as unknown as {
-    _requestHandlers: Map<string, (request: any, extra: any) => Promise<any>>;
-  };
-  const originalList = underlying._requestHandlers.get("tools/list");
-  const originalCall = underlying._requestHandlers.get("tools/call");
-  if (!originalList || !originalCall) return false;
-
-  server.server.removeRequestHandler("tools/list");
-  server.server.setRequestHandler(ListToolsRequestSchema, async (request, extra) => {
-    const visibleNames = new Set(controller.visibleDefinitions().map(definition => definition.name));
-    const previousEnabled = new Map<string, boolean>();
-    for (const [name, registered] of registeredTools) {
-      previousEnabled.set(name, registered.enabled);
-      // RegisteredTool.enabled is the SDK's public list-membership state. Set
-      // it directly for this synchronous list snapshot so every temporary
-      // toggle does not emit its own tools/list_changed notification.
-      registered.enabled = visibleNames.has(name);
-    }
-    try {
-      return await originalList(request, extra);
-    } finally {
-      for (const [name, enabled] of previousEnabled) {
-        const registered = registeredTools.get(name);
-        if (!registered) continue;
-        registered.enabled = enabled;
-      }
-    }
-  });
-
-  server.server.removeRequestHandler("tools/call");
+  syncRegisteredToolMembership(controller, registeredTools);
+  // McpServer does not expose a visibility predicate for its built-in
+  // tools/list handler. Reinstall the public request handler with the same
+  // SDK serialization rules, calculating membership at request time so lazy
+  // TTL expiry is reflected even when a fake or stalled clock does not fire a
+  // timer callback. This uses only public SDK APIs and no private handler map.
+  server.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: visibleRegisteredTools(controller, registeredTools)
+  }));
   server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     try {
       controller.assertToolVisible(request.params.name);
-      return await originalCall(request, extra);
+      const registered = registeredTools.get(request.params.name);
+      if (!registered || typeof registered.handler !== "function") {
+        throw new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${request.params.name}`, { toolName: request.params.name });
+      }
+      // All C2000 registrations use the regular callback form (task support is
+      // forbidden). Calling the public RegisteredTool handler directly keeps
+      // the SDK's normal tools/list membership while allowing the router to
+      // return CapabilityRequired/CapabilityExpired for stale cached calls.
+      return await registered.handler((request.params.arguments ?? {}) as any, extra as any) as any;
     } catch (error) {
       const result = failedInvocation(error, getInputSessionId(request.params.arguments));
       return {
@@ -812,6 +813,43 @@ function installDynamicMcpDispatch(
     }
   });
   return true;
+}
+
+function visibleRegisteredTools(
+  controller: ToolCapabilityController,
+  registeredTools: Map<string, RegisteredTool>
+): Array<Record<string, unknown>> {
+  const visibleNames = new Set(controller.visibleDefinitions().map(definition => definition.name));
+  const tools: Array<Record<string, unknown>> = [];
+  for (const [name, registered] of registeredTools) {
+    if (!registered.enabled || !visibleNames.has(name)) continue;
+    const inputSchema = registered.inputSchema ? normalizeObjectSchema(registered.inputSchema) : undefined;
+    tools.push({
+      name,
+      ...(registered.title === undefined ? {} : { title: registered.title }),
+      ...(registered.description === undefined ? {} : { description: registered.description }),
+      inputSchema: inputSchema
+        ? toJsonSchemaCompat(inputSchema, { strictUnions: true, pipeStrategy: "input" })
+        : { type: "object", properties: {} },
+      ...(registered.annotations === undefined ? {} : { annotations: registered.annotations }),
+      ...(registered.execution === undefined ? {} : { execution: registered.execution }),
+      ...(registered._meta === undefined ? {} : { _meta: registered._meta })
+    });
+  }
+  return tools;
+}
+
+function syncRegisteredToolMembership(
+  controller: ToolCapabilityController,
+  registeredTools: Map<string, RegisteredTool>
+): void {
+  const visibleNames = new Set(controller.visibleDefinitions().map(definition => definition.name));
+  for (const [name, registered] of registeredTools) {
+    // `enabled` is a public RegisteredTool property. Assigning it avoids a
+    // notification per tool; the caller emits one consolidated list-changed
+    // notification after the capability set has been updated.
+    registered.enabled = visibleNames.has(name);
+  }
 }
 
 function toolProfilePayload(exposure: ToolExposureSummary) {

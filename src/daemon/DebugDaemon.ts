@@ -63,6 +63,9 @@ import { CandidateReviewService } from "../improvement/review/CandidateReviewSer
 import { CandidatePublishService } from "../improvement/review/CandidatePublishService.js";
 import { GitHubReviewProvider } from "../improvement/review/GitHubReviewProvider.js";
 import { ImprovementPullRequestService } from "../improvement/review/ImprovementPullRequestService.js";
+import { ImprovementReviewFeedbackRepository, ImprovementRevisionProposalRepository } from "../improvement/revision/RevisionRepositories.js";
+import { ReviewFeedbackService } from "../improvement/revision/ReviewFeedbackService.js";
+import { RevisionProposalService } from "../improvement/revision/RevisionProposalService.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -135,21 +138,6 @@ export class DebugDaemon {
     const improvementArtifactRoot = path.resolve(improvementRepositoryRoot, improvementConfig.artifactRoot ?? "./runtime/improvement-artifacts");
     const improvementWorktrees = new ImprovementWorktreeManager({ repositoryRoot: improvementRepositoryRoot, worktreeRoot: improvementWorktreeRoot });
     const improvementRuns = new ImplementationRunRepository(store);
-    const improvementImplementation = new ImprovementImplementationService({
-      proposals: proposalRecords,
-      proposalService: improvementProposals,
-      runs: improvementRuns,
-      worktrees: improvementWorktrees,
-      agent: new ConfiguredCodingAgent(improvementConfig.codingAgent),
-      validation: new ImprovementValidationService({ worktrees: improvementWorktrees, artifactRoot: improvementArtifactRoot }),
-      candidateCommits: new CandidateCommitService(improvementWorktrees),
-      artifactRoot: improvementArtifactRoot,
-      currentMasterSha: () => improvementWorktrees.resolveRef(improvementConfig.baseRef ?? "master"),
-      baseRef: improvementConfig.baseRef ?? "master",
-      enabled: improvementConfig.enabled ?? false,
-      maxActiveRuns: improvementConfig.maxActiveRuns ?? 1,
-      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
-    });
     const improvementPullRequests = new ImprovementPullRequestRepository(store);
     const improvementReviewEvidence = new ImprovementReviewEvidenceRepository(store);
     const mergeRecommendations = new MergeRecommendationRepository(store);
@@ -175,6 +163,46 @@ export class DebugDaemon {
       githubTokenEnv: improvementConfig.review.githubTokenEnv,
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
+    const reviewFeedbackRecords = new ImprovementReviewFeedbackRepository(store);
+    const revisionProposalRecords = new ImprovementRevisionProposalRepository(store);
+    let revisionProposals: RevisionProposalService | undefined;
+    const reviewFeedback = new ReviewFeedbackService({
+      feedback: reviewFeedbackRecords,
+      pullRequests: improvementPullRequests,
+      provider: githubReviewProvider,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile),
+      artifactRoot: improvementArtifactRoot,
+      onEvidenceChanged: (feedbackIds, reason) => { revisionProposals?.markEvidenceChangedByFeedback(feedbackIds, reason); },
+      recordAnalytics: event => analytics.recordReviewFeedback(event)
+    });
+    revisionProposals = new RevisionProposalService({
+      feedback: reviewFeedback,
+      feedbackStore: reviewFeedbackRecords,
+      revisions: revisionProposalRecords,
+      pullRequests: improvementPullRequests,
+      proposals: proposalRecords,
+      runs: improvementRuns,
+      provider: githubReviewProvider,
+      repository: improvementConfig.review.repository,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile),
+      recordAnalytics: event => analytics.recordRevisionOutcome(event)
+    });
+    const improvementImplementation = new ImprovementImplementationService({
+      proposals: proposalRecords,
+      proposalService: improvementProposals,
+      revisionGate: revisionProposals,
+      runs: improvementRuns,
+      worktrees: improvementWorktrees,
+      agent: new ConfiguredCodingAgent(improvementConfig.codingAgent),
+      validation: new ImprovementValidationService({ worktrees: improvementWorktrees, artifactRoot: improvementArtifactRoot }),
+      candidateCommits: new CandidateCommitService(improvementWorktrees),
+      artifactRoot: improvementArtifactRoot,
+      currentMasterSha: () => improvementWorktrees.resolveRef(improvementConfig.baseRef ?? "master"),
+      baseRef: improvementConfig.baseRef ?? "master",
+      enabled: improvementConfig.enabled ?? false,
+      maxActiveRuns: improvementConfig.maxActiveRuns ?? 1,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
     const improvementPullRequest = new ImprovementPullRequestService({
       runs: improvementRuns,
       proposals: proposalRecords,
@@ -187,6 +215,7 @@ export class DebugDaemon {
       provider: githubReviewProvider,
       review: improvementConfig.review,
       artifactRoot: improvementArtifactRoot,
+      revisionService: revisionProposals,
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     improvementImplementation.reconcileOnStartup();
@@ -285,7 +314,7 @@ export class DebugDaemon {
       getImprovementProposal: input => improvementProposals.get(input.proposalId),
       reviewImprovementProposal: input => improvementProposals.review(input),
       exportImprovementImplementationPrompt: input => improvementProposals.exportImplementationPrompt(input.proposalId),
-      startImprovementImplementation: input => improvementImplementation.start(input.proposalId),
+      startImprovementImplementation: input => improvementImplementation.start(input),
       getImprovementImplementationRun: input => improvementImplementation.get(input.runId),
       listImprovementImplementationRuns: input => improvementImplementation.list(input),
       getImprovementCandidate: input => improvementImplementation.getCandidate(input.runId),
@@ -294,6 +323,39 @@ export class DebugDaemon {
       getImprovementPullRequest: input => improvementPullRequest.get(input),
       refreshImprovementReviewEvidence: input => improvementPullRequest.refresh(input),
       getMergeRecommendation: input => improvementPullRequest.getMergeRecommendation(input),
+      refreshReviewFeedback: input => reviewFeedback.refresh(input),
+      listReviewFeedback: input => reviewFeedback.list({
+        ...(input.pullRequestId ? { pullRequestId: input.pullRequestId } : {}),
+        ...(input.pullRequestNumber !== undefined ? { pullRequestNumber: input.pullRequestNumber } : {}),
+        ...(input.implementationRunId ? { pullRequestId: improvementPullRequests.findByImplementationRun(input.implementationRunId)?.pullRequestId } : {}),
+        ...(input.status ? { status: input.status } : {}),
+        ...(input.classification ? { classification: input.classification } : {}),
+        limit: input.limit
+      }),
+      listRevisionProposals: async input => {
+        const generated = input.generate
+          ? await revisionProposals.generate(input)
+          : undefined;
+        const pullRequestIdForNumber = input.pullRequestNumber !== undefined
+          ? improvementPullRequests.list(500).find(item => item.number === input.pullRequestNumber)?.pullRequestId
+          : undefined;
+        const listed = revisionProposals.list({
+          ...(input.originalProposalId ? { originalProposalId: input.originalProposalId } : {}),
+          ...(input.pullRequestId ? { pullRequestId: input.pullRequestId } : {}),
+          ...(input.pullRequestNumber !== undefined ? { pullRequestId: pullRequestIdForNumber ?? "__missing_pull_request__" } : {}),
+          ...(input.status ? { status: input.status } : {}),
+          limit: input.limit
+        });
+        return {
+          ...listed,
+          ...(generated ? {
+            generatedRevisionProposals: generated.revisionProposals,
+            recommendations: generated.recommendations
+          } : {})
+        };
+      },
+      reviewRevisionProposal: input => revisionProposals.review(input),
+      publishRevisionCandidate: input => improvementPullRequest.publishRevision(input),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),

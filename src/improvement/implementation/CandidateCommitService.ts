@@ -10,6 +10,12 @@ export interface CandidateCommitResult {
   validationResult: ProposalValidationResult;
 }
 
+export interface CandidateRevisionCommitMetadata {
+  revisionProposalId: string;
+  originalProposalId: string;
+  parentCandidateSha: string;
+}
+
 /** Creates the only commit in the Round6 lifecycle, on the candidate branch. */
 export class CandidateCommitService {
   constructor(private readonly worktrees: ImprovementWorktreeManager) {}
@@ -20,6 +26,7 @@ export class CandidateCommitService {
     worktreePath: string;
     baselineSha: string;
     validationResult: ProposalValidationResult;
+    revision?: CandidateRevisionCommitMetadata;
   }): Promise<CandidateCommitResult> {
     assertValidationAcceptable(input.proposal, input.validationResult);
     const before = await this.worktrees.snapshot(input.worktreePath, input.baselineSha);
@@ -49,14 +56,28 @@ export class CandidateCommitService {
         stderr: staged.stderr.slice(-4096)
       });
     }
-    const subject = `improve(${safeSubject(input.proposal.target)}): ${safeSubject(input.proposal.title)}`.slice(0, 120);
-    const message = [
-      subject,
-      "",
-      `Proposal: ${input.proposal.proposalId}`,
-      `Implementation-Run: ${input.runId}`,
-      `Baseline: ${input.baselineSha}`
-    ].join("\n");
+    const subject = input.revision
+      ? `fix(${safeSubject(input.proposal.target)}): address review feedback`
+      : `improve(${safeSubject(input.proposal.target)}): ${safeSubject(input.proposal.title)}`;
+    const message = input.revision
+      ? [
+          // The revision subject is a protocol-level audit marker and must
+          // remain exact; only the human-readable initial subject is bounded
+          // by the conventional commit subject limit.
+          subject,
+          "",
+          `Revision-Proposal: ${input.revision.revisionProposalId}`,
+          `Original-Proposal: ${input.revision.originalProposalId}`,
+          `Implementation-Run: ${input.runId}`,
+          `Parent-Candidate: ${input.revision.parentCandidateSha}`
+        ].join("\n")
+      : [
+          subject.slice(0, 120),
+          "",
+          `Proposal: ${input.proposal.proposalId}`,
+          `Implementation-Run: ${input.runId}`,
+          `Baseline: ${input.baselineSha}`
+        ].join("\n");
     const committed = await this.worktrees.runGitAt(input.worktreePath, ["commit", "-m", message], "CandidateCommitFailed");
     if (committed.exitCode !== 0 || committed.timedOut) {
       throw new DebugMcpError("CandidateCommitFailed", "Git could not create the validated candidate commit", {

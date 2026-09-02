@@ -23,7 +23,7 @@ describe("SQLite durable store", () => {
     directories.push(directory);
     const databasePath = path.join(directory, "c2000-debugd.sqlite");
     const first = await SqliteStore.open(databasePath, { wal: true });
-    expect(first.schemaVersion).toBe(13);
+    expect(first.schemaVersion).toBe(14);
     expect(first.journalMode()).toBe("wal");
 
     const registry = new BoardRegistry(
@@ -40,7 +40,7 @@ describe("SQLite durable store", () => {
     first.close();
 
     const second = await SqliteStore.open(databasePath, { wal: true });
-    expect(second.schemaVersion).toBe(13);
+    expect(second.schemaVersion).toBe(14);
     const reopenedRegistry = new BoardRegistry(
       new BoardRepository(second),
       new EventRepository(second),
@@ -71,6 +71,7 @@ describe("SQLite durable store", () => {
     const run: ImprovementImplementationRun = {
       runId: "imp-run-sqlite-001",
       proposalId: "imp-proposal-sqlite-001",
+      runKind: "initial",
       baselineSha: "0123456789abcdef0123456789abcdef01234567",
       branchName: "improve/imp-proposal-sqlite-001-run",
       worktreePath: path.join(directory, "worktree"),

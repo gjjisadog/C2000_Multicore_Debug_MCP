@@ -18,6 +18,9 @@ export interface ImprovementImplementationRunStore {
 interface ImplementationRunRow {
   run_id: string;
   proposal_id: string;
+  run_kind: string | null;
+  revision_proposal_id: string | null;
+  parent_candidate_sha: string | null;
   baseline_sha: string;
   branch_name: string;
   worktree_path: string;
@@ -95,14 +98,17 @@ export class ImplementationRunRepository implements ImprovementImplementationRun
     const parsed = improvementImplementationRunSchema.parse(run);
     this.store.run(`
       INSERT INTO improvement_implementation_runs(
-        run_id, proposal_id, baseline_sha, branch_name, worktree_path, created_at,
+        run_id, proposal_id, run_kind, revision_proposal_id, parent_candidate_sha, baseline_sha, branch_name, worktree_path, created_at,
         started_at, finished_at, status, agent_attempts, agent_provider, agent_run_id,
         prompt_artifact_json, pre_implementation_status_json, post_implementation_status_json,
         validation_result_json, validation_commands_json, artifacts_json,
         candidate_commit_sha, failure_reason, coding_agent_result_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(run_id) DO UPDATE SET
         proposal_id = excluded.proposal_id,
+        run_kind = excluded.run_kind,
+        revision_proposal_id = excluded.revision_proposal_id,
+        parent_candidate_sha = excluded.parent_candidate_sha,
         baseline_sha = excluded.baseline_sha,
         branch_name = excluded.branch_name,
         worktree_path = excluded.worktree_path,
@@ -125,6 +131,9 @@ export class ImplementationRunRepository implements ImprovementImplementationRun
     `, [
       parsed.runId,
       parsed.proposalId,
+      parsed.runKind,
+      parsed.revisionProposalId ?? null,
+      parsed.parentCandidateSha ?? null,
       parsed.baselineSha,
       parsed.branchName,
       parsed.worktreePath,
@@ -207,6 +216,9 @@ function decodeRun(row: ImplementationRunRow): ImprovementImplementationRun | un
     return parseImplementationRun({
       runId: row.run_id,
       proposalId: row.proposal_id,
+      runKind: row.run_kind ?? "initial",
+      ...(row.revision_proposal_id ? { revisionProposalId: row.revision_proposal_id } : {}),
+      ...(row.parent_candidate_sha ? { parentCandidateSha: row.parent_candidate_sha } : {}),
       baselineSha: row.baseline_sha,
       branchName: row.branch_name,
       worktreePath: row.worktree_path,

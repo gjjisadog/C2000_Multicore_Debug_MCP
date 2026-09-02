@@ -76,6 +76,7 @@ export const improvementPullRequestSchema = z.object({
   pullRequestId: boundedText(256),
   proposalId: boundedText(128),
   implementationRunId: boundedText(128),
+  currentImplementationRunId: boundedText(128).optional(),
   repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   branch: z.string().regex(/^(?:improve|auto-improve)\/[A-Za-z0-9._-]{1,220}$/),
   baseBranch: z.string().regex(/^[A-Za-z0-9._/-]{1,256}$/),
@@ -94,7 +95,18 @@ export const improvementPullRequestSchema = z.object({
   mergedCommitSha: shaSchema.optional(),
   mergedAt: z.string().datetime().optional(),
   generatedBodyHash: z.string().regex(/^[0-9a-f]{64}$/i),
-  humanBodyPreserved: z.boolean().default(true)
+  humanBodyPreserved: z.boolean().default(true),
+  revisionHistory: z.array(z.object({
+    runId: boundedText(128),
+    revisionProposalId: boundedText(256).optional(),
+    candidateSha: shaSchema,
+    parentCandidateSha: shaSchema.optional(),
+    category: boundedText(64).optional(),
+    summary: boundedText(512).optional(),
+    feedbackIds: z.array(boundedText(256)).max(64).default([]),
+    validationVerdict: z.string().max(64).optional(),
+    recordedAt: z.string().datetime()
+  })).max(32).default([])
 });
 export type ImprovementPullRequest = z.infer<typeof improvementPullRequestSchema>;
 

@@ -7,7 +7,9 @@ export const OUTCOME_EVENT_KINDS = [
   "capability_open",
   "capability_close",
   "capability_expire",
-  "escalation_recommendation"
+  "escalation_recommendation",
+  "review_feedback",
+  "revision_proposal"
 ] as const;
 
 export const OUTCOME_STATUSES = ["success", "failure", "timeout", "cancelled", "blocked", "unknown"] as const;
@@ -83,6 +85,24 @@ export const outcomeEventMetadataSchema = z.object({
     failureClass: z.enum(OUTCOME_FAILURE_CLASSES).optional(),
     jobId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
   }).optional(),
+  reviewAction: z.enum(["refresh", "linked", "evidence-changed"]).optional(),
+  reviewPullRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,256}$/).optional(),
+  reviewFeedbackId: z.string().regex(/^[A-Za-z0-9._:-]{1,256}$/).optional(),
+  reviewFeedbackCount: z.number().int().nonnegative().max(500).optional(),
+  reviewActionableCount: z.number().int().nonnegative().max(500).optional(),
+  reviewMalformedCount: z.number().int().nonnegative().max(500).optional(),
+  reviewClassificationCounts: z.record(z.number().int().nonnegative().max(500)).optional(),
+  reviewStatusCounts: z.record(z.number().int().nonnegative().max(500)).optional(),
+  revisionAction: z.enum(["generated", "approved", "rejected", "deferred", "candidate-ready", "evidence-changed"]).optional(),
+  revisionPullRequestId: z.string().regex(/^[A-Za-z0-9._:-]{1,256}$/).optional(),
+  revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{1,256}$/).optional(),
+  revisionCategory: z.string().regex(/^[A-Za-z0-9._:-]{1,64}$/).optional(),
+  revisionStatus: z.string().regex(/^[A-Za-z0-9._:-]{1,64}$/).optional(),
+  revisionOutcome: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
+  revisionNumber: z.number().int().positive().max(64).optional(),
+  revisionFeedbackCount: z.number().int().nonnegative().max(64).optional(),
+  revisionImplementationMode: z.enum(["auto-eligible", "manual-only"]).optional(),
+  revisionNewProposalRecommended: z.boolean().optional(),
   actor: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
 }).passthrough();
 

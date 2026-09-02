@@ -16,6 +16,12 @@ import {
 } from "../improvement/ProposalSchemas.js";
 import { IMPLEMENTATION_RUN_STATUSES } from "../improvement/implementation/ImplementationSchemas.js";
 import { hardwareEvidenceSchema } from "../improvement/review/ReviewSchemas.js";
+import {
+  REVIEW_FEEDBACK_CLASSES,
+  REVIEW_FEEDBACK_STATUSES,
+  REVISION_PROPOSAL_STATUSES,
+  revisionProposalReviewDecisionSchema
+} from "../improvement/revision/RevisionSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -174,7 +180,10 @@ export const exportImprovementImplementationPromptSchema = z.object({
 });
 
 export const startImprovementImplementationSchema = z.object({
-  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional()
+}).refine(value => [value.proposalId, value.revisionProposalId].filter(item => item !== undefined).length === 1, {
+  message: "Exactly one proposalId or revisionProposalId is required"
 });
 
 export const getImprovementImplementationRunSchema = z.object({
@@ -217,6 +226,47 @@ export const refreshImprovementReviewEvidenceSchema = improvementPullRequestSele
 });
 export const getMergeRecommendationSchema = improvementPullRequestSelectorObject.refine(requireOnePullRequestSelector, {
   message: "Exactly one implementationRunId, pullRequestId, or pullRequestNumber is required"
+});
+
+export const refreshReviewFeedbackSchema = improvementPullRequestSelectorObject.refine(requireOnePullRequestSelector, {
+  message: "Exactly one implementationRunId, pullRequestId, or pullRequestNumber is required"
+});
+
+export const listReviewFeedbackSchema = improvementPullRequestSelectorObject.extend({
+  status: z.enum(REVIEW_FEEDBACK_STATUSES).optional(),
+  classification: z.enum(REVIEW_FEEDBACK_CLASSES).optional(),
+  limit: z.number().int().positive().max(500).default(100)
+});
+
+export const listRevisionProposalsSchema = z.object({
+  originalProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  pullRequestId: z.string().trim().min(1).max(256).optional(),
+  pullRequestNumber: z.number().int().positive().optional(),
+  status: z.enum(REVISION_PROPOSAL_STATUSES).optional(),
+  limit: z.number().int().positive().max(500).default(100),
+  /** Explicitly ask the service to classify current feedback into proposals before listing. */
+  generate: z.boolean().default(false)
+}).superRefine((value, context) => {
+  if (!value.generate) return;
+  const selectorCount = [value.originalProposalId, value.pullRequestId, value.pullRequestNumber].filter(item => item !== undefined).length;
+  if (selectorCount !== 1) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["generate"],
+      message: "generate=true requires exactly one originalProposalId, pullRequestId, or pullRequestNumber"
+    });
+  }
+});
+
+export const reviewRevisionProposalSchema = z.object({
+  revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
+  decision: revisionProposalReviewDecisionSchema,
+  reviewReason: z.string().trim().min(1).max(2048),
+  reviewer: z.string().trim().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
+});
+
+export const publishRevisionCandidateSchema = z.object({
+  revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;

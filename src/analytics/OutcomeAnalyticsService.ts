@@ -68,6 +68,29 @@ export interface CapabilityAnalyticsInput {
   capability?: ToolCapability;
 }
 
+export interface ReviewFeedbackAnalyticsInput {
+  action: "refresh" | "linked" | "evidence-changed";
+  pullRequestId: string;
+  feedbackCount: number;
+  actionableCount: number;
+  malformedCount?: number;
+  classificationCounts?: Record<string, number>;
+  statusCounts?: Record<string, number>;
+}
+
+export interface RevisionProposalAnalyticsInput {
+  action: "generated" | "approved" | "rejected" | "deferred" | "candidate-ready" | "evidence-changed";
+  revisionProposalId: string;
+  pullRequestId?: string;
+  category: string;
+  status?: string;
+  outcome: string;
+  revisionNumber?: number;
+  feedbackCount?: number;
+  implementationMode?: "auto-eligible" | "manual-only";
+  newImprovementProposalRecommended?: boolean;
+}
+
 export interface EscalationRecommendationInput {
   workflow?: string;
   stage?: string;
@@ -247,6 +270,45 @@ export class OutcomeAnalyticsService {
     } catch (error) {
       this.analyticsWriteFailure("capability-audit", error);
     }
+  }
+
+  /** Record bounded review metadata only; review text is never accepted here. */
+  recordReviewFeedback(input: ReviewFeedbackAnalyticsInput): void {
+    this.record({
+      kind: "review_feedback",
+      name: input.action,
+      outcome: input.action === "evidence-changed" ? "blocked" : "success",
+      metadata: {
+        reviewAction: input.action,
+        reviewPullRequestId: boundedId(input.pullRequestId),
+        reviewFeedbackCount: boundedCount(input.feedbackCount),
+        reviewActionableCount: boundedCount(input.actionableCount),
+        ...(input.malformedCount === undefined ? {} : { reviewMalformedCount: boundedCount(input.malformedCount) }),
+        ...(input.classificationCounts ? { reviewClassificationCounts: sanitizeCountMap(input.classificationCounts) } : {}),
+        ...(input.statusCounts ? { reviewStatusCounts: sanitizeCountMap(input.statusCounts) } : {})
+      }
+    });
+  }
+
+  /** Record revision lifecycle metadata without storing review prose or commands. */
+  recordRevisionOutcome(input: RevisionProposalAnalyticsInput): void {
+    this.record({
+      kind: "revision_proposal",
+      name: input.action,
+      outcome: input.action === "rejected" || input.action === "deferred" || input.action === "evidence-changed" ? "blocked" : "success",
+      metadata: {
+        revisionAction: input.action,
+        revisionProposalId: boundedId(input.revisionProposalId),
+        ...(input.pullRequestId ? { revisionPullRequestId: boundedId(input.pullRequestId) } : {}),
+        revisionCategory: boundedLabel(input.category) ?? "unknown",
+        ...(input.status ? { revisionStatus: boundedLabel(input.status) } : {}),
+        ...(boundedLabel(input.outcome) ? { revisionOutcome: boundedLabel(input.outcome) } : {}),
+        ...(input.revisionNumber === undefined ? {} : { revisionNumber: boundedCount(input.revisionNumber) }),
+        ...(input.feedbackCount === undefined ? {} : { revisionFeedbackCount: boundedCount(input.feedbackCount) }),
+        ...(input.implementationMode ? { revisionImplementationMode: input.implementationMode } : {}),
+        ...(input.newImprovementProposalRecommended === undefined ? {} : { revisionNewProposalRecommended: input.newImprovementProposalRecommended })
+      }
+    });
   }
 
   async maintain(): Promise<{ deleted: number; available: boolean }> {
@@ -802,7 +864,10 @@ function metadataRecord(event: OutcomeEvent, key: string): Record<string, unknow
 function sanitizeMetadata(value: unknown): Record<string, unknown> {
   const source = asRecord(value);
   const output: Record<string, unknown> = {};
-  const stringKeys = ["role", "family", "exposure", "capability", "approvalClass", "domainVerdict", "recommendationId", "actor"];
+  const stringKeys = [
+    "role", "family", "exposure", "capability", "approvalClass", "domainVerdict", "recommendationId", "actor",
+    "reviewPullRequestId", "reviewFeedbackId", "revisionPullRequestId", "revisionProposalId", "revisionCategory", "revisionStatus", "revisionOutcome"
+  ];
   for (const key of stringKeys) {
     const safe = boundedLabel(source[key]);
     if (safe) output[key] = safe;
@@ -818,6 +883,18 @@ function sanitizeMetadata(value: unknown): Record<string, unknown> {
     const number = boundedNonNegativeInteger(source[key]);
     if (number !== undefined) output[key] = number;
   }
+  for (const key of ["reviewFeedbackCount", "reviewActionableCount", "reviewMalformedCount", "revisionNumber", "revisionFeedbackCount"]) {
+    const number = boundedNonNegativeInteger(source[key]);
+    if (number !== undefined) output[key] = number;
+  }
+  for (const key of ["reviewAction", "revisionAction"]) {
+    const safe = boundedLabel(source[key]);
+    if (safe) output[key] = safe;
+  }
+  if (source.reviewClassificationCounts) output.reviewClassificationCounts = sanitizeCountMap(source.reviewClassificationCounts);
+  if (source.reviewStatusCounts) output.reviewStatusCounts = sanitizeCountMap(source.reviewStatusCounts);
+  if (source.revisionImplementationMode === "auto-eligible" || source.revisionImplementationMode === "manual-only") output.revisionImplementationMode = source.revisionImplementationMode;
+  if (typeof source.revisionNewProposalRecommended === "boolean") output.revisionNewProposalRecommended = source.revisionNewProposalRecommended;
   if (typeof source.insufficientHistoricalSupport === "boolean") output.insufficientHistoricalSupport = source.insufficientHistoricalSupport;
   const openedFrom = asRecord(source.openedFrom);
   if (Object.keys(openedFrom).length) {
@@ -847,6 +924,26 @@ function boundedLabel(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim();
   return /^[A-Za-z0-9._:-]{1,128}$/.test(normalized) ? normalized : undefined;
+}
+
+function boundedId(value: string): string | undefined {
+  const normalized = value.trim();
+  return /^[A-Za-z0-9._:-]{1,256}$/.test(normalized) ? normalized : undefined;
+}
+
+function boundedCount(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? Math.min(500, Math.trunc(value)) : 0;
+}
+
+function sanitizeCountMap(value: unknown): Record<string, number> {
+  const source = asRecord(value);
+  const output: Record<string, number> = {};
+  for (const [key, count] of Object.entries(source).slice(0, 32)) {
+    const safeKey = boundedLabel(key);
+    if (!safeKey || typeof count !== "number" || !Number.isFinite(count) || count < 0) continue;
+    output[safeKey] = Math.min(500, Math.trunc(count));
+  }
+  return output;
 }
 
 function boundedDuration(value: number): number {

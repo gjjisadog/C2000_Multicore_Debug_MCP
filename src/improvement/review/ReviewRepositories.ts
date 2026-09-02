@@ -32,6 +32,7 @@ interface PullRequestRow {
   pull_request_id: string;
   proposal_id: string;
   implementation_run_id: string;
+  current_implementation_run_id: string | null;
   repository: string;
   branch: string;
   base_branch: string;
@@ -51,6 +52,7 @@ interface PullRequestRow {
   merged_at: string | null;
   generated_body_hash: string;
   human_body_preserved: number;
+  revision_history_json: string | null;
   record_json: string;
 }
 
@@ -82,7 +84,7 @@ export class ImprovementPullRequestRepository implements ImprovementPullRequestS
   }
 
   findByImplementationRun(implementationRunId: string): ImprovementPullRequest | undefined {
-    const row = this.store.get<PullRequestRow>("SELECT * FROM improvement_pull_requests WHERE implementation_run_id = ?", [implementationRunId]);
+    const row = this.store.get<PullRequestRow>("SELECT * FROM improvement_pull_requests WHERE implementation_run_id = ? OR current_implementation_run_id = ? ORDER BY updated_at DESC LIMIT 1", [implementationRunId, implementationRunId]);
     return row ? decodePullRequest(row) : undefined;
   }
 
@@ -113,14 +115,15 @@ export class ImprovementPullRequestRepository implements ImprovementPullRequestS
     const parsed = improvementPullRequestSchema.parse(value);
     this.store.run(`
       INSERT INTO improvement_pull_requests(
-        pull_request_id, proposal_id, implementation_run_id, repository, branch, base_branch,
+        pull_request_id, proposal_id, implementation_run_id, current_implementation_run_id, repository, branch, base_branch,
         candidate_sha, baseline_sha, number, url, title, status, draft, created_at, updated_at,
         original_base_sha, current_base_sha, current_head_sha, merged_commit_sha, merged_at,
-        generated_body_hash, human_body_preserved, record_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        generated_body_hash, human_body_preserved, revision_history_json, record_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(pull_request_id) DO UPDATE SET
         proposal_id = excluded.proposal_id,
         implementation_run_id = excluded.implementation_run_id,
+        current_implementation_run_id = excluded.current_implementation_run_id,
         repository = excluded.repository,
         branch = excluded.branch,
         base_branch = excluded.base_branch,
@@ -139,11 +142,13 @@ export class ImprovementPullRequestRepository implements ImprovementPullRequestS
         merged_at = excluded.merged_at,
         generated_body_hash = excluded.generated_body_hash,
         human_body_preserved = excluded.human_body_preserved,
+        revision_history_json = excluded.revision_history_json,
         record_json = excluded.record_json
     `, [
       parsed.pullRequestId,
       parsed.proposalId,
       parsed.implementationRunId,
+      parsed.currentImplementationRunId ?? null,
       parsed.repository,
       parsed.branch,
       parsed.baseBranch,
@@ -163,6 +168,7 @@ export class ImprovementPullRequestRepository implements ImprovementPullRequestS
       parsed.mergedAt ?? null,
       parsed.generatedBodyHash,
       parsed.humanBodyPreserved ? 1 : 0,
+      JSON.stringify(parsed.revisionHistory),
       JSON.stringify(parsed)
     ]);
   }
@@ -239,7 +245,7 @@ export class InMemoryImprovementPullRequestStore implements ImprovementPullReque
   }
 
   findByImplementationRun(implementationRunId: string): ImprovementPullRequest | undefined {
-    const value = Array.from(this.values.values()).find(item => item.implementationRunId === implementationRunId);
+    const value = Array.from(this.values.values()).find(item => item.implementationRunId === implementationRunId || item.currentImplementationRunId === implementationRunId);
     return value ? structuredClone(value) : undefined;
   }
 
@@ -301,6 +307,7 @@ function decodePullRequest(row: PullRequestRow): ImprovementPullRequest | undefi
       pullRequestId: row.pull_request_id,
       proposalId: row.proposal_id,
       implementationRunId: row.implementation_run_id,
+      ...(row.current_implementation_run_id ? { currentImplementationRunId: row.current_implementation_run_id } : {}),
       repository: row.repository,
       branch: row.branch,
       baseBranch: row.base_branch,
@@ -319,7 +326,8 @@ function decodePullRequest(row: PullRequestRow): ImprovementPullRequest | undefi
       ...(row.merged_commit_sha ? { mergedCommitSha: row.merged_commit_sha } : {}),
       ...(row.merged_at ? { mergedAt: row.merged_at } : {}),
       generatedBodyHash: row.generated_body_hash,
-      humanBodyPreserved: row.human_body_preserved === 1
+      humanBodyPreserved: row.human_body_preserved === 1,
+      revisionHistory: row.revision_history_json ? JSON.parse(row.revision_history_json) : []
     });
     return fallback.success ? fallback.data : undefined;
   } catch {

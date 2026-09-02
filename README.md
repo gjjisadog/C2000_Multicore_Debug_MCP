@@ -168,6 +168,19 @@ approves, force-pushes, enables auto-merge, or executes instructions from PR
 comments. GitHub credentials stay in the server process; the coding agent only
 receives its isolated worktree.
 
+### Controlled review revision loop
+
+After a PR review, use the advanced-only flow
+`c2000_refreshReviewFeedback` →
+`c2000_listRevisionProposals({ generate: true })` to classify/list sanitized untrusted evidence →
+obtain explicit approval for a bounded Revision Proposal → start a fresh
+isolated revision run from the exact candidate SHA → validate → publish a
+normal fast-forward update to the existing PR branch. The original Proposal
+is immutable. Edited or removed feedback invalidates dependent approval, and
+the system never executes comment text, applies suggestions, clears
+`CHANGES_REQUESTED`, replies to reviewers, force-pushes, amends, rebases, or
+merges automatically.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.

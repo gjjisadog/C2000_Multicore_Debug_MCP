@@ -128,7 +128,12 @@ import {
   publishImprovementCandidateSchema,
   getImprovementPullRequestSchema,
   refreshImprovementReviewEvidenceSchema,
-  getMergeRecommendationSchema
+  getMergeRecommendationSchema,
+  refreshReviewFeedbackSchema,
+  listReviewFeedbackSchema,
+  listRevisionProposalsSchema,
+  reviewRevisionProposalSchema,
+  publishRevisionCandidateSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -178,6 +183,11 @@ export interface ToolHandlerDeps {
   getImprovementPullRequest?: (input: z.input<typeof getImprovementPullRequestSchema>) => Promise<ToolResult> | ToolResult;
   refreshImprovementReviewEvidence?: (input: z.input<typeof refreshImprovementReviewEvidenceSchema>) => Promise<ToolResult> | ToolResult;
   getMergeRecommendation?: (input: z.input<typeof getMergeRecommendationSchema>) => Promise<ToolResult> | ToolResult;
+  refreshReviewFeedback?: (input: z.input<typeof refreshReviewFeedbackSchema>) => Promise<ToolResult> | ToolResult;
+  listReviewFeedback?: (input: z.input<typeof listReviewFeedbackSchema>) => Promise<ToolResult> | ToolResult;
+  listRevisionProposals?: (input: z.input<typeof listRevisionProposalsSchema>) => Promise<ToolResult> | ToolResult;
+  reviewRevisionProposal?: (input: z.input<typeof reviewRevisionProposalSchema>) => Promise<ToolResult> | ToolResult;
+  publishRevisionCandidate?: (input: z.input<typeof publishRevisionCandidateSchema>) => Promise<ToolResult> | ToolResult;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -270,6 +280,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const getImprovementPullRequest = deps.getImprovementPullRequest ?? unavailableImprovementImplementation;
   const refreshImprovementReviewEvidence = deps.refreshImprovementReviewEvidence ?? unavailableImprovementImplementation;
   const getMergeRecommendation = deps.getMergeRecommendation ?? unavailableImprovementImplementation;
+  const refreshReviewFeedback = deps.refreshReviewFeedback ?? unavailableImprovementImplementation;
+  const listReviewFeedback = deps.listReviewFeedback ?? unavailableImprovementImplementation;
+  const listRevisionProposals = deps.listRevisionProposals ?? unavailableImprovementImplementation;
+  const reviewRevisionProposal = deps.reviewRevisionProposal ?? unavailableImprovementImplementation;
+  const publishRevisionCandidate = deps.publishRevisionCandidate ?? unavailableImprovementImplementation;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -465,7 +480,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       try {
         return ok(await startImprovementImplementation(startImprovementImplementationSchema.parse(input)));
       } catch (error) {
-        return fail(error, { proposalId: input.proposalId });
+        return fail(error, { ...(input.proposalId ? { proposalId: input.proposalId } : {}), ...(input.revisionProposalId ? { revisionProposalId: input.revisionProposalId } : {}) });
       }
     },
 
@@ -530,6 +545,46 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await getMergeRecommendation(getMergeRecommendationSchema.parse(input)));
       } catch (error) {
         return fail(error);
+      }
+    },
+
+    async refreshReviewFeedback(input: z.input<typeof refreshReviewFeedbackSchema>) {
+      try {
+        return ok(await refreshReviewFeedback(refreshReviewFeedbackSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async listReviewFeedback(input: z.input<typeof listReviewFeedbackSchema>) {
+      try {
+        return ok(await listReviewFeedback(listReviewFeedbackSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async listRevisionProposals(input: z.input<typeof listRevisionProposalsSchema>) {
+      try {
+        return ok(await listRevisionProposals(listRevisionProposalsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async reviewRevisionProposal(input: z.input<typeof reviewRevisionProposalSchema>) {
+      try {
+        return ok(await reviewRevisionProposal(reviewRevisionProposalSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { revisionProposalId: input.revisionProposalId });
+      }
+    },
+
+    async publishRevisionCandidate(input: z.input<typeof publishRevisionCandidateSchema>) {
+      try {
+        return ok(await publishRevisionCandidate(publishRevisionCandidateSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { revisionProposalId: input.revisionProposalId });
       }
     },
 
