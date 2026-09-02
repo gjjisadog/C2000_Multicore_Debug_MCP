@@ -21,6 +21,10 @@ export interface ReviewEvidenceInput {
   pullRequest: ImprovementPullRequest;
   providerPullRequest: ProviderPullRequest;
   candidateReview: CandidateReviewResult;
+  /** Baseline of the run that produced the current candidate (C1 for C2). */
+  candidateBaselineSha?: string;
+  /** Base-branch SHA observed for the current PR record. */
+  expectedProviderBaseSha?: string;
   checks: readonly ProviderCheck[];
   reviews: readonly ProviderReview[];
   policy: ReviewPolicyConfig;
@@ -42,14 +46,16 @@ export class ReviewEvidenceService {
       });
     }
     const candidateSha = pullRequest.data.candidateSha;
+    const candidateBaselineSha = input.candidateBaselineSha ?? pullRequest.data.baselineSha;
     const candidateIdentityMatches = candidateReview.data.candidateSha.toLowerCase() === candidateSha.toLowerCase()
-      && candidateReview.data.baselineSha.toLowerCase() === pullRequest.data.baselineSha.toLowerCase();
+      && candidateReview.data.baselineSha.toLowerCase() === candidateBaselineSha.toLowerCase();
     const candidateIsPublishable = candidateReview.data.valid && candidateReview.data.publishAllowed && candidateIdentityMatches;
     const localStatus: EvidenceStatus = candidateIsPublishable ? "pass" : "fail";
     const candidateStatus: EvidenceStatus = candidateIsPublishable ? "pass" : "fail";
     const providerBaseSha = input.providerPullRequest.baseSha;
+    const expectedProviderBaseSha = input.expectedProviderBaseSha ?? candidateReview.data.currentBaseSha;
     const providerBaseMatches = /^[0-9a-f]{7,64}$/i.test(providerBaseSha)
-      && providerBaseSha.toLowerCase() === candidateReview.data.currentBaseSha.toLowerCase();
+      && providerBaseSha.toLowerCase() === expectedProviderBaseSha.toLowerCase();
     const baseStatus: EvidenceStatus = candidateReview.data.baseDrift.classification === "NO_DRIFT" && providerBaseMatches ? "pass" : "stale";
     const headStatus: EvidenceStatus = input.providerPullRequest.headSha.toLowerCase() === candidateSha.toLowerCase() ? "pass" : "stale";
     const checks = normalizeChecks(input.checks, candidateSha, input.policy);
@@ -168,9 +174,28 @@ function evaluateReviews(reviews: readonly ProviderReview[], policy: ReviewPolic
     if (!existing || review.id > existing.id) latest.set(review.login, review);
   }
   const values = Array.from(latest.values());
-  const changesRequested = values.some(review => review.state === "changes-requested");
   const trusted = new Set(policy.trustedReviewers.map(login => login.toLowerCase()));
   const isTrusted = (login: string) => trusted.size === 0 || trusted.has(login.toLowerCase());
+  // A bot, organization, or unknown account may report a review state, but
+  // only a trusted human CHANGES_REQUESTED review is authoritative for the
+  // human gate. This keeps automated review evidence informative without
+  // allowing an untrusted actor to change the merge decision. A subsequent
+  // ordinary comment is not reviewer confirmation: a request remains active
+  // until that same trusted human approves or explicitly dismisses it.
+  const changesRequested = Array.from(new Set(reviews
+    .filter(review => review.userType === "User" && isTrusted(review.login))
+    .map(review => review.login.toLowerCase())))
+    .some(login => {
+      const history = reviews
+        .filter(review => review.userType === "User" && review.login.toLowerCase() === login && isTrusted(review.login))
+        .sort((left, right) => left.id - right.id);
+      const lastRequested = history.filter(review => review.state === "changes-requested").at(-1);
+      if (!lastRequested) return false;
+      const lastResolution = history
+        .filter(review => review.state === "approved" || review.state === "dismissed")
+        .at(-1);
+      return !lastResolution || lastResolution.id < lastRequested.id;
+    });
   const humanApprovals = values.filter(review => review.state === "approved" && review.userType === "User" && isTrusted(review.login)).length;
   const botApprovals = values.filter(review => review.state === "approved" && review.userType !== "User").length;
   const approvals = values.filter(review => review.state === "approved").length;

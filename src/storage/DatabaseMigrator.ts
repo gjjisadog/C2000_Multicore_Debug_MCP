@@ -682,6 +682,90 @@ const migrations: Migration[] = [
           ON merge_recommendations(pull_request_id, generated_at);
       `);
     }
+  },
+  {
+    version: 14,
+    apply(store) {
+      // Round8 review feedback and revision proposals are bounded governance
+      // records. Review text is stored only as sanitized evidence plus a raw
+      // hash; the original Proposal and target/debug persistence remain intact.
+      store.exec(`
+        ALTER TABLE improvement_implementation_runs ADD COLUMN run_kind TEXT NOT NULL DEFAULT 'initial';
+        ALTER TABLE improvement_implementation_runs ADD COLUMN revision_proposal_id TEXT;
+        ALTER TABLE improvement_implementation_runs ADD COLUMN parent_candidate_sha TEXT;
+        ALTER TABLE improvement_pull_requests ADD COLUMN current_implementation_run_id TEXT;
+        ALTER TABLE improvement_pull_requests ADD COLUMN revision_history_json TEXT NOT NULL DEFAULT '[]';
+
+        CREATE TABLE IF NOT EXISTS review_feedback (
+          feedback_id TEXT PRIMARY KEY,
+          pull_request_id TEXT NOT NULL,
+          pull_request_number INTEGER,
+          review_id INTEGER,
+          thread_id TEXT,
+          comment_id INTEGER,
+          author TEXT NOT NULL,
+          author_type TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT,
+          source TEXT NOT NULL,
+          disposition TEXT NOT NULL,
+          path TEXT,
+          line INTEGER,
+          candidate_sha TEXT,
+          raw_text_hash TEXT NOT NULL,
+          sanitized_text TEXT,
+          normalized_summary TEXT NOT NULL,
+          fingerprint TEXT NOT NULL,
+          classification TEXT,
+          status TEXT NOT NULL,
+          reason TEXT,
+          trusted_as_instruction INTEGER NOT NULL DEFAULT 0,
+          record_json TEXT NOT NULL,
+          UNIQUE(pull_request_id, fingerprint),
+          FOREIGN KEY(pull_request_id) REFERENCES improvement_pull_requests(pull_request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_feedback_pr_status
+          ON review_feedback(pull_request_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_review_feedback_hash
+          ON review_feedback(raw_text_hash);
+
+        CREATE TABLE IF NOT EXISTS revision_proposals (
+          revision_proposal_id TEXT PRIMARY KEY,
+          fingerprint TEXT NOT NULL UNIQUE,
+          original_proposal_id TEXT NOT NULL,
+          implementation_run_id TEXT NOT NULL,
+          pull_request_id TEXT NOT NULL,
+          pull_request_number INTEGER,
+          base_candidate_sha TEXT NOT NULL,
+          feedback_ids_json TEXT NOT NULL,
+          feedback_hashes_json TEXT NOT NULL,
+          revision_number INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          status TEXT NOT NULL,
+          category TEXT NOT NULL,
+          title TEXT NOT NULL,
+          summary TEXT NOT NULL,
+          requested_change_json TEXT NOT NULL,
+          risk TEXT NOT NULL,
+          validation_plan_json TEXT NOT NULL,
+          implementation_mode TEXT NOT NULL,
+          review_reason TEXT,
+          reviewed_at TEXT,
+          reviewed_by TEXT,
+          new_improvement_proposal_recommended INTEGER NOT NULL DEFAULT 0,
+          untrusted_feedback INTEGER NOT NULL DEFAULT 1,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(original_proposal_id) REFERENCES improvement_proposals(proposal_id),
+          FOREIGN KEY(implementation_run_id) REFERENCES improvement_implementation_runs(run_id),
+          FOREIGN KEY(pull_request_id) REFERENCES improvement_pull_requests(pull_request_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_revision_proposals_original_status
+          ON revision_proposals(original_proposal_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_revision_proposals_pr
+          ON revision_proposals(pull_request_id, status, created_at);
+      `);
+    }
   }
 ];
 

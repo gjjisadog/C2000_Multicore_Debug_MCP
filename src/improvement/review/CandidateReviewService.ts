@@ -74,7 +74,11 @@ export class CandidateReviewService {
         cause: error instanceof Error ? error.message : String(error)
       });
     }
-    const currentBaseSha = await this.resolveCurrentBaseSha();
+    // A revision candidate is validated as the next link after its parent
+    // candidate. The PR branch drift gate is handled by CandidatePublishService;
+    // comparing C2 directly with master here would incorrectly reject a valid
+    // C1 -> C2 chain when master advanced independently.
+    const currentBaseSha = run.runKind === "revision" ? run.baselineSha : await this.resolveCurrentBaseSha();
     const baseDrift = await this.classifyBaseDrift(run.baselineSha, currentBaseSha, proposal);
     const artifactCheck = await this.verifyArtifacts(run);
     const validationPassed = validationPassedForCandidate(run.validationResult, proposal);

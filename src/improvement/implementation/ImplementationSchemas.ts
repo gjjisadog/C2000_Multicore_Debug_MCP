@@ -46,7 +46,11 @@ export const implementationArtifactSchema = z.object({
     "diff",
     "validation-summary",
     "validation-log",
-    "candidate-report"
+    "candidate-report",
+    "revision-feedback",
+    "revision-prompt",
+    "revision-report",
+    "revision-validation-summary"
   ]),
   path: z.string().max(2048),
   sha256: z.string().regex(/^[0-9a-f]{64}$/i),
@@ -88,6 +92,9 @@ export type ValidationCommandResult = z.infer<typeof validationCommandResultSche
 export const improvementImplementationRunSchema = z.object({
   runId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
   proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/),
+  runKind: z.enum(["initial", "revision"]).default("initial"),
+  revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  parentCandidateSha: shaSchema.optional(),
   baselineSha: shaSchema,
   branchName: z.string().regex(/^(?:improve|auto-improve)\/[A-Za-z0-9._-]{1,220}$/),
   worktreePath: z.string().trim().min(1).max(2048),
@@ -107,6 +114,16 @@ export const improvementImplementationRunSchema = z.object({
   candidateCommitSha: shaSchema.optional(),
   failureReason: boundedText(4096).optional(),
   codingAgentResult: codingAgentResultSchema.optional()
+}).superRefine((value, context) => {
+  if (value.runKind === "revision" && !value.revisionProposalId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["revisionProposalId"], message: "Revision runs require revisionProposalId" });
+  }
+  if (value.runKind === "revision" && !value.parentCandidateSha) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["parentCandidateSha"], message: "Revision runs require parentCandidateSha" });
+  }
+  if (value.runKind === "initial" && value.revisionProposalId) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["revisionProposalId"], message: "Initial runs cannot carry revisionProposalId" });
+  }
 });
 
 export type ImprovementImplementationRun = z.infer<typeof improvementImplementationRunSchema>;

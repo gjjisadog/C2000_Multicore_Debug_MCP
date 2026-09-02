@@ -131,6 +131,32 @@ export class CandidatePublishService {
     };
   }
 
+  /** Publish a revision branch onto the existing PR branch using a normal FF refspec. */
+  async publishRevision(runId: string, remoteBranch: string, parentCandidateSha: string): Promise<CandidatePublishResult> {
+    const review = await this.options.candidateReview.assertPublishable(runId);
+    const run = this.options.runs.get(runId);
+    if (!run) throw new DebugMcpError("ImprovementRunNotFound", `Improvement implementation run not found: ${runId}`, { runId });
+    if (run.runKind !== "revision" || !run.revisionProposalId) throw new DebugMcpError("CandidatePublishFailed", "Only a revision implementation run may use revision publication", { runId, runKind: run.runKind });
+    if (!/^(?:improve|auto-improve)\/[A-Za-z0-9._-]{1,220}$/.test(remoteBranch)) throw new DebugMcpError("CandidatePublishFailed", "The controlled PR branch is invalid", { runId, remoteBranch });
+    if (isProtectedBranch(remoteBranch, this.options.review.protectedBranches)) throw new DebugMcpError("CandidatePublishFailed", "Protected branches cannot receive an improvement revision", { runId, remoteBranch });
+    if (run.baselineSha.toLowerCase() !== parentCandidateSha.toLowerCase() || run.parentCandidateSha?.toLowerCase() !== parentCandidateSha.toLowerCase()) {
+      throw new DebugMcpError("RevisionRemoteDrift", "Revision parent candidate does not match the implementation baseline", { runId, parentCandidateSha, baselineSha: run.baselineSha, recordedParentCandidateSha: run.parentCandidateSha });
+    }
+    const remote = this.options.review.remote;
+    const remoteUrlResult = await this.git(this.repositoryRoot, ["remote", "get-url", "--push", remote]);
+    if (!processSucceeded(remoteUrlResult)) throw new DebugMcpError("CandidatePublishFailed", "Configured improvement Git remote is unavailable", { runId, remote });
+    const actualRepository = repositoryFromRemote(remoteUrlResult.stdout.trim());
+    if (actualRepository !== this.options.review.repository.toLowerCase()) throw new DebugMcpError("RemoteRepositoryMismatch", "Configured Git remote does not point to the expected C2000 repository", { runId, remote, expectedRepository: this.options.review.repository, actualRepository: actualRepository ?? "unknown" });
+    const existingSha = await this.remoteBranchSha(remote, remoteBranch);
+    if (!existingSha) throw new DebugMcpError("RevisionRemoteDrift", "The existing PR branch is missing; a revision cannot create a replacement branch", { runId, remoteBranch, parentCandidateSha });
+    if (existingSha.toLowerCase() !== parentCandidateSha.toLowerCase()) throw new DebugMcpError("RemoteBranchAdvanced", "The existing PR branch advanced since the revision was approved", { runId, remoteBranch, expectedParentCandidateSha: parentCandidateSha, actualRemoteSha: existingSha });
+    const pushed = await this.git(this.repositoryRoot, ["push", remote, `${run.branchName}:${remoteBranch}`]);
+    if (!processSucceeded(pushed)) throw new DebugMcpError("CandidatePublishFailed", "Git could not fast-forward the existing improvement pull request branch", { runId, remote, localBranch: run.branchName, remoteBranch, candidateSha: review.candidateSha, exitCode: pushed.exitCode, timedOut: pushed.timedOut, stderr: pushed.stderr.slice(-2048) });
+    const verifiedSha = await this.remoteBranchSha(remote, remoteBranch);
+    if (!verifiedSha || verifiedSha.toLowerCase() !== review.candidateSha.toLowerCase()) throw new DebugMcpError("CandidatePublishFailed", "The revision push did not resolve the PR branch to the validated candidate", { runId, remoteBranch, expectedCandidateSha: review.candidateSha, actualRemoteSha: verifiedSha ?? null });
+    return { repository: this.options.review.repository, remote, branch: remoteBranch, candidateSha: review.candidateSha, baselineSha: review.baselineSha, pushed: true, idempotent: false, candidateReview: review };
+  }
+
   private async remoteBranchSha(remote: string, branch: string): Promise<string | undefined> {
     const result = await this.git(this.repositoryRoot, ["ls-remote", "--heads", remote, `refs/heads/${branch}`]);
     if (!processSucceeded(result)) {

@@ -26,6 +26,8 @@ import {
 import { ReviewEvidenceService } from "./ReviewEvidenceService.js";
 import { MergeRecommendationService } from "./MergeRecommendationService.js";
 import type { ImprovementPullRequestStore, ImprovementReviewEvidenceStore, MergeRecommendationStore } from "./ReviewRepositories.js";
+import type { RevisionProposalService } from "../revision/RevisionProposalService.js";
+import type { ImprovementRevisionProposal } from "../revision/RevisionSchemas.js";
 
 export const IMPROVEMENT_PR_BODY_START = "<!-- c2000-improvement:start -->";
 export const IMPROVEMENT_PR_BODY_END = "<!-- c2000-improvement:end -->";
@@ -44,6 +46,7 @@ export interface ImprovementPullRequestServiceOptions {
   artifactRoot: string;
   now?: () => number;
   logger?: Pick<Logger, "info" | "warn" | "error">;
+  revisionService?: RevisionProposalService;
 }
 
 export interface PublishImprovementCandidateInput {
@@ -58,6 +61,10 @@ export interface GetImprovementPullRequestInput {
 
 export interface RefreshImprovementReviewEvidenceInput extends GetImprovementPullRequestInput {
   hardwareEvidence?: HardwareEvidence;
+}
+
+export interface PublishRevisionCandidateInput {
+  revisionProposalId: string;
 }
 
 /**
@@ -86,12 +93,14 @@ export class ImprovementPullRequestService {
       remote = await this.options.provider.findOpenPullRequest(run.branchName, this.options.review.baseBranch);
       const created = !remote;
       if (remote) this.assertRemoteMatches(remote, run, proposal, candidateReview.candidateSha);
+      const existing = this.options.pullRequests.findByImplementationRun(run.runId);
       const generatedBody = renderImprovementPullRequestBody({
         proposal,
         run,
         candidateReview,
         artifactRoot: this.artifactRoot,
-        hardwareRequired: proposal.validationPlan.hardwareRequired
+        hardwareRequired: proposal.validationPlan.hardwareRequired,
+        ...(existing?.revisionHistory ? { revisionHistory: existing.revisionHistory } : {})
       });
       const bodyHash = sha256Json(generatedBody);
       if (!remote) {
@@ -135,6 +144,62 @@ export class ImprovementPullRequestService {
     }
   }
 
+  /** Fast-forwards the existing PR branch with a validated C(n+1) revision. */
+  async publishRevision(input: PublishRevisionCandidateInput | string): Promise<Record<string, unknown>> {
+    if (!this.options.revisionService) throw new DebugMcpError("ImprovementImplementationUnavailable", "Review revision service is not configured in this runtime");
+    const revisionProposalId = typeof input === "string" ? input : input.revisionProposalId;
+    const context = await this.options.revisionService.prepareForPublication(revisionProposalId);
+    const revision = context.revision;
+    const run = this.requireRunForRevision(revision);
+    const proposal = context.originalProposal;
+    const candidateReview = await this.options.candidateReview.assertPublishable(run.runId);
+    const published = await this.options.candidatePublish.publishRevision(run.runId, context.pullRequest.branch, revision.baseCandidateSha);
+    const remote = await this.options.provider.getPullRequest(context.pullRequest.number!);
+    this.assertRemoteMatches(remote, run, proposal, candidateReview.candidateSha, context.pullRequest.branch);
+    const revisionHistory = appendRevisionHistory(context.pullRequest.revisionHistory, revision, run, candidateReview, new Date(this.now()).toISOString());
+    const generatedBody = renderImprovementPullRequestBody({
+      proposal,
+      run,
+      candidateReview,
+      artifactRoot: this.artifactRoot,
+      hardwareRequired: proposal.validationPlan.hardwareRequired,
+      revisionHistory
+    });
+    const generatedBodyHash = sha256Json(generatedBody);
+    const mergedBody = mergeGeneratedBody(remote.body, generatedBody);
+    const updatedRemote = mergedBody !== remote.body && remote.state === "open"
+      ? await this.options.provider.updatePullRequest(remote.number, { body: mergedBody })
+      : remote;
+    this.assertRemoteMatches(updatedRemote, run, proposal, candidateReview.candidateSha, context.pullRequest.branch);
+    const stored = improvementPullRequestSchema.parse({
+      ...context.pullRequest,
+      candidateSha: candidateReview.candidateSha,
+      currentImplementationRunId: run.runId,
+      currentBaseSha: updatedRemote.baseSha,
+      currentHeadSha: updatedRemote.headSha,
+      updatedAt: new Date(this.now()).toISOString(),
+      // A reviewer-requested change remains an active human gate until a
+      // later review explicitly clears it. Publishing C(n+1) is not a review
+      // resolution and must not silently turn that state back to "open".
+      status: context.pullRequest.status === "changes-requested" ? "changes-requested" : statusForRemote(updatedRemote),
+      generatedBodyHash,
+      revisionHistory
+    });
+    this.options.pullRequests.upsert(stored);
+    this.options.revisionService.markCandidateReady(revisionProposalId, run.runId, candidateReview.candidateSha);
+    return {
+      pullRequest: publicPullRequest(stored),
+      publication: published,
+      revisionProposal: revision,
+      created: false,
+      draft: updatedRemote.draft,
+      requiresHumanReview: true,
+      requiresHumanMerge: true,
+      pushesAutomatically: false,
+      mergesAutomatically: false
+    };
+  }
+
   get(input: GetImprovementPullRequestInput): Record<string, unknown> {
     const record = this.resolveStoredPullRequest(input);
     const evidence = this.options.evidence.getLatest(record.pullRequestId, record.candidateSha);
@@ -150,10 +215,14 @@ export class ImprovementPullRequestService {
   async refresh(input: RefreshImprovementReviewEvidenceInput): Promise<Record<string, unknown>> {
     const stored = this.resolveStoredPullRequest(input);
     if (!stored.number) throw new DebugMcpError("PullRequestInvalidState", "The improvement candidate has no external pull request number", { pullRequestId: stored.pullRequestId });
-    const run = this.requireRun(stored.implementationRunId);
+    const run = this.requireRun(stored.currentImplementationRunId ?? stored.implementationRunId);
     const proposal = this.requireProposal(stored.proposalId);
     const remote = await this.options.provider.getPullRequest(stored.number);
-    this.assertRemoteMatches(remote, run, proposal, stored.candidateSha);
+    // Refresh is an evidence operation. If a human or another process added
+    // an unvalidated commit to the PR branch, retain that fact as stale head
+    // evidence so MergeRecommendation can return NEEDS_REVALIDATION instead
+    // of hiding the drift behind an early exception.
+    this.assertRemoteBinding(remote, run, proposal, stored.branch);
     const checks = await this.options.provider.listChecks(stored.candidateSha);
     const reviews = await this.options.provider.listReviews(stored.number);
     const candidateReview = await this.options.candidateReview.review(run.runId);
@@ -161,6 +230,8 @@ export class ImprovementPullRequestService {
       pullRequest: stored,
       providerPullRequest: remote,
       candidateReview,
+      candidateBaselineSha: run.baselineSha,
+      expectedProviderBaseSha: stored.currentBaseSha ?? stored.originalBaseSha ?? remote.baseSha,
       checks,
       reviews,
       policy: this.options.review,
@@ -191,13 +262,14 @@ export class ImprovementPullRequestService {
       evidence,
       recommendation,
       artifactRoot: this.artifactRoot,
-      hardwareRequired: proposal.validationPlan.hardwareRequired
+      hardwareRequired: proposal.validationPlan.hardwareRequired,
+      revisionHistory: stored.revisionHistory
     });
     const generatedBodyHash = sha256Json(generatedBody);
     let refreshedRemote = remote;
     if (mergeGeneratedBody(remote.body, generatedBody) !== remote.body && remote.state === "open") {
       refreshedRemote = await this.options.provider.updatePullRequest(remote.number, { body: mergeGeneratedBody(remote.body, generatedBody) });
-      this.assertRemoteMatches(refreshedRemote, run, proposal, stored.candidateSha);
+      this.assertRemoteBinding(refreshedRemote, run, proposal, stored.branch);
     }
     const updated = this.storePullRequest(refreshedRemote, run, proposal, generatedBodyHash, statusForEvidence(refreshedRemote, evidence, recommendation));
     if (refreshedRemote.merged) this.markProposalLifecycle(proposal.proposalId, "merged");
@@ -230,15 +302,22 @@ export class ImprovementPullRequestService {
 
   private storePullRequest(remote: ProviderPullRequest, run: ImprovementImplementationRun, proposal: ImprovementProposal, generatedBodyHash: string, status: ImprovementPullRequestStatus): ImprovementPullRequest {
     const existing = this.options.pullRequests.findByImplementationRun(run.runId);
+    const candidateSha = run.candidateCommitSha ?? existing?.candidateSha;
+    const baselineSha = existing?.baselineSha ?? run.baselineSha;
+    if (!candidateSha) throw new DebugMcpError("CandidateNotReady", "The implementation run has no candidate commit SHA", { runId: run.runId });
     const stored = improvementPullRequestSchema.parse({
       pullRequestId: existing?.pullRequestId ?? `pr-${randomUUID()}`,
-      proposalId: proposal.proposalId,
-      implementationRunId: run.runId,
-      repository: this.options.review.repository,
-      branch: run.branchName,
-      baseBranch: this.options.review.baseBranch,
-      candidateSha: run.candidateCommitSha,
-      baselineSha: run.baselineSha,
+      proposalId: existing?.proposalId ?? proposal.proposalId,
+      // The PR remains anchored to the original implementation run; the
+      // current run is tracked separately so C(n+1) refreshes do not rewrite
+      // the PR's branch or original baseline identity.
+      implementationRunId: existing?.implementationRunId ?? run.runId,
+      currentImplementationRunId: run.runId,
+      repository: existing?.repository ?? this.options.review.repository,
+      branch: existing?.branch ?? run.branchName,
+      baseBranch: existing?.baseBranch ?? this.options.review.baseBranch,
+      candidateSha,
+      baselineSha,
       number: remote.number,
       url: remote.url,
       title: remote.title || `improve(${safeText(proposal.target, 96)}): ${safeText(proposal.title, 256)}`,
@@ -252,7 +331,16 @@ export class ImprovementPullRequestService {
       ...(remote.mergedSha ? { mergedCommitSha: remote.mergedSha } : {}),
       ...(remote.mergedAt ? { mergedAt: remote.mergedAt } : {}),
       generatedBodyHash,
-      humanBodyPreserved: true
+      humanBodyPreserved: true,
+      revisionHistory: existing?.revisionHistory ?? [{
+        runId: run.runId,
+        candidateSha,
+        category: proposal.category,
+        summary: safeText(proposal.summary, 512),
+        feedbackIds: [],
+        ...(run.validationResult?.verdict ? { validationVerdict: run.validationResult.verdict } : {}),
+        recordedAt: new Date(this.now()).toISOString()
+      }]
     });
     this.options.pullRequests.upsert(stored);
     return stored;
@@ -286,16 +374,8 @@ export class ImprovementPullRequestService {
     return proposal;
   }
 
-  private assertRemoteMatches(remote: ProviderPullRequest, run: ImprovementImplementationRun, proposal: ImprovementProposal, candidateSha: string): void {
-    if (remote.repository !== this.options.review.repository || remote.branch !== run.branchName || remote.baseBranch !== this.options.review.baseBranch) {
-      throw new DebugMcpError("PullRequestInvalidState", "External pull request is not bound to the configured candidate repository/branch/base", {
-        proposalId: proposal.proposalId,
-        runId: run.runId,
-        expectedRepository: this.options.review.repository,
-        expectedBranch: run.branchName,
-        expectedBaseBranch: this.options.review.baseBranch
-      });
-    }
+  private assertRemoteMatches(remote: ProviderPullRequest, run: ImprovementImplementationRun, proposal: ImprovementProposal, candidateSha: string, expectedBranch = run.branchName): void {
+    this.assertRemoteBinding(remote, run, proposal, expectedBranch);
     if (remote.headSha.toLowerCase() !== candidateSha.toLowerCase()) {
       throw new DebugMcpError("CandidateHeadChanged", "External pull request HEAD no longer matches the validated candidate SHA", {
         proposalId: proposal.proposalId,
@@ -303,6 +383,18 @@ export class ImprovementPullRequestService {
         candidateSha,
         externalHeadSha: remote.headSha,
         pullRequestNumber: remote.number
+      });
+    }
+  }
+
+  private assertRemoteBinding(remote: ProviderPullRequest, run: ImprovementImplementationRun, proposal: ImprovementProposal, expectedBranch = run.branchName): void {
+    if (remote.repository !== this.options.review.repository || remote.branch !== expectedBranch || remote.baseBranch !== this.options.review.baseBranch) {
+      throw new DebugMcpError("PullRequestInvalidState", "External pull request is not bound to the configured candidate repository/branch/base", {
+        proposalId: proposal.proposalId,
+        runId: run.runId,
+        expectedRepository: this.options.review.repository,
+        expectedBranch,
+        expectedBaseBranch: this.options.review.baseBranch
       });
     }
   }
@@ -348,6 +440,32 @@ export class ImprovementPullRequestService {
       humanBodyPreserved: true
     }));
   }
+
+  private requireRunForRevision(revision: ImprovementRevisionProposal): ImprovementImplementationRun {
+    const run = this.options.runs.list({ proposalId: revision.originalProposalId, limit: 500 }).find(item => item.revisionProposalId === revision.revisionProposalId && item.status === "candidate-ready");
+    if (!run) throw new DebugMcpError("CandidateNotReady", "No validated candidate run exists for the approved review revision", { revisionProposalId: revision.revisionProposalId });
+    return run;
+  }
+}
+
+function appendRevisionHistory(
+  current: ImprovementPullRequest["revisionHistory"],
+  revision: ImprovementRevisionProposal,
+  run: ImprovementImplementationRun,
+  candidateReview: { candidateSha: string },
+  recordedAt: string
+): ImprovementPullRequest["revisionHistory"] {
+  return [...current, {
+    runId: run.runId,
+    revisionProposalId: revision.revisionProposalId,
+    candidateSha: candidateReview.candidateSha,
+    parentCandidateSha: revision.baseCandidateSha,
+    category: revision.category,
+    summary: revision.summary.slice(0, 512),
+    feedbackIds: revision.feedbackIds,
+    ...(run.validationResult?.verdict ? { validationVerdict: run.validationResult.verdict } : {}),
+    recordedAt
+  }].slice(-32);
 }
 
 export function renderImprovementPullRequestBody(input: {
@@ -358,6 +476,7 @@ export function renderImprovementPullRequestBody(input: {
   recommendation?: MergeRecommendation;
   artifactRoot: string;
   hardwareRequired: boolean;
+  revisionHistory?: ImprovementPullRequest["revisionHistory"];
 }): string {
   const { proposal, run, candidateReview, evidence, recommendation } = input;
   const artifacts = (run.artifacts ?? []).map(artifact => formatArtifact(artifact, input.artifactRoot)).filter(Boolean);
@@ -426,6 +545,17 @@ export function renderImprovementPullRequestBody(input: {
     "- No automatic merge is permitted.",
     "- CI, hardware evidence, and human review are evidence gates; none authorizes an automatic merge.",
     `- Current merge recommendation: ${recommendation?.verdict ?? "refresh required"}. Human merge remains required.`,
+    ...(input.revisionHistory && input.revisionHistory.length > 0 ? [
+      "",
+      "## Revision History",
+      "",
+      ...input.revisionHistory.map(entry => {
+        const feedback = entry.feedbackIds.length > 0
+          ? ` [feedback: ${entry.feedbackIds.map(id => safeText(id, 128)).join(", ")}]`
+          : "";
+        return `- ${safeText(entry.runId, 128)}${entry.revisionProposalId ? ` / ${safeText(entry.revisionProposalId, 256)}` : ""}${feedback}: ${safeText(entry.category ?? "initial", 64)} — ${safeText(entry.summary ?? "candidate", 512)} (${entry.candidateSha.slice(0, 12)})`;
+      })
+    ] : []),
     "",
     IMPROVEMENT_PR_BODY_END
   ];
@@ -452,6 +582,7 @@ function statusForRemote(remote: ProviderPullRequest): ImprovementPullRequestSta
 function statusForEvidence(remote: ProviderPullRequest, evidence: ReviewEvidence, recommendation: MergeRecommendation): ImprovementPullRequestStatus {
   if (remote.merged) return "merged-externally";
   if (remote.state === "closed") return "closed";
+  if (evidence.reviews.changesRequested) return "changes-requested";
   if (recommendation.verdict === "MERGE_RECOMMENDED") return "merge-recommended";
   if (recommendation.verdict === "DO_NOT_MERGE") return evidence.reviews.status === "fail" ? "changes-requested" : "blocked";
   if (recommendation.verdict === "NEEDS_REVALIDATION") return "blocked";

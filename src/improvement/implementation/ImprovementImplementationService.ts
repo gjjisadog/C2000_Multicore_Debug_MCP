@@ -5,6 +5,8 @@ import { DebugMcpError } from "../../utils/errors.js";
 import type { ImprovementProposalStore } from "../ProposalRepository.js";
 import type { ImprovementProposal } from "../ProposalSchemas.js";
 import { buildImplementationPrompt } from "../ImplementationPromptBuilder.js";
+import { buildRevisionImplementationPrompt } from "../revision/RevisionPromptBuilder.js";
+import type { RevisionImplementationGate, RevisionImplementationContext } from "../revision/RevisionProposalService.js";
 import { ImprovementProposalService } from "../ImprovementProposalService.js";
 import { ImprovementArtifactWriter } from "./ImplementationArtifacts.js";
 import { CandidateCommitService } from "./CandidateCommitService.js";
@@ -38,6 +40,7 @@ export interface ImprovementImplementationServiceOptions {
   maxActiveRuns?: number;
   now?: () => number;
   logger?: Pick<Logger, "info" | "warn" | "error">;
+  revisionGate?: RevisionImplementationGate;
 }
 
 /**
@@ -62,15 +65,31 @@ export class ImprovementImplementationService {
     this.maxActiveRuns = Math.max(1, Math.trunc(options.maxActiveRuns ?? 1));
   }
 
-  async start(proposalId: string): Promise<Record<string, unknown>> {
+  async start(input: string | { proposalId?: string; revisionProposalId?: string }): Promise<Record<string, unknown>> {
+    const proposalId = typeof input === "string" ? input : input.proposalId;
+    const revisionProposalId = typeof input === "string" ? undefined : input.revisionProposalId;
+    if ((proposalId ? 1 : 0) + (revisionProposalId ? 1 : 0) !== 1) {
+      throw new DebugMcpError("ImplementationNotAllowed", "Exactly one proposalId or revisionProposalId is required", { proposalId, revisionProposalId });
+    }
     if (!this.enabled || this.stopped) {
       throw new DebugMcpError("ImprovementImplementationUnavailable", "Approved improvement implementation is disabled in this runtime", {
-        proposalId,
+        proposalId: proposalId ?? null,
+        revisionProposalId: revisionProposalId ?? null,
         actionRequired: "Enable improvement implementation and configure an approved coding-agent command."
       });
     }
-    const proposal = this.requireProposal(proposalId);
-    if (proposal.status !== "approved") {
+
+    let revisionContext: RevisionImplementationContext | undefined;
+    let proposal: ImprovementProposal;
+    let currentMasterSha: string | undefined;
+    if (revisionProposalId) {
+      if (!this.options.revisionGate) throw new DebugMcpError("ImprovementImplementationUnavailable", "Review revision implementation is not configured in this runtime", { revisionProposalId });
+      revisionContext = await this.options.revisionGate.prepareForImplementation(revisionProposalId);
+      proposal = revisionContext.executionProposal;
+    } else {
+      proposal = this.requireProposal(proposalId!);
+    }
+    if (!revisionContext && proposal.status !== "approved") {
       throw new DebugMcpError("ProposalNotApproved", `Proposal ${proposal.proposalId} must be approved before implementation can start`, {
         proposalId: proposal.proposalId,
         status: proposal.status,
@@ -80,57 +99,37 @@ export class ImprovementImplementationService {
     if (proposal.proposedChange.implementationMode !== "auto-eligible") {
       throw new DebugMcpError("ImplementationNotAllowed", `Proposal ${proposal.proposalId} is not eligible for automatic implementation`, {
         proposalId: proposal.proposalId,
+        revisionProposalId: revisionProposalId ?? null,
         implementationMode: proposal.proposedChange.implementationMode,
         actionRequired: "Use the manual implementation and human architecture review path."
       });
     }
-    const baselineSha = proposal.baselineSha;
-    if (!baselineSha) {
-      throw new DebugMcpError("BaselineUnavailable", "An approved Proposal must be bound to a baseline SHA before implementation", { proposalId });
+    const baselineSha = revisionContext?.baseCandidateSha ?? proposal.baselineSha;
+    if (!baselineSha) throw new DebugMcpError("BaselineUnavailable", "An approved Proposal must be bound to a baseline SHA before implementation", { proposalId: proposal.proposalId, revisionProposalId: revisionProposalId ?? null });
+    if (!revisionContext) {
+      currentMasterSha = await this.options.currentMasterSha();
+      if (!currentMasterSha) throw new DebugMcpError("BaselineUnavailable", "The current master baseline cannot be resolved", { proposalId: proposal.proposalId, baseRef: this.baseRef, actionRequired: `Resolve ${this.baseRef} before starting an implementation run.` });
+      if (currentMasterSha.toLowerCase() !== baselineSha.toLowerCase()) throw new DebugMcpError("BaselineDrift", "The approved Proposal baseline does not match the current master", { proposalId: proposal.proposalId, proposalBaseline: baselineSha, currentMasterSha, baseRef: this.baseRef, actionRequired: "Regenerate or re-review the Proposal against the current master; no candidate worktree was created." });
     }
-    const currentMasterSha = await this.options.currentMasterSha();
-    if (!currentMasterSha) {
-      throw new DebugMcpError("BaselineUnavailable", "The current master baseline cannot be resolved", {
-        proposalId,
-        baseRef: this.baseRef,
-        actionRequired: `Resolve ${this.baseRef} before starting an implementation run.`
-      });
-    }
-    if (currentMasterSha.toLowerCase() !== baselineSha.toLowerCase()) {
-      throw new DebugMcpError("BaselineDrift", "The approved Proposal baseline does not match the current master", {
-        proposalId,
-        proposalBaseline: baselineSha,
-        currentMasterSha,
-        baseRef: this.baseRef,
-        actionRequired: "Regenerate or re-review the Proposal against the current master; no candidate worktree was created."
-      });
-    }
-    const active = this.options.runs.findActiveByProposal(proposalId);
-    if (active) {
-      throw new DebugMcpError("ImplementationAlreadyActive", `Proposal ${proposalId} already has an active implementation run`, {
-        proposalId,
-        runId: active.runId,
-        status: active.status
-      });
-    }
-    if (this.options.runs.list().filter(run => isActiveRun(run.status)).length >= this.maxActiveRuns) {
-      throw new DebugMcpError("ImplementationBusy", "The configured maximum number of improvement implementation runs is active", {
-        proposalId,
-        maxActiveRuns: this.maxActiveRuns
-      });
-    }
+    const active = this.options.runs.findActiveByProposal(proposal.proposalId);
+    if (active) throw new DebugMcpError("ImplementationAlreadyActive", `Proposal ${proposal.proposalId} already has an active implementation run`, { proposalId: proposal.proposalId, revisionProposalId: revisionProposalId ?? null, runId: active.runId, status: active.status });
+    if (this.options.runs.list().filter(run => isActiveRun(run.status)).length >= this.maxActiveRuns) throw new DebugMcpError("ImplementationBusy", "The configured maximum number of improvement implementation runs is active", { proposalId: proposal.proposalId, revisionProposalId: revisionProposalId ?? null, maxActiveRuns: this.maxActiveRuns });
 
     const runId = `impl-${randomUUID()}`;
     const shortRunId = runId.slice(-8);
-    const branchName = `improve/${safeBranchPart(proposal.proposalId)}-${shortRunId}`;
+    const branchName = revisionContext ? `improve/${safeBranchPart(proposal.proposalId)}-revision-${shortRunId}` : `improve/${safeBranchPart(proposal.proposalId)}-${shortRunId}`;
     const worktree = await this.options.worktrees.createCandidate(baselineSha, branchName, runId);
     try {
       const preImplementationStatus = await this.options.worktrees.snapshot(worktree.path, baselineSha);
-      const prompt = buildImplementationPrompt(proposal, baselineSha, { runId, worktreePath: worktree.path });
-      const promptArtifact = await this.artifacts.write(runId, "prompt", "prompt.md", prompt.prompt);
+      const prompt = revisionContext
+        ? buildRevisionImplementationPrompt(revisionContext.originalProposal, revisionContext.revision, this.options.revisionGate!.getFeedback(revisionContext.revision.revisionProposalId), baselineSha, { runId, worktreePath: worktree.path, parentCandidateSha: revisionContext.parentCandidateSha })
+        : buildImplementationPrompt(proposal, baselineSha, { runId, worktreePath: worktree.path });
+      const promptArtifact = await this.artifacts.write(runId, revisionContext ? "revision-prompt" : "prompt", revisionContext ? "revision-prompt.md" : "prompt.md", prompt.prompt);
       const created = improvementImplementationRunSchema.parse({
         runId,
-        proposalId,
+        proposalId: proposal.proposalId,
+        runKind: revisionContext ? "revision" : "initial",
+        ...(revisionContext ? { revisionProposalId: revisionContext.revision.revisionProposalId, parentCandidateSha: revisionContext.parentCandidateSha } : {}),
         baselineSha,
         branchName,
         worktreePath: worktree.path,
@@ -142,26 +141,10 @@ export class ImprovementImplementationService {
         artifacts: [promptArtifact]
       });
       this.options.runs.upsert(created);
-      this.options.proposalService.markImplementationQueued(proposalId, currentMasterSha);
-      this.options.logger?.info("c2000 improvement implementation queued", { proposalId, runId, branchName, worktreePath: worktree.path, baselineSha });
+      if (!revisionContext) this.options.proposalService.markImplementationQueued(proposal.proposalId, currentMasterSha!);
+      this.options.logger?.info("c2000 improvement implementation queued", { proposalId: proposal.proposalId, revisionProposalId: revisionProposalId ?? null, runId, branchName, worktreePath: worktree.path, baselineSha });
       if (this.autoStart) void this.executeRun(runId);
-      return {
-        success: true,
-        runId,
-        proposalId,
-        run: created,
-        status: "implementation-queued",
-        startsAutomatically: this.autoStart,
-        autoEligible: true,
-        branch: branchName,
-        worktree: worktree.path,
-        candidateBranch: branchName,
-        candidateWorktree: worktree.path,
-        baselineSha,
-        requiresHumanMerge: true,
-        pushesAutomatically: false,
-        mergesAutomatically: false
-      };
+      return { success: true, runId, proposalId: proposal.proposalId, ...(revisionProposalId ? { revisionProposalId } : {}), run: created, status: "implementation-queued", startsAutomatically: this.autoStart, autoEligible: true, branch: branchName, worktree: worktree.path, candidateBranch: branchName, candidateWorktree: worktree.path, baselineSha, parentCandidateSha: revisionContext?.parentCandidateSha, requiresHumanMerge: true, pushesAutomatically: false, mergesAutomatically: false };
     } catch (error) {
       await this.options.worktrees.remove(worktree.path).catch(() => undefined);
       throw error;
@@ -177,12 +160,24 @@ export class ImprovementImplementationService {
         requiredStatus: "created"
       });
     }
-    const proposal = this.requireProposal(initial.proposalId);
+    const isRevision = initial.runKind === "revision" && Boolean(initial.revisionProposalId);
+    if (isRevision && !this.options.revisionGate) throw new DebugMcpError("ImprovementImplementationUnavailable", "Revision implementation gate is not configured", { runId, revisionProposalId: initial.revisionProposalId });
+    let proposal = isRevision
+      ? this.options.revisionGate!.getExecutionProposal(initial.revisionProposalId!)
+      : this.requireProposal(initial.proposalId);
     let run = initial;
     let phase: "agent" | "validation" | "commit" = "agent";
     let baselineWorktreePath: string | undefined;
     try {
-      this.options.proposalService.markImplementationStarted(proposal.proposalId);
+      // Re-check the approved evidence at execution time. A queued revision
+      // must not run if a reviewer edit/delete/resolution invalidated the
+      // proposal after start() created its isolated worktree.
+      if (isRevision) {
+        const refreshed = await this.options.revisionGate!.prepareForImplementation(initial.revisionProposalId!);
+        proposal = refreshed.executionProposal;
+      }
+      if (isRevision) this.options.revisionGate!.markImplementing(initial.revisionProposalId!, run.runId);
+      else this.options.proposalService.markImplementationStarted(proposal.proposalId);
       run = this.updateRun(run, { status: "agent-running", startedAt: new Date(this.now()).toISOString() });
       const basePrompt = await this.readPrompt(run);
       const sourceStatusBeforeAgent = await this.options.worktrees.captureSourceStatus();
@@ -231,11 +226,12 @@ export class ImprovementImplementationService {
         });
       }
       let scope = await this.options.worktrees.validateScope(proposal, run.worktreePath, run.baselineSha);
-      const diffArtifact = await this.artifacts.write(run.runId, "diff", "candidate.patch", scope.diffPatch);
+      const diffArtifact = await this.artifacts.write(run.runId, "diff", isRevision ? "revision.patch" : "candidate.patch", scope.diffPatch);
       run = this.updateRun(run, { artifacts: appendArtifacts(run, diffArtifact), postImplementationStatus: scope.snapshot });
 
       phase = "validation";
-      this.options.proposalService.markValidationPending(proposal.proposalId);
+      if (isRevision) this.options.revisionGate!.markValidationPending(initial.revisionProposalId!, run.runId);
+      else this.options.proposalService.markValidationPending(proposal.proposalId);
       run = this.updateRun(run, { status: "validating" });
       baselineWorktreePath = await this.options.worktrees.createBaseline(run.baselineSha, run.runId);
       let validation = await this.options.validation.validate(run.runId, {
@@ -313,7 +309,7 @@ export class ImprovementImplementationService {
           });
         }
         scope = await this.options.worktrees.validateScope(proposal, run.worktreePath, run.baselineSha);
-        const repairDiffArtifact = await this.artifacts.write(run.runId, "diff", "candidate-attempt-2.patch", scope.diffPatch);
+        const repairDiffArtifact = await this.artifacts.write(run.runId, "diff", isRevision ? "revision-attempt-2.patch" : "candidate-attempt-2.patch", scope.diffPatch);
         run = this.updateRun(run, { artifacts: appendArtifacts(run, repairDiffArtifact), postImplementationStatus: scope.snapshot });
         phase = "validation";
         validation = await this.options.validation.validate(run.runId, {
@@ -335,17 +331,19 @@ export class ImprovementImplementationService {
       }
       if (validation.result.verdict === "inconclusive") {
         run = this.updateRun(run, { status: "validation-pending" });
-        this.options.proposalService.markValidationPending(proposal.proposalId);
+        if (isRevision) this.options.revisionGate!.markValidationPending(initial.revisionProposalId!, run.runId);
+        else this.options.proposalService.markValidationPending(proposal.proposalId);
         return { success: false, run, validationPending: true, hardwareStatus: proposal.validationPlan.hardwareRequired ? "NOT_RUN_HARDWARE" : "INCONCLUSIVE" };
       }
       if (validation.result.verdict === "regressed") {
         run = this.updateRun(run, { status: "rejected" });
-        this.options.proposalService.markCandidateRejected(proposal.proposalId, validation.result, "Independent validation detected a regression");
+        if (isRevision) this.options.revisionGate!.markCandidateRejected(initial.revisionProposalId!, "Independent validation detected a regression");
+        else this.options.proposalService.markCandidateRejected(proposal.proposalId, validation.result, "Independent validation detected a regression");
         return { success: false, run, candidateReady: false };
       }
 
-      const latestMasterSha = await this.options.currentMasterSha();
-      if (!latestMasterSha || latestMasterSha.toLowerCase() !== run.baselineSha.toLowerCase()) {
+      const latestMasterSha = isRevision ? run.baselineSha : await this.options.currentMasterSha();
+      if (!isRevision && (!latestMasterSha || latestMasterSha.toLowerCase() !== run.baselineSha.toLowerCase())) {
         throw new DebugMcpError("BaselineDrift", "The current master changed while the implementation was running; no candidate commit was created", {
           proposalId: proposal.proposalId,
           runId: run.runId,
@@ -355,16 +353,27 @@ export class ImprovementImplementationService {
           actionRequired: "Re-evaluate the approved Proposal against the current master before retrying."
         });
       }
+      if (isRevision) this.options.revisionGate!.assertEvidenceStable(initial.revisionProposalId!);
       phase = "commit";
       const committed = await this.options.candidateCommits.commit({
         proposal,
         runId: run.runId,
         worktreePath: run.worktreePath,
         baselineSha: run.baselineSha,
-        validationResult: validation.result
+        validationResult: validation.result,
+        ...(isRevision ? {
+          revision: {
+            revisionProposalId: initial.revisionProposalId!,
+            originalProposalId: initial.proposalId,
+            parentCandidateSha: initial.parentCandidateSha ?? run.baselineSha
+          }
+        } : {})
       });
       const finalValidation = committed.validationResult;
-      const candidateReport = await this.artifacts.write(run.runId, "candidate-report", "candidate-report.md", renderCandidateReport({
+      const revisionValidationArtifact = isRevision
+        ? await this.artifacts.writeJson(run.runId, "revision-validation-summary", "revision-validation-summary.json", { revisionProposalId: initial.revisionProposalId, runId: run.runId, parentCandidateSha: initial.parentCandidateSha ?? run.baselineSha, candidateSha: committed.candidateCommitSha, verdict: finalValidation.verdict, tests: finalValidation.tests, safetyChecks: finalValidation.safetyChecks })
+        : undefined;
+      const candidateReport = await this.artifacts.write(run.runId, isRevision ? "revision-report" : "candidate-report", isRevision ? "revision-report.md" : "candidate-report.md", renderCandidateReport({
         proposal,
         run,
         candidateCommitSha: committed.candidateCommitSha,
@@ -378,9 +387,11 @@ export class ImprovementImplementationService {
         candidateCommitSha: committed.candidateCommitSha,
         postImplementationStatus: committed.postImplementationStatus,
         validationResult: finalValidation,
-        artifacts: appendArtifacts(run, candidateReport)
+        artifacts: appendArtifacts(run, ...(revisionValidationArtifact ? [revisionValidationArtifact] : []), candidateReport)
       });
-      this.options.proposalService.markCandidateReady(proposal.proposalId, finalValidation);
+      if (isRevision) this.options.revisionGate!.assertEvidenceStable(initial.revisionProposalId!);
+      if (isRevision) this.options.revisionGate!.markCandidateReady(initial.revisionProposalId!, run.runId, committed.candidateCommitSha);
+      else this.options.proposalService.markCandidateReady(proposal.proposalId, finalValidation);
       this.options.logger?.info("c2000 improvement candidate ready", { proposalId: proposal.proposalId, runId: run.runId, candidateCommitSha: committed.candidateCommitSha, branchName: run.branchName });
       return { success: true, run, candidateReady: true, requiresHumanMerge: true, pushesAutomatically: false, mergesAutomatically: false };
     } catch (error) {
@@ -400,7 +411,8 @@ export class ImprovementImplementationService {
         failureReason
       });
       try {
-        if (phase === "agent") this.options.proposalService.markImplementationFailed(proposal.proposalId, failureReason);
+        if (isRevision) this.options.revisionGate!.markFailed(initial.revisionProposalId!, failureReason);
+        else if (phase === "agent") this.options.proposalService.markImplementationFailed(proposal.proposalId, failureReason);
         else this.options.proposalService.markCandidateRejected(proposal.proposalId, run.validationResult, failureReason);
       } catch (proposalError) {
         this.options.logger?.error("c2000 improvement proposal lifecycle update failed", { proposalId: proposal.proposalId, runId, error: String(proposalError) });
@@ -435,7 +447,10 @@ export class ImprovementImplementationService {
       candidate: {
         proposalId: run.proposalId,
         runId: run.runId,
+        runKind: run.runKind,
+        ...(run.revisionProposalId ? { revisionProposalId: run.revisionProposalId } : {}),
         baselineSha: run.baselineSha,
+        ...(run.parentCandidateSha ? { parentCandidateSha: run.parentCandidateSha } : {}),
         candidateCommitSha: run.candidateCommitSha,
         branchName: run.branchName,
         worktreePath: run.worktreePath,
@@ -464,7 +479,10 @@ export class ImprovementImplementationService {
   reconcileOnStartup(): ImprovementImplementationRun[] {
     const interrupted = this.options.runs.markActiveInterrupted("Daemon restarted while the implementation run was active; automatic resume is disabled", new Date(this.now()).toISOString());
     for (const run of interrupted) {
-      try { this.options.proposalService.markImplementationFailed(run.proposalId, "Daemon restarted while the implementation run was active; automatic resume is disabled"); } catch (error) { this.options.logger?.warn("c2000 improvement restart reconciliation failed", { runId: run.runId, error: String(error) }); }
+      try {
+        if (run.runKind === "revision" && run.revisionProposalId) this.options.revisionGate?.markFailed(run.revisionProposalId, "Daemon restarted while the implementation run was active; automatic resume is disabled");
+        else this.options.proposalService.markImplementationFailed(run.proposalId, "Daemon restarted while the implementation run was active; automatic resume is disabled");
+      } catch (error) { this.options.logger?.warn("c2000 improvement restart reconciliation failed", { runId: run.runId, error: String(error) }); }
     }
     return interrupted;
   }
@@ -474,7 +492,10 @@ export class ImprovementImplementationService {
     this.stopped = true;
     const interrupted = this.options.runs.markActiveInterrupted("Daemon stopped while the implementation run was active; automatic resume is disabled", new Date(this.now()).toISOString());
     for (const run of interrupted) {
-      try { this.options.proposalService.markImplementationFailed(run.proposalId, "Daemon stopped while the implementation run was active; automatic resume is disabled"); } catch (error) { this.options.logger?.warn("c2000 improvement shutdown reconciliation failed", { runId: run.runId, error: String(error) }); }
+      try {
+        if (run.runKind === "revision" && run.revisionProposalId) this.options.revisionGate?.markFailed(run.revisionProposalId, "Daemon stopped while the implementation run was active; automatic resume is disabled");
+        else this.options.proposalService.markImplementationFailed(run.proposalId, "Daemon stopped while the implementation run was active; automatic resume is disabled");
+      } catch (error) { this.options.logger?.warn("c2000 improvement shutdown reconciliation failed", { runId: run.runId, error: String(error) }); }
     }
   }
 
@@ -497,7 +518,15 @@ export class ImprovementImplementationService {
   }
 
   private async readPrompt(run: ImprovementImplementationRun): Promise<string> {
-    if (!run.promptArtifact) return buildImplementationPrompt(this.requireProposal(run.proposalId), run.baselineSha, { runId: run.runId, worktreePath: run.worktreePath }).prompt;
+    if (!run.promptArtifact) {
+      if (run.runKind === "revision") {
+        throw new DebugMcpError("RevisionEvidenceChanged", "The approved revision prompt artifact is missing; the revision must be re-reviewed before execution", {
+          runId: run.runId,
+          revisionProposalId: run.revisionProposalId
+        });
+      }
+      return buildImplementationPrompt(this.requireProposal(run.proposalId), run.baselineSha, { runId: run.runId, worktreePath: run.worktreePath }).prompt;
+    }
     const { readFile } = await import("node:fs/promises");
     return readFile(run.promptArtifact.path, "utf8");
   }
@@ -558,7 +587,9 @@ function renderCandidateReport(input: {
     "",
     `- Proposal ID: ${proposal.proposalId}`,
     `- Implementation Run ID: ${run.runId}`,
+    `- Run kind: ${run.runKind}`,
     `- Baseline SHA: ${run.baselineSha}`,
+    ...(run.parentCandidateSha ? [`- Parent candidate SHA: ${run.parentCandidateSha}`] : []),
     `- Candidate SHA: ${candidateCommitSha}`,
     `- Branch: ${run.branchName}`,
     `- Worktree: ${run.worktreePath}`,

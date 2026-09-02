@@ -1,6 +1,7 @@
 import { DebugMcpError } from "../../utils/errors.js";
 import type { Logger } from "../../utils/logger.js";
 import type { MergeabilityState, ReviewCheckStatus, ReviewState } from "./ReviewSchemas.js";
+import type { ReviewFeedbackDisposition, ReviewFeedbackSource } from "../revision/RevisionSchemas.js";
 
 export interface ProviderPullRequest {
   number: number;
@@ -37,6 +38,26 @@ export interface ProviderReview {
   submittedAt?: string;
 }
 
+/** Raw provider evidence. `body` is consumed by the sanitizer and is never an instruction. */
+export interface ProviderReviewFeedback {
+  pullRequestId: string;
+  pullRequestNumber: number;
+  reviewId?: number;
+  threadId?: string;
+  commentId?: number;
+  author: string;
+  authorType: "human" | "bot" | "unknown";
+  createdAt: string;
+  updatedAt?: string;
+  source: ReviewFeedbackSource;
+  disposition: ReviewFeedbackDisposition;
+  body: string;
+  path?: string;
+  line?: number;
+  candidateSha?: string;
+  resolved?: boolean;
+}
+
 export interface CreatePullRequestInput {
   title: string;
   body: string;
@@ -59,6 +80,8 @@ export interface ImprovementCodeReviewProvider {
   updatePullRequest(number: number, input: UpdatePullRequestInput): Promise<ProviderPullRequest>;
   listChecks(candidateSha: string): Promise<ProviderCheck[]>;
   listReviews(number: number): Promise<ProviderReview[]>;
+  /** Optional for backwards-compatible injected providers; GitHub REST implements it. */
+  listReviewFeedback?(number: number): Promise<ProviderReviewFeedback[]>;
 }
 
 export interface GitHubReviewProviderOptions {
@@ -132,6 +155,20 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
     const value = await this.request("GET", `/repos/${this.repository}/pulls/${number}/reviews?per_page=100`);
     if (!Array.isArray(value)) return [];
     return value.flatMap(review => parseReview(review));
+  }
+
+  async listReviewFeedback(number: number): Promise<ProviderReviewFeedback[]> {
+    const [reviews, comments, issueComments] = await Promise.all([
+      this.request("GET", `/repos/${this.repository}/pulls/${number}/reviews?per_page=100`),
+      this.request("GET", `/repos/${this.repository}/pulls/${number}/comments?per_page=100`),
+      this.request("GET", `/repos/${this.repository}/issues/${number}/comments?per_page=100`)
+    ]);
+    const pullRequestId = `${this.repository}#${number}`;
+    return [
+      ...(Array.isArray(reviews) ? reviews.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review")) : []),
+      ...(Array.isArray(comments) ? comments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review-comment")) : []),
+      ...(Array.isArray(issueComments) ? issueComments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "issue-comment")) : [])
+    ];
   }
 
   private async request(method: "GET" | "POST" | "PATCH", resource: string, body?: unknown): Promise<unknown> {
@@ -246,5 +283,49 @@ function parseReview(value: unknown): ProviderReview[] {
     userType,
     state: normalizedState,
     ...(typeof record.submitted_at === "string" ? { submittedAt: record.submitted_at } : {})
+  }];
+}
+
+function parseReviewFeedback(value: unknown, pullRequestId: string, pullRequestNumber: number, source: "review" | "review-comment" | "issue-comment"): ProviderReviewFeedback[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const user = record.user && typeof record.user === "object" ? record.user as Record<string, unknown> : {};
+  const id = Number(record.id);
+  const body = typeof record.body === "string" ? record.body : "";
+  const author = typeof user.login === "string" ? user.login : "unknown";
+  if (!Number.isInteger(id) || id <= 0 || !body.trim()) return [];
+  const userType = user.type === "Bot" ? "bot" : user.type === "User" ? "human" : "unknown";
+  const state = String(record.state ?? "").toUpperCase();
+  const disposition: ProviderReviewFeedback["disposition"] = state === "CHANGES_REQUESTED"
+    ? "changes-requested"
+    : /\?/.test(body) || /\b(?:why|how|could you explain)\b/i.test(body)
+      ? "question"
+      : source === "review-comment" && (record.suggested_change !== undefined || /\bshould\b|\bplease\b|\bchange\b/i.test(body))
+        ? "suggestion"
+        : "comment";
+  const createdAt = typeof record.created_at === "string" ? record.created_at : new Date(0).toISOString();
+  const updatedAt = typeof record.updated_at === "string" ? record.updated_at : undefined;
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(createdAt)) return [];
+  const reviewId = Number(record.pull_request_review_id);
+  const line = Number(record.line ?? record.original_line);
+  const commitSha = typeof record.commit_id === "string" && /^[0-9a-f]{7,64}$/i.test(record.commit_id) ? record.commit_id : undefined;
+  return [{
+    pullRequestId,
+    pullRequestNumber,
+    ...(source === "review" ? { reviewId: id } : {}),
+    ...(source === "review-comment" && Number.isInteger(reviewId) && reviewId > 0 ? { reviewId } : {}),
+    ...(source === "review-comment" && typeof record.in_reply_to_id === "number" ? { threadId: String(record.in_reply_to_id) } : {}),
+    ...(source !== "issue-comment" ? { commentId: source === "review-comment" ? id : undefined } : { commentId: id }),
+    author,
+    authorType: userType,
+    createdAt,
+    ...(updatedAt ? { updatedAt } : {}),
+    source,
+    disposition,
+    ...(typeof record.path === "string" ? { path: record.path } : {}),
+    ...(Number.isInteger(line) && line > 0 ? { line } : {}),
+    ...(commitSha ? { candidateSha: commitSha } : {}),
+    body,
+    ...(record.resolved === true ? { resolved: true } : {})
   }];
 }
