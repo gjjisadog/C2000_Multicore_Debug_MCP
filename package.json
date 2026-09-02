@@ -29,6 +29,7 @@
     "test": "vitest run",
     "verify:debug-boundary": "tsx scripts/verify-debug-boundary.ts",
     "verify:host": "tsx scripts/verify-host-gate.ts",
+    "verify:debug:focused": "vitest run tests/DebugSessionManager.test.ts tests/hardwarePreflight.test.ts tests/boardWorkerSupervisor.test.ts tests/sessionQueue.test.ts tests/startupStageDiagnostics.test.ts tests/startupContract.test.ts tests/configLoader.test.ts tests/tools.test.ts",
     "verify:daemon-proxy": "vitest run tests/daemonProxyLifecycle.test.ts tests/jobPersistence.test.ts",
     "verify:daemon-restart": "vitest run tests/daemonProcessRecoveryE2E.test.ts",
     "sync:skills": "node scripts/sync-skills.mjs",

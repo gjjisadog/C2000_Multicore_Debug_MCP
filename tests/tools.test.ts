@@ -6,6 +6,16 @@ import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import { c2000ToolDefinitions, createC2000ToolInvoker, getToolContracts, getToolSurfaceGuide, registerC2000Tools } from "../src/mcp/tools.js";
 
 describe("MCP tool registration contract", () => {
+  test("documents that live target reads can perturb timing-sensitive execution", () => {
+    const snapshot = c2000ToolDefinitions.find(tool => tool.name === "c2000_getMulticoreSnapshot");
+    const evaluateMany = c2000ToolDefinitions.find(tool => tool.name === "c2000_evaluateMany");
+    expect(snapshot?.description).toMatch(/perturb real-time execution/i);
+    expect(evaluateMany?.description).toMatch(/avoid high-rate polling/i);
+
+    const guide = getToolSurfaceGuide("full", "compatibility");
+    expect(guide.guidance.join(" ")).toMatch(/Target reads may pause or perturb real-time execution/i);
+  });
+
   test("returns structured failures instead of rejecting tools for unknown or closed sessions", async () => {
     const handlers = new Map<string, (input: any) => Promise<any>>();
     const server = {

@@ -20,7 +20,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     toolProfile: "safe",
     toolSurfaceProfile: "agent",
     filesystem: { allowedReadRoots: [process.cwd()], allowedWriteRoots: [path.join(process.cwd(), "runtime")] },
-    debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 600000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
+    debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 600000, startupPreparationMs: 90000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
     daemon: {
       enabled: true,
       host: "127.0.0.1",
@@ -80,6 +80,7 @@ function applyEnvOverrides(config: Record<string, unknown>): Record<string, unkn
   if (process.env.C2000_PROGRAM_SEARCH_ROOTS) config.programSearchRoots = process.env.C2000_PROGRAM_SEARCH_ROOTS.split(path.delimiter).filter(Boolean);
   if (process.env.C2000_MCP_PROBE_QUEUE_DIR) debugProbe.queueDir = process.env.C2000_MCP_PROBE_QUEUE_DIR;
   if (process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS) debugProbe.queueTimeoutMs = Number.parseInt(process.env.C2000_MCP_PROBE_QUEUE_TIMEOUT_MS, 10);
+  if (process.env.C2000_MCP_PROBE_STARTUP_PREPARATION_MS) debugProbe.startupPreparationMs = Number.parseInt(process.env.C2000_MCP_PROBE_STARTUP_PREPARATION_MS, 10);
   if (process.env.C2000_MCP_PROBE_RECOVERY_POLICY) debugProbe.recoveryPolicy = process.env.C2000_MCP_PROBE_RECOVERY_POLICY;
   if (process.env.C2000_MCP_PROBES_JSON) debugProbe.probes = JSON.parse(process.env.C2000_MCP_PROBES_JSON);
   if (process.env.C2000_MCP_MULTI_BOARD_ENABLED) debugProbe.multiBoardEnabled = process.env.C2000_MCP_MULTI_BOARD_ENABLED === "1" || process.env.C2000_MCP_MULTI_BOARD_ENABLED === "true";

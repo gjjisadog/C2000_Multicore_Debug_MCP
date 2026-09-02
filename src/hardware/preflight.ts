@@ -139,9 +139,11 @@ export async function recoverDebugProbe(options: {
   killProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;
   settleMs?: number;
   targetCcxmlPath?: string;
+  /** Reuse the identity/preflight snapshot already collected by session startup. */
+  initialPreflight?: HardwarePreflightResult;
 }): Promise<ProbeRecoveryResult> {
   const killProcess = options.killProcess ?? ((pid, signal) => process.kill(pid, signal));
-  const before = await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile, platform: options.platform });
+  const before = options.initialPreflight ?? await runHardwarePreflight({ ccsInstallPath: options.ccsInstallPath, execFile: options.execFile, platform: options.platform });
   const allOwners = before.debugProcessDetails.filter(isProbeOwnerProcess);
   const owners = options.targetCcxmlPath
     ? allOwners.filter(owner => owner.command.includes(options.targetCcxmlPath!))

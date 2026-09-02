@@ -116,6 +116,35 @@ describe("board worker supervisor", () => {
     }
   });
 
+  test("includes the CCS host startup-preparation envelope in create-session timeout budgeting", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-startup-budget-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    const config = configFor(directory);
+    Object.assign(config, {
+      adapter: "ccs",
+      ccs: { scriptingMode: "ccs", timeouts: { startupMs: 1000 } },
+      debugProbe: { startupPreparationMs: 7000 }
+    });
+    const supervisor = new BoardWorkerSupervisor({
+      config,
+      daemonInstanceId: "daemon-test",
+      registry,
+      workers: new WorkerRepository(store),
+      events,
+      factory: options => new FakeWorker(options, false)
+    });
+
+    try {
+      expect(supervisor.commandTimeoutMs("c2000_createDebugSession", {})).toBe(38000);
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("reports a stale lease route before invoking the worker", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-lease-route-"));
     directories.push(directory);

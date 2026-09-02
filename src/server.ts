@@ -14,7 +14,8 @@ import type { C2000McpConfig } from "./config/config.schema.js";
 import { DebugSessionManager } from "./debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
 import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware/debugProbeCoordinator.js";
-import { recoverDebugProbe, runHardwarePreflight } from "./hardware/preflight.js";
+import { recoverDebugProbe, runHardwarePreflight, type HardwarePreflightResult } from "./hardware/preflight.js";
+import type { StartupStageRunner } from "./debug/startupStageDiagnostics.js";
 import {
   getToolExposureSummary,
   registerC2000Tools,
@@ -135,6 +136,7 @@ function buildRuntime(
   const debugProbe = config.debugProbe ?? {
     queueDir: "runtime/debug-probe-queue",
     queueTimeoutMs: 600_000,
+    startupPreparationMs: 90_000,
     recoveryPolicy: "owned-and-stale" as const,
     multiBoardEnabled: false
   };
@@ -241,10 +243,15 @@ function buildRuntime(
 
 function createProbePreparer(config: C2000McpConfig, ccsInstallPath?: string) {
   const recoveryPolicy = config.debugProbe?.recoveryPolicy ?? "owned-and-stale";
-  return async (lease?: { probe?: { probeId: string; serialNumber: string; ccxmlPath: string } }) => {
+  return async (
+    lease?: { probe?: { probeId: string; serialNumber: string; ccxmlPath: string } },
+    context?: { runStage: StartupStageRunner }
+  ) => {
+    const runStage = context?.runStage ?? (async <T>(_stage: string, work: () => Promise<T>) => work());
+    let initialPreflight: HardwarePreflightResult | undefined;
     if (lease?.probe) {
-      const preflight = await runHardwarePreflight({ ccsInstallPath });
-      const detectedSerials = preflight.xdsdfu.devices
+      initialPreflight = await runStage("probe-preflight", () => runHardwarePreflight({ ccsInstallPath }));
+      const detectedSerials = initialPreflight.xdsdfu.devices
         ?.map(device => device.serialNumber)
         .filter((serial): serial is string => Boolean(serial)) ?? [];
       if (!detectedSerials.includes(lease.probe.serialNumber)) {
@@ -262,11 +269,12 @@ function createProbePreparer(config: C2000McpConfig, ccsInstallPath?: string) {
         });
       }
     }
-    const recovery = await recoverDebugProbe({
+    const recovery = await runStage("probe-recovery", () => recoverDebugProbe({
       ccsInstallPath,
       policy: recoveryPolicy,
-      targetCcxmlPath: lease?.probe?.ccxmlPath
-    });
+      targetCcxmlPath: lease?.probe?.ccxmlPath,
+      initialPreflight
+    }));
     if (!recovery.recovered) {
       throw new DebugMcpError("ProbeRecoveryBlocked", "XDS110 recovery blocked by an existing debug owner", {
         policy: recovery.policy,

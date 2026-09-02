@@ -1,5 +1,6 @@
 export type WorkflowRunMode = "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running";
 export type WorkflowLoadMode = "cpu1-then-cpu2" | "cpu1-run-before-cpu2";
+export type Cpu2StartAuthority = "firmware-owned" | "debugger-owned" | "pre-running" | "unspecified";
 
 export interface WorkflowStartupContractInput {
   loadMode: WorkflowLoadMode;
@@ -35,11 +36,23 @@ export function workflowStartupContractIssues(input: WorkflowStartupContractInpu
 }
 
 export function describeWorkflowStartupContract(input: WorkflowStartupContractInput) {
+  const cpu2StartAuthority = input.runMode === "cpu1_boots_cpu2"
+    ? "firmware-owned"
+    : input.runMode === "debugger_runs_both"
+      ? "debugger-owned"
+      : input.runMode === "cpu2_pre_running"
+        ? "pre-running"
+        : "unspecified";
   return {
     loadMode: input.loadMode,
     runMode: input.runMode ?? "legacy_flags",
+    cpu2StartAuthority,
+    authorityEvidence: input.runMode ? "explicit-run-mode" : "legacy-flags-ambiguous",
     runCpu1First: input.runCpu1First,
     runCpu2: input.runCpu2,
-    issues: workflowStartupContractIssues(input)
+    issues: workflowStartupContractIssues(input),
+    warnings: input.runMode
+      ? []
+      : ["Legacy run flags do not establish whether CPU1 firmware releases CPU2; set runSequence.runMode explicitly before interpreting CPU2 startup evidence."]
   };
 }

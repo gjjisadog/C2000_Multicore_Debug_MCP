@@ -264,9 +264,17 @@ export class BoardWorkerSupervisor {
     const programLoadMs = config.timeouts?.programLoadMs ?? 300000;
     const requestedMs = positiveNumber(record(input).timeoutMs) ?? 0;
     const marginMs = 30000;
+    // Session creation performs host-side XDS110 enumeration/recovery before
+    // DSS startup. Keep that outer envelope separate from the inner DSS
+    // startup timeout so a slow probe cannot be reported as an unexplained
+    // worker timeout while the nested stage is still collecting evidence.
+    const startupPreparationMs = this.requiresCcxmlProbeValidation
+      ? this.options.config.debugProbe?.startupPreparationMs ?? 90000
+      : 0;
+    const startupEnvelopeMs = startupMs + startupPreparationMs;
 
     if (toolName === "c2000_createDebugSession") {
-      return Math.max(baseMs, startupMs + marginMs);
+      return Math.max(baseMs, startupEnvelopeMs + marginMs);
     }
     if (toolName === "c2000_loadProgram" || toolName === "c2000_loadSymbols" || toolName === "c2000_reloadResetRunToMain") {
       return Math.max(baseMs, programLoadMs + resetMs + marginMs);
@@ -279,10 +287,10 @@ export class BoardWorkerSupervisor {
       const cores = arrayRecords(record(input).cores);
       const loadCount = Math.max(1, cores.filter(core => core.load !== false).length);
       const connectCount = Math.max(1, cores.filter(core => core.connect !== false).length);
-      return Math.max(baseMs, startupMs + connectCount * connectMs + loadCount * programLoadMs + requestedMs + marginMs);
+      return Math.max(baseMs, startupEnvelopeMs + connectCount * connectMs + loadCount * programLoadMs + requestedMs + marginMs);
     }
     if (toolName === "c2000_launchAndRunIpcAcceptance") {
-      return Math.max(baseMs, startupMs + 2 * connectMs + 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
+      return Math.max(baseMs, startupEnvelopeMs + 2 * connectMs + 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
     }
     if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_runReloadAndDiagnose") {
       return Math.max(baseMs, 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);

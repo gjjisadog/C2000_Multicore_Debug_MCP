@@ -936,6 +936,7 @@ Environment overrides:
 - `C2000_MCP_REQUEST_TIMEOUT_MS` (end-to-end MCP/daemon long-operation response timeout; default: `600000`)
 - `C2000_MCP_PROBE_QUEUE_DIR` (shared FIFO lease directory; every MCP instance must use the same absolute path)
 - `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `600000`)
+- `C2000_MCP_PROBE_STARTUP_PREPARATION_MS` (default: `90000`; CCS host-side XDS110 preflight/recovery envelope included in the outer worker command timeout)
 - `C2000_MCP_PROBE_RECOVERY_POLICY=block|owned-and-stale|terminate-external` (default: `owned-and-stale`)
 - `C2000_MCP_PROBES_JSON` (optional JSON array defining the multi-board pool)
 - `C2000_MCP_MULTI_BOARD_ENABLED=true` (explicit multi-board opt-in; default is false)
@@ -1062,7 +1063,7 @@ Failures return:
 }
 ```
 
-Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores`, `c2000_resetCores`, and `c2000_runCores` return `success: false` with `error.code: "BatchOperationFailed"` if any per-core item in `results` fails. Clients should still inspect `results` for per-core diagnostics.
+Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores`, `c2000_resetCores`, and `c2000_runCores` return `success: false` with `error.code: "BatchOperationFailed"` if any per-core item in `results` fails. Clients should still inspect `results` for per-core diagnostics. Before a real program load, `c2000_loadPrograms` also fails closed with `error.code: "CoreNotConnected"`, `targetMemoryWritten: false`, and `nextAction: "c2000_connectCores"` when a known target core is disconnected; no item is programmed in that case.
 
 ## Typical RAM Debug Flow
 
@@ -1106,8 +1107,17 @@ default remains `"cpu1-then-cpu2"` and introduces no extra pre-load run.
 If CPU1 firmware owns the boot handoff after both images are loaded, set
 `runSequence.runMode` to `cpu1_boots_cpu2`. The server disconnects CPU2 while
 CPU1 runs, reconnects CPU2 before readiness polling/diagnosis, and records the
-sequence in `cpu2Release`. `c2000_runReloadAndDiagnose` exposes the equivalent
+sequence in `cpu2Release`. Workflow results also expose
+`startupContract.cpu2StartAuthority` and `runPlan.cpu2StartAuthority` as
+`firmware-owned`, `debugger-owned`, `pre-running`, or `unspecified`. The last
+value is intentional: legacy `runCpu1First`/`runCpu2` flags do not prove who
+releases CPU2. `c2000_runReloadAndDiagnose` exposes the equivalent
 `postLoadBoot.releaseCpu2BeforeCpu1` switch.
+
+Target reads are not timing-neutral on CCS. `c2000_evaluateMany`, snapshots,
+and expression waits may pause or perturb a live target, so avoid high-rate
+polling while judging UART/IPC timing. Prefer the workflow's bounded polling
+and preserve its first-failure evidence.
 
 Use atomic tools for manual inspection and bottom-layer validation:
 
@@ -1481,6 +1491,7 @@ If `c2000_launchMulticoreDebug` fails after creating a logical session, it calls
 npm test
 npm run build
 npm run verify:debug-boundary
+npm run verify:debug:focused
 npm run verify:host
 npm run smoke
 npm run smoke:mcp
@@ -1489,6 +1500,11 @@ npm run smoke:mcp
 The smoke test creates a mock F28P65x session, connects CPU1/CPU2, resets, loads two temporary `.out` files, runs CPU1, evaluates IPC symbols, and prints a final snapshot.
 
 `npm run verify:debug-boundary` is a host-only source guard. It scans `src` and `scripts` for forbidden active-target/current-target, CCS UI focus/selected CPU, and TI official MCP debug fallback patterns. It exits with code `1` and prints `debugBoundarySourceScan.offenders` if a forbidden pattern is introduced.
+
+`npm run verify:debug:focused` is the bounded regression profile for session
+startup, probe preflight/recovery, worker timeout budgeting, connectivity
+preflight, startup-mode evidence, and tool-surface guidance. Use it while
+iterating on debug/MCP behavior before the broader host gate.
 
 The MCP stdio smoke test starts the built server through `StdioClientTransport`, lists registered tools, calls `c2000_getDebugBoundary`, `c2000_getAcceptanceEvidence`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, and `c2000_getAcceptanceReadiness`, creates a mock debug session, connects/loads CPU1 and CPU2, reloads CPU1 through single-core `c2000_loadProgram`, runs/pauses CPU1 and CPU2 by explicit `coreId`, reads `c2000_getTargetState`, exercises `c2000_reset` and `c2000_disconnectTarget`, verifies `c2000_assignExpressions` and `c2000_injectFaults` write distinct values per core, verifies the four-step `c2000_verifyRunPauseIsolation` `acceptanceSummary`, reads `c2000_getMulticoreSnapshot`, verifies each loaded core reports both `loadedProgram` and trusted `loadedProgramInfo` metadata, and closes the session through MCP `tools/call`.
 
@@ -1826,6 +1842,7 @@ For multiple boards, configure `debugProbe.probes` in the config file (or `C2000
     "multiBoardEnabled": true,
     "queueDir": "/shared/c2000-probe-queue",
     "queueTimeoutMs": 600000,
+    "startupPreparationMs": 90000,
     "recoveryPolicy": "terminate-external",
     "probes": [
       { "probeId": "board-01", "serialNumber": "XDS110-A", "ccxmlPath": "/targets/board-01.ccxml", "enabled": true },
@@ -1837,7 +1854,7 @@ For multiple boards, configure `debugProbe.probes` in the config file (or `C2000
 
 Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true` and at least two enabled, uniquely identified probes are configured. At Session creation the MCP verifies that the selected XDS110 serial is currently enumerated and that its dedicated `.ccxml` contains that serial binding. A mismatch aborts before DSS creation or target access.
 
-Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, and wait time. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
+Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, wait time, and `startupDiagnostics.stages` for probe lease, host preflight/recovery, DSS startup, and initial core-state discovery. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
 
 The default `owned-and-stale` recovery policy blocks on a live external DSLite owner. For a dedicated unattended test machine, set `C2000_MCP_PROBE_RECOVERY_POLICY=terminate-external`; only the FIFO lease holder may then send TERM/KILL to detected DSLite, DebugServer, or dss.sh processes before starting the test. The CCS application itself is not terminated. `c2000_createDebugSession` returns `probeQueue` and `probeRecovery` evidence so callers can see queue position, wait time, and recovered PIDs.
 

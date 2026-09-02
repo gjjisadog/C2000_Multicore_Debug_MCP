@@ -12,6 +12,7 @@ export type DebugErrorCode =
   | "CoreIdentityMismatch"
   | "CoreNotConnected"
   | "OwnerCoreNotConnected"
+  | "StartupStageFailed"
   | "ProgramFileNotFound"
   | "ProgramLoadFailed"
   | "ProgramLoadSessionRefreshFailed"

@@ -1468,17 +1468,19 @@ function resolveRunPlan(
   if (sequence.runMode === "cpu1_boots_cpu2") {
     return {
       mode: sequence.runMode,
+      cpu2StartAuthority: "firmware-owned" as const,
       coreOrder: [cpu1CoreId],
       releaseCpu2BeforeCpu1: true,
       warnings: ["CPU2 is disconnected while CPU1 firmware releases it from reset, then reconnected for diagnosis."]
     };
   }
   if (sequence.runMode === "debugger_runs_both") {
-    return { mode: sequence.runMode, coreOrder: [cpu1CoreId, cpu2CoreId], releaseCpu2BeforeCpu1: false, warnings: [] };
+    return { mode: sequence.runMode, cpu2StartAuthority: "debugger-owned" as const, coreOrder: [cpu1CoreId, cpu2CoreId], releaseCpu2BeforeCpu1: false, warnings: [] };
   }
   if (sequence.runMode === "cpu2_pre_running") {
     return {
       mode: sequence.runMode,
+      cpu2StartAuthority: "pre-running" as const,
       coreOrder: [cpu2CoreId, cpu1CoreId],
       releaseCpu2BeforeCpu1: false,
       warnings: ["CPU2 is started before CPU1; use only for firmware designed for this ordering."]
@@ -1486,6 +1488,7 @@ function resolveRunPlan(
   }
   return {
     mode: "legacy_flags" as const,
+    cpu2StartAuthority: "unspecified" as const,
     coreOrder: [
       ...(sequence.runCpu1First ? [cpu1CoreId] : []),
       ...(sequence.runCpu2 ? [cpu2CoreId] : [])

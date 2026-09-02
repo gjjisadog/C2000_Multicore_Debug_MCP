@@ -75,6 +75,36 @@ describe("hardware preflight", () => {
     expect(recovery).toMatchObject({ attempted: false, recovered: false, terminatedPids: [] });
     expect(signals).toEqual([]);
   });
+
+  test("reuses the startup preflight snapshot instead of enumerating the probe twice", async () => {
+    let execCalls = 0;
+    const recovery = await recoverDebugProbe({
+      policy: "block",
+      initialPreflight: {
+        xdsdfuPath: "xdsdfu",
+        xdsdfu: { ok: true, commandOk: true, probeReady: true, devices: [{ serialNumber: "CL650001" }] },
+        debugProcesses: ["58893 /Applications/ti/ccs/DebugServer/bin/DSLite --config target.ccxml"],
+        debugProcessDetails: [{
+          pid: 58893,
+          ppid: 1,
+          elapsed: "00:10:00",
+          command: "/Applications/ti/ccs/DebugServer/bin/DSLite --config target.ccxml",
+          kind: "DSLite",
+          rawLine: " 58893 1 00:10:00 /Applications/ti/ccs/DebugServer/bin/DSLite --config target.ccxml"
+        }],
+        processInspection: { ok: true, platform: "darwin" }
+      },
+      execFile: async () => {
+        execCalls += 1;
+        return { stdout: "", stderr: "" };
+      },
+      platform: "darwin"
+    });
+
+    expect(recovery).toMatchObject({ attempted: false, recovered: false, remainingOwners: [{ pid: 58893 }] });
+    expect(execCalls).toBe(0);
+  });
+
   test("enumerates XDS110 devices and filters possible debug owners", async () => {
     const result = await runHardwarePreflight({
       ccsInstallPath: "/Applications/ti/ccs2100/ccs",

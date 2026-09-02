@@ -29,6 +29,14 @@ describe("DebugSessionManager", () => {
     });
 
     expect(session.sessionId).toMatch(/^dbg-/);
+    expect(session.startupDiagnostics).toEqual(expect.objectContaining({
+      schemaVersion: 1,
+      targetAccessAttempted: true,
+      stages: expect.arrayContaining([
+        expect.objectContaining({ stage: "dss-startup", status: "completed" }),
+        expect.objectContaining({ stage: "core-state-discovery", status: "completed", targetAccessAttempted: true })
+      ])
+    }));
     await expect(manager.listCores(session.sessionId)).resolves.toEqual([
       expect.objectContaining({ coreId: 0, coreName: "C28xx_CPU1", connected: false, active: false }),
       expect.objectContaining({ coreId: 2, coreName: "C28xx_CPU2", connected: false, active: false })
@@ -190,6 +198,41 @@ describe("DebugSessionManager", () => {
     expect(info!.sha256).toHaveLength(64);
   });
 
+  test("fails a batch load closed before the first program write when a target core is disconnected", async () => {
+    class CountingLoadAdapter extends MockDebugAdapter {
+      loadCount = 0;
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.loadCount += 1;
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-load-preflight-"));
+    const cpu1Out = path.join(tempDir, "cpu1.out");
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    await writeFile(cpu1Out, "cpu1-image");
+    await writeFile(cpu2Out, "cpu2-image");
+    const adapter = new CountingLoadAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "load-connectivity-preflight", coreMap });
+    await manager.connectTarget(session.sessionId, 0);
+
+    await expect(manager.loadPrograms(session.sessionId, [
+      { coreId: 0, programUri: cpu1Out },
+      { coreId: 2, programUri: cpu2Out, ramOwnershipPolicy: "skip" }
+    ])).rejects.toMatchObject({
+      code: "CoreNotConnected",
+      details: expect.objectContaining({
+        targetMemoryWritten: false,
+        nextAction: "c2000_connectCores",
+        connectCoreIds: [0, 2],
+        failedCores: [expect.objectContaining({ coreId: 2, connected: false })]
+      })
+    });
+    expect(adapter.loadCount).toBe(0);
+  });
+
   test("refreshes the adapter session and reconnects cores before an actual CPU1 program load", async () => {
     class RefreshingAdapter extends MockDebugAdapter {
       readonly refreshes: Array<{ previousAdapterSessionId: string; coreId: CoreId }> = [];
@@ -249,6 +292,7 @@ describe("DebugSessionManager", () => {
     await manager.connectTarget(session.sessionId, 0);
 
     await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out }]);
+    await manager.disconnectTarget(session.sessionId, 0);
     const skipped = await manager.loadPrograms(session.sessionId, [{ coreId: 0, programUri: cpu1Out, loadPolicy: "if-changed" }]);
 
     expect(adapter.refreshCount).toBe(1);

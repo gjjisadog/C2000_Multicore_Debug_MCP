@@ -133,6 +133,7 @@ describe("loadConfig", () => {
     expect(config.debugProbe).toEqual({
       queueDir: "/tmp/c2000-shared-probe",
       queueTimeoutMs: 120000,
+      startupPreparationMs: 90000,
       recoveryPolicy: "terminate-external",
       multiBoardEnabled: true,
       probes: [

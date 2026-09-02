@@ -78,10 +78,21 @@ export class BoardWorkerProcess implements BoardWorkerClient {
 
   invokeTool(toolName: string, input: unknown, timeoutMs: number): Promise<Record<string, unknown>> {
     const requestId = randomUUID();
+    const startedAtMs = Date.now();
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new DebugMcpError("WorkerCommandTimeout", `Board worker command timed out: ${toolName}`, { boardId: this.boardId, workerInstanceId: this.workerInstanceId, requestId, timeoutMs }));
+        reject(new DebugMcpError("WorkerCommandTimeout", `Board worker command timed out: ${toolName}`, {
+          boardId: this.boardId,
+          workerInstanceId: this.workerInstanceId,
+          requestId,
+          toolName,
+          timeoutMs,
+          elapsedMs: Math.max(0, Date.now() - startedAtMs),
+          timeoutLayer: "outer-worker-command",
+          lastHeartbeatAt: this.lastHeartbeatAt ? new Date(this.lastHeartbeatAt).toISOString() : undefined,
+          innerStage: "unknown"
+        }));
       }, timeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
       this.send({ type: "invoke", token: this.options.authToken, requestId, toolName, arguments: input });

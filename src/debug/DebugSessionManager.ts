@@ -43,6 +43,12 @@ import { sleep } from "../utils/async.js";
 import { SessionQueue } from "../utils/sessionQueue.js";
 import { resolveAddressFromMap } from "../hardware/mapSymbols.js";
 import type { DebugProbeCoordinator, DebugProbeLease } from "../hardware/debugProbeCoordinator.js";
+import {
+  createStartupDiagnostics,
+  createStartupStageRunner,
+  type StartupDiagnostics,
+  type StartupStageRunner
+} from "./startupStageDiagnostics.js";
 
 interface LogicalDebugSession {
   sessionId: string;
@@ -69,7 +75,7 @@ export interface DebugSessionManagerOptions {
   defaultWorkspacePath?: string;
   diagnostics?: Partial<DiagnosticsDefaults>;
   probeCoordinator?: DebugProbeCoordinator;
-  prepareProbe?: (lease?: DebugProbeLease) => Promise<unknown>;
+  prepareProbe?: (lease?: DebugProbeLease, context?: { runStage: StartupStageRunner }) => Promise<unknown>;
 }
 
 const F28P65X_CPU1_CORE_ID = 0;
@@ -84,7 +90,7 @@ export class DebugSessionManager {
   private readonly defaultCoreMap: CoreConfig[];
   private readonly defaultWorkspacePath?: string;
   private readonly probeCoordinator?: DebugProbeCoordinator;
-  private readonly prepareProbe?: (lease?: DebugProbeLease) => Promise<unknown>;
+  private readonly prepareProbe?: (lease?: DebugProbeLease, context?: { runStage: StartupStageRunner }) => Promise<unknown>;
 
   constructor(
     private readonly adapter: DebugAdapter,
@@ -109,16 +115,34 @@ export class DebugSessionManager {
     return this.queue.run(sessionId, work);
   }
 
-  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[]; probeQueue?: Record<string, unknown>; probeRecovery?: unknown }> {
+  async createDebugSession(options: Partial<CreateDebugSessionOptions>): Promise<{ sessionId: string; cores: CoreInfo[]; probeQueue?: Record<string, unknown>; probeRecovery?: unknown; startupDiagnostics: StartupDiagnostics }> {
     const sessionName = options.sessionName ?? "c2000-debug-session";
     const coreMap = validateCoreMap(options.coreMap ?? this.defaultCoreMap);
     const ccxmlPath = options.ccxmlPath ?? this.defaultCcxmlPath;
-    const probeLease = await this.probeCoordinator?.acquire(sessionName, { probeId: options.probeId, preferredProbeIds: options.preferredProbeIds, allowAutoProbeAllocation: options.allowAutoProbeAllocation });
+    const startupDiagnostics = createStartupDiagnostics();
+    const runStartupStage = createStartupStageRunner(startupDiagnostics, this.logger);
+    let probeLease: DebugProbeLease | undefined;
     let probeRecovery: unknown;
     let adapterSession: AdapterSession;
     try {
-      probeRecovery = await this.prepareProbe?.(probeLease);
-      adapterSession = await this.adapter.createSession({ sessionName, ccxmlPath: probeLease?.probe?.ccxmlPath ?? ccxmlPath, coreMap });
+      if (this.probeCoordinator) {
+        probeLease = await runStartupStage("probe-lease", () => this.probeCoordinator!.acquire(sessionName, {
+          probeId: options.probeId,
+          preferredProbeIds: options.preferredProbeIds,
+          allowAutoProbeAllocation: options.allowAutoProbeAllocation
+        }));
+      }
+      if (this.prepareProbe) {
+        probeRecovery = await runStartupStage(
+          "probe-preparation",
+          () => this.prepareProbe!(probeLease, { runStage: runStartupStage })
+        );
+      }
+      adapterSession = await runStartupStage("dss-startup", () => this.adapter.createSession({
+        sessionName,
+        ccxmlPath: probeLease?.probe?.ccxmlPath ?? ccxmlPath,
+        coreMap
+      }));
     } catch (error) {
       await probeLease?.release();
       throw error;
@@ -136,11 +160,17 @@ export class DebugSessionManager {
     });
     this.logger.info("debug session created", { sessionId, sessionName, ccxmlPath, coreMap });
     try {
+      const listedCores = await runStartupStage(
+        "core-state-discovery",
+        () => this.listCores(sessionId),
+        { targetAccessAttempted: true }
+      );
       return {
         sessionId,
-        cores: await this.listCores(sessionId),
+        cores: listedCores,
         ...(probeLease ? { probeQueue: { leaseId: probeLease.leaseId, queuePositionAtEntry: probeLease.queuePositionAtEntry, waitedMs: probeLease.waitedMs, ...(probeLease.probe ?? {}) } } : {}),
-        ...(probeRecovery !== undefined ? { probeRecovery } : {})
+        ...(probeRecovery !== undefined ? { probeRecovery } : {}),
+        startupDiagnostics
       };
     } catch (error) {
       try { await this.closeDebugSession(sessionId); } catch { /* Preserve the original creation error. */ }
@@ -632,7 +662,10 @@ export class DebugSessionManager {
           sessionId,
           ownerCoreId: F28P65X_CPU1_CORE_ID,
           targetCoreId: F28P65X_CPU2_CORE_ID,
-          programUri
+          programUri,
+          targetMemoryWritten: false,
+          nextAction: "c2000_connectCores",
+          connectCoreIds: [F28P65X_CPU1_CORE_ID, F28P65X_CPU2_CORE_ID]
         }
       );
     }
@@ -983,6 +1016,7 @@ export class DebugSessionManager {
           }
         );
       }
+      await this.assertProgramLoadConnectivity(sessionId, programs);
       const results: BatchItemResult[] = [];
       for (const program of programs) {
         try {
@@ -1025,6 +1059,88 @@ export class DebugSessionManager {
       }
       return { sessionId, results };
     });
+  }
+
+  /**
+   * Read connectivity for the whole target-load batch before the first load.
+   * This prevents a connected CPU1 image from being programmed when CPU2 is
+   * still held by the debugger (or vice versa), and gives callers a direct
+   * connect-next action instead of a late per-item failure.
+   */
+  private async assertProgramLoadConnectivity(sessionId: string, programs: LoadProgramRequest[]): Promise<void> {
+    const targetCoreIds = await this.targetCoreIdsForProgramLoad(sessionId, programs);
+    if (targetCoreIds.length === 0) return;
+
+    const failedCores: Array<Record<string, unknown>> = [];
+    for (const coreId of targetCoreIds) {
+      // Keep CoreNotFound as a per-item result in the existing batch path.
+      if (!this.sessions.get(sessionId)?.cores.has(coreId)) continue;
+      try {
+        const state = await this.getTargetStateUnlocked(sessionId, coreId);
+        if (!state.connected) {
+          failedCores.push({
+            coreId,
+            coreName: state.coreName,
+            state: state.state,
+            connected: false
+          });
+        }
+      } catch (error) {
+        failedCores.push({
+          coreId,
+          error: toStructuredError(error)
+        });
+      }
+    }
+    if (failedCores.length === 0) return;
+
+    throw new DebugMcpError(
+      "CoreNotConnected",
+      "All target cores must be connected before a batch program load; no program load was attempted",
+      {
+        sessionId,
+        targetMemoryWritten: false,
+        failedCores,
+        checkedCoreIds: targetCoreIds,
+        nextAction: "c2000_connectCores",
+        connectCoreIds: targetCoreIds
+      }
+    );
+  }
+
+  /**
+   * An unchanged `if-changed` item is a host-side registry decision and does
+   * not need a live target. Every other item remains in the preflight set so
+   * a batch cannot partially program before a disconnected peer is found.
+   */
+  private async targetCoreIdsForProgramLoad(sessionId: string, programs: LoadProgramRequest[]): Promise<CoreId[]> {
+    const targetCoreIds: CoreId[] = [];
+    for (const program of programs) {
+      if (program.loadPolicy === "verify-mcp-registry" || program.loadPolicy === "verify-only") {
+        continue;
+      }
+      if (program.loadPolicy !== "if-changed") {
+        targetCoreIds.push(program.coreId);
+        continue;
+      }
+      try {
+        const normalizedUri = this.normalizeArtifactUri(program.programUri);
+        const existing = this.loadedPrograms.get(sessionId, program.coreId);
+        if (!existing || existing.programUri !== normalizedUri) {
+          targetCoreIds.push(program.coreId);
+          continue;
+        }
+        const metadata = await fileMetadata(normalizedUri);
+        if (existing.fileMTime !== metadata.fileMTime || existing.fileSize !== metadata.fileSize || existing.sha256 !== metadata.sha256) {
+          targetCoreIds.push(program.coreId);
+        }
+      } catch {
+        // Let the normal per-item path report the host artifact error, but
+        // stay conservative if the item might still reach the adapter.
+        targetCoreIds.push(program.coreId);
+      }
+    }
+    return [...new Set(targetCoreIds)];
   }
 
   async connectCores(sessionId: string, coreIds: CoreId[]) {
