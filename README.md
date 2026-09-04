@@ -168,6 +168,13 @@ approves, force-pushes, enables auto-merge, or executes instructions from PR
 comments. GitHub credentials stay in the server process; the coding agent only
 receives its isolated worktree.
 
+Review evidence collection follows GitHub `Link: rel="next"` pagination for pull
+request reviews, code comments, issue comments, and CI checks. It uses a bounded
+page budget and fails closed when that budget is exceeded or a pagination link
+leaves the configured API host. The feedback synchronizer also rejects a pull
+request with more than 500 feedback records before changing any stored status;
+an incomplete remote page can therefore never be learned as removed evidence.
+
 ### Controlled review revision loop
 
 After a PR review, use the advanced-only flow

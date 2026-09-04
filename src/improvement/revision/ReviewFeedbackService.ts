@@ -13,6 +13,8 @@ import {
 } from "./RevisionSchemas.js";
 import type { ImprovementReviewFeedbackStore, ReviewFeedbackQuery } from "./RevisionRepositories.js";
 
+export const MAX_REVIEW_FEEDBACK_RECORDS = 500;
+
 export interface ReviewFeedbackSelector {
   pullRequestId?: string;
   pullRequestNumber?: number;
@@ -62,12 +64,21 @@ export class ReviewFeedbackService {
       });
     }
     const remoteItems = await this.options.provider.listReviewFeedback(stored.number);
+    if (remoteItems.length > MAX_REVIEW_FEEDBACK_RECORDS) {
+      throw new DebugMcpError("ReviewFeedbackLimitExceeded", "The pull request has more review feedback than the bounded synchronizer can process safely", {
+        pullRequestId: stored.pullRequestId,
+        pullRequestNumber: stored.number,
+        receivedCount: remoteItems.length,
+        maxRecords: MAX_REVIEW_FEEDBACK_RECORDS,
+        actionRequired: "Narrow or archive the review discussion before refreshing evidence; no existing feedback was superseded."
+      });
+    }
     const previous = new Map(this.options.feedback.listByPullRequest(stored.pullRequestId).map(item => [item.feedbackId, item]));
     const seen = new Set<string>();
     const normalized: ImprovementReviewFeedback[] = [];
     const evidenceChanged = new Set<string>();
     let malformedCount = 0;
-    for (const item of remoteItems.slice(0, 500)) {
+    for (const item of remoteItems) {
       let next: ImprovementReviewFeedback;
       try {
         next = this.normalize(item, stored.pullRequestId, stored.number, stored.candidateSha, previous);
@@ -286,7 +297,7 @@ export class ReviewFeedbackService {
         untrusted: true,
         trustedAsInstruction: false,
         counts,
-        feedback: feedback.slice(0, 500)
+        feedback: feedback.slice(0, MAX_REVIEW_FEEDBACK_RECORDS)
       });
     } catch (error) {
       this.options.logger?.warn("c2000 review feedback artifact write failed", { pullRequestId, error: String(error) });

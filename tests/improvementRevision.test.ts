@@ -22,7 +22,7 @@ import {
 } from "../src/improvement/review/ReviewSchemas.js";
 import type { ImprovementCodeReviewProvider, ProviderPullRequest, ProviderReviewFeedback } from "../src/improvement/review/GitHubReviewProvider.js";
 import { InMemoryImprovementReviewFeedbackStore, InMemoryImprovementRevisionProposalStore } from "../src/improvement/revision/RevisionRepositories.js";
-import { ReviewFeedbackService } from "../src/improvement/revision/ReviewFeedbackService.js";
+import { MAX_REVIEW_FEEDBACK_RECORDS, ReviewFeedbackService } from "../src/improvement/revision/ReviewFeedbackService.js";
 import { classifyReviewFeedback, sanitizeReviewText } from "../src/improvement/revision/ReviewFeedbackClassifier.js";
 import { RevisionProposalService } from "../src/improvement/revision/RevisionProposalService.js";
 import { improvementReviewFeedbackSchema, type ImprovementRevisionProposal } from "../src/improvement/revision/RevisionSchemas.js";
@@ -171,6 +171,54 @@ describe("Round8 review feedback and revision governance", () => {
       now: () => Date.parse(NOW)
     });
     expect(confirmed.reviews.changesRequested).toBe(false);
+  });
+
+  test("does not supersede stored feedback when the remote set exceeds the bounded synchronizer limit", async () => {
+    const pullRequest = makePullRequest();
+    const feedbackStore = new InMemoryImprovementReviewFeedbackStore();
+    const pullRequests = new InMemoryImprovementPullRequestStore();
+    pullRequests.upsert(pullRequest);
+    const existing = improvementReviewFeedbackSchema.parse({
+      feedbackId: "feedback-existing-round8",
+      pullRequestId: pullRequest.pullRequestId,
+      pullRequestNumber: pullRequest.number,
+      reviewId: 17,
+      threadId: "17",
+      commentId: 23,
+      author: "alice",
+      authorType: "human",
+      createdAt: NOW,
+      updatedAt: NOW,
+      source: "review-comment",
+      disposition: "suggestion",
+      path: "src/improvement/review/example.ts",
+      line: 12,
+      candidateSha: CANDIDATE_SHA,
+      rawTextHash: "f".repeat(64),
+      sanitizedText: "existing feedback",
+      normalizedSummary: "Existing feedback",
+      fingerprint: "e".repeat(64),
+      classification: "correctness",
+      status: "revision-approved",
+      trustedAsInstruction: false
+    });
+    feedbackStore.upsert(existing);
+    const provider = makeProvider(() => Array.from({ length: MAX_REVIEW_FEEDBACK_RECORDS + 1 }, (_, index) => ({
+      ...providerFeedback(`feedback ${index}`),
+      reviewId: 1000 + index,
+      commentId: 2000 + index
+    })));
+    const service = new ReviewFeedbackService({
+      feedback: feedbackStore,
+      pullRequests,
+      provider
+    });
+
+    await expect(service.refresh({ pullRequestId: pullRequest.pullRequestId })).rejects.toMatchObject({
+      code: "ReviewFeedbackLimitExceeded",
+      details: expect.objectContaining({ receivedCount: MAX_REVIEW_FEEDBACK_RECORDS + 1, maxRecords: MAX_REVIEW_FEEDBACK_RECORDS })
+    });
+    expect(feedbackStore.get(existing.feedbackId)).toEqual(expect.objectContaining({ status: "revision-approved", rawTextHash: existing.rawTextHash }));
   });
 
   test("revision evidence validates against the revision parent while retaining the PR base binding", () => {

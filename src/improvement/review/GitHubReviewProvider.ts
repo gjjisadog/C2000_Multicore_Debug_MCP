@@ -3,6 +3,10 @@ import type { Logger } from "../../utils/logger.js";
 import type { MergeabilityState, ReviewCheckStatus, ReviewState } from "./ReviewSchemas.js";
 import type { ReviewFeedbackDisposition, ReviewFeedbackSource } from "../revision/RevisionSchemas.js";
 
+export const GITHUB_PAGE_SIZE = 100;
+export const DEFAULT_GITHUB_MAX_PAGES = 5;
+export const MAX_GITHUB_MAX_PAGES = 20;
+
 export interface ProviderPullRequest {
   number: number;
   url: string;
@@ -90,6 +94,8 @@ export interface GitHubReviewProviderOptions {
   githubTokenEnv: string;
   token?: string;
   fetch?: typeof fetch;
+  /** Maximum number of API pages fetched for one evidence collection. */
+  maxPages?: number;
   logger?: Pick<Logger, "warn">;
 }
 
@@ -104,6 +110,7 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
   private readonly tokenEnv: string;
   private readonly injectedToken?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly maxPages: number;
   private readonly logger?: Pick<Logger, "warn">;
 
   constructor(options: GitHubReviewProviderOptions) {
@@ -112,6 +119,7 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
     this.tokenEnv = options.githubTokenEnv;
     this.injectedToken = options.token;
     this.fetchImpl = options.fetch ?? fetch;
+    this.maxPages = normalizeMaxPages(options.maxPages);
     this.logger = options.logger;
   }
 
@@ -132,9 +140,11 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
   }
 
   async findOpenPullRequest(branch: string, baseBranch: string): Promise<ProviderPullRequest | undefined> {
-    const value = await this.request("GET", `/repos/${this.repository}/pulls?state=open&head=${encodeURIComponent(`${this.repository.split("/")[0]}:${branch}`)}&base=${encodeURIComponent(baseBranch)}&per_page=100`);
-    if (!Array.isArray(value)) return undefined;
-    const matches = value.map(item => parsePullRequest(item, this.repository)).filter(item => item.state === "open" && item.branch === branch && item.baseBranch === baseBranch);
+    const values = await this.requestAllPages(
+      `/repos/${this.repository}/pulls?state=open&head=${encodeURIComponent(`${this.repository.split("/")[0]}:${branch}`)}&base=${encodeURIComponent(baseBranch)}&per_page=${GITHUB_PAGE_SIZE}`,
+      value => Array.isArray(value) ? value : []
+    );
+    const matches = values.map(item => parsePullRequest(item, this.repository)).filter(item => item.state === "open" && item.branch === branch && item.baseBranch === baseBranch);
     return matches[0];
   }
 
@@ -144,34 +154,76 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
   }
 
   async listChecks(candidateSha: string): Promise<ProviderCheck[]> {
-    const value = await this.request("GET", `/repos/${this.repository}/commits/${candidateSha}/check-runs?per_page=100`);
-    const runs = value && typeof value === "object" && Array.isArray((value as { check_runs?: unknown }).check_runs)
-      ? (value as { check_runs: unknown[] }).check_runs
-      : [];
+    const runs = await this.requestAllPages(
+      `/repos/${this.repository}/commits/${candidateSha}/check-runs?per_page=${GITHUB_PAGE_SIZE}`,
+      value => value && typeof value === "object" && Array.isArray((value as { check_runs?: unknown }).check_runs)
+        ? (value as { check_runs: unknown[] }).check_runs
+        : []
+    );
     return runs.flatMap(run => parseCheck(run, candidateSha));
   }
 
   async listReviews(number: number): Promise<ProviderReview[]> {
-    const value = await this.request("GET", `/repos/${this.repository}/pulls/${number}/reviews?per_page=100`);
-    if (!Array.isArray(value)) return [];
-    return value.flatMap(review => parseReview(review));
+    const values = await this.requestAllPages(
+      `/repos/${this.repository}/pulls/${number}/reviews?per_page=${GITHUB_PAGE_SIZE}`,
+      value => Array.isArray(value) ? value : []
+    );
+    return values.flatMap(review => parseReview(review));
   }
 
   async listReviewFeedback(number: number): Promise<ProviderReviewFeedback[]> {
     const [reviews, comments, issueComments] = await Promise.all([
-      this.request("GET", `/repos/${this.repository}/pulls/${number}/reviews?per_page=100`),
-      this.request("GET", `/repos/${this.repository}/pulls/${number}/comments?per_page=100`),
-      this.request("GET", `/repos/${this.repository}/issues/${number}/comments?per_page=100`)
+      this.requestAllPages(`/repos/${this.repository}/pulls/${number}/reviews?per_page=${GITHUB_PAGE_SIZE}`, value => Array.isArray(value) ? value : []),
+      this.requestAllPages(`/repos/${this.repository}/pulls/${number}/comments?per_page=${GITHUB_PAGE_SIZE}`, value => Array.isArray(value) ? value : []),
+      this.requestAllPages(`/repos/${this.repository}/issues/${number}/comments?per_page=${GITHUB_PAGE_SIZE}`, value => Array.isArray(value) ? value : [])
     ]);
     const pullRequestId = `${this.repository}#${number}`;
     return [
-      ...(Array.isArray(reviews) ? reviews.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review")) : []),
-      ...(Array.isArray(comments) ? comments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review-comment")) : []),
-      ...(Array.isArray(issueComments) ? issueComments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "issue-comment")) : [])
+      ...reviews.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review")),
+      ...comments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "review-comment")),
+      ...issueComments.flatMap(item => parseReviewFeedback(item, pullRequestId, number, "issue-comment"))
     ];
   }
 
   private async request(method: "GET" | "POST" | "PATCH", resource: string, body?: unknown): Promise<unknown> {
+    return (await this.requestPage(method, resource, body)).value;
+  }
+
+  private async requestAllPages(resource: string, extract: (value: unknown) => unknown[]): Promise<unknown[]> {
+    const values: unknown[] = [];
+    const visited = new Set<string>();
+    let nextResource: string | undefined = toRequestUrl(this.apiBaseUrl, resource, this.repository);
+    let pagesFetched = 0;
+    while (nextResource) {
+      const pageResource = nextResource;
+      if (visited.has(pageResource)) {
+        throw new DebugMcpError("GitHubApiUnavailable", "GitHub returned a repeated pagination link", {
+          repository: this.repository,
+          resource,
+          repeatedResource: pageResource
+        });
+      }
+      visited.add(pageResource);
+      const page = await this.requestPage("GET", pageResource);
+      pagesFetched += 1;
+      values.push(...extract(page.value));
+      if (!page.nextResource) return values;
+      if (pagesFetched >= this.maxPages) {
+        throw new DebugMcpError("GitHubPaginationLimit", "GitHub review evidence exceeds the configured pagination bound", {
+          repository: this.repository,
+          resource,
+          pagesFetched,
+          maxPages: this.maxPages,
+          itemsFetched: values.length,
+          actionRequired: "Increase the bounded GitHub page limit only after confirming the review evidence volume, then refresh again."
+        });
+      }
+      nextResource = page.nextResource;
+    }
+    return values;
+  }
+
+  private async requestPage(method: "GET" | "POST" | "PATCH", resource: string, body?: unknown): Promise<{ value: unknown; nextResource?: string }> {
     const token = this.injectedToken ?? process.env[this.tokenEnv];
     if (!token) {
       throw new DebugMcpError("GitHubCredentialsUnavailable", "GitHub review credentials are not configured for the server", {
@@ -181,8 +233,9 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
       });
     }
     let response: Response;
+    const requestUrl = toRequestUrl(this.apiBaseUrl, resource, this.repository);
     try {
-      response = await this.fetchImpl(`${this.apiBaseUrl}${resource}`, {
+      response = await this.fetchImpl(requestUrl, {
         method,
         headers: {
           Accept: "application/vnd.github+json",
@@ -209,12 +262,76 @@ export class GitHubReviewProvider implements ImprovementCodeReviewProvider {
       this.logger?.warn("c2000 GitHub review API request failed", { repository: this.repository, method, resource, status: response.status });
       throw new DebugMcpError("GitHubApiUnavailable", "GitHub review API returned an unsuccessful response", { repository: this.repository, method, resource, status: response.status });
     }
+    let value: unknown;
     try {
-      return await response.json() as unknown;
+      value = await response.json() as unknown;
     } catch (error) {
       throw new DebugMcpError("GitHubApiUnavailable", "GitHub review API returned invalid JSON", { repository: this.repository, resource, cause: error instanceof Error ? error.message : String(error) });
     }
+    return {
+      value,
+      ...(method === "GET" ? nextResourceFromLink(response.headers.get("link"), this.apiBaseUrl, this.repository, resource) : {})
+    };
   }
+}
+
+function normalizeMaxPages(value: number | undefined): number {
+  return Number.isInteger(value) && value! > 0
+    ? Math.min(value!, MAX_GITHUB_MAX_PAGES)
+    : DEFAULT_GITHUB_MAX_PAGES;
+}
+
+function toRequestUrl(apiBaseUrl: string, resource: string, repository: string): string {
+  try {
+    const base = new URL(apiBaseUrl);
+    const basePath = base.pathname.replace(/\/+$/, "");
+    const target = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|\/\/)/.test(resource)
+      ? new URL(resource)
+      : resource.startsWith("/")
+        ? new URL(`${base.origin}${basePath}${resource}`)
+        : new URL(resource, new URL(`${base.origin}${basePath}/`));
+    if (target.origin !== base.origin) {
+      throw new DebugMcpError("GitHubApiUnavailable", "GitHub pagination link points outside the configured API host", {
+        repository
+      });
+    }
+    return target.toString();
+  } catch (error) {
+    if (error instanceof DebugMcpError) throw error;
+    throw new DebugMcpError("GitHubApiUnavailable", "GitHub returned an invalid pagination link", {
+      resource,
+      cause: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+function nextResourceFromLink(
+  linkHeader: string | null,
+  apiBaseUrl: string,
+  repository: string,
+  resource: string
+): { nextResource?: string } {
+  if (!linkHeader) return {};
+  for (const link of linkHeader.split(",")) {
+    const match = link.match(/<([^>]+)>\s*;\s*rel\s*=\s*"?([^";]+)"?/i);
+    if (!match) continue;
+    const relations = match[2]!.split(/\s+/).map(value => value.toLowerCase());
+    if (!relations.includes("next")) continue;
+    try {
+      const currentResource = toRequestUrl(apiBaseUrl, resource, repository);
+      return { nextResource: toRequestUrl(apiBaseUrl, new URL(match[1]!, currentResource).toString(), repository) };
+    } catch (error) {
+      if (error instanceof DebugMcpError) {
+        throw new DebugMcpError(error.code, error.message, {
+          ...error.details,
+          repository,
+          resource
+        });
+      }
+      throw error;
+    }
+  }
+  return {};
 }
 
 function parsePullRequest(value: unknown, repository: string): ProviderPullRequest {
