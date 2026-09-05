@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "../utils/logger.js";
+import { runtimeBuildInfo, SERVER_VERSION } from "../runtimeInfo.js";
 import type { CapabilityAuditEvent, ToolCapability } from "../mcp/capabilities.js";
 import {
   c2000ToolDefinitions,
@@ -38,6 +39,7 @@ export interface OutcomeAnalyticsServiceOptions {
   activeCapabilities?: () => readonly ToolCapability[];
   now?: () => number;
   retentionDays?: number;
+  runtimeIdentity?: { mcpVersion?: string; mcpGitSha?: string };
   logger?: Pick<Logger, "warn" | "error">;
 }
 
@@ -172,11 +174,17 @@ const CAPABILITY_RULES: readonly CapabilityRule[] = [
 export class OutcomeAnalyticsService {
   private readonly now: () => number;
   private readonly retentionDays: number;
+  private readonly runtimeIdentity: { mcpVersion: string; mcpGitSha: string };
   private readonly logger?: Pick<Logger, "warn" | "error">;
 
   constructor(private readonly options: OutcomeAnalyticsServiceOptions) {
     this.now = options.now ?? (() => Date.now());
     this.retentionDays = Math.max(1, Math.min(3650, Math.trunc(options.retentionDays ?? OUTCOME_ANALYTICS_RETENTION_DAYS)));
+    const build = runtimeBuildInfo();
+    this.runtimeIdentity = {
+      mcpVersion: options.runtimeIdentity?.mcpVersion ?? SERVER_VERSION,
+      mcpGitSha: options.runtimeIdentity?.mcpGitSha ?? build.sourceRevision ?? "unknown"
+    };
     this.logger = options.logger;
   }
 
@@ -189,7 +197,9 @@ export class OutcomeAnalyticsService {
         timestamp: event.timestamp ?? new Date(this.now()).toISOString(),
         toolProfile: event.toolProfile ?? this.currentProfile(),
         toolSurfaceProfile: event.toolSurfaceProfile ?? this.currentSurface(),
-        activeCapabilities: event.activeCapabilities ?? this.currentCapabilities()
+        activeCapabilities: event.activeCapabilities ?? this.currentCapabilities(),
+        mcpVersion: event.mcpVersion ?? this.runtimeIdentity.mcpVersion,
+        mcpGitSha: event.mcpGitSha ?? this.runtimeIdentity.mcpGitSha
       });
       this.options.repository.append(normalized);
       return true;
@@ -551,7 +561,8 @@ export function capabilityAuditToOutcomeEvent(
   event: CapabilityAuditEvent,
   toolProfile: ToolProfile,
   toolSurfaceProfile: ToolSurfaceProfile,
-  activeCapabilities: readonly ToolCapability[] = []
+  activeCapabilities: readonly ToolCapability[] = [],
+  runtimeIdentity: { mcpVersion?: string; mcpGitSha?: string } = {}
 ): OutcomeEvent {
   const kind: OutcomeEventKind = event.action === "open"
     ? "capability_open"
@@ -568,6 +579,8 @@ export function capabilityAuditToOutcomeEvent(
     toolProfile,
     toolSurfaceProfile,
     activeCapabilities,
+    ...(runtimeIdentity.mcpVersion ? { mcpVersion: runtimeIdentity.mcpVersion } : {}),
+    ...(runtimeIdentity.mcpGitSha ? { mcpGitSha: runtimeIdentity.mcpGitSha } : {}),
     sessionId: event.sessionId,
     ...(event.openedFrom?.workflow ? { escalationFrom: event.openedFrom.workflow } : event.openedFrom?.failureClass ? { escalationFrom: event.openedFrom.failureClass } : {}),
     escalationTo: event.capability,
@@ -599,6 +612,8 @@ export function sanitizeOutcomeEvent(value: Record<string, unknown>): OutcomeEve
     toolProfile: value.toolProfile,
     toolSurfaceProfile: value.toolSurfaceProfile,
     activeCapabilities,
+    ...(typeof value.mcpVersion === "string" && /^[A-Za-z0-9._+-]{1,128}$/.test(value.mcpVersion) ? { mcpVersion: value.mcpVersion } : {}),
+    ...(typeof value.mcpGitSha === "string" && (value.mcpGitSha === "unknown" || /^[0-9a-f]{7,64}$/i.test(value.mcpGitSha)) ? { mcpGitSha: value.mcpGitSha.toLowerCase() === "unknown" ? "unknown" : value.mcpGitSha } : {}),
     ...(boundedNonNegativeInteger(value.boardCount) === undefined ? {} : { boardCount: boundedNonNegativeInteger(value.boardCount) }),
     ...(boundedNonNegativeInteger(value.coreCount) === undefined ? {} : { coreCount: boundedNonNegativeInteger(value.coreCount) }),
     ...(boundedLabel(value.jobId) ? { jobId: boundedLabel(value.jobId) } : {}),
@@ -896,6 +911,51 @@ function sanitizeMetadata(value: unknown): Record<string, unknown> {
   if (source.revisionImplementationMode === "auto-eligible" || source.revisionImplementationMode === "manual-only") output.revisionImplementationMode = source.revisionImplementationMode;
   if (typeof source.revisionNewProposalRecommended === "boolean") output.revisionNewProposalRecommended = source.revisionNewProposalRecommended;
   if (typeof source.insufficientHistoricalSupport === "boolean") output.insufficientHistoricalSupport = source.insufficientHistoricalSupport;
+  for (const key of ["workflow", "firmwareIdentity", "testPlanIdentity", "osRuntime"]) {
+    if (typeof source[key] !== "string" || source[key].trim().length === 0 || source[key].trim().length > 256) continue;
+    if (key === "workflow" && !/^[A-Za-z0-9._:-]{1,128}$/.test(source[key].trim())) continue;
+    output[key] = source[key].trim();
+  }
+  if (source.adapterMode === "mock" || source.adapterMode === "ccs" || source.adapterMode === "auto") output.adapterMode = source.adapterMode;
+  if (source.evidenceLevel === "MOCK" || source.evidenceLevel === "HARDWARE_TARGET" || source.evidenceLevel === "HARDWARE_BUS" || source.evidenceLevel === "MIXED" || source.evidenceLevel === "UNKNOWN") output.evidenceLevel = source.evidenceLevel;
+  if (source.hardwareMode === "mock" || source.hardwareMode === "hardware" || source.hardwareMode === "mixed" || source.hardwareMode === "unknown") output.hardwareMode = source.hardwareMode;
+  if (typeof source.metricName === "string" && /^[A-Za-z0-9._:/-]{1,192}$/.test(source.metricName.trim())) {
+    output.metricName = source.metricName.trim();
+  }
+  for (const key of ["releaseContainsSha", "deployedCommitSha"]) {
+    if (typeof source[key] === "string" && /^[0-9a-f]{7,64}$/i.test(source[key].trim())) output[key] = source[key].trim();
+  }
+  for (const key of ["metricValue"]) {
+    if (typeof source[key] === "number" && Number.isFinite(source[key])) output[key] = source[key];
+  }
+  for (const key of ["metrics", "metricValues"]) {
+    const values = asRecord(source[key]);
+    const sanitized: Record<string, number> = {};
+    for (const [name, value] of Object.entries(values).slice(0, 64)) {
+      if (/^[A-Za-z0-9._:/-]{1,192}$/.test(name) && typeof value === "number" && Number.isFinite(value)) sanitized[name] = value;
+    }
+    if (Object.keys(sanitized).length > 0) output[key] = sanitized;
+  }
+  if (typeof source.safetyRegression === "boolean") output.safetyRegression = source.safetyRegression;
+  if (typeof source.safetyViolation === "boolean") output.safetyViolation = source.safetyViolation;
+  const runtimeIdentity = asRecord(source.runtimeIdentity);
+  const runtimeVersion = typeof runtimeIdentity.mcpVersion === "string" && /^[A-Za-z0-9._+-]{1,128}$/.test(runtimeIdentity.mcpVersion.trim())
+    ? runtimeIdentity.mcpVersion.trim()
+    : undefined;
+  const runtimeSha = typeof runtimeIdentity.mcpGitSha === "string"
+    && (runtimeIdentity.mcpGitSha === "unknown" || /^[0-9a-f]{7,64}$/i.test(runtimeIdentity.mcpGitSha.trim()))
+    ? runtimeIdentity.mcpGitSha.trim().toLowerCase() === "unknown" ? "unknown" : runtimeIdentity.mcpGitSha.trim()
+    : undefined;
+  const buildId = typeof runtimeIdentity.buildId === "string" && runtimeIdentity.buildId.trim().length <= 256
+    ? runtimeIdentity.buildId.trim()
+    : undefined;
+  if (runtimeVersion || runtimeSha || buildId) {
+    output.runtimeIdentity = {
+      ...(runtimeVersion ? { mcpVersion: runtimeVersion } : {}),
+      ...(runtimeSha ? { mcpGitSha: runtimeSha } : {}),
+      ...(buildId ? { buildId } : {})
+    };
+  }
   const openedFrom = asRecord(source.openedFrom);
   if (Object.keys(openedFrom).length) {
     const safeOpenedFrom: Record<string, string> = {};

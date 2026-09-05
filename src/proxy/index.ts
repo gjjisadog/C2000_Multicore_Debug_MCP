@@ -3,7 +3,7 @@ import type { C2000McpConfig } from "../config/config.schema.js";
 import { registerC2000Tools } from "../mcp/tools.js";
 import { ensureDaemon } from "../daemon/DaemonBootstrap.js";
 import { McpDaemonClient } from "./McpDaemonClient.js";
-import { SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
+import { runtimeBuildInfo, SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
 import path from "node:path";
 import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 import { CapabilitySessionManager } from "../mcp/capabilities.js";
@@ -33,7 +33,8 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
         event,
         config.toolProfile ?? "safe",
         config.toolSurfaceProfile ?? "agent",
-        capabilitySessions.activeCapabilities()
+        capabilitySessions.activeCapabilities(),
+        { mcpVersion: SERVER_VERSION, mcpGitSha: runtimeBuildInfo().sourceRevision ?? "unknown" }
       );
       void client.recordOutcomeEvent(analyticsEvent).catch(error => {
         logger.warn("c2000 capability analytics audit forwarding failed", { error });
@@ -60,7 +61,7 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
     }),
     {},
     {
-      getServerHealth: () => client.invokeTool("c2000_getServerHealth", {})
+      getServerHealth: async () => annotateProxyRuntimeHealth(await client.invokeTool("c2000_getServerHealth", {}))
     },
     config.toolSurfaceProfile ?? "agent",
     { capabilitySessions }
@@ -72,4 +73,31 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
       await client.close();
     }
   };
+}
+
+function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<string, unknown> {
+  const server = asRecord(health.server);
+  const runtime = asRecord(health.runtime);
+  const build = asRecord(runtime.build);
+  const daemonVersion = typeof server.version === "string" ? server.version : undefined;
+  const daemonSha = typeof build.sourceRevision === "string" ? build.sourceRevision : undefined;
+  const proxySha = runtimeBuildInfo().sourceRevision ?? undefined;
+  const mismatch = (daemonVersion !== undefined && daemonVersion !== SERVER_VERSION)
+    || (daemonSha !== undefined && proxySha !== undefined && daemonSha !== "unknown" && proxySha !== "unknown" && daemonSha.toLowerCase() !== proxySha.toLowerCase());
+  const configuration = asRecord(health.configuration);
+  const tools = asRecord(health.tools);
+  return {
+    ...health,
+    runtimeVersionMismatch: mismatch,
+    configuration: { ...configuration, runtimeVersionMismatch: mismatch },
+    tools: { ...tools, runtimeVersionMismatch: mismatch },
+    runtimeIdentity: {
+      proxy: { mcpVersion: SERVER_VERSION, mcpGitSha: proxySha ?? "unknown" },
+      daemon: { mcpVersion: daemonVersion ?? "unknown", mcpGitSha: daemonSha ?? "unknown" }
+    }
+  };
+}
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }

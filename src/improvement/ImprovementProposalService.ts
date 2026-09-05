@@ -28,7 +28,9 @@ import {
   type ProposalReviewDecision,
   type ProposalValidationResult,
   type ProposalStatus,
-  type ProposalSummary
+  type ProposalSummary,
+  type ProposalFinalOutcome,
+  derivePrimaryMetrics
 } from "./ProposalSchemas.js";
 
 const DEFAULT_PROPOSAL_WINDOW: AnalyticsWindow = "30d";
@@ -206,28 +208,29 @@ export class ImprovementProposalService {
   }
 
   review(input: ReviewImprovementProposalInput): Record<string, unknown> {
-    const proposal = this.requireProposal(input.proposalId);
+    const current = this.requireProposal(input.proposalId);
     const reason = input.reviewReason.trim();
     if (!reason) {
       throw new DebugMcpError("ProposalReviewReasonRequired", "A reviewReason is required for every Proposal decision", { proposalId: input.proposalId });
     }
-    if (input.decision === "approve" && proposal.status !== "ready-for-review" && proposal.status !== "deferred") {
-      throw new DebugMcpError("ProposalNotReadyForReview", `Proposal ${proposal.proposalId} is not ready for approval`, {
-        proposalId: proposal.proposalId,
-        status: proposal.status,
+    if (input.decision === "approve" && current.status !== "ready-for-review" && current.status !== "deferred") {
+      throw new DebugMcpError("ProposalNotReadyForReview", `Proposal ${current.proposalId} is not ready for approval`, {
+        proposalId: current.proposalId,
+        status: current.status,
         requiredStatus: "ready-for-review"
       });
     }
+    if (input.decision !== "approve" && ["implementation-queued", "implementing", "validation-pending", "candidate-ready", "validated", "superseded"].includes(current.status)) {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${current.proposalId} cannot be reviewed from ${current.status}`, {
+        proposalId: current.proposalId,
+        status: current.status
+      });
+    }
+    const proposal = input.decision === "approve" ? this.ensurePrimaryMetricsLocked(current) : current;
     if (input.decision === "approve" && !proposal.baselineSha) {
       throw new DebugMcpError("BaselineUnavailable", "An approved Proposal must be bound to a baseline SHA", {
         proposalId: proposal.proposalId,
         actionRequired: "Regenerate the Proposal with baselineSha or configure C2000_MCP_BASELINE_SHA."
-      });
-    }
-    if (input.decision !== "approve" && ["implementation-queued", "implementing", "validation-pending", "candidate-ready", "validated", "superseded"].includes(proposal.status)) {
-      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot be reviewed from ${proposal.status}`, {
-        proposalId: proposal.proposalId,
-        status: proposal.status
       });
     }
     const status: ProposalStatus = input.decision === "approve" ? "approved" : input.decision === "reject" ? "rejected" : "deferred";
@@ -248,6 +251,34 @@ export class ImprovementProposalService {
       mergeCandidate: false,
       executesAutomatically: false
     };
+  }
+
+  /** Lock the primary success metrics before a Proposal enters approval. */
+  lockPrimaryMetrics(proposalId: string): ImprovementProposal {
+    return this.ensurePrimaryMetricsLocked(this.requireProposal(proposalId));
+  }
+
+  /**
+   * Record the final post-merge outcome without changing Proposal governance
+   * status. This method never approves, merges, reverts, or executes code.
+   */
+  setFinalOutcome(proposalId: string, finalOutcome: ProposalFinalOutcome): ImprovementProposal {
+    const current = this.requireProposal(proposalId);
+    if (current.status !== "merged" && current.finalOutcome === undefined) {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${current.proposalId} is not a merged candidate`, {
+        proposalId,
+        status: current.status,
+        requiredStatus: "merged"
+      });
+    }
+    const proposal = this.ensurePrimaryMetricsLocked(current);
+    const updated = improvementProposalSchema.parse({
+      ...proposal,
+      finalOutcome,
+      updatedAt: new Date(this.now()).toISOString()
+    });
+    this.options.proposals.upsert(updated);
+    return updated;
   }
 
   /** Mark an approved Proposal as being implemented in an isolated candidate. */
@@ -362,14 +393,18 @@ export class ImprovementProposalService {
    * validation remain outside the MCP server's authority.
    */
   recordValidation(input: RecordProposalValidationInput): Record<string, unknown> {
-    const proposal = this.requireProposal(input.proposalId);
-    if (proposal.status !== "approved" && proposal.status !== "implementing" && proposal.status !== "validation-pending") {
-      throw new DebugMcpError("ProposalInvalidState", `Proposal ${proposal.proposalId} cannot accept validation from ${proposal.status}`, {
-        proposalId: proposal.proposalId,
-        status: proposal.status,
+    // Legacy Proposals may predate Round9's explicit metric contract. Lock
+    // their derived/declared primary metrics before accepting validation so a
+    // later post-merge comparison cannot silently change its target metric set.
+    const current = this.requireProposal(input.proposalId);
+    if (current.status !== "approved" && current.status !== "implementing" && current.status !== "validation-pending") {
+      throw new DebugMcpError("ProposalInvalidState", `Proposal ${current.proposalId} cannot accept validation from ${current.status}`, {
+        proposalId: current.proposalId,
+        status: current.status,
         requiredStatuses: ["approved", "implementing"]
       });
     }
+    const proposal = this.ensurePrimaryMetricsLocked(current);
     const result = proposalValidationResultSchema.parse(input.result);
     if (!proposal.baselineSha) {
       throw new DebugMcpError("BaselineUnavailable", "Validation requires a Proposal baseline SHA", {
@@ -475,7 +510,8 @@ export class ImprovementProposalService {
     nowMs: number
   ): ImprovementProposal {
     const timestamp = new Date(nowMs).toISOString();
-    const status: ProposalStatus = existing && ["approved", "implementation-queued", "implementing", "validation-pending", "candidate-ready", "candidate-rejected", "implementation-failed", "validated", "superseded"].includes(existing.status)
+    const preserveExisting = existing !== undefined && shouldPreserveGeneratedLifecycle(existing.status);
+    const status: ProposalStatus = preserveExisting
       ? existing.status
       : finding.evidence.sufficient ? "ready-for-review" : "draft";
     const proposal = improvementProposalSchema.parse({
@@ -498,7 +534,25 @@ export class ImprovementProposalService {
       priority: assessment.priority,
       generatedBy: finding.generatedBy,
       sourceWindow: finding.evidence.sampleWindow,
-      ...(existing && ["approved", "implementation-queued", "implementing", "validation-pending", "candidate-ready", "candidate-rejected", "implementation-failed", "validated", "superseded"].includes(existing.status)
+      primaryMetrics: existing?.primaryMetricsLocked
+        ? existing.primaryMetrics
+        : finding.expectedBenefit.metrics.map(metric => ({
+            name: metric.name,
+            classification: metricClassificationForName(metric.name),
+            direction: metric.direction,
+            required: true,
+            tolerance: 0,
+            meaningfulDelta: 0.01,
+            unit: "",
+            rationale: metric.rationale,
+            source: "declared" as const
+          })),
+      primaryMetricsLocked: existing?.primaryMetricsLocked ?? false,
+      ...(existing?.primaryMetricsLockedAt ? { primaryMetricsLockedAt: existing.primaryMetricsLockedAt } : {}),
+      primaryMetricsSource: existing?.primaryMetricsSource ?? "declared",
+      ...(existing?.source ? { source: existing.source } : {}),
+      ...(existing?.finalOutcome ? { finalOutcome: existing.finalOutcome } : {}),
+      ...(preserveExisting
         ? (existing.baselineSha ? { baselineSha: existing.baselineSha } : {})
         : baselineSha ? { baselineSha } : existing?.baselineSha ? { baselineSha: existing.baselineSha } : {}),
       createdAt: existing?.createdAt ?? timestamp,
@@ -517,6 +571,28 @@ export class ImprovementProposalService {
     const proposal = this.options.proposals.get(proposalId);
     if (!proposal) throw new DebugMcpError("ProposalNotFound", `Improvement Proposal not found: ${proposalId}`, { proposalId });
     return proposal;
+  }
+
+  private ensurePrimaryMetricsLocked(proposal: ImprovementProposal): ImprovementProposal {
+    if (proposal.primaryMetricsLocked && proposal.primaryMetrics.length > 0) return proposal;
+    const metrics = derivePrimaryMetrics(proposal);
+    if (metrics.length === 0) {
+      throw new DebugMcpError("ProposalNotReadyForReview", "Proposal must declare at least one primary success metric before approval", {
+        proposalId: proposal.proposalId,
+        requiredField: "primaryMetrics"
+      });
+    }
+    const lockedAt = new Date(this.now()).toISOString();
+    const locked = improvementProposalSchema.parse({
+      ...proposal,
+      primaryMetrics: metrics,
+      primaryMetricsLocked: true,
+      primaryMetricsLockedAt: lockedAt,
+      primaryMetricsSource: metrics.some(metric => metric.source === "retrospective") ? "retrospective" : "declared",
+      updatedAt: lockedAt
+    });
+    this.options.proposals.upsert(locked);
+    return locked;
   }
 
   private persistLifecycle(
@@ -546,6 +622,36 @@ export class ImprovementProposalService {
     }
     return configured;
   }
+}
+
+function metricClassificationForName(name: string): "workflow" | "tool-surface" | "capability" | "reliability" | "performance" | "error-guidance" | "review-quality" | "test-quality" | "safety" {
+  if (/safe|safety|invariant|lease|ownership|flash/i.test(name)) return "safety";
+  if (/duration|latency|p95|p99|time|throughput|performance|cycle/i.test(name)) return "performance";
+  if (/error|failure|timeout|reliab|success|pass|regression/i.test(name)) return "reliability";
+  if (/tool|schema|surface/i.test(name)) return "tool-surface";
+  if (/capability|escalat/i.test(name)) return "capability";
+  if (/review/i.test(name)) return "review-quality";
+  if (/test|coverage/i.test(name)) return "test-quality";
+  return "workflow";
+}
+
+function shouldPreserveGeneratedLifecycle(status: ProposalStatus): boolean {
+  return [
+    "approved",
+    "implementation-queued",
+    "implementing",
+    "validation-pending",
+    "candidate-ready",
+    "candidate-rejected",
+    "implementation-failed",
+    "validated",
+    "pr-open",
+    "merge-recommended",
+    "merged",
+    "closed-without-merge",
+    "failed",
+    "superseded"
+  ].includes(status);
 }
 
 function normalizeFindingEvidence(finding: ProposalFinding, context: DetectorContext): ProposalFinding {

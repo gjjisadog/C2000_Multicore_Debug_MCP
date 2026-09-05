@@ -25,7 +25,7 @@ import {
 } from "./mcp/tools.js";
 import { CapabilitySessionManager } from "./mcp/capabilities.js";
 import type { ToolHandlerDeps } from "./mcp/toolHandlers.js";
-import { buildServerHealth, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
+import { buildServerHealth, runtimeBuildInfo, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
 import { DebugMcpError } from "./utils/errors.js";
 import { Logger } from "./utils/logger.js";
 import { normalizeWorkspacePath } from "./utils/pathUtils.js";
@@ -35,6 +35,12 @@ import { InMemoryOutcomeEventStore } from "./analytics/OutcomeEventRepository.js
 import { OutcomeAnalyticsService } from "./analytics/OutcomeAnalyticsService.js";
 import { InMemoryImprovementProposalStore } from "./improvement/ProposalRepository.js";
 import { ImprovementProposalService } from "./improvement/ImprovementProposalService.js";
+import {
+  InMemoryPostMergeEvaluationSnapshotStore,
+  InMemoryPostMergeEvaluationStore,
+  InMemoryRollbackRecommendationStore
+} from "./improvement/evaluation/EvaluationRepositories.js";
+import { PostMergeEvaluationService } from "./improvement/evaluation/PostMergeEvaluationService.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -99,9 +105,16 @@ function buildRuntime(
     || !toolHandlerDeps.getImprovementProposal
     || !toolHandlerDeps.reviewImprovementProposal
     || !toolHandlerDeps.exportImprovementImplementationPrompt;
-  const localOutcomeEvents = needsLocalAnalytics || needsLocalProposals ? new InMemoryOutcomeEventStore() : undefined;
+  const needsLocalEvaluations = !toolHandlerDeps.listPostMergeEvaluations
+    || !toolHandlerDeps.getPostMergeEvaluation
+    || !toolHandlerDeps.refreshPostMergeEvaluation
+    || !toolHandlerDeps.getRollbackRecommendation
+    || !toolHandlerDeps.reviewRollbackRecommendation;
+  const localOutcomeEvents = needsLocalAnalytics || needsLocalProposals || needsLocalEvaluations ? new InMemoryOutcomeEventStore() : undefined;
+  const localProposalStore = needsLocalProposals || needsLocalEvaluations ? new InMemoryImprovementProposalStore() : undefined;
   let localAnalytics: OutcomeAnalyticsService | undefined;
   let localImprovementProposals: ImprovementProposalService | undefined;
+  let localPostMergeEvaluation: PostMergeEvaluationService | undefined;
   const capabilitySessions = new CapabilitySessionManager({
     logger,
     onAudit: event => (toolHandlerDeps.capabilityAudit ?? localAnalytics)?.recordCapabilityAudit(event)
@@ -112,17 +125,31 @@ function buildRuntime(
       toolProfile,
       toolSurfaceProfile,
       activeCapabilities: () => capabilitySessions.activeCapabilities(),
+      runtimeIdentity: { mcpVersion: SERVER_VERSION, mcpGitSha: runtimeBuildInfo().sourceRevision ?? "unknown" },
       logger
     });
   }
-  if (needsLocalProposals) {
+  if (needsLocalProposals || needsLocalEvaluations) {
     localImprovementProposals = new ImprovementProposalService({
       events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
-      proposals: new InMemoryImprovementProposalStore(),
+      proposals: localProposalStore!,
       currentBaselineSha: () => process.env.C2000_MCP_BASELINE_SHA,
       logger
     });
   }
+  if (needsLocalEvaluations) {
+    localPostMergeEvaluation = new PostMergeEvaluationService({
+      evaluations: new InMemoryPostMergeEvaluationStore(),
+      snapshots: new InMemoryPostMergeEvaluationSnapshotStore(),
+      rollbackRecommendations: new InMemoryRollbackRecommendationStore(),
+      events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
+      proposals: localProposalStore!,
+      proposalService: localImprovementProposals,
+      logger
+    });
+  }
+  const getActiveCriticalImprovementRegression = toolHandlerDeps.getActiveCriticalImprovementRegression
+    ?? (() => localPostMergeEvaluation?.hasActiveCriticalRegression() ?? false);
   let getExposureSummary = () => getToolExposureSummary(toolProfile, toolSurfaceProfile);
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
@@ -168,7 +195,8 @@ function buildRuntime(
     const exposure = getExposureSummary();
     return buildServerHealth(config, startedAt, exposure.registered.map(tool => tool.name), {
       activeCapabilityCount: exposure.activeCapabilities.length,
-      capabilityMode: "dynamic"
+      capabilityMode: "dynamic",
+      activeCriticalImprovementRegression: getActiveCriticalImprovementRegression()
     });
   };
   const verificationRoot = path.join(
@@ -213,6 +241,14 @@ function buildRuntime(
       getImprovementProposal: toolHandlerDeps.getImprovementProposal ?? (input => localImprovementProposals!.get(input.proposalId)),
       reviewImprovementProposal: toolHandlerDeps.reviewImprovementProposal ?? (input => localImprovementProposals!.review(input)),
       exportImprovementImplementationPrompt: toolHandlerDeps.exportImprovementImplementationPrompt ?? (input => localImprovementProposals!.exportImplementationPrompt(input.proposalId)),
+      listPostMergeEvaluations: toolHandlerDeps.listPostMergeEvaluations ?? (input => localPostMergeEvaluation!.list(input)),
+      getPostMergeEvaluation: toolHandlerDeps.getPostMergeEvaluation ?? (input => localPostMergeEvaluation!.get(input.evaluationId)),
+      refreshPostMergeEvaluation: toolHandlerDeps.refreshPostMergeEvaluation ?? (input => localPostMergeEvaluation!.refresh(input)),
+      getRollbackRecommendation: toolHandlerDeps.getRollbackRecommendation ?? (input => input.recommendationId
+        ? localPostMergeEvaluation!.getRollbackRecommendation(input.recommendationId)
+        : localPostMergeEvaluation!.getRollbackRecommendationForEvaluation(input.evaluationId!)),
+      reviewRollbackRecommendation: toolHandlerDeps.reviewRollbackRecommendation ?? (input => localPostMergeEvaluation!.reviewRollbackRecommendation(input)),
+      getActiveCriticalImprovementRegression,
       effectiveAdapterType: adapterResolution.mode,
       filesystem,
       programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots

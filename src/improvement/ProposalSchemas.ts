@@ -31,7 +31,8 @@ export const PROPOSAL_CATEGORIES = [
   "performance",
   "reliability",
   "documentation",
-  "test-coverage"
+  "test-coverage",
+  "rollback"
 ] as const;
 
 export const PROPOSAL_ROOT_CAUSES = [
@@ -49,7 +50,8 @@ export const PROPOSAL_CHANGE_KINDS = [
   "skill-routing",
   "error-guidance",
   "test-coverage",
-  "performance"
+  "performance",
+  "rollback"
 ] as const;
 
 export const PROPOSAL_RISK_LEVELS = ["low", "medium", "high"] as const;
@@ -58,6 +60,15 @@ export const PROPOSAL_IMPLEMENTATION_MODES = ["auto-eligible", "manual-only"] as
 export const PROPOSAL_PRIORITIES = ["P0", "P1", "P2", "P3"] as const;
 export const PROPOSAL_VALIDATION_VERDICTS = ["improved", "neutral", "regressed", "inconclusive"] as const;
 export const PROPOSAL_REVIEW_DECISIONS = ["approve", "reject", "defer"] as const;
+export const PROPOSAL_FINAL_OUTCOMES = [
+  "verified-improvement",
+  "no-observable-benefit",
+  "verified-regression",
+  "inconclusive",
+  "rolled-back",
+  "superseded"
+] as const;
+export const PROPOSAL_SOURCES = ["outcome-analytics", "post-merge-regression", "manual"] as const;
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 const boundedName = z.string().regex(/^[A-Za-z0-9._:/-]{1,192}$/);
@@ -102,6 +113,33 @@ export const expectedBenefitSchema = z.object({
     direction: z.enum(["increase", "decrease", "preserve"]),
     rationale: boundedText(512)
   })).min(1).max(16)
+});
+
+/**
+ * Success metrics are governance metadata. They are intentionally separate
+ * from ToolProfile safety metadata: a metric says what to observe after a
+ * human merge, never what target side effect is allowed.
+ */
+export const proposalMetricDefinitionSchema = z.object({
+  name: boundedName,
+  classification: z.enum([
+    "workflow",
+    "tool-surface",
+    "capability",
+    "reliability",
+    "performance",
+    "error-guidance",
+    "review-quality",
+    "test-quality",
+    "safety"
+  ]),
+  direction: z.enum(["increase", "decrease", "preserve"]),
+  required: z.boolean().default(true),
+  tolerance: z.number().finite().nonnegative().max(1_000_000).default(0),
+  meaningfulDelta: z.number().finite().nonnegative().max(1_000_000).default(0.01),
+  unit: z.string().max(64).default(""),
+  rationale: boundedText(512),
+  source: z.enum(["declared", "retrospective"]).default("declared")
 });
 
 export const proposalRiskSchema = z.object({
@@ -155,7 +193,14 @@ export const improvementProposalSchema = z.object({
   priority: z.enum(PROPOSAL_PRIORITIES),
   generatedBy: z.enum(["static-rule", "analytics-pattern", "static-and-analytics"]),
   sourceWindow: z.enum(ANALYTICS_WINDOWS),
+  source: z.enum(PROPOSAL_SOURCES).default("outcome-analytics"),
   baselineSha: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
+  /** Empty only for legacy rows; approval/validation derives and locks it. */
+  primaryMetrics: z.array(proposalMetricDefinitionSchema).max(32).default([]),
+  primaryMetricsLocked: z.boolean().default(false),
+  primaryMetricsLockedAt: z.string().datetime().optional(),
+  primaryMetricsSource: z.enum(["declared", "retrospective"]).default("declared"),
+  finalOutcome: z.enum(PROPOSAL_FINAL_OUTCOMES).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   lastObservedAt: z.string().datetime(),
@@ -174,13 +219,62 @@ export type ProposalImplementationMode = typeof PROPOSAL_IMPLEMENTATION_MODES[nu
 export type ProposalPriority = typeof PROPOSAL_PRIORITIES[number];
 export type ProposalValidationVerdict = typeof PROPOSAL_VALIDATION_VERDICTS[number];
 export type ProposalReviewDecision = typeof PROPOSAL_REVIEW_DECISIONS[number];
+export type ProposalFinalOutcome = typeof PROPOSAL_FINAL_OUTCOMES[number];
+export type ProposalSource = typeof PROPOSAL_SOURCES[number];
 export type ProposalEvidence = z.infer<typeof proposalEvidenceSchema>;
 export type ProposedChange = z.infer<typeof proposedChangeSchema>;
 export type ExpectedBenefit = z.infer<typeof expectedBenefitSchema>;
+export type ProposalMetricDefinition = z.infer<typeof proposalMetricDefinitionSchema>;
 export type ProposalRisk = z.infer<typeof proposalRiskSchema>;
 export type ValidationPlan = z.infer<typeof validationPlanSchema>;
 export type ImprovementProposal = z.infer<typeof improvementProposalSchema>;
 export type ProposalValidationResult = z.infer<typeof proposalValidationResultSchema>;
+
+/**
+ * Derive a bounded, retrospective metric set for proposals created before
+ * Round9. This is deterministic and does not infer a causal relationship.
+ */
+export function derivePrimaryMetrics(proposal: Pick<ImprovementProposal, "primaryMetrics" | "expectedBenefit" | "validationPlan">): ProposalMetricDefinition[] {
+  if (proposal.primaryMetrics.length > 0) return proposal.primaryMetrics;
+  const derived = proposal.expectedBenefit.metrics.map(metric => ({
+    name: metric.name,
+    classification: metricClassificationForName(metric.name),
+    direction: metric.direction,
+    required: true,
+    tolerance: 0,
+    meaningfulDelta: 0.01,
+    unit: "",
+    rationale: metric.rationale,
+    source: "retrospective" as const
+  }));
+  const known = new Set(derived.map(metric => metric.name));
+  for (const name of proposal.validationPlan.beforeAfterMetrics) {
+    if (known.has(name)) continue;
+    derived.push({
+      name,
+      classification: metricClassificationForName(name),
+      direction: "preserve",
+      required: true,
+      tolerance: 0,
+      meaningfulDelta: 0.01,
+      unit: "",
+      rationale: "Retrospectively derived from the pre-Round9 validation plan.",
+      source: "retrospective"
+    });
+  }
+  return derived.slice(0, 32);
+}
+
+function metricClassificationForName(name: string): ProposalMetricDefinition["classification"] {
+  if (/safe|safety|invariant|lease|ownership|flash/i.test(name)) return "safety";
+  if (/duration|latency|p95|p99|time|throughput|performance|cycle/i.test(name)) return "performance";
+  if (/error|failure|timeout|reliab|success|pass|regression/i.test(name)) return "reliability";
+  if (/tool|schema|surface/i.test(name)) return "tool-surface";
+  if (/capability|escalat/i.test(name)) return "capability";
+  if (/review/i.test(name)) return "review-quality";
+  if (/test|coverage/i.test(name)) return "test-quality";
+  return "workflow";
+}
 
 export interface ProposalSummary {
   proposalId: string;

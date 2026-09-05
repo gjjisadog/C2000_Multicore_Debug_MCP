@@ -181,6 +181,20 @@ the system never executes comment text, applies suggestions, clears
 `CHANGES_REQUESTED`, replies to reviewers, force-pushes, amends, rebases, or
 merges automatically.
 
+### Post-merge outcome evaluation
+
+After a human merges a controlled PR, the daemon creates a deferred evaluation
+record. The advanced-only `c2000_listPostMergeEvaluations`,
+`c2000_getPostMergeEvaluation`, and `c2000_refreshPostMergeEvaluation` tools
+wait for a runtime/release identity containing the merged SHA, then compare a
+frozen baseline with comparable post-merge Outcome Events. Verdicts are
+`improved`, `neutral`, `regressed`, or `inconclusive`; mixed firmware,
+mock/hardware, runtime, or test-plan identities fail closed. A regression can
+produce a human-only `c2000_getRollbackRecommendation` result and a reviewed
+follow-up Proposal, but this MCP never reverts source, changes production,
+restarts a daemon, pushes, or merges. Evaluation data is governance metadata
+and does not change Debug, Job, lease, or safety semantics.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.

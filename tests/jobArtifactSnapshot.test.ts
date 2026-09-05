@@ -403,7 +403,7 @@ describe("standard job artifact snapshot", () => {
     `);
     legacy.close();
     const migrated = await SqliteStore.open(databasePath);
-    expect(migrated.schemaVersion).toBe(14);
+    expect(migrated.schemaVersion).toBe(16);
     const event = new EventRepository(migrated).list({ jobId: "legacy-job", ascending: true })[0]!;
     expect(event).toMatchObject({ sequence: 1, monotonicTimestampNs: "1" });
     expect(migrated.all<{ name: string }>("PRAGMA table_info(workers)").map(column => column.name)).toContain("worker_generation");
@@ -412,7 +412,7 @@ describe("standard job artifact snapshot", () => {
 
   it("exports old jobs without requiring newly introduced input fields", async () => {
     const fixture = await createFixture();
-    expect(fixture.store.schemaVersion).toBe(14);
+    expect(fixture.store.schemaVersion).toBe(16);
     const legacyEvent = fixture.events.list({ jobId: fixture.jobId, ascending: true })[0]!;
     expect(legacyEvent.sequence).toBe(1);
     await fixture.service.exportJob(fixture.jobId);

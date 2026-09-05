@@ -54,7 +54,12 @@ describe("MCP tool surface profiles", () => {
       "c2000_listReviewFeedback",
       "c2000_listRevisionProposals",
       "c2000_reviewRevisionProposal",
-      "c2000_publishRevisionCandidate"
+      "c2000_publishRevisionCandidate",
+      "c2000_listPostMergeEvaluations",
+      "c2000_getPostMergeEvaluation",
+      "c2000_refreshPostMergeEvaluation",
+      "c2000_getRollbackRecommendation",
+      "c2000_reviewRollbackRecommendation"
     ];
     const agent = names("safe", "agent");
     const advanced = names("safe", "advanced");
@@ -258,8 +263,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 84,
-      advancedOnlyCount: 82,
+      hiddenBySurfaceCount: 89,
+      advancedOnlyCount: 87,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -274,7 +279,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(82);
+    expect(guide.advancedOnly).toBe(87);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -297,14 +302,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 84,
-      advancedOnlyCount: 82,
+      hiddenBySurfaceCount: 89,
+      advancedOnlyCount: 87,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 28,
         hiddenBySafety: 8,
-        hiddenBySurface: 84,
-        advancedOnly: 82,
+        hiddenBySurface: 89,
+        advancedOnly: 87,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -382,8 +387,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(112);
-    expect(fullCompatibility.count).toBe(120);
+    expect(safeCompatibility.count).toBe(117);
+    expect(fullCompatibility.count).toBe(125);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 
