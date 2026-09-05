@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Logger } from "../utils/logger.js";
 import { DebugMcpError } from "../utils/errors.js";
 import type { OutcomeEventStore } from "../analytics/OutcomeEventRepository.js";
@@ -32,6 +32,7 @@ import {
   type ProposalFinalOutcome,
   derivePrimaryMetrics
 } from "./ProposalSchemas.js";
+import { currentEngineeringPolicySnapshot } from "./meta/PolicySnapshotService.js";
 
 const DEFAULT_PROPOSAL_WINDOW: AnalyticsWindow = "30d";
 const MAX_EVENT_QUERY = 50_000;
@@ -71,6 +72,31 @@ export interface ReviewImprovementProposalInput {
 export interface RecordProposalValidationInput {
   proposalId: string;
   result: ProposalValidationResult;
+}
+
+/** Input used only when a reviewed meta recommendation becomes a normal Proposal. */
+export interface PolicyRecommendationProposalInput {
+  recommendationId: string;
+  category: string;
+  target: string;
+  title: string;
+  summary: string;
+  evidence: {
+    sampleSize: number;
+    currentPolicyRegime: string;
+    validationEscapeCount: number;
+    effectSize: number;
+    relevantProposalIds: string[];
+    relevantEvaluationIds: string[];
+    confounders: string[];
+  };
+  currentPolicy: unknown;
+  recommendedPolicyChange: unknown;
+  expectedEffect: string[];
+  risks: string[];
+  confidence: number;
+  engineeringPolicyHash: string;
+  policyRegime: string;
 }
 
 /** Evidence-bound Proposal lifecycle. It never edits source code or executes a proposal. */
@@ -205,6 +231,121 @@ export class ImprovementProposalService {
   get(proposalId: string): Record<string, unknown> {
     const proposal = this.requireProposal(proposalId);
     return { proposal, mergeCandidate: isMergeCandidate(proposal) };
+  }
+
+  /**
+   * Convert a reviewed policy recommendation into the ordinary Proposal
+   * lifecycle. The result is deliberately ready-for-review, never approved.
+   */
+  createPolicyRecommendationProposal(input: PolicyRecommendationProposalInput): ImprovementProposal {
+    const timestamp = new Date(this.now()).toISOString();
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify({ source: "policy-recommendation", recommendationId: input.recommendationId, target: input.target, policy: input.recommendedPolicyChange, policyRegime: input.policyRegime }), "utf8")
+      .digest("hex");
+    const existing = this.options.proposals.findByFingerprint(fingerprint);
+    if (existing) return existing;
+
+    const category = policyProposalCategory(input.category);
+    const changeKind = policyProposalChangeKind(input.category);
+    const currentPolicy = compactPolicyValue(input.currentPolicy);
+    const recommendedPolicy = compactPolicyValue(input.recommendedPolicyChange);
+    const metrics = policySuccessMetrics(input.category, input.expectedEffect);
+    const relevantProposalIds = input.evidence.relevantProposalIds.slice(0, 4).join(",").slice(0, 256);
+    const relevantEvaluationIds = input.evidence.relevantEvaluationIds.slice(0, 4).join(",").slice(0, 256);
+    const proposal = improvementProposalSchema.parse({
+      proposalId: `imp-policy-${fingerprint.slice(0, 24)}-${randomUUID().slice(0, 8)}`,
+      fingerprint,
+      status: "ready-for-review",
+      category,
+      target: input.target,
+      title: `Policy proposal: ${input.title}`.slice(0, 256),
+      summary: `${input.summary} This Proposal was converted from ${input.recommendationId}; it still requires ordinary Proposal review, isolated implementation, PR review, and post-merge evaluation.`.slice(0, 2048),
+      evidence: {
+        matchingRuns: input.evidence.sampleSize,
+        affectedRuns: input.evidence.sampleSize,
+        successAfterEscalation: 0,
+        failureAfterEscalation: input.evidence.validationEscapeCount,
+        sampleWindow: "retained",
+        patternRatio: Math.max(0, Math.min(1, Math.abs(input.evidence.effectSize))),
+        failureRate: input.evidence.sampleSize === 0 ? 0 : Math.min(1, input.evidence.validationEscapeCount / input.evidence.sampleSize),
+        sufficient: true,
+        minimumMatchingRuns: 5,
+        minimumPatternRatio: 0.2,
+        supportingTools: [],
+        supportingCapabilities: [],
+        context: {
+          recommendationId: input.recommendationId,
+          policyRegime: input.policyRegime,
+          engineeringPolicyHash: input.engineeringPolicyHash,
+          currentPolicy,
+          recommendedPolicy,
+          ...(relevantProposalIds ? { relevantProposalIds } : {}),
+          ...(relevantEvaluationIds ? { relevantEvaluationIds } : {})
+        },
+        rootCause: "likely-mcp-deficiency",
+        rootCauseReason: "A deterministic cross-improvement pattern was reviewed before conversion to a normal Proposal.",
+        observedAt: timestamp
+      },
+      proposedChange: {
+        kind: changeKind,
+        target: input.target,
+        description: `Review and, if approved, implement this governance change. Current policy: ${currentPolicy}. Recommended change: ${recommendedPolicy}.`,
+        allowedAreas: ["src/improvement/**", "tests/**", "README.md", "skills/c2000-multicore-debug/SKILL.md"],
+        forbiddenAreas: ["src/debug/**", "src/boards/**", "src/can/**", "automatic merge", "automatic rollback", "MetaPolicyGuard protected floors"],
+        changeScope: "medium",
+        implementationMode: "manual-only",
+        suggestedTools: []
+      },
+      expectedBenefit: {
+        summary: input.expectedEffect.slice(0, 8).join(" ").slice(0, 1024),
+        metrics
+      },
+      risks: (input.risks.length > 0 ? input.risks : ["Governance changes can create confounding or reduce improvement throughput; retain all safety and human-review floors."]).slice(0, 16).map(risk => ({
+        level: "high" as const,
+        description: risk.slice(0, 1024),
+        mitigation: "Require human Proposal review, isolated validation, PR review, and post-merge evaluation."
+      })),
+      validationPlan: {
+        existingTests: ["tests/improvementProposal.test.ts", "tests/metaAnalytics.test.ts", "tests/toolSafety.test.ts"],
+        newRegressionTestRequired: true,
+        mockValidation: true,
+        hardwareRequired: Boolean(asRecord(input.recommendedPolicyChange).hardwareRequired),
+        replayFixtures: input.evidence.relevantEvaluationIds.slice(0, 8),
+        beforeAfterMetrics: metrics.map(metric => metric.name),
+        rollbackCondition: "Any protected-floor violation, verified regression, or unacceptable throughput loss requires manual investigation.",
+        acceptanceCriteria: [
+          "The policy change preserves Safety Profile and human merge semantics.",
+          "The expected meta metrics are measured before and after the change.",
+          "The merged policy change receives a normal Post-Merge Evaluation."
+        ]
+      },
+      confidence: Math.max(0, Math.min(1, input.confidence)),
+      priority: policyProposalPriority(input.category),
+      generatedBy: "analytics-pattern",
+      sourceWindow: "retained",
+      source: "policy-recommendation",
+      policyRegime: input.policyRegime,
+      engineeringPolicyHash: input.engineeringPolicyHash,
+      sourceRecommendationId: input.recommendationId,
+      primaryMetrics: metrics.map(metric => ({
+        name: metric.name,
+        classification: metricClassificationForName(metric.name),
+        direction: metric.direction,
+        required: true,
+        tolerance: 0,
+        meaningfulDelta: 0.01,
+        unit: "",
+        rationale: metric.rationale,
+        source: "declared" as const
+      })),
+      primaryMetricsLocked: false,
+      primaryMetricsSource: "declared",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastObservedAt: timestamp
+    });
+    this.options.proposals.upsert(proposal);
+    return proposal;
   }
 
   review(input: ReviewImprovementProposalInput): Record<string, unknown> {
@@ -514,6 +655,7 @@ export class ImprovementProposalService {
     const status: ProposalStatus = preserveExisting
       ? existing.status
       : finding.evidence.sufficient ? "ready-for-review" : "draft";
+    const policySnapshot = existing ? undefined : currentEngineeringPolicySnapshot();
     const proposal = improvementProposalSchema.parse({
       proposalId: existing?.proposalId ?? `imp-${finding.fingerprint}-${randomUUID().slice(0, 8)}`,
       fingerprint: finding.fingerprint,
@@ -522,7 +664,13 @@ export class ImprovementProposalService {
       target: finding.target,
       title: finding.title,
       summary: finding.summary,
-      evidence: finding.evidence,
+      evidence: {
+        ...finding.evidence,
+        context: {
+          ...finding.evidence.context,
+          detector: finding.detector
+        }
+      },
       proposedChange: {
         ...finding.proposedChange,
         implementationMode: assessment.implementationMode
@@ -534,6 +682,8 @@ export class ImprovementProposalService {
       priority: assessment.priority,
       generatedBy: finding.generatedBy,
       sourceWindow: finding.evidence.sampleWindow,
+      ...(existing?.policyRegime ? { policyRegime: existing.policyRegime } : existing ? {} : { policyRegime: policySnapshot!.policyRegime }),
+      ...(existing?.engineeringPolicyHash ? { engineeringPolicyHash: existing.engineeringPolicyHash } : existing ? {} : { engineeringPolicyHash: policySnapshot!.engineeringPolicyHash }),
       primaryMetrics: existing?.primaryMetricsLocked
         ? existing.primaryMetrics
         : finding.expectedBenefit.metrics.map(metric => ({
@@ -633,6 +783,71 @@ function metricClassificationForName(name: string): "workflow" | "tool-surface" 
   if (/review/i.test(name)) return "review-quality";
   if (/test|coverage/i.test(name)) return "test-quality";
   return "workflow";
+}
+
+function policyProposalCategory(category: string): ProposalCategory {
+  const mapping: Record<string, ProposalCategory> = {
+    "proposal-policy": "workflow",
+    "validation-policy": "test-coverage",
+    "hardware-policy": "reliability",
+    "tool-surface-policy": "tool-surface",
+    "capability-policy": "capability",
+    "skill-policy": "skill",
+    "implementation-policy": "performance",
+    "review-policy": "documentation",
+    "evaluation-policy": "diagnostics"
+  };
+  return mapping[category] ?? "workflow";
+}
+
+function policyProposalChangeKind(category: string): "workflow-gap" | "surface-promotion" | "surface-demotion" | "capability-review" | "skill-routing" | "error-guidance" | "test-coverage" | "performance" | "rollback" {
+  const mapping: Record<string, "workflow-gap" | "surface-promotion" | "surface-demotion" | "capability-review" | "skill-routing" | "error-guidance" | "test-coverage" | "performance" | "rollback"> = {
+    "proposal-policy": "workflow-gap",
+    "validation-policy": "test-coverage",
+    "hardware-policy": "test-coverage",
+    "tool-surface-policy": "surface-demotion",
+    "capability-policy": "capability-review",
+    "skill-policy": "skill-routing",
+    "implementation-policy": "performance",
+    "review-policy": "error-guidance",
+    "evaluation-policy": "test-coverage"
+  };
+  return mapping[category] ?? "workflow-gap";
+}
+
+function policyProposalPriority(category: string): "P0" | "P1" | "P2" | "P3" {
+  if (category === "hardware-policy" || category === "validation-policy") return "P1";
+  if (category === "proposal-policy" || category === "evaluation-policy") return "P2";
+  return "P3";
+}
+
+function policySuccessMetrics(category: string, expectedEffect: string[]): Array<{
+  name: string;
+  direction: "increase" | "decrease" | "preserve";
+  rationale: string;
+}> {
+  const primary = category === "validation-policy" || category === "hardware-policy"
+    ? "regression-rate"
+    : category === "tool-surface-policy"
+      ? "tool-selection-friction"
+      : "verified-improvement-yield";
+  const direction = /decrease|reduce|lower|fewer|下降|减少/i.test(expectedEffect.join(" ")) ? "decrease" as const : "increase" as const;
+  return [
+    { name: primary, direction, rationale: expectedEffect[0]?.slice(0, 512) ?? "Measure the expected policy effect." },
+    { name: "regression-rate", direction: "preserve" as const, rationale: "Regression rate must not increase after the governance change." }
+  ];
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function compactPolicyValue(value: unknown): string {
+  try {
+    return JSON.stringify(value).slice(0, 240);
+  } catch {
+    return "unserializable-policy";
+  }
 }
 
 function shouldPreserveGeneratedLifecycle(status: ProposalStatus): boolean {

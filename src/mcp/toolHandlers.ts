@@ -138,7 +138,12 @@ import {
   getPostMergeEvaluationSchema,
   refreshPostMergeEvaluationSchema,
   getRollbackRecommendationSchema,
-  reviewRollbackRecommendationSchema
+  reviewRollbackRecommendationSchema,
+  getImprovementSystemScorecardSchema,
+  generateEngineeringPolicyRecommendationsSchema,
+  listEngineeringPolicyRecommendationsSchema,
+  getEngineeringPolicyRecommendationSchema,
+  reviewEngineeringPolicyRecommendationSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -198,6 +203,11 @@ export interface ToolHandlerDeps {
   refreshPostMergeEvaluation?: (input: z.input<typeof refreshPostMergeEvaluationSchema>) => Promise<ToolResult> | ToolResult;
   getRollbackRecommendation?: (input: z.input<typeof getRollbackRecommendationSchema>) => Promise<ToolResult> | ToolResult;
   reviewRollbackRecommendation?: (input: z.input<typeof reviewRollbackRecommendationSchema>) => Promise<ToolResult> | ToolResult;
+  getImprovementSystemScorecard?: (input: z.input<typeof getImprovementSystemScorecardSchema>) => Promise<ToolResult> | ToolResult;
+  generateEngineeringPolicyRecommendations?: (input: z.input<typeof generateEngineeringPolicyRecommendationsSchema>) => Promise<ToolResult> | ToolResult;
+  listEngineeringPolicyRecommendations?: (input: z.input<typeof listEngineeringPolicyRecommendationsSchema>) => Promise<ToolResult> | ToolResult;
+  getEngineeringPolicyRecommendation?: (input: z.input<typeof getEngineeringPolicyRecommendationSchema>) => Promise<ToolResult> | ToolResult;
+  reviewEngineeringPolicyRecommendation?: (input: z.input<typeof reviewEngineeringPolicyRecommendationSchema>) => Promise<ToolResult> | ToolResult;
   getActiveCriticalImprovementRegression?: () => boolean;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
@@ -302,6 +312,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const refreshPostMergeEvaluation = deps.refreshPostMergeEvaluation ?? unavailablePostMergeEvaluation;
   const getRollbackRecommendation = deps.getRollbackRecommendation ?? unavailablePostMergeEvaluation;
   const reviewRollbackRecommendation = deps.reviewRollbackRecommendation ?? unavailablePostMergeEvaluation;
+  const unavailableMetaAnalytics = () => { throw new DebugMcpError("ImprovementAnalyticsUnavailable", "Cross-improvement analytics require the Improvement history services"); };
+  const getImprovementSystemScorecard = deps.getImprovementSystemScorecard ?? unavailableMetaAnalytics;
+  const generateEngineeringPolicyRecommendations = deps.generateEngineeringPolicyRecommendations ?? unavailableMetaAnalytics;
+  const listEngineeringPolicyRecommendations = deps.listEngineeringPolicyRecommendations ?? unavailableMetaAnalytics;
+  const getEngineeringPolicyRecommendation = deps.getEngineeringPolicyRecommendation ?? unavailableMetaAnalytics;
+  const reviewEngineeringPolicyRecommendation = deps.reviewEngineeringPolicyRecommendation ?? unavailableMetaAnalytics;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -640,6 +656,46 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async reviewRollbackRecommendation(input: z.input<typeof reviewRollbackRecommendationSchema>) {
       try {
         return ok(await reviewRollbackRecommendation(reviewRollbackRecommendationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { recommendationId: input.recommendationId });
+      }
+    },
+
+    async getImprovementSystemScorecard(input: z.input<typeof getImprovementSystemScorecardSchema>) {
+      try {
+        return ok(await getImprovementSystemScorecard(getImprovementSystemScorecardSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async generateEngineeringPolicyRecommendations(input: z.input<typeof generateEngineeringPolicyRecommendationsSchema>) {
+      try {
+        return ok(await generateEngineeringPolicyRecommendations(generateEngineeringPolicyRecommendationsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async listEngineeringPolicyRecommendations(input: z.input<typeof listEngineeringPolicyRecommendationsSchema>) {
+      try {
+        return ok(await listEngineeringPolicyRecommendations(listEngineeringPolicyRecommendationsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getEngineeringPolicyRecommendation(input: z.input<typeof getEngineeringPolicyRecommendationSchema>) {
+      try {
+        return ok(await getEngineeringPolicyRecommendation(getEngineeringPolicyRecommendationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { recommendationId: input.recommendationId });
+      }
+    },
+
+    async reviewEngineeringPolicyRecommendation(input: z.input<typeof reviewEngineeringPolicyRecommendationSchema>) {
+      try {
+        return ok(await reviewEngineeringPolicyRecommendation(reviewEngineeringPolicyRecommendationSchema.parse(input)));
       } catch (error) {
         return fail(error, { recommendationId: input.recommendationId });
       }

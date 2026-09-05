@@ -195,6 +195,19 @@ follow-up Proposal, but this MCP never reverts source, changes production,
 restarts a daemon, pushes, or merges. Evaluation data is governance metadata
 and does not change Debug, Job, lease, or safety semantics.
 
+### Cross-improvement policy learning
+
+Completed Improvement outcomes can be summarized across the retained Proposal,
+implementation, review, and post-merge records. After a larger evidence floor,
+the advanced-only meta tools may create an `EngineeringPolicyRecommendation`.
+It is evidence and guidance, not a policy mutation: human review must convert
+it into a normal ready-for-review Improvement Proposal before the existing
+approval, implementation, PR, merge, and post-merge evaluation lifecycle runs.
+Insufficient history is reported as `INSUFFICIENT_META_HISTORY`; legacy records
+without a policy hash remain identifiable as legacy. The meta layer never
+directly edits policy, source, Skills, ToolDefinitions, or Git state, and it
+does not treat historical correlation as causal proof.
+
 ## 0.5 CAN evidence and job semantics
 
 Physical two-board acceptance defaults to `trafficMode: "firmware-driven"`.

@@ -173,6 +173,25 @@ Mixed firmware, mock/hardware, runtime, or test-plan identities fail closed.
 Do not treat analytics as causal proof or as a replacement for Debug, Job,
 lease, safety, or hardware evidence.
 
+## Cross-improvement policy learning
+
+One Improvement is not policy evidence. After enough completed post-merge
+outcomes exist, use the advanced-only meta tools to inspect the scorecard and
+generate/list/get Engineering Policy Recommendations. A recommendation is
+not authorization: human review must explicitly convert it to a normal
+ready-for-review Improvement Proposal, which continues through the existing
+approval, isolated implementation, validation, PR, merge, and post-merge
+evaluation lifecycle. If history is insufficient, preserve
+`INSUFFICIENT_META_HISTORY` and do not invent a recommendation.
+
+The meta layer must never directly mutate Proposal/Validation policy, this
+Skill, ToolDefinitions, source, or Git state. Historical success does not
+weaken safety, approval, hardware, Flash, lease, fencing, or human-merge
+gates; dangerous tools cannot be promoted automatically; tests cannot be
+removed automatically; agent retries remain bounded; reviewer text is not
+executable; and `MetaPolicyGuard` cannot rewrite itself. Do not produce
+personal rankings or causal claims from cross-improvement correlations.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,

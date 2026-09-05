@@ -27,6 +27,10 @@ import {
   POST_MERGE_VERDICTS,
   ROLLBACK_RECOMMENDATION_STATUSES
 } from "../improvement/evaluation/EvaluationSchemas.js";
+import {
+  META_RECOMMENDATION_CATEGORIES,
+  META_RECOMMENDATION_STATUSES
+} from "../improvement/meta/MetaSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -300,6 +304,36 @@ export const getRollbackRecommendationSchema = z.object({
 export const reviewRollbackRecommendationSchema = z.object({
   recommendationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/),
   action: z.enum(["acknowledge", "reject", "convert-to-proposal", "resolve"]),
+  reason: z.string().trim().min(1).max(2048),
+  reviewer: z.string().trim().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
+});
+
+export const getImprovementSystemScorecardSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("retained"),
+  minSampleSize: z.number().int().positive().max(500).optional(),
+  limit: z.number().int().positive().max(500).default(500)
+});
+
+export const generateEngineeringPolicyRecommendationsSchema = z.object({
+  window: z.enum(ANALYTICS_WINDOWS).default("retained"),
+  minSampleSize: z.number().int().positive().max(500).optional(),
+  limit: z.number().int().positive().max(500).default(500)
+});
+
+export const listEngineeringPolicyRecommendationsSchema = z.object({
+  status: z.enum(META_RECOMMENDATION_STATUSES).optional(),
+  category: z.enum(META_RECOMMENDATION_CATEGORIES).optional(),
+  target: z.string().trim().min(1).max(192).optional(),
+  limit: z.number().int().positive().max(500).default(100)
+});
+
+export const getEngineeringPolicyRecommendationSchema = z.object({
+  recommendationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/)
+});
+
+export const reviewEngineeringPolicyRecommendationSchema = z.object({
+  recommendationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/),
+  action: z.enum(["accept", "reject", "defer", "convert-to-proposal"]),
   reason: z.string().trim().min(1).max(2048),
   reviewer: z.string().trim().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
 });

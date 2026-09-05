@@ -261,7 +261,10 @@ export type DebugErrorCode =
   | "PostMergeEvaluationInvalidated"
   | "RollbackRecommendationNotFound"
   | "RollbackReviewReasonRequired"
-  | "RollbackRecommendationStale";
+  | "RollbackRecommendationStale"
+  | "EngineeringPolicyRecommendationNotFound"
+  | "EngineeringPolicyRecommendationInvalidState"
+  | "MetaPolicyGuardSuppressed";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

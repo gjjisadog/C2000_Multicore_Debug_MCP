@@ -851,6 +851,61 @@ const migrations: Migration[] = [
         ALTER TABLE improvement_proposals ADD COLUMN final_outcome TEXT;
       `);
     }
+  },
+  {
+    version: 17,
+    apply(store) {
+      // Round10 keeps cross-improvement history derived from the existing
+      // lifecycle tables. Only bounded recommendation and aggregate snapshot
+      // metadata is retained; raw Proposal/Run/PR/Evaluation rows remain the
+      // single source of truth.
+      store.exec(`
+        ALTER TABLE improvement_proposals ADD COLUMN policy_regime TEXT;
+        ALTER TABLE improvement_proposals ADD COLUMN engineering_policy_hash TEXT;
+        ALTER TABLE improvement_proposals ADD COLUMN source_recommendation_id TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_improvement_proposals_policy_regime
+          ON improvement_proposals(policy_regime, updated_at);
+
+        CREATE TABLE IF NOT EXISTS engineering_policy_recommendations (
+          recommendation_id TEXT PRIMARY KEY,
+          fingerprint TEXT NOT NULL UNIQUE,
+          category TEXT NOT NULL,
+          target TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_observed_at TEXT NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_engineering_policy_recommendations_status
+          ON engineering_policy_recommendations(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_engineering_policy_recommendations_target
+          ON engineering_policy_recommendations(category, target, updated_at);
+
+        CREATE TABLE IF NOT EXISTS engineering_policy_snapshots (
+          snapshot_id TEXT PRIMARY KEY,
+          policy_regime TEXT NOT NULL,
+          engineering_policy_hash TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_engineering_policy_snapshots_hash
+          ON engineering_policy_snapshots(engineering_policy_hash, captured_at);
+
+        CREATE TABLE IF NOT EXISTS cross_improvement_snapshots (
+          snapshot_id TEXT PRIMARY KEY,
+          generated_at TEXT NOT NULL,
+          policy_regime TEXT NOT NULL,
+          engineering_policy_hash TEXT NOT NULL,
+          history_status TEXT NOT NULL,
+          sample_size INTEGER NOT NULL,
+          record_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_cross_improvement_snapshots_time
+          ON cross_improvement_snapshots(generated_at, policy_regime);
+      `);
+    }
   }
 ];
 

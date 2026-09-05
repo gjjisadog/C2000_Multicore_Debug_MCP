@@ -263,7 +263,7 @@ describe("post-merge evaluation governance", () => {
     const directory = await mkdtemp(join(tmpdir(), "c2000-round9-proposal-"));
     temporaryDirectories.push(directory);
     const store = await SqliteStore.open(join(directory, "proposals.sqlite"));
-    expect(store.schemaVersion).toBe(16);
+    expect(store.schemaVersion).toBe(17);
     const repository = new ProposalRepository(store);
     const proposal = improvementProposalSchema.parse({
       ...makeProposal(),
