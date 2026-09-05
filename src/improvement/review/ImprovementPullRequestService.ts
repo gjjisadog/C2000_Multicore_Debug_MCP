@@ -47,6 +47,8 @@ export interface ImprovementPullRequestServiceOptions {
   now?: () => number;
   logger?: Pick<Logger, "info" | "warn" | "error">;
   revisionService?: RevisionProposalService;
+  /** Called after an externally observed merge has been durably recorded. */
+  onMerged?: (pullRequest: ImprovementPullRequest) => void | Promise<void>;
 }
 
 export interface PublishImprovementCandidateInput {
@@ -272,7 +274,22 @@ export class ImprovementPullRequestService {
       this.assertRemoteBinding(refreshedRemote, run, proposal, stored.branch);
     }
     const updated = this.storePullRequest(refreshedRemote, run, proposal, generatedBodyHash, statusForEvidence(refreshedRemote, evidence, recommendation));
-    if (refreshedRemote.merged) this.markProposalLifecycle(proposal.proposalId, "merged");
+    if (refreshedRemote.merged) {
+      this.markProposalLifecycle(proposal.proposalId, "merged");
+      try {
+        await this.options.onMerged?.(updated);
+      } catch (error) {
+        // Post-merge evaluation is an isolated governance side effect. A
+        // provider refresh must remain usable even if its optional evaluator
+        // cannot create metadata for a legacy or incomplete record.
+        this.options.logger?.warn("c2000 post-merge evaluation creation failed", {
+          pullRequestId: updated.pullRequestId,
+          proposalId: updated.proposalId,
+          mergedCommitSha: updated.mergedCommitSha,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
     else if (refreshedRemote.state === "closed") this.markProposalLifecycle(proposal.proposalId, "closed-without-merge");
     else if (recommendation.verdict === "MERGE_RECOMMENDED") this.markProposalLifecycle(proposal.proposalId, "merge-recommended");
     return {

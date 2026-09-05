@@ -254,7 +254,14 @@ export type DebugErrorCode =
   | "ImprovementDaemonRestarted"
   | "BaselineDrift"
   | "BaselineUnavailable"
-  | "BaselineInvalid";
+  | "BaselineInvalid"
+  | "PostMergeEvaluationNotFound"
+  | "PostMergeEvaluationUnavailable"
+  | "PostMergeMergeShaUnavailable"
+  | "PostMergeEvaluationInvalidated"
+  | "RollbackRecommendationNotFound"
+  | "RollbackReviewReasonRequired"
+  | "RollbackRecommendationStale";
 
 export interface StructuredError {
   code: DebugErrorCode | string;

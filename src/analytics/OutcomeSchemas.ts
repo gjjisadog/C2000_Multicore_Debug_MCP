@@ -50,6 +50,9 @@ export const outcomeEventSchema = z.object({
   toolProfile: z.enum(["readonly", "safe", "full"]),
   toolSurfaceProfile: z.enum(["agent", "advanced", "compatibility"]),
   activeCapabilities: z.array(z.enum(TOOL_CAPABILITY_NAMES)),
+  /** Runtime identity is optional for legacy rows but required on new service-generated events. */
+  mcpVersion: z.string().regex(/^[A-Za-z0-9._+-]{1,128}$/).optional(),
+  mcpGitSha: z.union([z.literal("unknown"), z.string().regex(/^[0-9a-f]{7,64}$/i)]).optional(),
   boardCount: z.number().int().nonnegative().optional(),
   coreCount: z.number().int().nonnegative().optional(),
   jobId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
@@ -103,6 +106,26 @@ export const outcomeEventMetadataSchema = z.object({
   revisionFeedbackCount: z.number().int().nonnegative().max(64).optional(),
   revisionImplementationMode: z.enum(["auto-eligible", "manual-only"]).optional(),
   revisionNewProposalRecommended: z.boolean().optional(),
+  workflow: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional(),
+  adapterMode: z.enum(["mock", "ccs", "auto"]).optional(),
+  evidenceLevel: z.enum(["MOCK", "HARDWARE_TARGET", "HARDWARE_BUS", "MIXED", "UNKNOWN"]).optional(),
+  hardwareMode: z.enum(["mock", "hardware", "mixed", "unknown"]).optional(),
+  firmwareIdentity: z.string().max(256).optional(),
+  testPlanIdentity: z.string().max(256).optional(),
+  osRuntime: z.string().max(256).optional(),
+  runtimeIdentity: z.object({
+    mcpVersion: z.string().regex(/^[A-Za-z0-9._+-]{1,128}$/).optional(),
+    mcpGitSha: z.union([z.literal("unknown"), z.string().regex(/^[0-9a-f]{7,64}$/i)]).optional(),
+    buildId: z.string().max(256).optional()
+  }).optional(),
+  metricName: z.string().regex(/^[A-Za-z0-9._:/-]{1,192}$/).optional(),
+  metricValue: z.number().finite().optional(),
+  metricValues: z.record(z.number().finite()).optional(),
+  metrics: z.record(z.number().finite()).optional(),
+  safetyRegression: z.boolean().optional(),
+  safetyViolation: z.boolean().optional(),
+  releaseContainsSha: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
+  deployedCommitSha: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
   actor: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
 }).passthrough();
 

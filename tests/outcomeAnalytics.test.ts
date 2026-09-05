@@ -97,6 +97,29 @@ describe("C2000 outcome analytics", () => {
     expect(summary.duration).toEqual(expect.objectContaining({ mean: 300, p50: 300, p95: 480 }));
   });
 
+  test("retains bounded runtime identity metadata for legacy event attribution", () => {
+    const repository = new InMemoryOutcomeEventStore();
+    const service = createService({ repository });
+    service.record(event({
+      mcpVersion: undefined,
+      mcpGitSha: undefined,
+      metadata: {
+        workflow: "c2000_runBootHandoffDiagnosis",
+        runtimeIdentity: {
+          mcpVersion: "0.7.0",
+          mcpGitSha: "a".repeat(40),
+          buildId: "build-round9"
+        }
+      }
+    }));
+
+    expect(repository.list()[0]?.metadata.runtimeIdentity).toEqual({
+      mcpVersion: "0.7.0",
+      mcpGitSha: "a".repeat(40),
+      buildId: "build-round9"
+    });
+  });
+
   test("retains only the configured horizon and tolerates analytics storage failure", async () => {
     const now = Date.parse("2026-09-08T00:00:00.000Z");
     const repository = new InMemoryOutcomeEventStore();
@@ -252,7 +275,7 @@ describe("C2000 outcome analytics", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-outcome-analytics-"));
     roots.push(directory);
     const store = await SqliteStore.open(path.join(directory, "analytics.sqlite"));
-    expect(store.schemaVersion).toBe(14);
+    expect(store.schemaVersion).toBe(16);
     const repository = new OutcomeEventRepository(store);
     repository.append(event({ eventId: crypto.randomUUID(), kind: "tool_invocation", name: "c2000_getServerHealth" }));
     store.run(`

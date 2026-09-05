@@ -133,7 +133,12 @@ import {
   listReviewFeedbackSchema,
   listRevisionProposalsSchema,
   reviewRevisionProposalSchema,
-  publishRevisionCandidateSchema
+  publishRevisionCandidateSchema,
+  listPostMergeEvaluationsSchema,
+  getPostMergeEvaluationSchema,
+  refreshPostMergeEvaluationSchema,
+  getRollbackRecommendationSchema,
+  reviewRollbackRecommendationSchema
 } from "./toolSchemas.js";
 
 type ToolResult = Record<string, any>;
@@ -188,6 +193,12 @@ export interface ToolHandlerDeps {
   listRevisionProposals?: (input: z.input<typeof listRevisionProposalsSchema>) => Promise<ToolResult> | ToolResult;
   reviewRevisionProposal?: (input: z.input<typeof reviewRevisionProposalSchema>) => Promise<ToolResult> | ToolResult;
   publishRevisionCandidate?: (input: z.input<typeof publishRevisionCandidateSchema>) => Promise<ToolResult> | ToolResult;
+  listPostMergeEvaluations?: (input: z.input<typeof listPostMergeEvaluationsSchema>) => Promise<ToolResult> | ToolResult;
+  getPostMergeEvaluation?: (input: z.input<typeof getPostMergeEvaluationSchema>) => Promise<ToolResult> | ToolResult;
+  refreshPostMergeEvaluation?: (input: z.input<typeof refreshPostMergeEvaluationSchema>) => Promise<ToolResult> | ToolResult;
+  getRollbackRecommendation?: (input: z.input<typeof getRollbackRecommendationSchema>) => Promise<ToolResult> | ToolResult;
+  reviewRollbackRecommendation?: (input: z.input<typeof reviewRollbackRecommendationSchema>) => Promise<ToolResult> | ToolResult;
+  getActiveCriticalImprovementRegression?: () => boolean;
   getDaemonHealth?: () => Promise<ToolResult> | ToolResult;
   listBoards?: (input: z.infer<typeof listBoardsSchema>) => Promise<ToolResult> | ToolResult;
   registerBoard?: (input: z.infer<typeof registerBoardSchema>) => Promise<ToolResult> | ToolResult;
@@ -285,6 +296,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const listRevisionProposals = deps.listRevisionProposals ?? unavailableImprovementImplementation;
   const reviewRevisionProposal = deps.reviewRevisionProposal ?? unavailableImprovementImplementation;
   const publishRevisionCandidate = deps.publishRevisionCandidate ?? unavailableImprovementImplementation;
+  const unavailablePostMergeEvaluation = () => { throw new DebugMcpError("PostMergeEvaluationUnavailable", "Post-merge evaluation service is not configured in this runtime"); };
+  const listPostMergeEvaluations = deps.listPostMergeEvaluations ?? unavailablePostMergeEvaluation;
+  const getPostMergeEvaluation = deps.getPostMergeEvaluation ?? unavailablePostMergeEvaluation;
+  const refreshPostMergeEvaluation = deps.refreshPostMergeEvaluation ?? unavailablePostMergeEvaluation;
+  const getRollbackRecommendation = deps.getRollbackRecommendation ?? unavailablePostMergeEvaluation;
+  const reviewRollbackRecommendation = deps.reviewRollbackRecommendation ?? unavailablePostMergeEvaluation;
   const getDaemonHealth = deps.getDaemonHealth ?? (() => ({
     daemon: { available: false, reason: "This runtime is not hosted by c2000-debugd" },
     workers: { total: 0, healthy: 0, unhealthy: 0 },
@@ -585,6 +602,46 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(await publishRevisionCandidate(publishRevisionCandidateSchema.parse(input)));
       } catch (error) {
         return fail(error, { revisionProposalId: input.revisionProposalId });
+      }
+    },
+
+    async listPostMergeEvaluations(input: z.input<typeof listPostMergeEvaluationsSchema>) {
+      try {
+        return ok(await listPostMergeEvaluations(listPostMergeEvaluationsSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async getPostMergeEvaluation(input: z.input<typeof getPostMergeEvaluationSchema>) {
+      try {
+        return ok(await getPostMergeEvaluation(getPostMergeEvaluationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { evaluationId: input.evaluationId });
+      }
+    },
+
+    async refreshPostMergeEvaluation(input: z.input<typeof refreshPostMergeEvaluationSchema>) {
+      try {
+        return ok(await refreshPostMergeEvaluation(refreshPostMergeEvaluationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { evaluationId: input.evaluationId });
+      }
+    },
+
+    async getRollbackRecommendation(input: z.input<typeof getRollbackRecommendationSchema>) {
+      try {
+        return ok(await getRollbackRecommendation(getRollbackRecommendationSchema.parse(input)));
+      } catch (error) {
+        return fail(error);
+      }
+    },
+
+    async reviewRollbackRecommendation(input: z.input<typeof reviewRollbackRecommendationSchema>) {
+      try {
+        return ok(await reviewRollbackRecommendation(reviewRollbackRecommendationSchema.parse(input)));
+      } catch (error) {
+        return fail(error, { recommendationId: input.recommendationId });
       }
     },
 

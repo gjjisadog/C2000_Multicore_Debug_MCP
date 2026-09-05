@@ -39,7 +39,13 @@ interface ImprovementProposalRow {
   priority: string;
   generated_by: string;
   source_window: string;
+  proposal_source: string | null;
   baseline_sha: string | null;
+  primary_metrics_json: string | null;
+  primary_metrics_locked: number | null;
+  primary_metrics_locked_at: string | null;
+  primary_metrics_source: string | null;
+  final_outcome: string | null;
   created_at: string;
   updated_at: string;
   last_observed_at: string;
@@ -117,9 +123,10 @@ export class ProposalRepository implements ImprovementProposalStore {
         proposal_id, fingerprint, status, category, target, title, summary,
         evidence_json, proposed_change_json, expected_benefit_json, risks_json,
         validation_json, validation_result_json, confidence, priority, generated_by, source_window,
-        baseline_sha, created_at, updated_at, last_observed_at, review_reason,
-        reviewed_at, reviewed_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        proposal_source, baseline_sha, primary_metrics_json, primary_metrics_locked,
+        primary_metrics_locked_at, primary_metrics_source, final_outcome,
+        created_at, updated_at, last_observed_at, review_reason, reviewed_at, reviewed_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(proposal_id) DO UPDATE SET
         fingerprint = excluded.fingerprint,
         status = excluded.status,
@@ -137,7 +144,13 @@ export class ProposalRepository implements ImprovementProposalStore {
         priority = excluded.priority,
         generated_by = excluded.generated_by,
         source_window = excluded.source_window,
+        proposal_source = excluded.proposal_source,
         baseline_sha = excluded.baseline_sha,
+        primary_metrics_json = excluded.primary_metrics_json,
+        primary_metrics_locked = excluded.primary_metrics_locked,
+        primary_metrics_locked_at = excluded.primary_metrics_locked_at,
+        primary_metrics_source = excluded.primary_metrics_source,
+        final_outcome = excluded.final_outcome,
         updated_at = excluded.updated_at,
         last_observed_at = excluded.last_observed_at,
         review_reason = excluded.review_reason,
@@ -161,7 +174,13 @@ export class ProposalRepository implements ImprovementProposalStore {
       parsed.priority,
       parsed.generatedBy,
       parsed.sourceWindow,
+      parsed.source,
       parsed.baselineSha ?? null,
+      JSON.stringify(parsed.primaryMetrics),
+      parsed.primaryMetricsLocked ? 1 : 0,
+      parsed.primaryMetricsLockedAt ?? null,
+      parsed.primaryMetricsSource,
+      parsed.finalOutcome ?? null,
       parsed.createdAt,
       parsed.updatedAt,
       parsed.lastObservedAt,
@@ -222,7 +241,13 @@ function decodeProposal(row: ImprovementProposalRow): ImprovementProposal | unde
       priority: row.priority,
       generatedBy: row.generated_by,
       sourceWindow: row.source_window,
+      source: row.proposal_source ?? "outcome-analytics",
       ...(row.baseline_sha ? { baselineSha: row.baseline_sha } : {}),
+      primaryMetrics: row.primary_metrics_json ? JSON.parse(row.primary_metrics_json) : [],
+      primaryMetricsLocked: row.primary_metrics_locked === 1,
+      ...(row.primary_metrics_locked_at ? { primaryMetricsLockedAt: row.primary_metrics_locked_at } : {}),
+      primaryMetricsSource: row.primary_metrics_source ?? "declared",
+      ...(row.final_outcome ? { finalOutcome: row.final_outcome } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       lastObservedAt: row.last_observed_at,

@@ -22,6 +22,11 @@ import {
   REVISION_PROPOSAL_STATUSES,
   revisionProposalReviewDecisionSchema
 } from "../improvement/revision/RevisionSchemas.js";
+import {
+  POST_MERGE_EVALUATION_STATUSES,
+  POST_MERGE_VERDICTS,
+  ROLLBACK_RECOMMENDATION_STATUSES
+} from "../improvement/evaluation/EvaluationSchemas.js";
 
 const resetTypeSchema = z.enum(["cpu", "system", "restart", "default"]);
 const ipcLoadSequenceSchema = z.object({
@@ -267,6 +272,36 @@ export const reviewRevisionProposalSchema = z.object({
 
 export const publishRevisionCandidateSchema = z.object({
   revisionProposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/)
+});
+
+export const listPostMergeEvaluationsSchema = z.object({
+  proposalId: z.string().regex(/^[A-Za-z0-9._:-]{8,128}$/).optional(),
+  lifecycleStatus: z.enum(POST_MERGE_EVALUATION_STATUSES).optional(),
+  verdict: z.enum(POST_MERGE_VERDICTS).optional(),
+  limit: z.number().int().positive().max(500).default(100)
+});
+
+export const getPostMergeEvaluationSchema = z.object({
+  evaluationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/)
+});
+
+export const refreshPostMergeEvaluationSchema = z.object({
+  evaluationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/),
+  finalize: z.boolean().default(false)
+});
+
+export const getRollbackRecommendationSchema = z.object({
+  recommendationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/).optional(),
+  evaluationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/).optional()
+}).refine(value => Boolean(value.recommendationId) !== Boolean(value.evaluationId), {
+  message: "Exactly one recommendationId or evaluationId is required"
+});
+
+export const reviewRollbackRecommendationSchema = z.object({
+  recommendationId: z.string().regex(/^[A-Za-z0-9._:-]{8,256}$/),
+  action: z.enum(["acknowledge", "reject", "convert-to-proposal", "resolve"]),
+  reason: z.string().trim().min(1).max(2048),
+  reviewer: z.string().trim().regex(/^[A-Za-z0-9._:-]{1,128}$/).optional()
 });
 
 export const verifyBuildSchema = buildVerificationInputSchema;

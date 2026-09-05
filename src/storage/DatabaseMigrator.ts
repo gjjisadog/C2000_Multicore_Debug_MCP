@@ -766,6 +766,91 @@ const migrations: Migration[] = [
           ON revision_proposals(pull_request_id, status, created_at);
       `);
     }
+  },
+  {
+    version: 15,
+    apply(store) {
+      // Round9 is additive governance state. Evaluation snapshots preserve
+      // frozen baseline evidence beyond the bounded raw analytics retention.
+      store.exec(`
+        ALTER TABLE outcome_events ADD COLUMN mcp_version TEXT;
+        ALTER TABLE outcome_events ADD COLUMN mcp_git_sha TEXT;
+        CREATE INDEX IF NOT EXISTS idx_outcome_events_runtime
+          ON outcome_events(mcp_version, mcp_git_sha, timestamp);
+
+        CREATE TABLE IF NOT EXISTS post_merge_evaluations (
+          evaluation_id TEXT PRIMARY KEY,
+          proposal_id TEXT NOT NULL,
+          pull_request_id TEXT NOT NULL,
+          pull_request_number INTEGER,
+          baseline_sha TEXT NOT NULL,
+          candidate_sha TEXT NOT NULL,
+          merged_commit_sha TEXT NOT NULL,
+          merged_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          lifecycle_status TEXT NOT NULL,
+          verdict TEXT,
+          confidence REAL NOT NULL,
+          rollback_recommendation_id TEXT,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(proposal_id) REFERENCES improvement_proposals(proposal_id),
+          FOREIGN KEY(pull_request_id) REFERENCES improvement_pull_requests(pull_request_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_post_merge_evaluations_proposal
+          ON post_merge_evaluations(proposal_id, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_post_merge_evaluations_status
+          ON post_merge_evaluations(lifecycle_status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_post_merge_evaluations_pr
+          ON post_merge_evaluations(pull_request_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS post_merge_evaluation_snapshots (
+          snapshot_id TEXT PRIMARY KEY,
+          evaluation_id TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          captured_at TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(evaluation_id) REFERENCES post_merge_evaluations(evaluation_id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_post_merge_evaluation_snapshots_eval
+          ON post_merge_evaluation_snapshots(evaluation_id, captured_at, phase);
+
+        CREATE TABLE IF NOT EXISTS rollback_recommendations (
+          recommendation_id TEXT PRIMARY KEY,
+          evaluation_id TEXT NOT NULL,
+          proposal_id TEXT NOT NULL,
+          merged_commit_sha TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          record_json TEXT NOT NULL,
+          FOREIGN KEY(evaluation_id) REFERENCES post_merge_evaluations(evaluation_id) ON DELETE CASCADE,
+          FOREIGN KEY(proposal_id) REFERENCES improvement_proposals(proposal_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_rollback_recommendations_status
+          ON rollback_recommendations(status, severity, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_rollback_recommendations_eval
+          ON rollback_recommendations(evaluation_id, updated_at);
+      `);
+    }
+  },
+  {
+    version: 16,
+    apply(store) {
+      // Round9 Proposal success metrics and terminal outcome are governance
+      // state. Keep them in explicit columns so SQLite round-trips preserve
+      // the frozen metric contract instead of silently reverting to legacy
+      // defaults after a restart.
+      store.exec(`
+        ALTER TABLE improvement_proposals ADD COLUMN proposal_source TEXT NOT NULL DEFAULT 'outcome-analytics';
+        ALTER TABLE improvement_proposals ADD COLUMN primary_metrics_json TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE improvement_proposals ADD COLUMN primary_metrics_locked INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE improvement_proposals ADD COLUMN primary_metrics_locked_at TEXT;
+        ALTER TABLE improvement_proposals ADD COLUMN primary_metrics_source TEXT NOT NULL DEFAULT 'declared';
+        ALTER TABLE improvement_proposals ADD COLUMN final_outcome TEXT;
+      `);
+    }
   }
 ];
 

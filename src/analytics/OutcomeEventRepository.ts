@@ -7,6 +7,8 @@ export interface OutcomeEventQuery {
   kinds?: readonly OutcomeEventKind[];
   names?: readonly string[];
   jobId?: string;
+  mcpVersion?: string;
+  mcpGitSha?: string;
   limit?: number;
 }
 export interface OutcomeEventStore {
@@ -27,6 +29,8 @@ interface OutcomeEventRow {
   failure_class: string | null;
   tool_profile: string;
   tool_surface_profile: string;
+  mcp_version: string | null;
+  mcp_git_sha: string | null;
   active_capabilities_json: string;
   board_count: number | null;
   core_count: number | null;
@@ -47,9 +51,9 @@ export class OutcomeEventRepository implements OutcomeEventStore {
       INSERT OR REPLACE INTO outcome_events(
         event_id, timestamp, kind, name, outcome, duration_ms, stage, error_code,
         failure_class, tool_profile, tool_surface_profile, active_capabilities_json,
-        board_count, core_count, job_id, session_id, escalation_from, escalation_to,
+        mcp_version, mcp_git_sha, board_count, core_count, job_id, session_id, escalation_from, escalation_to,
         metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       parsed.eventId,
       parsed.timestamp,
@@ -63,6 +67,8 @@ export class OutcomeEventRepository implements OutcomeEventStore {
       parsed.toolProfile,
       parsed.toolSurfaceProfile,
       JSON.stringify(parsed.activeCapabilities),
+      parsed.mcpVersion ?? null,
+      parsed.mcpGitSha ?? null,
       parsed.boardCount ?? null,
       parsed.coreCount ?? null,
       parsed.jobId ?? null,
@@ -88,6 +94,14 @@ export class OutcomeEventRepository implements OutcomeEventStore {
       clauses.push("job_id = ?");
       parameters.push(query.jobId);
     }
+    if (query.mcpVersion) {
+      clauses.push("mcp_version = ?");
+      parameters.push(query.mcpVersion);
+    }
+    if (query.mcpGitSha) {
+      clauses.push("mcp_git_sha = ?");
+      parameters.push(query.mcpGitSha);
+    }
     if (query.kinds && query.kinds.length > 0) {
       clauses.push(`kind IN (${query.kinds.map(() => "?").join(",")})`);
       parameters.push(...query.kinds);
@@ -100,7 +114,7 @@ export class OutcomeEventRepository implements OutcomeEventStore {
     const rows = this.store.all<OutcomeEventRow>(`
       SELECT event_id, timestamp, kind, name, outcome, duration_ms, stage, error_code,
              failure_class, tool_profile, tool_surface_profile, active_capabilities_json,
-             board_count, core_count, job_id, session_id, escalation_from, escalation_to,
+             mcp_version, mcp_git_sha, board_count, core_count, job_id, session_id, escalation_from, escalation_to,
              metadata_json
       FROM outcome_events
       ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
@@ -128,6 +142,8 @@ export class InMemoryOutcomeEventStore implements OutcomeEventStore {
       .filter(event => !query.from || event.timestamp >= query.from)
       .filter(event => !query.to || event.timestamp <= query.to)
       .filter(event => !query.jobId || event.jobId === query.jobId)
+      .filter(event => !query.mcpVersion || event.mcpVersion === query.mcpVersion)
+      .filter(event => !query.mcpGitSha || event.mcpGitSha === query.mcpGitSha)
       .filter(event => !query.kinds?.length || query.kinds.includes(event.kind))
       .filter(event => !query.names?.length || query.names.includes(event.name))
       .sort((left, right) => left.timestamp.localeCompare(right.timestamp) || left.eventId.localeCompare(right.eventId))
@@ -160,6 +176,8 @@ function decodeRow(row: OutcomeEventRow): OutcomeEvent[] {
       ...(row.failure_class === null ? {} : { failureClass: row.failure_class }),
       toolProfile: row.tool_profile,
       toolSurfaceProfile: row.tool_surface_profile,
+      ...(row.mcp_version === null ? {} : { mcpVersion: row.mcp_version }),
+      ...(row.mcp_git_sha === null ? {} : { mcpGitSha: row.mcp_git_sha }),
       activeCapabilities: JSON.parse(row.active_capabilities_json),
       ...(row.board_count === null ? {} : { boardCount: row.board_count }),
       ...(row.core_count === null ? {} : { coreCount: row.core_count }),

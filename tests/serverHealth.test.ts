@@ -39,5 +39,9 @@ describe("server runtime health", () => {
       daemonRestartRequired: false,
       frontendReconnectRequired: true
     }));
+
+    const mixedRuntimeHealth = buildServerHealth(config, "2026-07-11T00:00:00.000Z", [], { runtimeVersionMismatch: true });
+    expect(mixedRuntimeHealth.configuration.runtimeVersionMismatch).toBe(true);
+    expect(mixedRuntimeHealth.tools.runtimeVersionMismatch).toBe(true);
   });
 });

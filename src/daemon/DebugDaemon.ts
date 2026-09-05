@@ -31,7 +31,7 @@ import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecke
 import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
 import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
 import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
-import { SERVER_VERSION } from "../runtimeInfo.js";
+import { runtimeBuildInfo, SERVER_VERSION } from "../runtimeInfo.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { ArtifactExportRepository } from "../storage/repositories/ArtifactExportRepository.js";
@@ -66,6 +66,12 @@ import { ImprovementPullRequestService } from "../improvement/review/Improvement
 import { ImprovementReviewFeedbackRepository, ImprovementRevisionProposalRepository } from "../improvement/revision/RevisionRepositories.js";
 import { ReviewFeedbackService } from "../improvement/revision/ReviewFeedbackService.js";
 import { RevisionProposalService } from "../improvement/revision/RevisionProposalService.js";
+import {
+  PostMergeEvaluationRepository,
+  PostMergeEvaluationSnapshotRepository,
+  RollbackRecommendationRepository
+} from "../improvement/evaluation/EvaluationRepositories.js";
+import { PostMergeEvaluationService } from "../improvement/evaluation/PostMergeEvaluationService.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -90,6 +96,7 @@ export class DebugDaemon {
   private rpcServer?: DaemonRpcServer;
   private analytics?: OutcomeAnalyticsService;
   private improvementImplementation?: ImprovementImplementationService;
+  private postMergeEvaluation?: PostMergeEvaluationService;
   private instance?: DebugDaemonInstance;
   private releaseSingleton?: () => Promise<void>;
   private stopping?: Promise<void>;
@@ -112,6 +119,7 @@ export class DebugDaemon {
       repository: outcomeEvents,
       toolProfile: this.config.toolProfile ?? "safe",
       toolSurfaceProfile: this.config.toolSurfaceProfile ?? "agent",
+      runtimeIdentity: { mcpVersion: SERVER_VERSION, mcpGitSha: runtimeBuildInfo().sourceRevision ?? "unknown" },
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     this.analytics = analytics;
@@ -141,6 +149,19 @@ export class DebugDaemon {
     const improvementPullRequests = new ImprovementPullRequestRepository(store);
     const improvementReviewEvidence = new ImprovementReviewEvidenceRepository(store);
     const mergeRecommendations = new MergeRecommendationRepository(store);
+    const postMergeEvaluations = new PostMergeEvaluationRepository(store);
+    const postMergeEvaluationSnapshots = new PostMergeEvaluationSnapshotRepository(store);
+    const rollbackRecommendations = new RollbackRecommendationRepository(store);
+    const postMergeEvaluation = new PostMergeEvaluationService({
+      evaluations: postMergeEvaluations,
+      snapshots: postMergeEvaluationSnapshots,
+      rollbackRecommendations,
+      events: outcomeEvents,
+      proposals: proposalRecords,
+      proposalService: improvementProposals,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
+    this.postMergeEvaluation = postMergeEvaluation;
     const candidateReview = new CandidateReviewService({
       runs: improvementRuns,
       proposals: proposalRecords,
@@ -216,6 +237,7 @@ export class DebugDaemon {
       review: improvementConfig.review,
       artifactRoot: improvementArtifactRoot,
       revisionService: revisionProposals,
+      onMerged: pullRequest => { postMergeEvaluation.ensureForMergedPullRequest(pullRequest); },
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     improvementImplementation.reconcileOnStartup();
@@ -356,6 +378,14 @@ export class DebugDaemon {
       },
       reviewRevisionProposal: input => revisionProposals.review(input),
       publishRevisionCandidate: input => improvementPullRequest.publishRevision(input),
+      listPostMergeEvaluations: input => postMergeEvaluation.list(input),
+      getPostMergeEvaluation: input => postMergeEvaluation.get(input.evaluationId),
+      refreshPostMergeEvaluation: input => postMergeEvaluation.refresh(input),
+      getRollbackRecommendation: input => input.recommendationId
+        ? postMergeEvaluation.getRollbackRecommendation(input.recommendationId)
+        : postMergeEvaluation.getRollbackRecommendationForEvaluation(input.evaluationId!),
+      reviewRollbackRecommendation: input => postMergeEvaluation.reviewRollbackRecommendation(input),
+      getActiveCriticalImprovementRegression: () => postMergeEvaluation.hasActiveCriticalRegression(),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
       recoverBoard: input => this.recoverBoard(input),
@@ -570,6 +600,7 @@ export class DebugDaemon {
       this.dlog = undefined;
       this.erad = undefined;
       this.analytics = undefined;
+      this.postMergeEvaluation = undefined;
       this.jobEngine = undefined;
       await this.releaseSingleton?.().catch(() => undefined);
       this.releaseSingleton = undefined;
@@ -597,7 +628,8 @@ export class DebugDaemon {
       toolProfile: this.config.toolProfile ?? "safe",
       toolSurfaceProfile: this.config.toolSurfaceProfile ?? "agent",
       capabilityMode: "dynamic",
-      activeImplementationRunCount
+      activeImplementationRunCount,
+      activeCriticalImprovementRegression: this.postMergeEvaluation?.hasActiveCriticalRegression() ?? false
     };
   }
 

@@ -59,7 +59,12 @@ export function buildServerHealth(
   config: C2000McpConfig,
   startedAt: string,
   registeredToolNames: string[],
-  dynamicCapabilities: { activeCapabilityCount?: number; capabilityMode?: "dynamic" | "static" } = {}
+  dynamicCapabilities: {
+    activeCapabilityCount?: number;
+    capabilityMode?: "dynamic" | "static";
+    activeCriticalImprovementRegression?: boolean;
+    runtimeVersionMismatch?: boolean;
+  } = {}
 ) {
   const adapterMode = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
   const toolProfile = config.toolProfile ?? "safe";
@@ -82,6 +87,8 @@ export function buildServerHealth(
       toolSurfaceProfile,
       capabilityMode: dynamicCapabilities.capabilityMode ?? "dynamic",
       activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0,
+      activeCriticalImprovementRegression: dynamicCapabilities.activeCriticalImprovementRegression ?? false,
+      runtimeVersionMismatch: dynamicCapabilities.runtimeVersionMismatch ?? false,
       profile: {
         effective: toolProfile,
         source: process.env.C2000_MCP_TOOL_PROFILE
@@ -116,7 +123,9 @@ export function buildServerHealth(
     tools: {
       registeredCount: registeredToolNames.length,
       registeredNames: registeredToolNames,
-      activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0
+      activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0,
+      activeCriticalImprovementRegression: dynamicCapabilities.activeCriticalImprovementRegression ?? false,
+      runtimeVersionMismatch: dynamicCapabilities.runtimeVersionMismatch ?? false
     }
   };
 }

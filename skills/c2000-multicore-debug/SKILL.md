@@ -157,6 +157,22 @@ amend, rebase, merge, or weaken safety gates. If feedback is out of scope or
 touches safety, architecture, capability policy, or protected invariants,
 stop at manual review or create a separate Improvement Proposal.
 
+## Post-merge outcome evaluation
+
+After a human merges a controlled Improvement PR, treat evaluation as deferred
+governance evidence: the daemon waits for a runtime or declared release that
+contains the merged SHA, compares the frozen baseline against comparable
+post-merge Outcome Events, and reports `improved`, `neutral`, `regressed`, or
+`inconclusive`. Use the advanced-only
+`c2000_listPostMergeEvaluations` → `c2000_getPostMergeEvaluation` →
+`c2000_refreshPostMergeEvaluation` flow when reviewing those results. A
+regression may expose a human-only
+`c2000_getRollbackRecommendation` and a reviewed follow-up Proposal; it never
+authorizes an automatic revert, production change, restart, push, or merge.
+Mixed firmware, mock/hardware, runtime, or test-plan identities fail closed.
+Do not treat analytics as causal proof or as a replacement for Debug, Job,
+lease, safety, or hardware evidence.
+
 ## Safety hard rules
 
 - Do not use TI official `continue`, `pause`, `reset`, `connectTarget`,
