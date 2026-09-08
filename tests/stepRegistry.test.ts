@@ -438,6 +438,7 @@ describe("StepRegistry", () => {
     const parsed = testPlanSchema.parse(build({}));
     expect(parsed.steps[1]).toEqual(expect.objectContaining({
       resetType: "cpu",
+      programPreparation: "load",
       loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 250 },
       runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true, settleMs: 500 },
       timeoutMs: 10000,
@@ -448,6 +449,52 @@ describe("StepRegistry", () => {
       runSequence: { runCpu1First: true, runCpu2: true, settleMs: 33 }
     })).success).toBe(false);
     expect(testPlanSchema.safeParse(build({ timeoutMs: 10001, intervalMs: 1 })).success).toBe(false);
+  });
+
+  test("durable symbols-only IPC forwards declared hashes without changing registry verification semantics", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "c2000-mcp-durable-symbols-only-"));
+    const files = {
+      cpu1OutPath: path.join(root, "cpu1.out"),
+      cpu2OutPath: path.join(root, "cpu2.out"),
+      cpu1MapPath: path.join(root, "cpu1.map"),
+      cpu2MapPath: path.join(root, "cpu2.map")
+    };
+    await Promise.all(Object.values(files).map(file => writeFile(file, file.endsWith(".map") ? "MEMORY CONFIGURATION" : file)));
+    const hashes = {
+      cpu1OutSha256: await sha256File(files.cpu1OutPath),
+      cpu2OutSha256: await sha256File(files.cpu2OutPath),
+      cpu1MapSha256: await sha256File(files.cpu1MapPath),
+      cpu2MapSha256: await sha256File(files.cpu2MapPath)
+    };
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker, undefined, { allowedReadRoots: [root], allowedWriteRoots: [] });
+    const plan = testPlanSchema.parse({
+      planVersion: 1,
+      name: "durable-symbols-only",
+      boardIds: ["board-a"],
+      artifacts: { ...files, ...hashes },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "runIpcAcceptance",
+          programPreparation: "symbols-only",
+          loadPolicy: "verify-mcp-registry",
+          ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: 1 }]
+        }
+      ]
+    });
+
+    await registry.execute({ jobId: "job-symbols-only", boardId: "board-a", sessionId: "dbg-job", plan, step: plan.steps[1]! });
+
+    expect(invoker.calls).toHaveLength(1);
+    expect(invoker.calls[0]).toEqual(expect.objectContaining({
+      toolName: "c2000_runIpcAcceptance",
+      input: expect.objectContaining({
+        programPreparation: "symbols-only",
+        loadPolicy: "verify-mcp-registry",
+        ...hashes
+      })
+    }));
   });
 
   test("durable launch persists the explicit owner-first startup contract and rejects conflicts", () => {
