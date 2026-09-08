@@ -8,6 +8,7 @@ import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId, EvaluateResult, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
+import { sha256File } from "../src/utils/fileHash.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -172,6 +173,82 @@ class ArtifactMutatingAdapter extends WorkflowRecordingAdapter {
       await writeFile(programUri, "cpu1-image-mutated-during-load");
     }
   }
+}
+
+class PhaseChangingOwnershipAdapter extends WorkflowRecordingAdapter {
+  readonly ownershipReads: number[] = [];
+  readonly ownershipWrites: number[] = [];
+  private ownershipReadIndex = 0;
+
+  constructor(
+    private readonly ownershipValues: number[],
+    options: ConstructorParameters<typeof MockDebugAdapter>[0] = {}
+  ) {
+    super(options);
+  }
+
+  override async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
+    this.events.push(`evaluate:${coreId}:${expressions.join(",")}`);
+    return super.evaluateExpressions(session, coreId, expressions);
+  }
+
+  override async loadSymbols(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+    this.events.push(`symbols:${coreId}:${path.basename(programUri)}`);
+    await super.loadSymbols(session, coreId, programUri);
+  }
+
+  override async readMemory(
+    session: AdapterSession,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    typeSize: number
+  ): Promise<number> {
+    await super.readMemory(session, coreId, page, address, typeSize);
+    const value = this.ownershipValues[Math.min(this.ownershipReadIndex++, this.ownershipValues.length - 1)] ?? 0;
+    this.ownershipReads.push(value);
+    this.events.push(`readMemory:${value}`);
+    return value;
+  }
+
+  override async writeMemory(
+    session: AdapterSession,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    value: number,
+    typeSize: number
+  ): Promise<void> {
+    this.ownershipWrites.push(value);
+    this.events.push(`writeMemory:${value}`);
+    await super.writeMemory(session, coreId, page, address, value, typeSize);
+  }
+}
+
+class OwnershipReadFailureAdapter extends WorkflowRecordingAdapter {
+  override async readMemory(
+    _session: AdapterSession,
+    _coreId: CoreId,
+    _page: string,
+    _address: number,
+    _typeSize: number
+  ): Promise<number> {
+    throw new Error("simulated MEMCFG read failure");
+  }
+}
+
+async function createIpcWorkflowArtifacts(tempDir: string) {
+  const files = {
+    cpu1OutPath: path.join(tempDir, "cpu1.out"),
+    cpu2OutPath: path.join(tempDir, "cpu2.out"),
+    cpu1MapPath: path.join(tempDir, "cpu1.map"),
+    cpu2MapPath: path.join(tempDir, "cpu2.map")
+  };
+  await writeFile(files.cpu1OutPath, "cpu1-image");
+  await writeFile(files.cpu2OutPath, "cpu2-image");
+  await writeFile(files.cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+  await writeFile(files.cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+  return files;
 }
 
 describe("tool handlers", () => {
