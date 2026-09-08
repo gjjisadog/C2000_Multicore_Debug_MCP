@@ -1,0 +1,542 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?fileVersion 4.0.0?><cproject storage_type_id="org.eclipse.cdt.core.XmlProjectDescriptionStorage">
+    <storageModule moduleId="org.eclipse.cdt.core.settings">
+        <cconfiguration id="com.ti.ccstudio.buildDefinitions.C2000.Default.1568582512">
+            <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Default.1568582512" moduleId="org.eclipse.cdt.core.settings" name="CPU1_DK9_SAFE_VALIDATION_RAM">
+                <macros>
+                    <stringMacro name="REPO_ROOT" type="VALUE_PATH_ANY" value="C:/Users/11981/Documents/Hybrid_Platform/.worktrees/codex-dk9-full-runtime-acceptance"/>
+                </macros>
+                <externalSettings/>
+                <extensions>
+                    <extension id="org.eclipse.cdt.core.GmakeErrorParser" point="com.ti.ccs.project.ErrorParser"/>
+                    <extension id="com.ti.ccs.errorparser.CompilerErrorParser_TI" point="com.ti.ccs.project.ErrorParser"/>
+                </extensions>
+            </storageModule>
+            <storageModule moduleId="cdtBuildSystem" version="4.0.0">
+                <configuration artifactExtension="out" artifactName="${ProjName}" buildProperties="" cleanCommand="${CG_CLEAN_CMD}" description="" id="com.ti.ccstudio.buildDefinitions.C2000.Default.1568582512" name="CPU1_DK9_SAFE_VALIDATION_RAM" parent="com.ti.ccstudio.buildDefinitions.C2000.Default" prebuildStep="&quot;${REPO_ROOT}/tools/param_gen/ccs_prebuild.bat&quot; &quot;${REPO_ROOT}&quot; &quot;${PROJECT_BUILD_DIR}&quot; CPU1 DK9_LAUNCHXL">
+                    <folderInfo id="com.ti.ccstudio.buildDefinitions.C2000.Default.1568582512." name="/" resourcePath="">
+                        <toolChain id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain.871342716" name="TI Build Tools" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain" targetTool="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.1574772364">
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.355330390" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS" valueType="stringList">
+                                <listOptionValue value="DEVICE_CONFIGURATION_ID=TMS320C28XX.TMS320F28P650DK9"/>
+                                <listOptionValue value="DEVICE_CORE_ID="/>
+                                <listOptionValue value="DEVICE_ENDIANNESS=little"/>
+                                <listOptionValue value="OUTPUT_FORMAT=ELF"/>
+                                <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
+                                <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
+                                <listOptionValue value="OUTPUT_TYPE=executable"/>
+                                <listOptionValue value="PRODUCTS="/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={}"/>
+                            </option>
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.1297642887" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
+                            <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.1078552730" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
+                            <builder arguments="" buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.160705381" name="GNU Make.CPU1_DK9_SAFE_VALIDATION_RAM" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.622595802" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.504520289" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY.1957937603" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.670399120" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.28" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.1271211745" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.fpu64" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.2086556725" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.cla2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.1461920987" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.vcrc" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.1614221135" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.tmu1" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER.1953012514" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING.1671438836" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING" valueType="stringList">
+                                    <listOptionValue value="225"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.1910564510" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH.1721678764" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${PROJECT_ROOT}"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/02_curr_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/03_inv_pwm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/06_soft_pll/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/13_phase_gen/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/05_pr/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/07_voltage_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/12_open_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/11_carrier_sync/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/device_support/f28p65x/common/include"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/services/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/multi_core/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/scheduler/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/00_base/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/01_crc/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/02_filter/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/03_math/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/05_pos_neg_seq/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/04_pi/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/06_ramp/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/08_transform/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/core_comm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/ram_inject/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/dk9/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/cla/inc"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/shared"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu1"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/shared"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/inc"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.1441957578" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.eabi" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.852792629" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE.1328553449" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE" valueType="stringList">
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/board.opt"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/c2000ware_libraries.opt"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE.832592162" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="RAM"/>
+                                    <listOptionValue value="HYBRID30K_DK9_SAFE_VALIDATION"/>
+                                    <listOptionValue value="STACK_WATCH_ENABLE"/>
+                                    <listOptionValue value="SCHED_CPU1_VALIDATION_HOOK_ENABLE"/>
+                                    <listOptionValue value="CORE_COMM_MSGRAM_PARITY_INJECT_ENABLE"/>
+                                    <listOptionValue value="CORE_COMM_RAM_TEST_INJECT_ENABLE"/>
+                                    <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="BOARD_PROFILE_DK9_LAUNCHXL"/>
+                                    <listOptionValue value="CPU1"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.882682993" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.1421314366" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.on" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS.236383760" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS" valueType="stringList">
+                                    <listOptionValue value="10063"/>
+                                </option>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.1574772364" name="C2000 Linker" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE.1262828937" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE" value="0x700" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE.974505217" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE" value="${ProjName}.out" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE.326115370" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE" value="${ProjName}.map" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO.1495571401" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO" value="${ProjName}_linkInfo.xml" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER.1020660193" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.672837499" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH.1286916417" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH" valueType="libPaths">
+                                    <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY.97972628" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY" valueType="libs">
+                                    <listOptionValue value="c2000ware_libraries.cmd.genlibs"/>
+                                    <listOptionValue value="board.cmd.genlibs"/>
+                                    <listOptionValue value="libc.a"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT.1347144631" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT" value="code_start" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE.588253712" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE" value="0x200" valueType="string"/>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex.202618358" name="C2000 Hex Utility" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex"/>
+                        </toolChain>
+                    </folderInfo>
+                    <sourceEntries>
+                        <entry excluding="app/ctrl/03_inv_pwm/src/ctrl_inv_pwm.cla|app/ctrl/02_curr_loop/src/ctrl_curr_loop.cla|project/hybrid30k/validation/dk9/cpu1/cpu1_measurement_synthetic.c|project/hybrid30k/validation/dk9/cpu1/cpu1_runtime_accept.c|project/hybrid30k/dsp/cpu1/src/main_cpu1_runtime_accept.c|project/hybrid30k/board/src/board_cla_pwm.cla|project/hybrid30k/board/src/board_cla_adc.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla_task.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla.c|project/hybrid30k/validation/dk9/cpu1/cpu1_validation_obs.c|project/hybrid30k/board/src/board_cpu1_safety.c|platform/linker/cpu1/f28p65x_cpu1_flash_cla_validation.cmd" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                    </sourceEntries>
+                </configuration>
+            </storageModule>
+            <storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
+        </cconfiguration>
+        <cconfiguration id="com.ti.ccstudio.buildDefinitions.C2000.Default.138269708">
+            <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Default.138269708" moduleId="org.eclipse.cdt.core.settings" name="CPU1_DK9_CE_PRELOADED_VALIDATION_RAM">
+                <macros>
+                    <stringMacro name="REPO_ROOT" type="VALUE_PATH_ANY" value="C:/Users/11981/Documents/Hybrid_Platform/.worktrees/codex-dk9-full-runtime-acceptance"/>
+                </macros>
+                <externalSettings/>
+                <extensions>
+                    <extension id="org.eclipse.cdt.core.GmakeErrorParser" point="com.ti.ccs.project.ErrorParser"/>
+                    <extension id="com.ti.ccs.errorparser.CompilerErrorParser_TI" point="com.ti.ccs.project.ErrorParser"/>
+                </extensions>
+            </storageModule>
+            <storageModule moduleId="cdtBuildSystem" version="4.0.0">
+                <configuration artifactExtension="out" artifactName="${ProjName}" buildProperties="" cleanCommand="${CG_CLEAN_CMD}" description="" id="com.ti.ccstudio.buildDefinitions.C2000.Default.138269708" name="CPU1_DK9_CE_PRELOADED_VALIDATION_RAM" parent="com.ti.ccstudio.buildDefinitions.C2000.Default" prebuildStep="&quot;${REPO_ROOT}/tools/param_gen/ccs_prebuild.bat&quot; &quot;${REPO_ROOT}&quot; &quot;${PROJECT_BUILD_DIR}&quot; CPU1 DK9_LAUNCHXL">
+                    <folderInfo id="com.ti.ccstudio.buildDefinitions.C2000.Default.138269708." name="/" resourcePath="">
+                        <toolChain id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain.1124369046" name="TI Build Tools" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain" targetTool="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.231392306">
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.1304927580" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS" valueType="stringList">
+                                <listOptionValue value="DEVICE_CONFIGURATION_ID=TMS320C28XX.TMS320F28P650DK9"/>
+                                <listOptionValue value="DEVICE_CORE_ID="/>
+                                <listOptionValue value="DEVICE_ENDIANNESS=little"/>
+                                <listOptionValue value="OUTPUT_FORMAT=ELF"/>
+                                <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
+                                <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
+                                <listOptionValue value="OUTPUT_TYPE=executable"/>
+                                <listOptionValue value="PRODUCTS="/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={}"/>
+                            </option>
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.1306678821" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
+                            <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.252644060" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
+                            <builder arguments="" buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.1017262518" name="GNU Make.CPU1_DK9_CE_PRELOADED_VALIDATION_RAM" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.459577938" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.374467695" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY.558116265" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.143719283" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.28" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.1918440281" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.fpu64" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.100040409" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.cla2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.804743999" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.vcrc" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.657256904" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.tmu1" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER.537343800" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING.582183006" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING" valueType="stringList">
+                                    <listOptionValue value="225"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.313170602" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH.2092397687" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${PROJECT_ROOT}"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/02_curr_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/03_inv_pwm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/06_soft_pll/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/13_phase_gen/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/05_pr/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/07_voltage_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/12_open_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/11_carrier_sync/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/device_support/f28p65x/common/include"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/services/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/multi_core/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/scheduler/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/00_base/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/01_crc/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/02_filter/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/03_math/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/05_pos_neg_seq/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/04_pi/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/06_ramp/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/08_transform/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/core_comm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/ram_inject/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/dk9/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/cla/inc"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/shared"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu1"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/shared"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/inc"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.1859298860" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.eabi" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.547941031" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE.2102587560" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE" valueType="stringList">
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/board.opt"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/c2000ware_libraries.opt"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE.1297644288" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="RAM"/>
+                                    <listOptionValue value="HYBRID30K_DK9_SAFE_VALIDATION"/>
+                                    <listOptionValue value="HYBRID30K_DK9_CE_PRELOADED"/>
+                                    <listOptionValue value="STACK_WATCH_ENABLE"/>
+                                    <listOptionValue value="CORE_COMM_DEBUG_CPU2_PRELOADED"/>
+                                    <listOptionValue value="SCHED_CPU1_VALIDATION_HOOK_ENABLE"/>
+                                    <listOptionValue value="CORE_COMM_MSGRAM_PARITY_INJECT_ENABLE"/>
+                                    <listOptionValue value="CORE_COMM_RAM_TEST_INJECT_ENABLE"/>
+                                    <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="BOARD_PROFILE_DK9_LAUNCHXL"/>
+                                    <listOptionValue value="CPU1"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.1211387264" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.1890451994" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.on" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS.2128305693" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS" valueType="stringList">
+                                    <listOptionValue value="10063"/>
+                                </option>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.231392306" name="C2000 Linker" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE.2104588759" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE" value="0x700" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE.152303295" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE" value="${ProjName}.out" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE.1807787159" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE" value="${ProjName}.map" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO.968652822" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO" value="${ProjName}_linkInfo.xml" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER.268710008" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.35741574" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH.1128807732" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH" valueType="libPaths">
+                                    <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY.186797985" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY" valueType="libs">
+                                    <listOptionValue value="c2000ware_libraries.cmd.genlibs"/>
+                                    <listOptionValue value="board.cmd.genlibs"/>
+                                    <listOptionValue value="libc.a"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT.2111016224" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT" value="code_start" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE.1378275680" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE" value="0x200" valueType="string"/>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex.1246303767" name="C2000 Hex Utility" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex"/>
+                        </toolChain>
+                    </folderInfo>
+                    <sourceEntries>
+                        <entry excluding="app/ctrl/03_inv_pwm/src/ctrl_inv_pwm.cla|app/ctrl/02_curr_loop/src/ctrl_curr_loop.cla|project/hybrid30k/validation/dk9/cpu1/cpu1_measurement_synthetic.c|project/hybrid30k/validation/dk9/cpu1/cpu1_runtime_accept.c|project/hybrid30k/dsp/cpu1/src/main_cpu1_runtime_accept.c|project/hybrid30k/board/src/board_cla_pwm.cla|project/hybrid30k/board/src/board_cla_adc.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla_task.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla.c|project/hybrid30k/validation/dk9/cpu1/cpu1_validation_obs.c|project/hybrid30k/board/src/board_cpu1_safety.c|platform/linker/cpu1/f28p65x_cpu1_flash_cla_validation.cmd" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                    </sourceEntries>
+                </configuration>
+            </storageModule>
+            <storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
+        </cconfiguration>
+        <cconfiguration id="com.ti.ccstudio.buildDefinitions.C2000.Default.2018074991">
+            <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Default.2018074991" moduleId="org.eclipse.cdt.core.settings" name="CPU1_DK9_RUNTIME_ACCEPTANCE_RAM">
+                <macros>
+                    <stringMacro name="REPO_ROOT" type="VALUE_PATH_ANY" value="C:/Users/11981/Documents/Hybrid_Platform/.worktrees/codex-dk9-full-runtime-acceptance"/>
+                </macros>
+                <externalSettings/>
+                <extensions>
+                    <extension id="org.eclipse.cdt.core.GmakeErrorParser" point="com.ti.ccs.project.ErrorParser"/>
+                    <extension id="com.ti.ccs.errorparser.CompilerErrorParser_TI" point="com.ti.ccs.project.ErrorParser"/>
+                </extensions>
+            </storageModule>
+            <storageModule moduleId="cdtBuildSystem" version="4.0.0">
+                <configuration artifactExtension="out" artifactName="${ProjName}" buildProperties="" cleanCommand="${CG_CLEAN_CMD}" description="" id="com.ti.ccstudio.buildDefinitions.C2000.Default.2018074991" name="CPU1_DK9_RUNTIME_ACCEPTANCE_RAM" parent="com.ti.ccstudio.buildDefinitions.C2000.Default" prebuildStep="&quot;${REPO_ROOT}/tools/param_gen/ccs_prebuild.bat&quot; &quot;${REPO_ROOT}&quot; &quot;${PROJECT_BUILD_DIR}&quot; CPU1 DK9_LAUNCHXL">
+                    <folderInfo id="com.ti.ccstudio.buildDefinitions.C2000.Default.2018074991." name="/" resourcePath="">
+                        <toolChain id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain.389432570" name="TI Build Tools" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain" targetTool="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.1154956160">
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.1513253905" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS" valueType="stringList">
+                                <listOptionValue value="DEVICE_CONFIGURATION_ID=TMS320C28XX.TMS320F28P650DK9"/>
+                                <listOptionValue value="DEVICE_CORE_ID="/>
+                                <listOptionValue value="DEVICE_ENDIANNESS=little"/>
+                                <listOptionValue value="OUTPUT_FORMAT=ELF"/>
+                                <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
+                                <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
+                                <listOptionValue value="OUTPUT_TYPE=executable"/>
+                                <listOptionValue value="PRODUCTS="/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={}"/>
+                            </option>
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.808296027" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
+                            <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.1888220614" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
+                            <builder arguments="" buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.2124415274" name="GNU Make.CPU1_DK9_RUNTIME_ACCEPTANCE_RAM" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.1120215731" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.900260129" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY.957617650" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.1993226806" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.28" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.954704447" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.fpu64" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.134211017" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.cla2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.178904480" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.vcrc" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.472127996" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.tmu1" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER.1997712574" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING.1101609830" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING" valueType="stringList">
+                                    <listOptionValue value="225"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.2068205985" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH.227311262" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${PROJECT_ROOT}"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/02_curr_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/03_inv_pwm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/06_soft_pll/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/13_phase_gen/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/05_pr/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/07_voltage_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/12_open_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/11_carrier_sync/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/device_support/f28p65x/common/include"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/services/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/multi_core/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/scheduler/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/00_base/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/01_crc/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/02_filter/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/03_math/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/05_pos_neg_seq/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/04_pi/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/06_ramp/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/08_transform/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/core_comm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/ram_inject/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/cla/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/dk9/cpu1"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/shared"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu1"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/shared"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/inc"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.1149466293" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.eabi" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.119120067" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE.603357920" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE" valueType="stringList">
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/board.opt"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/c2000ware_libraries.opt"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE.1980387302" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="RAM"/>
+                                    <listOptionValue value="HYBRID30K_DK9_CE_PRELOADED"/>
+                                    <listOptionValue value="HYBRID30K_DK9_MEASUREMENT_SYNTHETIC"/>
+                                    <listOptionValue value="CORE_COMM_RAM_TEST_INJECT_ENABLE"/>
+                                    <listOptionValue value="CTRL_CURRLOOP_CLA_RUN_VALIDATED"/>
+                                    <listOptionValue value="STACK_WATCH_ENABLE"/>
+                                    <listOptionValue value="HYBRID30K_DK9_RUNTIME_ACCEPTANCE"/>
+                                    <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="BOARD_PROFILE_DK9_LAUNCHXL"/>
+                                    <listOptionValue value="CPU1"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.435890346" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.1184468822" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.on" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS.351953330" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS" valueType="stringList">
+                                    <listOptionValue value="10063"/>
+                                </option>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.1154956160" name="C2000 Linker" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE.252784755" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE" value="0x700" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE.887929422" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE" value="${ProjName}.out" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE.1410488081" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE" value="${ProjName}.map" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO.1499044147" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO" value="${ProjName}_linkInfo.xml" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER.712282788" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.104442210" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH.97482136" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH" valueType="libPaths">
+                                    <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY.701690612" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY" valueType="libs">
+                                    <listOptionValue value="c2000ware_libraries.cmd.genlibs"/>
+                                    <listOptionValue value="board.cmd.genlibs"/>
+                                    <listOptionValue value="libc.a"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT.2082252334" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT" value="code_start" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE.35863680" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE" value="0x200" valueType="string"/>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex.1507043432" name="C2000 Hex Utility" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex"/>
+                        </toolChain>
+                    </folderInfo>
+                    <sourceEntries>
+                        <entry excluding="project/hybrid30k/validation/dk9/cpu1/cpu1_cla_task_validation.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla_validation.c|project/hybrid30k/validation/dk9/cpu1/cpu1_validation.c|project/hybrid30k/validation/dk9/cpu1/cpu1_validation_obs.c|project/hybrid30k/dsp/cpu1/src/main_cpu1_validation.c|app/ctrl/03_inv_pwm/src/ctrl_inv_pwm_validation.cla|app/ctrl/02_curr_loop/src/ctrl_curr_loop_validation.cla|project/hybrid30k/board/src/board_cpu1_safety_validation.c|platform/linker/cpu1/f28p65x_cpu1_flash_cla_validation.cmd" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                    </sourceEntries>
+                </configuration>
+            </storageModule>
+            <storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
+        </cconfiguration>
+        <cconfiguration id="com.ti.ccstudio.buildDefinitions.C2000.Default.62944394">
+            <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.C2000.Default.62944394" moduleId="org.eclipse.cdt.core.settings" name="CPU1_DK9_STANDALONE_VALIDATION_FLASH">
+                <macros>
+                    <stringMacro name="REPO_ROOT" type="VALUE_PATH_ANY" value="C:/Users/11981/Documents/Hybrid_Platform/.worktrees/codex-dk9-full-runtime-acceptance"/>
+                </macros>
+                <externalSettings/>
+                <extensions>
+                    <extension id="org.eclipse.cdt.core.GmakeErrorParser" point="com.ti.ccs.project.ErrorParser"/>
+                    <extension id="com.ti.ccs.errorparser.CompilerErrorParser_TI" point="com.ti.ccs.project.ErrorParser"/>
+                </extensions>
+            </storageModule>
+            <storageModule moduleId="cdtBuildSystem" version="4.0.0">
+                <configuration artifactExtension="out" artifactName="${ProjName}" buildProperties="" cleanCommand="${CG_CLEAN_CMD}" description="" id="com.ti.ccstudio.buildDefinitions.C2000.Default.62944394" name="CPU1_DK9_STANDALONE_VALIDATION_FLASH" parent="com.ti.ccstudio.buildDefinitions.C2000.Default" prebuildStep="&quot;${REPO_ROOT}/tools/param_gen/ccs_prebuild.bat&quot; &quot;${REPO_ROOT}&quot; &quot;${PROJECT_BUILD_DIR}&quot; CPU1 DK9_LAUNCHXL">
+                    <folderInfo id="com.ti.ccstudio.buildDefinitions.C2000.Default.62944394." name="/" resourcePath="">
+                        <toolChain id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain.1264080839" name="TI Build Tools" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.DebugToolchain" targetTool="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.459788716">
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS.1460444657" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_TAGS" valueType="stringList">
+                                <listOptionValue value="DEVICE_CONFIGURATION_ID=TMS320C28XX.TMS320F28P650DK9"/>
+                                <listOptionValue value="DEVICE_CORE_ID="/>
+                                <listOptionValue value="DEVICE_ENDIANNESS=little"/>
+                                <listOptionValue value="OUTPUT_FORMAT=ELF"/>
+                                <listOptionValue value="CCS_MBS_VERSION=70.0.0"/>
+                                <listOptionValue value="RUNTIME_SUPPORT_LIBRARY=libc.a"/>
+                                <listOptionValue value="OUTPUT_TYPE=executable"/>
+                                <listOptionValue value="PRODUCTS="/>
+                                <listOptionValue value="PRODUCT_MACRO_IMPORTS={}"/>
+                            </option>
+                            <option id="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION.334620920" superClass="com.ti.ccstudio.buildDefinitions.core.OPT_CODEGEN_VERSION" value="25.11.1.LTS" valueType="string"/>
+                            <targetPlatform id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug.1357366619" name="Platform" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.targetPlatformDebug"/>
+                            <builder arguments="" buildPath="${BuildDirectory}" id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug.1110801928" name="GNU Make.CPU1_DK9_STANDALONE_VALIDATION_FLASH" parallelBuildOn="true" parallelizationNumber="optimal" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.builderDebug"/>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug.1119256857" name="C2000 Compiler" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.compilerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL.1003819569" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.LARGE_MEMORY_MODEL" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY.2069715501" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.UNIFIED_MEMORY" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.605604628" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.SILICON_VERSION.28" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.104213012" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.FLOAT_SUPPORT.fpu64" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.424107935" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CLA_SUPPORT.cla2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.1142529777" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.VCU_SUPPORT.vcrc" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.919843163" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.TMU_SUPPORT.tmu1" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER.1455368037" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING.181505956" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WARNING" valueType="stringList">
+                                    <listOptionValue value="225"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.822276155" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH.335358234" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.INCLUDE_PATH" valueType="includePath">
+                                    <listOptionValue value="${PROJECT_ROOT}"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/02_curr_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/03_inv_pwm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/06_soft_pll/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/13_phase_gen/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/05_pr/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/07_voltage_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/12_open_loop/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/app/ctrl/11_carrier_sync/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/device_support/f28p65x/common/include"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/services/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/multi_core/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/bsw/scheduler/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/00_base/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/01_crc/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/02_filter/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/03_math/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/05_pos_neg_seq/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/04_pi/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/06_ramp/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/platform/utils/08_transform/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/core_comm/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/ram_inject/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/validation/dk9/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/inc"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/dsp/cpu1/cla/inc"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/shared"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu1"/>
+                                    <listOptionValue value="${PROJECT_BUILD_DIR}/rtm_generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/shared"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu1"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/rtm/generated/cpu2"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/inc"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.1334499700" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ABI.eabi" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.214875214" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.OPT_LEVEL.2" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE.453762595" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.CMD_FILE" valueType="stringList">
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/board.opt"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1/c2000ware_libraries.opt"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE.5346216" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DEFINE" valueType="definedSymbols">
+                                    <listOptionValue value="_FLASH"/>
+                                    <listOptionValue value="HYBRID30K_DK9_STANDALONE_VALIDATION_FLASH"/>
+                                    <listOptionValue value="HYBRID30K_DK9_SAFE_VALIDATION"/>
+                                    <listOptionValue value="HYBRID30K_DK9_CE_PRELOADED"/>
+                                    <listOptionValue value="SCHED_CPU1_VALIDATION_HOOK_ENABLE"/>
+                                    <listOptionValue value="DEBUG"/>
+                                    <listOptionValue value="BOARD_PROFILE_DK9_LAUNCHXL"/>
+                                    <listOptionValue value="CPU1"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.923050107" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.ISR_SAVE_VCU_REGS.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.1600202261" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.GEN_FUNC_SUBSECTIONS.on" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS.473607607" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.compilerID.DIAG_SUPPRESS" valueType="stringList">
+                                    <listOptionValue value="10063"/>
+                                </option>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug.459788716" name="C2000 Linker" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.exe.linkerDebug">
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE.517497048" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.STACK_SIZE" value="0x700" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE.1539363667" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.OUTPUT_FILE" value="${ProjName}.out" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE.1475548372" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.MAP_FILE" value="${ProjName}.map" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO.1459877120" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.XML_LINK_INFO" value="${ProjName}_linkInfo.xml" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER.1736154839" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DISPLAY_ERROR_NUMBER" value="true" valueType="boolean"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.1855602231" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP" value="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.DIAG_WRAP.off" valueType="enumerated"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH.1445633177" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.SEARCH_PATH" valueType="libPaths">
+                                    <listOptionValue value="${CG_TOOL_ROOT}/lib"/>
+                                    <listOptionValue value="${REPO_ROOT}/project/hybrid30k/board/generated/dk9_launchxl/cpu1"/>
+                                    <listOptionValue value="${CG_TOOL_ROOT}/include"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY.1731808606" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.LIBRARY" valueType="libs">
+                                    <listOptionValue value="c2000ware_libraries.cmd.genlibs"/>
+                                    <listOptionValue value="board.cmd.genlibs"/>
+                                    <listOptionValue value="libc.a"/>
+                                </option>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT.1465484323" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.ENTRY_POINT" value="code_start" valueType="string"/>
+                                <option id="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE.1220136335" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.linkerID.HEAP_SIZE" value="0x200" valueType="string"/>
+                            </tool>
+                            <tool id="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex.885371973" name="C2000 Hex Utility" superClass="com.ti.ccstudio.buildDefinitions.C2000_25.11.hex"/>
+                        </toolChain>
+                    </folderInfo>
+                    <sourceEntries>
+                        <entry excluding="app/ctrl/03_inv_pwm/src/ctrl_inv_pwm.cla|app/ctrl/02_curr_loop/src/ctrl_curr_loop.cla|project/hybrid30k/validation/dk9/cpu1/cpu1_measurement_synthetic.c|project/hybrid30k/validation/dk9/cpu1/cpu1_runtime_accept.c|project/hybrid30k/dsp/cpu1/src/main_cpu1_runtime_accept.c|project/hybrid30k/board/src/board_cla_pwm.cla|project/hybrid30k/board/src/board_cla_adc.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla_task.cla|project/hybrid30k/dsp/cpu1/cla/src/cpu1_cla.c|project/hybrid30k/dsp/cpu1/src/cpu1_stack_watch_sp.asm|project/hybrid30k/dsp/cpu1/src/cpu1_stack_watch.c|project/hybrid30k/validation/ram_inject/src/test_inject_ram_only.c|project/hybrid30k/board/src/board_cpu1_safety.c|platform/linker/cpu1/f28p65x_cpu1_ram_cla_validation.cmd" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
+                    </sourceEntries>
+                </configuration>
+            </storageModule>
+            <storageModule moduleId="org.eclipse.cdt.core.externalSettings"/>
+        </cconfiguration>
+    </storageModule>
+    <storageModule moduleId="cdtBuildSystem" version="4.0.0">
+        <project id="Hybrid30K_F28P65x_CPU1.com.ti.ccstudio.buildDefinitions.C2000.ProjectType.186897662" name="C2000" projectType="com.ti.ccstudio.buildDefinitions.C2000.ProjectType"/>
+    </storageModule>
+</cproject>

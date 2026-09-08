@@ -1,0 +1,1196 @@
+{
+  "cpu1": {
+    "c_stack": {
+      "runtime_interface": "CPU1_StackWatch_Run / g_stCpu1StackWatch",
+      "runtime_peak": "N/A (requires target runtime measurement)",
+      "section": ".stack",
+      "static_allocation": {
+        "declared_stack_size": 1792,
+        "display_name": "RAMD1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU1_STACK",
+        "physical_region": "RAMD1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMD1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu1\\prj\\Hybrid30K_CPU1_DK8_PROD.projectspec",
+        "region_used": 1792,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1792,
+        "usage_percent": 100.0,
+        "used": 1792
+      }
+    },
+    "cla": {
+      "data": {
+        "headroom": 1339,
+        "name": "CLA_DATA",
+        "physical_region": "RAMLS7",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMLS7"
+        },
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 2048,
+        "usage_percent": 34.6191,
+        "used": 709
+      },
+      "data_sections": {
+        ".bss_cla": 0,
+        ".const_cla": 168,
+        ".scratchpad": 139,
+        "Cla1DataRam": 402
+      },
+      "ls7_region_used": 709,
+      "program": {
+        "headroom": 1542,
+        "name": "CLA_PROGRAM",
+        "physical_region": "RAMLS0_6",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMLS0_6"
+        },
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 14336,
+        "usage_percent": 89.2439,
+        "used": 12794
+      },
+      "program_section": "Cla1Prog"
+    },
+    "flash_image": {
+      "display_name": "FLASH_BANK0",
+      "headroom": 75223,
+      "name": "FLASH_BANK0",
+      "physical_region": "FLASH_BANK0",
+      "reserved": false,
+      "status": "PASS",
+      "thresholds": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "total": 131070,
+      "usage_percent": 42.6085,
+      "used": 55847
+    },
+    "gate_metrics": [
+      {
+        "display_name": "FLASH_BANK0",
+        "headroom": 75223,
+        "name": "FLASH_BANK0",
+        "physical_region": "FLASH_BANK0",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131070,
+        "usage_percent": 42.6085,
+        "used": 55847
+      },
+      {
+        "display_name": "FLASH_BANK1",
+        "headroom": 131072,
+        "name": "FLASH_BANK1",
+        "physical_region": "FLASH_BANK1",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "FLASH_BANK2",
+        "headroom": 131072,
+        "name": "FLASH_BANK2",
+        "physical_region": "FLASH_BANK2",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD0",
+        "headroom": 6977,
+        "name": "RAMD0",
+        "physical_region": "RAMD0",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 14.8315,
+        "used": 1215
+      },
+      {
+        "declared_stack_size": 1792,
+        "display_name": "RAMD1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU1_STACK",
+        "physical_region": "RAMD1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMD1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu1\\prj\\Hybrid30K_CPU1_DK8_PROD.projectspec",
+        "region_used": 1792,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1792,
+        "usage_percent": 100.0,
+        "used": 1792
+      },
+      {
+        "display_name": "RAMD1_GUARD",
+        "headroom": 32,
+        "name": "RAMD1_GUARD",
+        "physical_region": "RAMD1_GUARD",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 32,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD1_WORK",
+        "headroom": 6368,
+        "name": "RAMD1_WORK",
+        "physical_region": "RAMD1_WORK",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 6368,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD4",
+        "headroom": 8192,
+        "name": "RAMD4",
+        "physical_region": "RAMD4",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD5",
+        "headroom": 8192,
+        "name": "RAMD5",
+        "physical_region": "RAMD5",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMLS0_6",
+        "headroom": 1542,
+        "name": "RAMLS0_6",
+        "physical_region": "RAMLS0_6",
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 14336,
+        "usage_percent": 89.2439,
+        "used": 12794
+      },
+      {
+        "display_name": "RAMLS7",
+        "headroom": 1339,
+        "name": "RAMLS7",
+        "physical_region": "RAMLS7",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 2048,
+        "usage_percent": 34.6191,
+        "used": 709
+      },
+      {
+        "display_name": "RAMLS8",
+        "headroom": 6229,
+        "name": "RAMLS8",
+        "physical_region": "RAMLS8",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 23.9624,
+        "used": 1963
+      },
+      {
+        "display_name": "RAMLS9",
+        "headroom": 8192,
+        "name": "RAMLS9",
+        "physical_region": "RAMLS9",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS0",
+        "headroom": 8192,
+        "name": "RAMGS0",
+        "physical_region": "RAMGS0",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS1",
+        "headroom": 8192,
+        "name": "RAMGS1",
+        "physical_region": "RAMGS1",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS2",
+        "headroom": 8192,
+        "name": "RAMGS2",
+        "physical_region": "RAMGS2",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "headroom": 1542,
+        "name": "CLA_PROGRAM",
+        "physical_region": "RAMLS0_6",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMLS0_6"
+        },
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 14336,
+        "usage_percent": 89.2439,
+        "used": 12794
+      },
+      {
+        "headroom": 1339,
+        "name": "CLA_DATA",
+        "physical_region": "RAMLS7",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMLS7"
+        },
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 2048,
+        "usage_percent": 34.6191,
+        "used": 709
+      }
+    ],
+    "map": {
+      "linked_at": "Wed Sep  2 09:21:39 2026",
+      "output_file": "Hybrid30K_CPU1_DK8_PROD.out",
+      "path": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\ccs_ws_dk9_rework_20260902_mainline\\Hybrid30K_CPU1_DK8_PROD\\CPU1_FLASH\\Hybrid30K_CPU1_DK8_PROD.map",
+      "sha256": "02f0bc1294b63c247b39a1656b33fd70a9803d6fcb9b9bdf34a372a0fec95405"
+    },
+    "regions": [
+      {
+        "display_name": "FLASH_BANK0",
+        "headroom": 75223,
+        "name": "FLASH_BANK0",
+        "physical_region": "FLASH_BANK0",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131070,
+        "usage_percent": 42.6085,
+        "used": 55847
+      },
+      {
+        "display_name": "FLASH_BANK1",
+        "headroom": 131072,
+        "name": "FLASH_BANK1",
+        "physical_region": "FLASH_BANK1",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "FLASH_BANK2",
+        "headroom": 131072,
+        "name": "FLASH_BANK2",
+        "physical_region": "FLASH_BANK2",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD0",
+        "headroom": 6977,
+        "name": "RAMD0",
+        "physical_region": "RAMD0",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 14.8315,
+        "used": 1215
+      },
+      {
+        "declared_stack_size": 1792,
+        "display_name": "RAMD1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU1_STACK",
+        "physical_region": "RAMD1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMD1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu1\\prj\\Hybrid30K_CPU1_DK8_PROD.projectspec",
+        "region_used": 1792,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1792,
+        "usage_percent": 100.0,
+        "used": 1792
+      },
+      {
+        "display_name": "RAMD1_GUARD",
+        "headroom": 32,
+        "name": "RAMD1_GUARD",
+        "physical_region": "RAMD1_GUARD",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 32,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD1_WORK",
+        "headroom": 6368,
+        "name": "RAMD1_WORK",
+        "physical_region": "RAMD1_WORK",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 6368,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD4",
+        "headroom": 8192,
+        "name": "RAMD4",
+        "physical_region": "RAMD4",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD5",
+        "headroom": 8192,
+        "name": "RAMD5",
+        "physical_region": "RAMD5",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMLS0_6",
+        "headroom": 1542,
+        "name": "RAMLS0_6",
+        "physical_region": "RAMLS0_6",
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 14336,
+        "usage_percent": 89.2439,
+        "used": 12794
+      },
+      {
+        "display_name": "RAMLS7",
+        "headroom": 1339,
+        "name": "RAMLS7",
+        "physical_region": "RAMLS7",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 2048,
+        "usage_percent": 34.6191,
+        "used": 709
+      },
+      {
+        "display_name": "RAMLS8",
+        "headroom": 6229,
+        "name": "RAMLS8",
+        "physical_region": "RAMLS8",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 23.9624,
+        "used": 1963
+      },
+      {
+        "display_name": "RAMLS9",
+        "headroom": 8192,
+        "name": "RAMLS9",
+        "physical_region": "RAMLS9",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS0",
+        "headroom": 8192,
+        "name": "RAMGS0",
+        "physical_region": "RAMGS0",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS1",
+        "headroom": 8192,
+        "name": "RAMGS1",
+        "physical_region": "RAMGS1",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS2",
+        "headroom": 8192,
+        "name": "RAMGS2",
+        "physical_region": "RAMGS2",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      }
+    ]
+  },
+  "cpu2": {
+    "c_stack": {
+      "runtime_interface": "target stack instrumentation required",
+      "runtime_peak": "N/A (requires target runtime measurement)",
+      "section": ".stack",
+      "static_allocation": {
+        "declared_stack_size": 1016,
+        "display_name": "RAMM1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU2_C_STACK",
+        "physical_region": "RAMM1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMM1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu2\\prj\\Hybrid30K_CPU2_DK8_PROD.projectspec",
+        "region_used": 1016,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1016,
+        "usage_percent": 100.0,
+        "used": 1016
+      }
+    },
+    "flash_image": {
+      "display_name": "FLASH_BANK3",
+      "headroom": 100793,
+      "name": "FLASH_BANK3",
+      "physical_region": "FLASH_BANK3",
+      "reserved": false,
+      "status": "PASS",
+      "thresholds": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "total": 131070,
+      "usage_percent": 23.0999,
+      "used": 30277
+    },
+    "freertos_stack": {
+      "runtime_interface": "uxTaskGetStackHighWaterMark / g_stCpu2RtosWatch with STACK_WATCH_ENABLE",
+      "runtime_peak": "N/A (requires target runtime measurement)",
+      "section": ".freertosStaticStack",
+      "source_budget_words": 3072,
+      "source_matches_map": true,
+      "static_allocation": {
+        "headroom": 1024,
+        "name": "CPU2_RTOS_STACK",
+        "physical_region": "RAMD2_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMD2_STACK"
+        },
+        "reserved": false,
+        "status": "WARNING",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 75.0,
+        "used": 3072
+      },
+      "tasks": [
+        {
+          "id": "LOGIC",
+          "name": "CPU2_LogicTask",
+          "source": "CPU2_RTOS_TASK_CFG_LIST",
+          "stack_words": 1024
+        },
+        {
+          "id": "FAULT",
+          "name": "CPU2_FaultTask",
+          "source": "CPU2_RTOS_TASK_CFG_LIST",
+          "stack_words": 512
+        },
+        {
+          "id": "COMM",
+          "name": "CPU2_CommTask",
+          "source": "CPU2_RTOS_TASK_CFG_LIST",
+          "stack_words": 512
+        },
+        {
+          "id": "EMS",
+          "name": "CPU2_EmsTask",
+          "source": "CPU2_RTOS_TASK_CFG_LIST",
+          "stack_words": 768
+        },
+        {
+          "id": "IDLE",
+          "name": "FreeRTOS Idle",
+          "source": "configMINIMAL_STACK_SIZE",
+          "stack_words": 256
+        }
+      ]
+    },
+    "gate_metrics": [
+      {
+        "display_name": "FLASH_BANK3",
+        "headroom": 100793,
+        "name": "FLASH_BANK3",
+        "physical_region": "FLASH_BANK3",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131070,
+        "usage_percent": 23.0999,
+        "used": 30277
+      },
+      {
+        "display_name": "FLASH_BANK4",
+        "headroom": 131072,
+        "name": "FLASH_BANK4",
+        "physical_region": "FLASH_BANK4",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "declared_stack_size": 1016,
+        "display_name": "RAMM1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU2_C_STACK",
+        "physical_region": "RAMM1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMM1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu2\\prj\\Hybrid30K_CPU2_DK8_PROD.projectspec",
+        "region_used": 1016,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1016,
+        "usage_percent": 100.0,
+        "used": 1016
+      },
+      {
+        "display_name": "RAMM1_GUARD",
+        "headroom": 8,
+        "name": "RAMM1_GUARD",
+        "physical_region": "RAMM1_GUARD",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD2_WORK",
+        "headroom": 3776,
+        "name": "RAMD2_WORK",
+        "physical_region": "RAMD2_WORK",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 7.8125,
+        "used": 320
+      },
+      {
+        "display_name": "RAMD3_RAMFUNC",
+        "headroom": 3861,
+        "name": "RAMD3_RAMFUNC",
+        "physical_region": "RAMD3_RAMFUNC",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 5.7373,
+        "used": 235
+      },
+      {
+        "display_name": "RAMD3_DATA",
+        "headroom": 723,
+        "name": "RAMD3_DATA",
+        "physical_region": "RAMD3_DATA",
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 82.3486,
+        "used": 3373
+      },
+      {
+        "display_name": "RAMGS3",
+        "headroom": 8192,
+        "name": "RAMGS3",
+        "physical_region": "RAMGS3",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS4",
+        "headroom": 8192,
+        "name": "RAMGS4",
+        "physical_region": "RAMGS4",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "headroom": 1024,
+        "name": "CPU2_RTOS_STACK",
+        "physical_region": "RAMD2_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMD2_STACK"
+        },
+        "reserved": false,
+        "status": "WARNING",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 75.0,
+        "used": 3072
+      }
+    ],
+    "map": {
+      "linked_at": "Wed Sep  2 09:22:08 2026",
+      "output_file": "Hybrid30K_CPU2_DK8_PROD.out",
+      "path": "C:\\Users\\11981\\Documents\\C2000_Debug_MCP\\ccs_ws_dk9_rework_20260902_mainline\\Hybrid30K_CPU2_DK8_PROD\\CPU2_FLASH\\Hybrid30K_CPU2_DK8_PROD.map",
+      "sha256": "310c306fdcd3d8d7f37720480bb075196a17adfc77f8e19b472401abaff36812"
+    },
+    "regions": [
+      {
+        "display_name": "FLASH_BANK3",
+        "headroom": 100793,
+        "name": "FLASH_BANK3",
+        "physical_region": "FLASH_BANK3",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131070,
+        "usage_percent": 23.0999,
+        "used": 30277
+      },
+      {
+        "display_name": "FLASH_BANK4",
+        "headroom": 131072,
+        "name": "FLASH_BANK4",
+        "physical_region": "FLASH_BANK4",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 131072,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "declared_stack_size": 1016,
+        "display_name": "RAMM1_STACK",
+        "gate_kind": "static_reservation_contract",
+        "headroom": 0,
+        "name": "CPU2_C_STACK",
+        "physical_region": "RAMM1_STACK",
+        "placement": {
+          "missing_sections": [],
+          "ok": true,
+          "outside_allocations": [],
+          "region": "RAMM1_STACK"
+        },
+        "projectspec": "C:\\Users\\11981\\Documents\\Hybrid_Platform\\.worktrees\\dk9-mil-hw-rework-20260902\\project\\hybrid30k\\dsp\\cpu2\\prj\\Hybrid30K_CPU2_DK8_PROD.projectspec",
+        "region_used": 1016,
+        "reserved": false,
+        "status": "CONTRACT_PASS",
+        "thresholds": null,
+        "total": 1016,
+        "usage_percent": 100.0,
+        "used": 1016
+      },
+      {
+        "display_name": "RAMM1_GUARD",
+        "headroom": 8,
+        "name": "RAMM1_GUARD",
+        "physical_region": "RAMM1_GUARD",
+        "reserved": true,
+        "status": "RESERVED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMD2_STACK",
+        "headroom": 1024,
+        "name": "RAMD2_STACK",
+        "physical_region": "RAMD2_STACK",
+        "reserved": false,
+        "status": "WARNING",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 75.0,
+        "used": 3072
+      },
+      {
+        "display_name": "RAMD2_WORK",
+        "headroom": 3776,
+        "name": "RAMD2_WORK",
+        "physical_region": "RAMD2_WORK",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 7.8125,
+        "used": 320
+      },
+      {
+        "display_name": "RAMD3_RAMFUNC",
+        "headroom": 3861,
+        "name": "RAMD3_RAMFUNC",
+        "physical_region": "RAMD3_RAMFUNC",
+        "reserved": false,
+        "status": "PASS",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 5.7373,
+        "used": 235
+      },
+      {
+        "display_name": "RAMD3_DATA",
+        "headroom": 723,
+        "name": "RAMD3_DATA",
+        "physical_region": "RAMD3_DATA",
+        "reserved": false,
+        "status": "REVIEW",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 4096,
+        "usage_percent": 82.3486,
+        "used": 3373
+      },
+      {
+        "display_name": "RAMGS3",
+        "headroom": 8192,
+        "name": "RAMGS3",
+        "physical_region": "RAMGS3",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      },
+      {
+        "display_name": "RAMGS4",
+        "headroom": 8192,
+        "name": "RAMGS4",
+        "physical_region": "RAMGS4",
+        "reserved": false,
+        "status": "UNUSED",
+        "thresholds": {
+          "fail": 90.0,
+          "review": 80.0,
+          "warning": 70.0
+        },
+        "total": 8192,
+        "usage_percent": 0.0,
+        "used": 0
+      }
+    ]
+  },
+  "diagnostics": [
+    {
+      "code": "MEMORY_BUDGET_REVIEW",
+      "message": "RAMLS0_6 usage 89.24% requires review",
+      "metric": "RAMLS0_6",
+      "severity": "REVIEW"
+    },
+    {
+      "code": "MEMORY_BUDGET_REVIEW",
+      "message": "CLA_PROGRAM usage 89.24% requires review",
+      "metric": "CLA_PROGRAM",
+      "severity": "REVIEW"
+    },
+    {
+      "code": "MEMORY_BUDGET_REVIEW",
+      "message": "RAMD3_DATA usage 82.35% requires review",
+      "metric": "RAMD3_DATA",
+      "severity": "REVIEW"
+    },
+    {
+      "code": "MEMORY_BUDGET_WARNING",
+      "message": "CPU2_RTOS_STACK usage 75.00% requires warning",
+      "metric": "CPU2_RTOS_STACK",
+      "severity": "WARNING"
+    }
+  ],
+  "generated_at_utc": "2026-09-02T01:23:09.230610Z",
+  "result": "REVIEW",
+  "schema_version": 1,
+  "threshold_config": {
+    "default": {
+      "fail": 90.0,
+      "review": 80.0,
+      "warning": 70.0
+    },
+    "overrides": {
+      "CLA_DATA": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "CLA_PROGRAM": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "CPU2_RTOS_STACK": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "FLASH_BANK0": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "FLASH_BANK3": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      },
+      "RAMD3_DATA": {
+        "fail": 90.0,
+        "review": 80.0,
+        "warning": 70.0
+      }
+    }
+  },
+  "unit": "C28x 16-bit addressable words"
+}

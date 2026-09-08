@@ -1,0 +1,54 @@
+# Hybrid30K Memory Budget
+
+Result: REVIEW
+Unit: C28x 16-bit addressable words
+
+## CPU1
+
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+FLASH_BANK0                0x00CDF7   0x01FFFE   0x013207   40.23%  PASS
+RAMD0                      0x0004BF   0x002000   0x001B41   14.83%  PASS
+RAMLS8                     0x0007AB   0x002000   0x001855   23.96%  PASS
+RAMLS9                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS0                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS1                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS2                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMD1_STACK                0x000700   0x000700   0x000000  100.00%  CONTRACT_PASS
+CLA_PROGRAM                0x002E6E   0x003800   0x000992   82.91%  REVIEW
+CLA_DATA                   0x000225   0x000800   0x0005DB   26.81%  PASS
+
+## CPU2
+
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+FLASH_BANK3                0x00760B   0x01FFFE   0x0189F3   23.06%  PASS
+RAMM1_STACK                0x0003F8   0x0003F8   0x000000  100.00%  CONTRACT_PASS
+CPU2_RTOS_STACK            0x000C00   0x001000   0x000400   75.00%  WARNING
+RAMD2_WORK                 0x000140   0x001000   0x000EC0    7.81%  PASS
+RAMD3_RAMFUNC              0x0000EB   0x001000   0x000F15    5.74%  PASS
+RAMD3_DATA                 0x000D2D   0x001000   0x0002D3   82.35%  REVIEW
+RAMGS3                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS4                     0x000000   0x002000   0x002000    0.00%  UNUSED
+
+## Headroom
+
+CPU1 Flash Headroom: 0x013207
+CLA Program Headroom: 0x000992
+CLA Data Headroom: 0x0005DB
+CPU1 C Stack Reservation Headroom: 0x000000 (contract only)
+CPU2 Flash Headroom: 0x0189F3
+CPU2 RTOS Stack Headroom: 0x000400
+
+## Stack Semantics
+
+Static Allocation is parsed from linker map sections.
+Dedicated C .stack sections are checked as reservation contracts and are not evaluated by generic utilization thresholds.
+Runtime Peak / High Water Mark: N/A (requires target runtime measurement)
+
+## Gate Diagnostics
+
+- [REVIEW] MEMORY_BUDGET_REVIEW (RAMLS0_6): RAMLS0_6 usage 82.91% requires review
+- [REVIEW] MEMORY_BUDGET_REVIEW (CLA_PROGRAM): CLA_PROGRAM usage 82.91% requires review
+- [REVIEW] MEMORY_BUDGET_REVIEW (RAMD3_DATA): RAMD3_DATA usage 82.35% requires review
+- [WARNING] MEMORY_BUDGET_WARNING (CPU2_RTOS_STACK): CPU2_RTOS_STACK usage 75.00% requires warning

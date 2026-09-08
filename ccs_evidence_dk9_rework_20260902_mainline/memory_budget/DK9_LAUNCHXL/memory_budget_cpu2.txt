@@ -1,0 +1,54 @@
+Hybrid30K CPU2 Memory Budget
+============================
+Result: REVIEW
+Unit: C28x 16-bit addressable words
+Source map: C:\Users\11981\Documents\C2000_Debug_MCP\ccs_ws_dk9_rework_20260902_mainline\Hybrid30K_CPU2_DK9_LAUNCHXL\CPU2_FLASH\Hybrid30K_CPU2_DK9_LAUNCHXL.map
+Map SHA-256: 066817a201f65f84445df691b8f6f2780020ebf5aaa20cd84d44653ad0f83385
+
+Physical Regions
+----------------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+FLASH_BANK3                0x00760B   0x01FFFE   0x0189F3   23.06%  PASS
+FLASH_BANK4                0x000000   0x020000   0x020000    0.00%  RESERVED
+RAMM1_STACK                0x0003F8   0x0003F8   0x000000  100.00%  CONTRACT_PASS
+RAMM1_GUARD                0x000000   0x000008   0x000008    0.00%  RESERVED
+RAMD2_STACK                0x000C00   0x001000   0x000400   75.00%  WARNING
+RAMD2_WORK                 0x000140   0x001000   0x000EC0    7.81%  PASS
+RAMD3_RAMFUNC              0x0000EB   0x001000   0x000F15    5.74%  PASS
+RAMD3_DATA                 0x000D2D   0x001000   0x0002D3   82.35%  REVIEW
+RAMGS3                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS4                     0x000000   0x002000   0x002000    0.00%  UNUSED
+
+CPU2 C Stack
+------------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+RAMM1_STACK                0x0003F8   0x0003F8   0x000000  100.00%  CONTRACT_PASS
+Static Allocation (.stack): 0x0003F8
+Dedicated region allocation: 0x0003F8 / 0x0003F8
+Projectspec --stack_size: 0x0003F8
+Static reservation contract: CONTRACT_PASS
+Generic usage thresholds: NOT_APPLICABLE
+Runtime Peak: N/A (requires target runtime measurement)
+
+FreeRTOS Static Stack
+---------------------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+CPU2_RTOS_STACK            0x000C00   0x001000   0x000400   75.00%  WARNING
+Map section .freertosStaticStack: 0x000C00
+Source task budget: 0x000C00
+Source matches map: YES
+LOGIC    CPU2_LogicTask           0x000400 (CPU2_RTOS_TASK_CFG_LIST)
+FAULT    CPU2_FaultTask           0x000200 (CPU2_RTOS_TASK_CFG_LIST)
+COMM     CPU2_CommTask            0x000200 (CPU2_RTOS_TASK_CFG_LIST)
+EMS      CPU2_EmsTask             0x000300 (CPU2_RTOS_TASK_CFG_LIST)
+IDLE     FreeRTOS Idle            0x000100 (configMINIMAL_STACK_SIZE)
+Runtime Peak / High Water Mark: N/A (requires target runtime measurement)
+Runtime interface: uxTaskGetStackHighWaterMark / g_stCpu2RtosWatch with STACK_WATCH_ENABLE
+
+Diagnostics
+-----------
+[REVIEW] MEMORY_BUDGET_REVIEW: RAMD3_DATA usage 82.35% requires review
+[WARNING] MEMORY_BUDGET_WARNING: CPU2_RTOS_STACK usage 75.00% requires warning

@@ -1,0 +1,88 @@
+{
+  "attempts": 1,
+  "completed_at_utc": "2026-09-02T01:23:09.346253Z",
+  "configurations": {
+    "CPU1_FLASH": "PASS",
+    "CPU2_FLASH": "PASS"
+  },
+  "elapsed_seconds": 128.703,
+  "failure": null,
+  "failure_class": "NONE",
+  "gate_plan": "gate-plan.json",
+  "head_sha": "43b80e310a190f35f940ce7092857dfa82cf8c58",
+  "host_platform": "windows",
+  "impact": {
+    "ccs_configurations": [
+      "CPU1_FLASH",
+      "CPU2_FLASH"
+    ],
+    "ccs_required": true,
+    "changed_paths": [
+      "project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c"
+    ],
+    "escalation_reasons": [
+      "unallowlisted path(s): project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c"
+    ],
+    "host_profile": "full",
+    "impact": "firmware-or-unknown",
+    "matched_rules": [
+      "unclassified"
+    ],
+    "path_classifications": [
+      {
+        "ccs_scope": "all_four",
+        "class": "unknown",
+        "path": "project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c",
+        "rule_id": "unclassified",
+        "sysconfig_required": true,
+        "tier_hint": "firmware-or-unknown"
+      }
+    ],
+    "policy_version": "2026.08.29.1",
+    "python_compat_required": true,
+    "python_compatibility_tests": [
+      "tests.test_change_impact",
+      "tests.test_host_gate_runner",
+      "tests.test_ai_task_protocol",
+      "tests.test_param_gen",
+      "tests.test_param_excel",
+      "tests.test_param_architecture_final",
+      "tests.test_param_wrap_style"
+    ],
+    "reason": "shared dual-core, build surface, mixed cores, unknown path, empty diff, or fail-closed default",
+    "review_hits": [],
+    "sysconfig_required": true
+  },
+  "infra_retry_count": 0,
+  "memory_budget": {
+    "evidence": "memory_budget",
+    "failure": null,
+    "status": "PASS"
+  },
+  "raw_log": "ccs-gate.log",
+  "result": "PASS",
+  "reuse_mode": "NEW",
+  "rtm_model_id": "0x5307",
+  "schema_version": 6,
+  "stack_budget": {
+    "contract_id": "C28-CPU1-STARTUP-STACK-2026-08-R2",
+    "evidence": {
+      "contract_id": "C28-CPU1-STARTUP-STACK-2026-08-R2",
+      "migration_debt": [],
+      "status": "PASS"
+    },
+    "failure": null,
+    "migration_debt": [],
+    "status": "PASS"
+  },
+  "started_at_utc": "2026-09-02T01:21:00.645518Z",
+  "tool_versions": {
+    "c2000ware": "26.01.00.00",
+    "ccs": "21.0.0",
+    "cgt": "25.11.1",
+    "sysconfig": "1.28.0"
+  },
+  "validated_code_sha": "43b80e310a190f35f940ce7092857dfa82cf8c58",
+  "validated_tree_sha": "aa0d4373939c34f31e31d9c1e70ae1f3f30aa7f3",
+  "workspace_fresh": true
+}

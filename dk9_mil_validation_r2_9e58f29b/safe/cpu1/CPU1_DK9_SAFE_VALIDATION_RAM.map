@@ -1,0 +1,1879 @@
+******************************************************************************
+             TMS320C2000 Linker PC v25.11.1                    
+******************************************************************************
+>> Linked Tue Sep  1 08:57:11 2026
+
+OUTPUT FILE NAME:   <Hybrid30K_F28P65x_CPU1.out>
+ENTRY POINT SYMBOL: "code_start"  address: 00000000
+
+
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  BEGIN                 00000000   00000002  00000002  00000000  RWIX
+  BOOT_RSVD             00000002   000001af  00000000  000001af  RWIX
+  RAMM0                 000001b1   0000024f  00000046  00000209  RWIX
+  RAMM1                 00000400   00000400  00000000  00000400  RWIX
+  CLATOCPURAM           00001480   00000080  0000006e  00000012  RWIX
+  CPUTOCLARAM           00001500   00000080  00000060  00000020  RWIX
+  CLATODMARAM           00001680   00000080  00000000  00000080  RWIX
+  DMATOCLARAM           00001700   00000080  00000000  00000080  RWIX
+  RAMLS0_6              00008000   00003800  0000118a  00002676  RWIX
+  RAMLS7                0000b800   00000800  00000343  000004bd  RWIX
+  RAMD0                 0000c000   00002000  00002000  00000000  RWIX
+  RAMD1_STACK           0000e000   00000700  00000700  00000000  RWIX
+  RAMD1_GUARD           0000e700   00000020  00000000  00000020  RWIX
+  RAMD1_WORK            0000e720   000018e0  000018e0  00000000  RWIX
+  RAMGS0                00010000   00002000  000000a0  00001f60  RWIX
+  RAMGS1                00012000   00002000  00000000  00002000  RWIX
+  RAMD3                 0001c000   00002000  00000000  00002000  RWIX
+  RAMD4                 0001e000   00002000  00002000  00000000  RWIX
+  RAMD5                 00020000   00002000  00002000  00000000  RWIX
+  RAMLS8                00022000   00002000  00001ffa  00000006  RWIX
+  RAMLS9                00024000   00002000  00000a9b  00001565  RWIX
+  CPU1TOCPU2RAM         0003a000   00000400  00000148  000002b8  RWIX
+  CPU2TOCPU1RAM         0003b000   00000400  00000144  000002bc  RWIX
+  CANA_MSG_RAM          00049000   00000800  00000000  00000800  RWIX
+  CANB_MSG_RAM          0004b000   00000800  00000000  00000800  RWIX
+  FLASH_BANK0           00080000   00020000  00000000  00020000  RWIX
+  FLASH_BANK1           000a0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK2           000c0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK3           000e0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK4           00100000   00020000  00000000  00020000  RWIX
+  RESET                 003fffc0   00000002  00000000  00000002  RWIX
+
+
+SECTION ALLOCATION MAP
+
+ output                                  attributes/
+section   page    origin      length       input sections
+--------  ----  ----------  ----------   ----------------
+codestart 
+*          0    00000000    00000002     
+                  00000000    00000002     f28p65x_codestartbranch.obj (codestart)
+
+.cinit     0    000001b6    00000042     
+                  000001b6    00000018     (.cinit..data.load) [load image, compression = lzss]
+                  000001ce    00000006     (__TI_handler_table)
+                  000001d4    00000004     (.cinit..bss.load) [load image, compression = zero_init]
+                  000001d8    00000004     (.cinit..bss_cla.load) [load image, compression = zero_init]
+                  000001dc    00000004     (.cinit..scratchpad.load) [load image, compression = zero_init]
+                  000001e0    00000004     (.cinit.Cla1DataRam.load) [load image, compression = zero_init]
+                  000001e4    00000014     (__TI_cinit_table)
+
+.reset     0    003fffc0    00000000     DSECT
+
+.stack     0    0000e000    00000700     UNINITIALIZED
+                  0000e000    00000700     --HOLE--
+
+.bss       0    00022000    0000088a     UNINITIALIZED
+                  00022000    0000041e     cpu1_ctrl.obj (.bss)
+                  0002241e    0000001e     cpu1_dk9_dc_side_pin_test.obj (.bss)
+                  0002243c    00000004     cpu1_measurement.obj (.bss)
+                  00022440    00000114     core_msg_cpu1.obj (.bss)
+                  00022554    0000002a     cpu1_dk9_mil_adc.obj (.bss)
+                  0002257e    00000002     ipc_port.obj (.bss)
+                  00022580    000000ee     cpu1_param_table.obj (.bss)
+                  0002266e    0000000c     board_cpu1_isr.obj (.bss)
+                  0002267a    00000002     rtm_cpu1_param.obj (.bss)
+                  0002267c    00000001     cpu1_safety_validation.obj (.bss)
+                  0002267d    00000003     --HOLE--
+                  00022680    000000e0     cpu1_core_comm.obj (.bss)
+                  00022760    0000001a     board_cpu1.obj (.bss)
+                  0002277a    00000006     --HOLE--
+                  00022780    00000086     cpu1_validation.obj (.bss)
+                  00022806    0000002e     bsw_cpu1_scheduler.obj (.bss)
+                  00022834    0000000a     board_dk9_trip_inject.obj (.bss)
+                  0002283e    00000002     --HOLE--
+                  00022840    0000001a     cpu1_cla_validation.obj (.bss)
+                  0002285a    00000016     board_cpu1_safety_validation.obj (.bss)
+                  00022870    0000000a     bsw_core_err.obj (.bss)
+                  0002287a    00000006     --HOLE--
+                  00022880    0000000a     cpu1_stack_watch.obj (.bss)
+
+.init_array 
+*          0    000001b1    00000000     UNINITIALIZED
+
+.data      0    0002288a    0000001c     UNINITIALIZED
+                  0002288a    0000000e     boot_sync.obj (.data)
+                  00022898    00000006     rts2800_fpu64_eabi.lib : exit.c.obj (.data)
+                  0002289e    00000004     board_cpu1.obj (.data)
+                  000228a2    00000002     rts2800_fpu64_eabi.lib : _lock.c.obj (.data:_lock)
+                  000228a4    00000002                            : _lock.c.obj (.data:_unlock)
+
+MSGRAM_CPU1_TO_CPU2 
+*          0    0003a000    00000148     UNINITIALIZED
+                  0003a000    00000094     core_msg_storage.obj (MSGRAM_CPU1_TO_CPU2)
+                  0003a094    00000016     core_state.obj (MSGRAM_CPU1_TO_CPU2)
+                  0003a0aa    00000016     --HOLE--
+                  0003a0c0    00000088     driverlib.lib : ipc.obj (MSGRAM_CPU1_TO_CPU2)
+
+MSGRAM_CPU2_TO_CPU1 
+*          0    0003b000    00000144     UNINITIALIZED
+                  0003b000    00000088     driverlib.lib : ipc.obj (MSGRAM_CPU2_TO_CPU1)
+                  0003b088    00000016     core_state.obj (MSGRAM_CPU2_TO_CPU1)
+                  0003b09e    00000022     --HOLE--
+                  0003b0c0    00000084     core_msg_storage.obj (MSGRAM_CPU2_TO_CPU1)
+
+.TI.ramfunc 
+*          0    000001b1    00000004     
+                  000001b1    00000004     driverlib.lib : sysctl.obj (.TI.ramfunc)
+
+Cla1ToCpuMsgRAM 
+*          0    00001480    0000006e     UNINITIALIZED
+                  00001480    00000058     cpu1_cla_validation.obj (Cla1ToCpuMsgRAM)
+                  000014d8    00000016     cpu1_dk9_mil_adc.obj (Cla1ToCpuMsgRAM)
+
+CpuToCla1MsgRAM 
+*          0    00001500    00000060     UNINITIALIZED
+                  00001500    00000060     cpu1_cla_validation.obj (CpuToCla1MsgRAM)
+
+Cla1Prog   0    00008000    0000118a     
+                  00008000    000002c2     cpu1_cla_task_validation.obj (Cla1Prog:Cla1Task1)
+                  000082c2    0000015c     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Val_PhaseLmt)
+                  0000841e    00000150     ctrl_curr_loop_validation.obj (Cla1Prog:CTRL_CurrLoop_Run)
+                  0000856e    00000124     board_cla_adc.obj (Cla1Prog:BOARD_Cla_FastAdc_Read)
+                  00008692    000000c2     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvCurr_InputLoad)
+                  00008754    000000b0     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Validation_VdqLimit)
+                  00008804    000000a0     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvCurrCfg_Init)
+                  000088a4    00000094     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_Dk9MilAdcWatch_Update)
+                  00008938    00000092     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Validation_RunAxis)
+                  000089ca    0000008a     cpu1_cla_task_validation.obj (Cla1Prog:Cla1Task8)
+                  00008a54    00000088     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvPwmNaN_Run)
+                  00008adc    00000078     ctrl_curr_loop_validation.obj (Cla1Prog:CTRL_CurrLoop_Reset)
+                  00008b54    00000074     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Val_TrackAxis)
+                  00008bc8    0000006e     ctrl_curr_loop_validation.obj (Cla1Prog:CTRL_CurrLoop_Init)
+                  00008c36    0000006c     ctrl_inv_pwm_validation.obj (Cla1Prog:CTRL_InvPwm_Init)
+                  00008ca2    00000064     utils_pi_f32.obj (Cla1Prog:UTILS_Pi_RunCla)
+                  00008d06    0000005e     board_cla_adc.obj (Cla1Prog:ADC_readResult)
+                  00008d64    0000005c     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Val_ClearAxis)
+                  00008dc0    0000005a     ctrl_inv_pwm_validation.obj (Cla1Prog:CTRL_InvPwm_Reset)
+                  00008e1a    00000056     ctrl_inv_pwm_validation.obj (Cla1Prog:prvCTRL_InvPwm_Validation_ClearOutput)
+                  00008e70    00000050     ctrl_curr_loop_validation.obj (Cla1Prog:CTRL_CurrLoop_SetConfig)
+                  00008ec0    00000050     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_PwmCmpDiag_Clear)
+                  00008f10    0000003e     utils_pi_f32.obj (Cla1Prog:UTILS_Pi_TrackOutputCla)
+                  00008f4e    0000003e     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_DiagVoltToI16)
+                  00008f8c    0000003e     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvVoltCmd_Publish)
+                  00008fca    0000003a     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvPwmDiag_Clear)
+                  00009004    00000038     ctrl_curr_loop_validation.obj (Cla1Prog:prvCTRL_CurrLoop_Val_LoadPICfg)
+                  0000903c    00000036     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_VoltageSnapshot_Clear)
+                  00009072    0000002c     utils_transform_f32.obj (Cla1Prog:UTILS_Transform_InvParkCla)
+                  0000909e    00000028     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvCtrl_Reset)
+                  000090c6    00000028     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvVoltCmd_Get)
+                  000090ee    00000026     utils_transform_f32.obj (Cla1Prog:UTILS_Transform_InvClarkeCla)
+                  00009114    00000024     ctrl_inv_pwm_validation.obj (Cla1Prog:CTRL_InvPwm_Run)
+                  00009138    0000001e     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_InvCurr_Run)
+                  00009156    00000014     cpu1_cla_task_validation.obj (Cla1Prog:prvCLA_PwmCmpDiag_ChannelClear)
+                  0000916a    00000014     ctrl_inv_pwm_validation.obj (Cla1Prog:prvCTRL_InvPwm_Validation_ClearChannel)
+                  0000917e    0000000c     utils_pi_f32.obj (Cla1Prog:UTILS_Pi_ResetCla)
+
+.scratchpad 
+*          0    0000b800    000000c2     UNINITIALIZED
+                  0000b800    00000004     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvCurrCfg_Init)
+                  0000b800    000000a8     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:CTRL_CurrLoop_Init)
+                  0000b800    0000007c     ctrl_inv_pwm_validation.obj (.scratchpad:Cla1Prog:CTRL_InvPwm_Init)
+                  0000b800    00000002     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_PwmCmpDiag_Clear)
+                  0000b800    00000002     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvCtrl_Reset)
+                  0000b800    0000001c     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_Dk9MilAdcWatch_Update)
+                  0000b800    00000008     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvVoltCmd_Publish)
+                  0000b800    0000000a     utils_transform_f32.obj (.scratchpad:Cla1Prog:UTILS_Transform_InvParkCla)
+                  0000b800    00000007     utils_transform_f32.obj (.scratchpad:Cla1Prog:UTILS_Transform_InvClarkeCla)
+                  0000b800    00000004     ctrl_inv_pwm_validation.obj (.scratchpad:Cla1Prog:CTRL_InvPwm_Run)
+                  0000b800    00000018     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Validation_VdqLimit)
+                  0000b800    00000012     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Val_TrackAxis)
+                  0000b804    00000002     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvPwmNaN_Run)
+                  0000b808    00000003     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvVoltCmd_Get)
+                  0000b818    00000014     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Validation_RunAxis)
+                  0000b81c    00000012     board_cla_adc.obj (.scratchpad:Cla1Prog:BOARD_Cla_FastAdc_Read)
+                  0000b82c    00000010     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:CTRL_CurrLoop_Run)
+                  0000b83c    0000000e     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Val_PhaseLmt)
+                  0000b84a    00000004     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:Cla1Task1)
+                  0000b84e    00000002     utils_pi_f32.obj (.scratchpad:Cla1Prog:UTILS_Pi_TrackOutputCla)
+                  0000b850    00000002     cpu1_cla_task_validation.obj (.scratchpad:Cla1Prog:prvCLA_InvCurr_Run)
+                  0000b87c    00000004     ctrl_inv_pwm_validation.obj (.scratchpad:Cla1Prog:CTRL_InvPwm_Reset)
+                  0000b880    00000004     ctrl_inv_pwm_validation.obj (.scratchpad:Cla1Prog:prvCTRL_InvPwm_Validation_ClearOutput)
+                  0000b8a8    00000008     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:CTRL_CurrLoop_SetConfig)
+                  0000b8a8    00000014     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Val_ClearAxis)
+                  0000b8b0    00000004     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:prvCTRL_CurrLoop_Val_LoadPICfg)
+                  0000b8bc    00000006     ctrl_curr_loop_validation.obj (.scratchpad:Cla1Prog:CTRL_CurrLoop_Reset)
+
+Cla1DataRam 
+*          0    0000b8c2    0000015c     UNINITIALIZED
+                  0000b8c2    00000134     cpu1_cla_task_validation.obj (Cla1DataRam)
+                  0000b9f6    0000000a     --HOLE--
+                  0000ba00    0000001e     cpu1_cla_validation.obj (Cla1DataRam)
+
+.const_cla 
+*          0    0000ba1e    00000121     
+                  0000ba1e    000000a0     ctrl_curr_loop_validation.obj (.const_cla:$P$T0$1)
+                  0000babe    00000076     ctrl_inv_pwm_validation.obj (.const_cla:$P$T0$1)
+                  0000bb34    00000008     board_cla_adc.obj (.const_cla:$P$T0$1)
+                  0000bb3c    00000003     board_cla_adc.obj (.const_cla:$P$T1$2)
+
+.bss_cla   0    0000bb3f    00000004     UNINITIALIZED
+                  0000bb3f    00000004     cpu1_cla_task_validation.obj (.bss_cla)
+
+.text.1    0    0000c000    00002000     
+                  0000c000    00001464     board.obj (.text:EPWM_init)
+                  0000d464    000005fc     cpu1_param.obj (.text:CPU1_Param_MeasurementCfg_Build)
+                  0000da60    000002fc     board.obj (.text:PinMux_init)
+                  0000dd5c    00000240     cpu1_ctrl.obj (.text:CPU1_Ctrl_Sample_Run)
+                  0000df9c    00000064     driverlib.lib : adc.obj (.text:ADC_setINLTrim)
+
+.text.2    0    0000e720    000018e0     
+                  0000e720    000001f7     cpu1_measurement.obj (.text:prvCPU1_Measurement_DirectRun)
+                  0000e917    000001da     cpu1_ctrl.obj (.text:CPU1_Ctrl_Fast_Run)
+                  0000eaf1    000001cd     cpu1_measurement.obj (.text:prvCPU1_Measurement_MuxSlowRun)
+                  0000ecbe    000001a0     device.obj (.text:Device_enableAllPeripherals)
+                  0000ee5e    0000018a     board.obj (.text:MEMCFG_init)
+                  0000efe8    00000188     cpu1_measurement.obj (.text:prvCPU1_Measurement_SnapshotPack)
+                  0000f170    0000016f     cpu1_ctrl.obj (.text:CPU1_Ctrl_ConfigApply)
+                  0000f2df    0000014d     cpu1_ctrl.obj (.text:CPU1_Ctrl_StartupConfig_Get)
+                  0000f42c    0000014c     cpu1_ctrl.obj (.text:CPU1_Ctrl_Init)
+                  0000f578    00000126     driverlib.lib : sysctl.obj (.text:SysCtl_setClock)
+                  0000f69e    00000120                   : sysctl.obj (.text:SysCtl_isPLLValid)
+                  0000f7be    00000111     cpu1_core_comm.obj (.text:CPU1_CoreComm_Run1ms)
+                  0000f8cf    00000107     rts2800_fpu64_eabi.lib : ll_div28.asm.obj (.text)
+                  0000f9d6    00000101     ctrl_voltage_loop.obj (.text:CTRL_VoltLoop_Run)
+                  0000fad7    00000100     core_msg_access.obj (.text:COREMSG_Access_Parameter_Copy)
+                  0000fbd7    00000100     core_msg_access.obj (.text:COREMSG_Access_Parameter_ReadShared)
+                  0000fcd7    000000fd     cpu1_ctrl.obj (.text:CPU1_Ctrl_InputsCommit)
+                  0000fdd4    000000f0     cpu1_measurement.obj (.text:prvCPU1_Measurement_MuxFastRun)
+                  0000fec4    000000da     cpu1_validation.obj (.text:prvCPU1_Validation_Watch_Update)
+                  0000ff9e    00000062     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_CarrierSync_Run8k)
+
+.text.3    0    00010000    000000a0     
+                  00010000    00000004     board_cpu1.obj (.text:BOARD_CarrierSyncPeriod_Active_Get)
+                  00010004    00000004     board_cpu1.obj (.text:BOARD_Cla1_Task1_HasOverflowed)
+                  00010008    00000004     board_cpu1.obj (.text:BOARD_Cla1_Task1_IsPending)
+                  0001000c    00000004     board_cpu1.obj (.text:BOARD_Cla1_Task1_IsRunning)
+                  00010010    00000004     board_cpu1.obj (.text:BOARD_Cpu1_NestAllowInt1_Exit)
+                  00010014    00000004     board_cpu1.obj (.text:BOARD_GlobalInt_Enable)
+                  00010018    00000004     board_cpu1.obj (.text:BOARD_TimestampElapsed_Get)
+                  0001001c    00000004     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_GetAppliedSeq)
+                  00010020    00000004     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_GetAppliedVersion)
+                  00010024    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetBootAttemptCnt)
+                  00010028    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetBootEpoch)
+                  0001002c    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetBootStep)
+                  00010030    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2BootEpoch)
+                  00010034    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2BootStep)
+                  00010038    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2FaultFlags)
+                  0001003c    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2LastError)
+                  00010040    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2LastWarn)
+                  00010044    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2LogicAliveSeq)
+                  00010048    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2RunState)
+                  0001004c    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2Status)
+                  00010050    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetLastError)
+                  00010054    00000004     core_state.obj (.text:CORESTATE_Cpu1_GetRunState)
+                  00010058    00000004     cpu1_cla_validation.obj (.text:CPU1_Cla_Fault_IsLatched)
+                  0001005c    00000004     cpu1_core_comm.obj (.text:CPU1_CoreComm_CtrlEnabled_IsSet)
+                  00010060    00000004     ipc_port.obj (.text:IPC_Port_Timebase_Set)
+                  00010064    00000004     rtm_cpu1_param.obj (.text:RTM_Cpu1Param_Version_Get)
+                  00010068    00000004     utils_filter.obj (.text:UTILS_Filter_Lpf1_Reset)
+                  0001006c    00000004     cpu1_stack_watch_sp.obj (.text)
+                  00010070    00000004     core_state.obj (.text:prvCORESTATE_BootEpoch_Next)
+                  00010074    00000004     cpu1_validation.obj (.text:prvCPU1_Validation_Epoch_Next)
+                  00010078    00000004     utils_math.obj (.text:prvUTILS_Math_TableIndex)
+                  0001007c    00000003     core_msg_access.obj (.text:COREMSG_Access_Sequence_ResetCommit)
+                  0001007f    00000003     utils_math.obj (.text:UTILS_Math_SquareI16)
+                  00010082    00000003     utils_pi.obj (.text:UTILS_Pi_Reset)
+                  00010085    00000003     device.obj (.text:__error__)
+                  00010088    00000003     core_state.obj (.text:prvCORESTATE_LocalState_Get)
+                  0001008b    00000002     core_state.obj (.text:CORESTATE_Cpu1_DebugBarrier_IsArmed)
+                  0001008d    00000002     core_state.obj (.text:CORESTATE_Cpu1_GetDebugBootSession)
+                  0001008f    00000002     core_state.obj (.text:CORESTATE_Cpu1_IsCpu2DebugBarrierCurrent)
+                  00010091    00000002     core_state.obj (.text:CORESTATE_Cpu1_IsCpu2DebugBootInitialized)
+                  00010093    00000002     cpu1_core_comm.obj (.text:CPU1_CoreComm_NmiParityRecovery_Try)
+                  00010095    00000002     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_DiagFallback_IsEnabled)
+                  00010097    00000002     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_OpenLoopCalc_IsAllowed)
+                  00010099    00000002     rts2800_fpu64_eabi.lib : pre_init.c.obj (.text)
+                  0001009b    00000001     board_relay.obj (.text:BOARD_Relay_RuntimeOwner_Transfer)
+                  0001009c    00000001     core_state.obj (.text:CORESTATE_Cpu1_DebugBarrier_Arm)
+                  0001009d    00000001     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_Observe32k)
+                  0001009e    00000001     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_Observe8k)
+                  0001009f    00000001     rts2800_fpu64_eabi.lib : startup.c.obj (.text)
+
+.text.4    0    0001e000    00002000     
+                  0001e000    000000d0     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_ClaRuntime_Build)
+                  0001e0d0    000000c5     board.obj (.text:DK9_SMOKE_ADCA_init)
+                  0001e195    000000c3     board.obj (.text:DK9_VALIDATION_ADCB_init)
+                  0001e258    000000c3     board.obj (.text:DK9_VALIDATION_ADCC_init)
+                  0001e31b    000000c0     cpu1_validation.obj (.text:CPU1_Validation_ControlFrame_Get)
+                  0001e3db    000000ac     board_cpu1.obj (.text:BOARD_Runtime_Init)
+                  0001e487    000000a9     driverlib.lib : memcfg.obj (.text:MemCfg_setProtection)
+                  0001e530    0000009f     core_msg_access.obj (.text:COREMSG_Access_Command_Copy)
+                  0001e5cf    0000009f     core_msg_access.obj (.text:COREMSG_Access_Command_ReadShared)
+                  0001e66e    0000009f     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_Receive)
+                  0001e70d    0000009e     cpu1_ctrl.obj (.text:CPU1_Ctrl_Run8k)
+                  0001e7ab    0000009c     ctrl_open_loop.obj (.text:prvCTRL_OpenLoop_InvRun)
+                  0001e847    00000097     cpu1_core_comm.obj (.text:CPU1_CoreComm_Cpu2Boot_Run)
+                  0001e8de    00000096     cpu1_measurement.obj (.text:CPU1_Measurement_Init)
+                  0001e974    0000008e     cpu1_cla_validation.obj (.text:CPU1_Cla_StartupConfig_Apply)
+                  0001ea02    0000008c     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_LogicAlive_Update)
+                  0001ea8e    0000008b     driverlib.lib : memcfg.obj (.text:MemCfg_getInitStatus)
+                  0001eb19    0000008b     utils_pos_neg_seq.obj (.text:UTILS_Pos_Neg_Seq_Run)
+                  0001eba4    00000089     board.obj (.text:BOARD_CARRIER_SYNC_ECAP1_init)
+                  0001ec2d    00000088     rts2800_fpu64_eabi.lib : fs_div28.asm.obj (.text)
+                  0001ecb5    00000085     ctrl_carrier_sync.obj (.text:CTRL_CarrierSync_Run)
+                  0001ed3a    00000085     cpu1_validation.obj (.text:prvCPU1_Validation_Cla_Run)
+                  0001edbf    00000083     boot_sync.obj (.text:BOOTSYNC_Cpu1_StartCpu2Attempt)
+                  0001ee42    00000080     board_cpu1_isr.obj (.text:CPU1_AdcaInt1_Isr)
+                  0001eec2    0000007d     cpu1_core_comm.obj (.text:CPU1_CoreComm_StartupParameters_Receive)
+                  0001ef3f    0000007c     driverlib.lib : memcfg.obj (.text:MemCfg_initSections)
+                  0001efbb    0000007b     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_Offgrid_Run)
+                  0001f036    00000077     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_ConfigRangeIsValid)
+                  0001f0ad    00000073     boot_sync.obj (.text:BOOTSYNC_Cpu1_WaitCpu2Ready)
+                  0001f120    00000073     driverlib.lib : sysctl.obj (.text:DCC_setCounterSeeds)
+                  0001f193    00000073     cpu1_measurement.obj (.text:prvCPU1_Measurement_PhysicalSet)
+                  0001f206    00000071     board_cpu1.obj (.text:BOARD_CtrlTimebase_Start)
+                  0001f277    00000071     driverlib.lib : gpio.obj (.text:GPIO_setAnalogMode)
+                  0001f2e8    0000006f     cpu1_measurement.obj (.text:prvCPU1_Measurement_EffectiveCfg_Update)
+                  0001f357    0000006e     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_Receive)
+                  0001f3c5    0000006e     board_cpu1_isr.obj (.text:CPU1_Ctrl8k_Isr)
+                  0001f433    0000006b     cpu1_validation.obj (.text:prvCPU1_Validation_Command_Run)
+                  0001f49e    00000069     main_cpu1_validation.obj (.text:main)
+                  0001f507    00000065     driverlib.lib : sysctl.obj (.text:SysCtl_getClock)
+                  0001f56c    00000064                   : can.obj (.text:CAN_setBitTiming)
+                  0001f5d0    00000063     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_Angle_Run)
+                  0001f633    00000061     cpu1_cla_validation.obj (.text:CPU1_Cla_Diag_Update32k)
+                  0001f694    0000005e     cpu1_safety_validation.obj (.text:CPU1_Nmi_Isr)
+                  0001f6f2    0000005e     cpu1_validation.obj (.text:CPU1_Validation_Init)
+                  0001f750    0000005d     driverlib.lib : uart.obj (.text:UART_setConfig)
+                  0001f7ad    0000005c                   : spi.obj (.text:SPI_setConfig)
+                  0001f809    0000005b     cpu1_param.obj (.text:CPU1_Param_PllSnapshot_Get)
+                  0001f864    0000005a     board_cpu1.obj (.text:BOARD_AdcFastSample_Capture)
+                  0001f8be    0000005a     cpu1_measurement.obj (.text:prvCPU1_Measurement_ZeroRun)
+                  0001f918    00000059     ctrl_soft_pll.obj (.text:CTRL_SoftPLL_Run)
+                  0001f971    00000057     core_msg_access.obj (.text:COREMSG_Access_FastInstant_WriteShared)
+                  0001f9c8    00000057     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_VoltCfg_Build)
+                  0001fa1f    00000056     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_ApplyPending)
+                  0001fa75    00000055     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_ApplyPending)
+                  0001faca    00000052     driverlib.lib : gpio.obj (.text:GPIO_setPadConfig)
+                  0001fb1c    0000004f     cpu1_measurement.obj (.text:CPU1_Measurement_Run8k)
+                  0001fb6b    0000004f     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_PccVoltage_ToQ12)
+                  0001fbba    0000004e     cpu1_measurement.obj (.text:prvCPU1_Measurement_MuxAbcPublish)
+                  0001fc08    0000004d     board.obj (.text:EPWM_isBaseValid)
+                  0001fc55    0000004d     driverlib.lib : xbar.obj (.text:XBAR_setEPWMMuxConfig)
+                  0001fca2    0000004c     core_msg_cpu1.obj (.text:prvCOREMSG_CommandRx_CanApplyPending)
+                  0001fcee    0000004c     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_TypeRangeIsValid)
+                  0001fd3a    0000004b     rtm_cpu1_param.obj (.text:RTM_Cpu1Param_Init)
+                  0001fd85    00000049     driverlib.lib : adc.obj (.text:ADC_setVREF)
+                  0001fdce    00000049     board_cpu1.obj (.text:BOARD_DelayUs)
+                  0001fe17    00000049     cpu1_param.obj (.text:CPU1_Param_CurrCtrlSnapshot_Get)
+                  0001fe60    00000047     cpu1_cla_validation.obj (.text:CPU1_Cla_Task8Init_Run)
+                  0001fea7    00000047     driverlib.lib : sysctl.obj (.text:SysCtl_selectOscSource)
+                  0001feee    00000046     board_cpu1.obj (.text:BOARD_CarrierSyncOutput_Set)
+                  0001ff34    00000046     driverlib.lib : sysctl.obj (.text:SysCtl_selectXTAL)
+                  0001ff7a    00000045     cpu1_dk9_dc_side_pin_test.obj (.text:CPU1_Dk9DcSidePinTest_Foreground)
+                  0001ffbf    00000041     ctrl_phase_gen.obj (.text:CTRL_PhaseGen_FreqSet)
+
+.text.5    0    00020000    00002000     
+                  00020000    00000044     board_cpu1.obj (.text:BOARD_CarrierSyncError_Read)
+                  00020044    00000044     utils_pi.obj (.text:UTILS_Pi_RunError)
+                  00020088    00000043     board_cpu1.obj (.text:prvBOARD_CarrierSyncRaw_Read)
+                  000200cb    00000042     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_GetPending)
+                  0002010d    00000040     board_cpu1_safety_validation.obj (.text:BOARD_Watchdog_Activate)
+                  0002014d    00000040     cpu1_param.obj (.text:CPU1_Param_OpenLoopSnapshot_Get)
+                  0002018d    00000040     board.obj (.text:EPWM_setCounterCompareShadowLoadMode)
+                  000201cd    00000040     driverlib.lib : sysctl.obj (.text:SysCtl_pollX1Counter)
+                  0002020d    0000003e     cpu1_dk9_mil_adc.obj (.text:CPU1_Dk9MilAdc_Foreground)
+                  0002024b    0000003e     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_PllCfg_Build)
+                  00020289    0000003d     device.obj (.text:Device_init)
+                  000202c6    0000003d     driverlib.lib : interrupt.obj (.text:Interrupt_initModule)
+                  00020303    0000003d     utils_ramp.obj (.text:UTILS_Ramp_Run)
+                  00020340    0000003c     board.obj (.text:BOARD_NVM_SPI_init)
+                  0002037c    0000003c     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_StartupRuntimeCfg_Apply)
+                  000203b8    0000003b     board.obj (.text:EPWM_setActionQualifierAction)
+                  000203f3    0000003a     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_OpenLoopVolt_ToQ12)
+                  0002042d    00000039     ipc_port.obj (.text:IPC_Port_SyncWithTimeout)
+                  00020466    00000039     driverlib.lib : memcfg.obj (.text:MemCfg_setLSRAMControllerSel)
+                  0002049f    00000039     ctrl_open_loop.obj (.text:prvCTRL_OpenLoop_BuckBoostRun)
+                  000204d8    00000038     boot_sync.obj (.text:BOOTSYNC_Cpu1_WaitCpu2AppInit)
+                  00020510    00000038     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_Command_Service)
+                  00020548    00000037     ctrl_open_loop.obj (.text:CTRL_OpenLoop_Reset)
+                  0002057f    00000037     ctrl_soft_pll.obj (.text:CTRL_SoftPLL_SetConfig)
+                  000205b6    00000037     driverlib.lib : gpio.obj (.text:GPIO_setControllerCore)
+                  000205ed    00000037                   : gpio.obj (.text:GPIO_setPinConfig)
+                  00020624    00000037                   : gpio.obj (.text:GPIO_setQualificationMode)
+                  0002065b    00000037                   : interrupt.obj (.text:Interrupt_enable)
+                  00020692    00000037     cpu1_validation.obj (.text:prvCPU1_Validation_Sched_Run)
+                  000206c9    00000036     boot_sync.obj (.text:BOOTSYNC_Cpu1_WaitCpu2LogicAliveChange)
+                  000206ff    00000035     cpu1_ctrl.obj (.text:CPU1_Ctrl_Run32k)
+                  00020734    00000034     cpu1_dk9_dc_side_pin_test.obj (.text:CPU1_Dk9DcSidePinTest_Init)
+                  00020768    00000034     cpu1_dk9_mil_adc.obj (.text:CPU1_Dk9MilAdc_OnCapture)
+                  0002079c    00000034     cpu1_measurement.obj (.text:CPU1_Measurement_SlowSnapshot_Take)
+                  000207d0    00000033     cpu1_dk9_mil_adc.obj (.text:CPU1_Dk9MilAdc_Init)
+                  00020803    00000032     cpu1_cla_validation.obj (.text:CPU1_Cla_Init)
+                  00020835    00000031     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_CheckTimeout)
+                  00020866    00000031     cpu1_core_comm.obj (.text:CPU1_CoreComm_Init)
+                  00020897    00000031     cpu1_core_comm.obj (.text:CPU1_CoreComm_NmiFault_Latch)
+                  000208c8    00000031     driverlib.lib : gpio.obj (.text:GPIO_setDirectionMode)
+                  000208f9    00000031     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_Offgrid4wRef_Run)
+                  0002092a    00000030     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_StartupRuntimeCfg_Prepare)
+                  0002095a    00000030     cpu1_measurement.obj (.text:prvCPU1_Measurement_ZeroMask_Rebuild)
+                  0002098a    0000002f     ctrl_open_loop.obj (.text:prvCTRL_OpenLoop_BoostRun)
+                  000209b9    0000002e     rts2800_fpu64_eabi.lib : copy_decompress_lzss.c.obj (.text:decompress:lzss)
+                  000209e7    0000002d     board_cpu1.obj (.text:BOARD_CarrierSyncPeriod_Apply)
+                  00020a14    0000002b     board_cpu1_safety_validation.obj (.text:BOARD_SafetyEarly_Init)
+                  00020a3f    0000002b     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_Policy_Get)
+                  00020a6a    0000002b     utils_math.obj (.text:UTILS_Math_SqrtU32)
+                  00020a95    0000002b     rts2800_fpu64_eabi.lib : autoinit.c.obj (.text:__TI_auto_init_nobinit_nopinit)
+                  00020ac0    0000002b     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_PhaseTrig_Update)
+                  00020aeb    0000002a     bsw_cpu1_scheduler.obj (.text:SCHED_Cpu1_Run1msTask)
+                  00020b15    00000029     board.obj (.text:CPU1_CLA1_init)
+                  00020b3e    00000029     cpu1_stack_watch.obj (.text:CPU1_StackWatch_Init)
+                  00020b67    00000029     cpu1_stack_watch.obj (.text:CPU1_StackWatch_Run)
+                  00020b90    00000029     utils_pi.obj (.text:UTILS_Pi_TrackOutputError)
+                  00020bb9    00000029     core_msg_cpu1.obj (.text:prvCOREMSG_CommandRx_CommitSafeOff)
+                  00020be2    00000029     rts2800_fpu64_eabi.lib : exit.c.obj (.text)
+                  00020c0b    00000028     driverlib.lib : uart.obj (.text:UART_disableModule)
+                  00020c33    00000028     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_DebugWatch_Update)
+                  00020c5b    00000028     ipc_port.obj (.text:prvIPC_Port_WaitFlagClearUntil)
+                  00020c83    00000027     board.obj (.text:COMM_DEBUG_UART_init)
+                  00020caa    00000027     cpu1_core_comm.obj (.text:CPU1_CoreComm_FastExchange_Run)
+                  00020cd1    00000027     driverlib.lib : ecap.obj (.text:ECAP_isBaseValid)
+                  00020cf8    00000027     bsw_cpu1_scheduler.obj (.text:SCHED_Cpu1_Ctrl8kTiming_Update)
+                  00020d1f    00000027     core_state.obj (.text:prvCORESTATE_State_Init)
+                  00020d46    00000027     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_Led_Update)
+                  00020d6d    00000027     cpu1_measurement.obj (.text:prvCPU1_Measurement_Filter)
+                  00020d94    00000027     cpu1_measurement.obj (.text:prvCPU1_Measurement_Scale)
+                  00020dbb    00000026     board_cpu1.obj (.text:BOARD_BootTimebase_Start)
+                  00020de1    00000026     driverlib.lib : cla.obj (.text:CLA_setTriggerSource)
+                  00020e07    00000026                   : memcfg.obj (.text:MemCfg_setGSRAMControllerSel)
+                  00020e2d    00000026     ipc_port.obj (.text:prvIPC_Port_WaitRemoteStsSetUntil)
+                  00020e53    00000025     board_cpu1.obj (.text:BOARD_Cpu2_Boot_Release)
+                  00020e78    00000025     board.obj (.text:COMM_ARM_UART_init)
+                  00020e9d    00000025     ctrl_voltage_loop.obj (.text:CTRL_VoltLoop_Init)
+                  00020ec2    00000025     driverlib.lib : sysctl.obj (.text:SysCtl_selectXTALSingleEnded)
+                  00020ee7    00000024     board_cpu1_safety_validation.obj (.text:BOARD_NmiDiag_Read)
+                  00020f0b    00000024     driverlib.lib : sysctl.obj (.text:DCC_enableSingleShotMode)
+                  00020f2f    00000022     board.obj (.text:EPWM_setCounterCompareValue)
+                  00020f51    00000021     board.obj (.text:Board_init)
+                  00020f72    00000021     board.obj (.text:EPWM_setTripZoneAction)
+                  00020f93    00000021     driverlib.lib : sysctl.obj (.text:SysCtl_controlCPU2Reset)
+                  00020fb4    00000021     utils_math.obj (.text:UTILS_Math_ClampI64ToI32)
+                  00020fd5    00000021     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_EntryValidate)
+                  00020ff6    00000020     board_dk9_trip_inject.obj (.text:BOARD_Dk9TripInject_Init)
+                  00021016    00000020     cpu1_core_comm.obj (.text:CPU1_CoreComm_StartupParameters_Apply)
+                  00021036    00000020     utils_transform.obj (.text:UTILS_Transform_Clarke)
+                  00021056    00000020     ctrl_soft_pll.obj (.text:prvCTRL_SoftPLL_ThetaStep_CalcFromFreq)
+                  00021076    00000020     rts2800_fpu64_eabi.lib : memcpy.c.obj (.text)
+                  00021096    0000001e     cpu1_core_comm.obj (.text:CPU1_CoreComm_RunInputs)
+                  000210b4    0000001e     ctrl_soft_pll.obj (.text:CTRL_SoftPLL_Reset)
+                  000210d2    0000001e     driverlib.lib : sysctl.obj (.text:DCC_setCounter0ClkSource)
+                  000210f0    0000001e                   : sysctl.obj (.text:DCC_setCounter1ClkSource)
+                  0002110e    0000001e                   : ecap.obj (.text:ECAP_setEmulationMode)
+                  0002112c    0000001e     ipc_port.obj (.text:IPC_Port_Timeout_IsExpired)
+                  0002114a    0000001e     driverlib.lib : interrupt.obj (.text:Interrupt_initVectorTable)
+                  00021168    0000001e     rts2800_fpu64_eabi.lib : ll_cmp28.asm.obj (.text)
+                  00021186    0000001d     driverlib.lib : adc.obj (.text:ADC_setMode)
+                  000211a3    0000001d     board_cpu1.obj (.text:BOARD_AdcFastSample_Get)
+                  000211c0    0000001d     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_Init)
+                  000211dd    0000001d     ctrl_open_loop.obj (.text:CTRL_OpenLoop_Run)
+                  000211fa    0000001d     ctrl_phase_gen.obj (.text:CTRL_PhaseGen_Run)
+                  00021217    0000001d     ctrl_soft_pll.obj (.text:prvCTRL_SoftPLL_Freq_CalcFromThetaStep)
+                  00021234    0000001d     ctrl_voltage_loop.obj (.text:prvCTRL_VoltLoop_Cfg_IsValid)
+                  00021251    0000001c     bsw_core_err.obj (.text:BSW_CoreErr_Init)
+                  0002126d    0000001c     driverlib.lib : can.obj (.text:CAN_initModule)
+                  00021289    0000001c     ctrl_phase_gen.obj (.text:CTRL_PhaseGen_Init)
+                  000212a5    0000001c     utils_pos_neg_seq.obj (.text:UTILS_Pos_Neg_Seq_Init)
+                  000212c1    0000001c     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_SignalDq_Update)
+                  000212dd    0000001c     cpu1_measurement.obj (.text:prvCPU1_Measurement_MuxZeroRun)
+                  000212f9    0000001c     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_ValueLoad)
+                  00021315    0000001b     core_msg_cpu1.obj (.text:COREMSG_FastInstantCpu1_Publish)
+                  00021330    0000001b     core_msg_cpu1.obj (.text:COREMSG_SlowStatusCpu1_Publish)
+                  0002134b    0000001b     bsw_cpu1_scheduler.obj (.text:SCHED_Cpu1_Init)
+                  00021366    0000001b     driverlib.lib : spi.obj (.text:SPI_isBaseValid)
+                  00021381    0000001b                   : uart.obj (.text:UART_enableModule)
+                  0002139c    0000001b     param_msg_bind.obj (.text:prvPARAMBIND_LocalIdentity)
+                  000213b7    0000001a     board_cpu1_safety_validation.obj (.text:BOARD_Watchdog_Service)
+                  000213d1    0000001a     driverlib.lib : can.obj (.text:CAN_initRAM)
+                  000213eb    0000001a     core_msg_access.obj (.text:COREMSG_Access_Identity_Matches)
+                  00021405    0000001a     ctrl_voltage_loop.obj (.text:CTRL_VoltLoop_SetConfig)
+                  0002141f    0000001a     driverlib.lib : sysctl.obj (.text:DCC_isBaseValid)
+                  00021439    0000001a     board.obj (.text:EPWM_disableActionQualifierShadowLoadMode)
+                  00021453    0000001a     driverlib.lib : sysctl.obj (.text:SysCtl_getLowSpeedClock)
+                  0002146d    0000001a     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_ContractDiag_Update)
+                  00021487    0000001a     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_Freshness_Update)
+                  000214a1    00000019     board_cpu1_isr.obj (.text:BOARD_Cpu1_IsrHooks_Register)
+                  000214ba    00000019     board_cpu1.obj (.text:BOARD_Cpu2_Reset_Hold)
+                  000214d3    00000019     board_cpu1_safety_validation.obj (.text:BOARD_SafetyPostInit_Reassert)
+                  000214ec    00000019     cpu1_ctrl_runtime_boundary_validation.obj (.text:CPU1_Ctrl_RuntimeBoundary_SamplePolicy_Get)
+                  00021505    00000019     ctrl_soft_pll.obj (.text:CTRL_SoftPLL_Advance)
+                  0002151e    00000019     device.obj (.text:SysCtl_enablePeripheral)
+                  00021537    00000019     driverlib.lib : sysctl.obj (.text:SysCtl_setPLLSysClk)
+                  00021550    00000019     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_CurrentCfg_Load)
+                  00021569    00000019     cpu1_param.obj (.text:prvCPU1_Param_S16_Read)
+                  00021582    00000019     cpu1_param.obj (.text:prvCPU1_Param_U16_Read)
+                  0002159b    00000019     rts2800_fpu64_eabi.lib : boot28.asm.obj (.text)
+                  000215b4    00000018     board.obj (.text:BOARD_CPU1_LED_GREEN_init)
+                  000215cc    00000018     board.obj (.text:BOARD_CPU1_LED_RED_init)
+                  000215e4    00000018     board.obj (.text:BOARD_SYNC_OUT4_init)
+                  000215fc    00000018     core_msg_access.obj (.text:COREMSG_Access_SlowStatus_WriteShared)
+                  00021614    00000018     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_ForceSafeOff)
+                  0002162c    00000018     board.obj (.text:DK9_FAULT_RESET_SHADOW_init)
+                  00021644    00000018     ipc_port.obj (.text:IPC_Port_TryNotify)
+                  0002165c    00000018     rtm_cpu1_param.obj (.text:RTM_Cpu1Param_Read)
+                  00021674    00000018     core_msg_cpu1.obj (.text:prvCOREMSG_CommandRx_RequestSafeOff)
+                  0002168c    00000018     core_msg_cpu1.obj (.text:prvCOREMSG_FastInstantInit_Begin)
+                  000216a4    00000018     core_msg_cpu1.obj (.text:prvCOREMSG_RecoverableLatch_Clear)
+                  000216bc    00000018     core_msg_cpu1.obj (.text:prvCOREMSG_SlowStatusInit_Begin)
+                  000216d4    00000017     driverlib.lib : adc.obj (.text:ADC_isBaseValid)
+                  000216eb    00000017     board.obj (.text:BOARD_SYNC_OUT1_init)
+                  00021702    00000017     cpu1_validation.obj (.text:CPU1_Validation_Foreground_Run)
+                  00021719    00000017     driverlib.lib : memcfg.obj (.text:MemCfg_getUncorrErrorAddress)
+                  00021730    00000017     bsw_cpu1_scheduler.obj (.text:SCHED_Cpu1_Timing32k_Update)
+                  00021747    00000017     driverlib.lib : sysctl.obj (.text:SysCtl_enablePeripheral)
+                  0002175e    00000017     utils_transform.obj (.text:UTILS_Transform_InvClarke)
+                  00021775    00000017     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_ClaRef_Commit)
+                  0002178c    00000017     cpu1_param.obj (.text:prvCPU1_Param_S32_Read)
+                  000217a3    00000016     driverlib.lib : adc.obj (.text:ADC_selectOffsetTrimMode)
+                  000217b9    00000016                   : sysctl.obj (.text:DCC_disableDoneSignal)
+                  000217cf    00000016                   : interrupt.obj (.text:Interrupt_defaultHandler)
+                  000217e5    00000016     board_cpu1_safety_validation.obj (.text:prvBOARD_TripLatch_InitAndAssert)
+                  000217fb    00000015     board.obj (.text:COMM_PARALLEL_CAN_init)
+                  00021810    00000015     driverlib.lib : sysctl.obj (.text:DCC_clearDoneFlag)
+                  00021825    00000015                   : sysctl.obj (.text:DCC_clearErrorFlag)
+                  0002183a    00000015                   : sysctl.obj (.text:DCC_disableErrorSignal)
+                  0002184f    00000015     board.obj (.text:GPIO_init)
+                  00021864    00000015     driverlib.lib : uart.obj (.text:UART_isBaseValid)
+                  00021879    00000015     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_BootError_Record)
+                  0002188e    00000015     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_VoltPiCfg)
+                  000218a3    00000014     core_state.obj (.text:CORESTATE_Cpu1_CheckCpu2Peer)
+                  000218b7    00000014     driverlib.lib : sysctl.obj (.text:DCC_disableModule)
+                  000218cb    00000014                   : sysctl.obj (.text:DCC_enableModule)
+                  000218df    00000014     board.obj (.text:DK9_CARRIER_SYNC_CAPTURE_INPUT_init)
+                  000218f3    00000014     board.obj (.text:DK9_TEST_BAT1_TRIP_init)
+                  00021907    00000014     board.obj (.text:DK9_TEST_BAT2_TRIP_init)
+                  0002191b    00000014     board.obj (.text:DK9_TEST_INV_TRIP_init)
+                  0002192f    00000014     board.obj (.text:DK9_TEST_PV_TRIP_init)
+                  00021943    00000014     driverlib.lib : gpio.obj (.text:GPIO_isPinValid)
+                  00021957    00000014     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_CommandBoundary_Run)
+                  0002196b    00000014     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_Cpu2BootFail_Run)
+                  0002197f    00000014     cpu1_validation.obj (.text:prvCPU1_Validation_ClaPeak_Get)
+                  00021993    00000014     ctrl_voltage_loop.obj (.text:prvCTRL_VoltLoop_AxisCfg_IsValid)
+                  000219a7    00000014     ctrl_voltage_loop.obj (.text:prvCTRL_VoltLoop_Reset)
+                  000219bb    00000014     bsw_cpu1_scheduler.obj (.text:prvSCHED_Cpu1_Release1ms)
+                  000219cf    00000014     rts2800_fpu64_eabi.lib : ll_mpy28.asm.obj (.text)
+                  000219e3    00000013     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_Init)
+                  000219f6    00000013     utils_transform.obj (.text:UTILS_Transform_InvPark)
+                  00021a09    00000013     core_state.obj (.text:prvCORESTATE_CoreErrSink_Register)
+                  00021a1c    00000013     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_DualCoreHealthy_Evaluate)
+                  00021a2f    00000013     cpu1_validation.obj (.text:prvCPU1_Validation_SchedCount_Get)
+                  00021a42    00000013     ctrl_soft_pll.obj (.text:prvCTRL_SoftPLL_SinCos_Update)
+                  00021a55    00000013     rts2800_fpu64_eabi.lib : memcmp.c.obj (.text)
+                  00021a68    00000012     core_state.obj (.text:CORESTATE_Cpu1_ClearFault)
+                  00021a7a    00000012     cpu1_cla_validation.obj (.text:CPU1_Cla_ControlFrame_Commit)
+                  00021a8c    00000012     ctrl_open_loop.obj (.text:CTRL_OpenLoop_Init)
+                  00021a9e    00000012     board.obj (.text:DK9_VALIDATION_BAT1_TRIP_init)
+                  00021ab0    00000012     param_msg_bind.obj (.text:PARAMBIND_Cpu1_Init)
+                  00021ac2    00000012     utils_transform.obj (.text:UTILS_Transform_Park)
+                  00021ad4    00000012     core_msg_cpu1.obj (.text:prvCOREMSG_ParameterRx_ClearActive)
+                  00021ae6    00000012     bsw_cpu1_scheduler.obj (.text:prvSCHED_Cpu1_Overrun32k_Record)
+                  00021af8    00000012     rts2800_fpu64_eabi.lib : args_main.c.obj (.text)
+                  00021b0a    00000011     core_state.obj (.text:CORESTATE_Cpu1_GetCpu2ContractDiag)
+                  00021b1b    00000011     core_state.obj (.text:CORESTATE_Cpu1_SetFault)
+                  00021b2c    00000011     board.obj (.text:DK9_VALIDATION_BAT2_TRIP_init)
+                  00021b3d    00000011     board.obj (.text:DK9_VALIDATION_INV_TRIP_init)
+                  00021b4e    00000011     board.obj (.text:DK9_VALIDATION_PV_TRIP_init)
+                  00021b5f    00000011     board.obj (.text:SYNC_init)
+                  00021b70    00000011     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_FastInstant_GridSeq_Commit)
+                  00021b81    00000011     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_Grid_Run)
+                  00021b92    00000011     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_EntryFind)
+                  00021ba3    00000010     driverlib.lib : can.obj (.text:CAN_isBaseValid)
+                  00021bb3    00000010     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_GetDiag)
+                  00021bc3    00000010     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_GetDiag)
+                  00021bd3    00000010     cpu1_param.obj (.text:prvCPU1_Param_BuildBegin)
+                  00021be3    0000000f     board_cpu1_safety_validation.obj (.text:BOARD_SafetyOff_Assert)
+                  00021bf2    0000000f     core_state.obj (.text:CORESTATE_Cpu1_InitOnce)
+                  00021c01    0000000f     cpu1_measurement.obj (.text:CPU1_Measurement_EffectiveAdcCfg_Get)
+                  00021c10    0000000f     driverlib.lib : ipc.obj (.text:Interrupt_unregister)
+                  00021c1f    0000000f     board_cpu1_safety_validation.obj (.text:prvBOARD_PwmSafeDisabled_Init)
+                  00021c2e    0000000f     boot_sync.obj (.text:prvBOOTSYNC_Cpu1_ResolveError)
+                  00021c3d    0000000e     core_msg_access.obj (.text:COREMSG_Access_Identity_Copy)
+                  00021c4b    0000000e     core_msg_access.obj (.text:COREMSG_Access_Identity_ReadShared)
+                  00021c59    0000000e     core_msg_access.obj (.text:COREMSG_Access_Sequence_PublishBegin)
+                  00021c67    0000000e     cpu1_validation.obj (.text:CPU1_Validation_Run1ms_Hook)
+                  00021c75    0000000e     ctrl_soft_pll.obj (.text:CTRL_SoftPLL_Init)
+                  00021c83    0000000e     ipc_port.obj (.text:IPC_Port_AbortTx)
+                  00021c91    0000000e     ipc_port.obj (.text:IPC_Port_Ack)
+                  00021c9f    0000000e     core_msg_cpu1.obj (.text:prvCOREMSG_ForceMailbox_Take)
+                  00021cad    0000000e     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_MemCfgDiag_Update)
+                  00021cbb    0000000d     board.obj (.text:ASYSCTL_init)
+                  00021cc8    0000000d     driverlib.lib : interrupt.obj (.text:Interrupt_disableGlobal)
+                  00021cd5    0000000d                   : interrupt.obj (.text:Interrupt_enableGlobal)
+                  00021ce2    0000000d     board_cpu1.obj (.text:prvBOARD_CarrierSync_ModuloDelta)
+                  00021cef    0000000d     cpu1_param.obj (.text:prvCPU1_Param_BuildEnd)
+                  00021cfc    0000000d     ctrl_soft_pll.obj (.text:prvCTRL_SoftPLL_Theta_Advance)
+                  00021d09    0000000c     board_cpu1.obj (.text:BOARD_LedGreen_Write)
+                  00021d15    0000000c     board_cpu1.obj (.text:BOARD_LedRed_Write)
+                  00021d21    0000000c     core_msg_access.obj (.text:COREMSG_Access_Sequence_IsNewer)
+                  00021d2d    0000000c     core_state.obj (.text:CORESTATE_Cpu1_BootAttemptBegin)
+                  00021d39    0000000c     cpu1_core_comm.obj (.text:CPU1_CoreComm_Running_Enter)
+                  00021d45    0000000c     cpu1_core_comm.obj (.text:CPU1_CoreComm_StartupFailure_Indicate)
+                  00021d51    0000000c     cpu1_safety_validation.obj (.text:CPU1_Safety_StartupFail_Stop)
+                  00021d5d    0000000c     board.obj (.text:INTERRUPT_init)
+                  00021d69    0000000c     utils_filter.obj (.text:UTILS_Filter_Lpf1_Run)
+                  00021d75    0000000c     core_msg_cpu1.obj (.text:prvCOREMSG_ParameterRx_ResetBaseline)
+                  00021d81    0000000c     cpu1_measurement.obj (.text:prvCPU1_Measurement_ZeroPermit_Get)
+                  00021d8d    0000000c     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_ValueStore)
+                  00021d99    0000000b     board_cpu1.obj (.text:BOARD_MemCfgDiag_Read)
+                  00021da4    0000000b     bsw_core_err.obj (.text:BSW_CoreErr_SetLastError)
+                  00021daf    0000000b     cpu1_safety_validation.obj (.text:CPU1_Safety_SafeOff_Run)
+                  00021dba    0000000b     ctrl_carrier_sync.obj (.text:CTRL_CarrierSync_Reset)
+                  00021dc5    0000000b     ctrl_phase_gen.obj (.text:CTRL_PhaseGen_Seed)
+                  00021dd0    0000000b     board.obj (.text:INPUTXBAR_init)
+                  00021ddb    0000000b     driverlib.lib : sysctl.obj (.text:SysCtl_isMCDClockFailureDetected)
+                  00021de6    0000000b     utils_math.obj (.text:UTILS_Math_Cos)
+                  00021df1    0000000b     utils_pi.obj (.text:UTILS_Pi_Run)
+                  00021dfc    0000000b     cpu1_core_comm.obj (.text:prvCPU1_CoreComm_PeerError_Mirror)
+                  00021e07    0000000b     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_MuxConsumer_Reset)
+                  00021e12    0000000b     cpu1_measurement.obj (.text:prvCPU1_Measurement_CfgIsValid)
+                  00021e1d    0000000a     bsw_core_err.obj (.text:BSW_CoreErr_GetLastError)
+                  00021e27    0000000a     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_IsSafeOff)
+                  00021e31    0000000a     driverlib.lib : interrupt.obj (.text:Interrupt_illegalOperationHandler)
+                  00021e3b    0000000a                   : interrupt.obj (.text:Interrupt_nmiHandler)
+                  00021e45    0000000a     bsw_cpu1_scheduler.obj (.text:SCHED_Cpu1_Release1msIfDue)
+                  00021e4f    0000000a     boot_sync.obj (.text:prvBOOTSYNC_Cpu1_SyncWithPolicy)
+                  00021e59    0000000a     core_state.obj (.text:prvCORESTATE_CoreErr_SetLastError)
+                  00021e63    0000000a     cpu1_ctrl.obj (.text:prvCPU1_Ctrl_MuxFrame_Get)
+                  00021e6d    0000000a     rtm_cpu1_param.obj (.text:prvRTM_Cpu1Param_ValueIsUnsigned)
+                  00021e77    00000009     cpu1_core_comm.obj (.text:CPU1_CoreComm_RunCommand8k)
+                  00021e80    00000009     board.obj (.text:EPWMXBAR_init)
+                  00021e89    00000009     ipc_port.obj (.text:IPC_Port_TimeUs_Get)
+                  00021e92    00000009     rts2800_fpu64_eabi.lib : _lock.c.obj (.text)
+                  00021e9b    00000008     driverlib.lib : adc.obj (.text:ADC_setOffsetTrim)
+                  00021ea3    00000008     board_cpu1.obj (.text:BOARD_Cla1_Task8_Force)
+                  00021eab    00000008     core_state.obj (.text:CORESTATE_Cpu1_IsCpu2StatePresent)
+                  00021eb3    00000008     rts2800_fpu64_eabi.lib : copy_decompress_none.c.obj (.text:decompress:none)
+                  00021ebb    00000008     f28p65x_codestartbranch.obj (.text)
+                  00021ec3    00000008     board_cpu1_safety_validation.obj (.text:prvBOARD_TripLatch_Assert)
+                  00021ecb    00000007     board.obj (.text:ADC_init)
+                  00021ed2    00000007     board_cpu1.obj (.text:BOARD_Cpu2ValidationGs2_Transfer)
+                  00021ed9    00000007     board_cpu1_isr.obj (.text:BOARD_NmiHandler_Register)
+                  00021ee0    00000007     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_NmiSafeOff_Request)
+                  00021ee7    00000007     core_msg_cpu1.obj (.text:COREMSG_ParameterCpu1_GetActive)
+                  00021eee    00000007     core_state.obj (.text:CORESTATE_Cpu1_GetFaultFlags)
+                  00021ef5    00000007     cpu1_core_comm.obj (.text:CPU1_CoreComm_Timebase_Init)
+                  00021efc    00000007     driverlib.lib : sysctl.obj (.text:SysCtl_resetMCD)
+                  00021f03    00000007     utils_math.obj (.text:UTILS_Math_Sin)
+                  00021f0a    00000007     main_cpu1_validation.obj (.text:prvCPU1_CoreComm1ms_Run)
+                  00021f11    00000007     rts2800_fpu64_eabi.lib : memset.c.obj (.text)
+                  00021f18    00000006     board_cpu1.obj (.text:BOARD_BootTimeUs_Get)
+                  00021f1e    00000006     board_cpu1.obj (.text:BOARD_Cla1_Task1_ClearOverflow)
+                  00021f24    00000006     board_cpu1.obj (.text:BOARD_Cla1_Task8_ClearOverflow)
+                  00021f2a    00000006     board_cpu1.obj (.text:BOARD_Cpu1_NestAllowInt1_Enter)
+                  00021f30    00000006     board_cpu1.obj (.text:BOARD_TimestampCount_Get)
+                  00021f36    00000006     core_msg_access.obj (.text:COREMSG_Access_Sequence_ResetBegin)
+                  00021f3c    00000006     cpu1_ctrl.obj (.text:CPU1_Ctrl_MeasurementSlowSnapshot_Take)
+                  00021f42    00000006     board.obj (.text:DK9_XBAR_BAT1_TRIP_init)
+                  00021f48    00000006     board.obj (.text:DK9_XBAR_BAT2_TRIP_init)
+                  00021f4e    00000006     board.obj (.text:DK9_XBAR_CARRIER_SYNC_CAPTURE_init)
+                  00021f54    00000006     board.obj (.text:DK9_XBAR_INV_TRIP_init)
+                  00021f5a    00000006     board.obj (.text:DK9_XBAR_PV_TRIP_init)
+                  00021f60    00000006     rts2800_fpu64_eabi.lib : copy_zero_init.c.obj (.text:decompress:ZI)
+                  00021f66    00000006     board_cpu1_safety_validation.obj (.text:prvBOARD_TripLatch_IsAsserted)
+                  00021f6c    00000006     core_msg_cpu1.obj (.text:prvCOREMSG_FgCritical_Exit)
+                  00021f72    00000006     cpu1_validation.obj (.text:prvCPU1_Validation_Snapshot_Begin)
+                  00021f78    00000006     cpu1_validation.obj (.text:prvCPU1_Validation_Snapshot_End)
+                  00021f7e    00000006     ipc_port.obj (.text:prvIPC_Port_MapPeer)
+                  00021f84    00000006     bsw_cpu1_scheduler.obj (.text:prvSCHED_Cpu1_ExitCritical)
+                  00021f8a    00000005     board_cpu1.obj (.text:BOARD_Cla1_Task8_HasOverflowed)
+                  00021f8f    00000005     board_cpu1.obj (.text:BOARD_Cla1_Task8_IsPending)
+                  00021f94    00000005     board_cpu1.obj (.text:BOARD_Cla1_Task8_IsRunning)
+                  00021f99    00000005     board_cpu1.obj (.text:BOARD_Interrupt_Init)
+                  00021f9e    00000005     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_GetActiveCommand)
+                  00021fa3    00000005     core_msg_cpu1.obj (.text:COREMSG_CommandCpu1_TakeClearApplied)
+                  00021fa8    00000005     core_msg_cpu1.obj (.text:COREMSG_Cpu1Snapshots_InitBegin)
+                  00021fad    00000005     core_msg_cpu1.obj (.text:COREMSG_Cpu1Snapshots_InitCommit)
+                  00021fb2    00000005     core_state.obj (.text:CORESTATE_Cpu1_NmiFault_Latch)
+                  00021fb7    00000005     core_state.obj (.text:CORESTATE_Cpu1_SetBootState)
+                  00021fbc    00000005     cpu1_cla_validation.obj (.text:CPU1_Cla_Fault_Latch)
+                  00021fc1    00000005     cpu1_ctrl.obj (.text:CPU1_Ctrl_MeasurementSnapshot_Get)
+                  00021fc6    00000005     cpu1_safety_validation.obj (.text:CPU1_Safety_FastProtect_Run)
+                  00021fcb    00000005     cpu1_safety_validation.obj (.text:CPU1_Safety_Nmi_Init)
+                  00021fd0    00000005     ctrl_voltage_loop.obj (.text:CTRL_VoltLoop_Reset)
+                  00021fd5    00000005     board.obj (.text:UART_init)
+                  00021fda    00000005     core_msg_cpu1.obj (.text:prvCOREMSG_FastInstantInit_Commit)
+                  00021fdf    00000005     core_msg_cpu1.obj (.text:prvCOREMSG_FgCritical_Enter)
+                  00021fe4    00000005     core_msg_cpu1.obj (.text:prvCOREMSG_ForceMailbox_Or)
+                  00021fe9    00000005     core_msg_cpu1.obj (.text:prvCOREMSG_SlowStatusInit_Commit)
+                  00021fee    00000005     core_state.obj (.text:prvCORESTATE_CoreErr_GetLastError)
+                  00021ff3    00000005     core_state.obj (.text:prvCORESTATE_CoreErr_SetLastWarn)
+                  00021ff8    00000005     bsw_cpu1_scheduler.obj (.text:prvSCHED_Cpu1_EnterCritical)
+                  00021ffd    00000003     boot_sync.obj (.text:BOOTSYNC_BootPolicy_Get)
+
+.const.1   0    000228a6    00001754     
+                  000228a6    00001001     utils_math.obj (.const:s_iSinTable_Q12)
+                  000238a7    00000016     ctrl_open_loop.obj (.const)
+                  000238bd    00000001     cpu1_param_table.obj (.const)
+                  000238be    00000002     rtm_cpu1_param.obj (.const)
+                  000238c0    000001e6     cpu1_ctrl.obj (.const)
+                  00023aa6    000000b3     board.obj (.const:.string)
+                  00023b59    00000001     --HOLE-- [fill = 0]
+                  00023b5a    0000009a     driverlib.lib : sysctl.obj (.const:.string)
+                  00023bf4    00000098                   : gpio.obj (.const:.string)
+                  00023c8c    00000098                   : uart.obj (.const:.string)
+                  00023d24    00000097                   : adc.obj (.const:.string)
+                  00023dbb    00000001     --HOLE-- [fill = 0]
+                  00023dbc    00000097                   : can.obj (.const:.string)
+                  00023e53    00000001     --HOLE-- [fill = 0]
+                  00023e54    00000097                   : spi.obj (.const:.string)
+                  00023eeb    0000000b     board_cpu1.obj (.const)
+                  00023ef6    0000000a     board_dk9_trip_inject.obj (.const)
+                  00023f00    0000008e     cpu1_param.obj (.const)
+                  00023f8e    0000004e     driverlib.lib : memcfg.obj (.const:.string)
+                  00023fdc    0000001e     cpu1_dk9_dc_side_pin_test.obj (.const)
+
+.const.2   0    00024000    0000077b     
+                  00024000    00000770     cpu1_param_table.obj (.const:g_stRtmCpu1ParamLocalTable)
+                  00024770    0000000b     cpu1_ctrl_runtime_boundary_validation.obj (.const)
+
+.const.3   0    00024780    000000bc     
+                  00024780    0000008a     cpu1_validation.obj (.const)
+                  0002480a    00000032     ctrl_voltage_loop.obj (.const)
+
+.const.4   0    00024840    0000013e     
+                  00024840    00000078     cpu1_cla_validation.obj (.const)
+                  000248b8    00000008     bsw_core_err.obj (.const)
+                  000248c0    00000068     core_msg_cpu1.obj (.const)
+                  00024928    0000004c     driverlib.lib : ecap.obj (.const:.string)
+                  00024974    0000000a     utils_pos_neg_seq.obj (.const)
+
+.const.5   0    00024980    00000126     
+                  00024980    00000048     cpu1_measurement.obj (.const)
+                  000249c8    00000044     driverlib.lib : ipc.obj (.const:IPC_Instance)
+                  00024a0c    0000002c     bsw_cpu1_scheduler.obj (.const)
+                  00024a38    00000008     ctrl_phase_gen.obj (.const)
+                  00024a40    00000040     cpu1_dk9_mil_adc.obj (.const)
+                  00024a80    00000016     cpu1_measurement.obj (.const:s_emZeroSignal$1)
+                  00024a96    00000008     main_cpu1_validation.obj (.const)
+                  00024a9e    00000008     cpu1_param_table.obj (.const:retain)
+
+MODULE SUMMARY
+
+       Module                                      code    ro data   rw data
+       ------                                      ----    -------   -------
+    .\app\ctrl\02_curr_loop\src\
+       ctrl_curr_loop_validation.obj               1580    160       298    
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      1580    160       298    
+                                                                            
+    .\app\ctrl\03_inv_pwm\src\
+       ctrl_inv_pwm_validation.obj                 340     118       136    
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      340     118       136    
+                                                                            
+    .\app\ctrl\06_soft_pll\src\
+       ctrl_soft_pll.obj                           306     0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      306     0         0      
+                                                                            
+    .\app\ctrl\07_voltage_loop\src\
+       ctrl_voltage_loop.obj                       394     50        0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      394     50        0      
+                                                                            
+    .\app\ctrl\11_carrier_sync\src\
+       ctrl_carrier_sync.obj                       144     0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      144     0         0      
+                                                                            
+    .\app\ctrl\12_open_loop\src\
+       ctrl_open_loop.obj                          362     22        0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      362     22        0      
+                                                                            
+    .\app\ctrl\13_phase_gen\src\
+       ctrl_phase_gen.obj                          133     8         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      133     8         0      
+                                                                            
+    .\platform\bsw\multi_core\src\
+       ipc_port.obj                                236     0         2      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      236     0         2      
+                                                                            
+    .\platform\bsw\scheduler\src\
+       bsw_cpu1_scheduler.obj                      190     44        46     
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      190     44        46     
+                                                                            
+    .\platform\bsw\services\src\
+       bsw_core_err.obj                            49      8         10     
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      49      8         10     
+                                                                            
+    .\platform\utils\02_filter\src\
+       utils_filter.obj                            16      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      16      0         0      
+                                                                            
+    .\platform\utils\03_math\src\
+       utils_math.obj                              101     4097      0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      101     4097      0      
+                                                                            
+    .\platform\utils\04_pi\src\
+       utils_pi_f32.obj                            174     0         2      
+       utils_pi.obj                                123     0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      297     0         2      
+                                                                            
+    .\platform\utils\05_pos_neg_seq\src\
+       utils_pos_neg_seq.obj                       167     10        0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      167     10        0      
+                                                                            
+    .\platform\utils\06_ramp\src\
+       utils_ramp.obj                              61      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      61      0         0      
+                                                                            
+    .\platform\utils\08_transform\src\
+       utils_transform_f32.obj                     82      0         17     
+       utils_transform.obj                         92      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      174     0         17     
+                                                                            
+    .\project\hybrid30k\board\generated\dk9_launchxl\cpu1\
+       board.obj                                   8039    179       0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      8039    179       0      
+                                                                            
+    .\project\hybrid30k\board\src\
+       board_cpu1.obj                              968     11        30     
+       board_cla_adc.obj                           386     11        18     
+       board_cpu1_isr.obj                          270     0         12     
+       board_cpu1_safety_validation.obj            260     0         22     
+       board_relay.obj                             1       0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      1885    22        82     
+                                                                            
+    .\project\hybrid30k\dsp\core_comm\src\
+       core_msg_cpu1.obj                           1048    104       276    
+       core_msg_access.obj                         1030    0         0      
+       boot_sync.obj                               384     0         14     
+       core_state.obj                              270     0         44     
+       core_msg_storage.obj                        0       0         280    
+       param_msg_bind.obj                          45      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      2777    104       614    
+                                                                            
+    .\project\hybrid30k\dsp\cpu1\cla\src\
+       cpu1_cla_validation.obj                     387     120       240    
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      387     120       240    
+                                                                            
+    .\project\hybrid30k\dsp\cpu1\src\
+       cpu1_ctrl.obj                               3723    486       1054   
+       cpu1_measurement.obj                        2463    94        4      
+       cpu1_param.obj                              1862    142       0      
+       cpu1_core_comm.obj                          1226    0         224    
+       rtm_cpu1_param.obj                          398     2         2      
+       cpu1_safety_validation.obj                  127     0         1      
+       main_cpu1_validation.obj                    112     8         0      
+       cpu1_stack_watch.obj                        82      0         10     
+       cpu1_ctrl_runtime_boundary_validation.obj   74      11        0      
+       cpu1_stack_watch_sp.obj                     4       0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      10071   743       1295   
+                                                                            
+    .\project\hybrid30k\rtm\generated\cpu1\
+       cpu1_param_table.obj                        0       1913      238    
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      0       1913      238    
+                                                                            
+    .\project\hybrid30k\validation\dk9\cpu1\
+       cpu1_cla_task_validation.obj                1928    0         367    
+       cpu1_validation.obj                         891     138       134    
+       cpu1_dk9_mil_adc.obj                        165     64        64     
+       cpu1_dk9_dc_side_pin_test.obj               121     30        30     
+       board_dk9_trip_inject.obj                   32      10        10     
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      3137    242       605    
+                                                                            
+    .\ti\device\source\
+       device.obj                                  505     0         0      
+       f28p65x_codestartbranch.obj                 10      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      515     0         0      
+                                                                            
+    C:/Users/11981/Documents/Hybrid_Platform/.worktrees/dk9-mil-validation-cumulative-r2-20260901/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib/ccs/Debug/driverlib.lib
+       sysctl.obj                                  1416    154       0      
+       memcfg.obj                                  550     78        0      
+       gpio.obj                                    429     152       0      
+       adc.obj                                     255     151       0      
+       ipc.obj                                     15      68        272    
+       uart.obj                                    181     152       0      
+       can.obj                                     170     151       0      
+       spi.obj                                     119     151       0      
+       interrupt.obj                               214     0         0      
+       ecap.obj                                    69      76        0      
+       xbar.obj                                    77      0         0      
+       cla.obj                                     38      0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      3533    1133      272    
+                                                                            
+    D:\ccs21.0\ccs\tools\compiler\ti-cgt-c2000_25.11.1.LTS\lib\rts2800_fpu64_eabi.lib
+       ll_div28.asm.obj                            263     0         0      
+       fs_div28.asm.obj                            136     0         0      
+       exit.c.obj                                  41      0         6      
+       copy_decompress_lzss.c.obj                  46      0         0      
+       autoinit.c.obj                              43      0         0      
+       memcpy.c.obj                                32      0         0      
+       ll_cmp28.asm.obj                            30      0         0      
+       boot28.asm.obj                              25      0         0      
+       ll_mpy28.asm.obj                            20      0         0      
+       memcmp.c.obj                                19      0         0      
+       args_main.c.obj                             18      0         0      
+       _lock.c.obj                                 9       0         4      
+       copy_decompress_none.c.obj                  8       0         0      
+       memset.c.obj                                7       0         0      
+       copy_zero_init.c.obj                        6       0         0      
+       pre_init.c.obj                              2       0         0      
+       startup.c.obj                               1       0         0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Total:                                      706     0         10     
+                                                                            
+       Stack:                                      0       0         1792   
+       Linker Generated:                           0       66        0      
+    +--+-------------------------------------------+-------+---------+---------+
+       Grand Total:                                35600   9039      5659   
+
+
+LINKER GENERATED COPY TABLES
+
+__TI_cinit_table @ 000001e4 records: 5, size/record: 4, table size: 20
+	.data: load addr=000001b6, load size=00000018 bytes, run addr=0002288a, run size=0000001c bytes, compression=lzss
+	.bss: load addr=000001d4, load size=00000004 bytes, run addr=00022000, run size=0000088a bytes, compression=zero_init
+	.bss_cla: load addr=000001d8, load size=00000004 bytes, run addr=0000bb3f, run size=00000004 bytes, compression=zero_init
+	.scratchpad: load addr=000001dc, load size=00000004 bytes, run addr=0000b800, run size=000000c2 bytes, compression=zero_init
+	Cla1DataRam: load addr=000001e0, load size=00000004 bytes, run addr=0000b8c2, run size=0000015c bytes, compression=zero_init
+
+
+LINKER GENERATED HANDLER TABLE
+
+__TI_handler_table @ 000001ce records: 3, size/record: 2, table size: 6
+	index: 0, handler: __TI_zero_init
+	index: 1, handler: __TI_decompress_lzss
+	index: 2, handler: __TI_decompress_none
+
+
+GLOBAL DATA SYMBOLS: SORTED BY DATA PAGE
+
+address     data page           name
+--------    ----------------    ----
+00001480      52 (00001480)     g_stClaToCpuMsg
+
+000014d8      53 (000014c0)     g_stCpu1Dk9MilClaAdcWatch
+
+00001500      54 (00001500)     g_stCpuToClaMsg
+
+0000b800     2e0 (0000b800)     __claUTILS_Transform_InvClarkeCla_sp
+0000b800     2e0 (0000b800)     __claUTILS_Transform_InvParkCla_sp
+
+0000ba00     2e8 (0000ba00)     g_stCpuToClaStartupCfg
+
+0000e000     380 (0000e000)     __stack
+
+00022009     880 (00022000)     g_stCpu1ClaRuntimeWatch
+00022014     880 (00022000)     g_stCpu1CarrierSyncWatch
+0002201e     880 (00022000)     g_stCpu1OpenLoopWatch
+
+0002241e     890 (00022400)     g_stCpu1Dk9DcSidePinWatch
+0002243c     890 (00022400)     g_stCpu1MeasurementWatch
+
+00022554     895 (00022540)     g_stCpu1Dk9MilAdcWatch
+
+00022700     89c (00022700)     g_stCoreCommCpu1Watch
+
+0002278e     89e (00022780)     g_stCpu1ValidationCmd
+
+000227c0     89f (000227c0)     g_stCpu1ValidationWatch
+
+00022808     8a0 (00022800)     g_stSchedCpu1Watch
+00022834     8a0 (00022800)     g_stBoardDk9TripInjectWatch
+
+00022842     8a1 (00022840)     g_stCpu1ClaWatch
+0002285c     8a1 (00022840)     g_stBoardSafetyWatch
+
+00022882     8a2 (00022880)     g_stCpu1StackWatch
+00022898     8a2 (00022880)     __TI_enable_exit_profile_output
+0002289a     8a2 (00022880)     __TI_cleanup_ptr
+0002289c     8a2 (00022880)     __TI_dtors_ptr
+000228a2     8a2 (00022880)     _lock
+000228a4     8a2 (00022880)     _unlock
+
+000238bd     8e2 (00023880)     g_uiRtmCpu1ParamLocalCount
+
+00024000     900 (00024000)     g_stRtmCpu1ParamLocalTable
+
+000249c8     927 (000249c0)     IPC_Instance
+
+00024a9e     92a (00024a80)     g_stRtmParamInfo
+
+0003a000     e80 (0003a000)     g_stCoreCommC1FastInstMsg
+
+0003a040     e81 (0003a040)     g_stCoreCommC1SlowStsMsg
+
+0003a094     e82 (0003a080)     g_stCoreCommC1State
+
+0003a0c0     e83 (0003a0c0)     IPC_CPU1_To_CPU2_PutBuffer
+
+0003b000     ec0 (0003b000)     IPC_CPU1_To_CPU2_GetBuffer
+
+0003b088     ec2 (0003b080)     g_stCoreCommC2State
+
+0003b0c0     ec3 (0003b0c0)     g_stCoreCommC2CmdMsg
+
+0003b100     ec4 (0003b100)     g_stCoreCommC2ParamMsg
+
+
+GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name 
+
+page  address   name                                            
+----  -------   ----                                            
+0     00021ecb  ADC_init                                        
+0     0000df9c  ADC_setINLTrim                                  
+0     00021186  ADC_setMode                                     
+0     00021e9b  ADC_setOffsetTrim                               
+0     0001fd85  ADC_setVREF                                     
+0     00021cbb  ASYSCTL_init                                    
+0     0001f864  BOARD_AdcFastSample_Capture                     
+0     000211a3  BOARD_AdcFastSample_Get                         
+0     00021f18  BOARD_BootTimeUs_Get                            
+0     00020dbb  BOARD_BootTimebase_Start                        
+0     00021f30  BOARD_BootTimerCount_Get                        
+0     0001eba4  BOARD_CARRIER_SYNC_ECAP1_init                   
+0     000215b4  BOARD_CPU1_LED_GREEN_init                       
+0     000215cc  BOARD_CPU1_LED_RED_init                         
+0     00020000  BOARD_CarrierSyncError_Read                     
+0     0001feee  BOARD_CarrierSyncOutput_Set                     
+0     00010000  BOARD_CarrierSyncPeriod_Active_Get              
+0     000209e7  BOARD_CarrierSyncPeriod_Apply                   
+0     00021f1e  BOARD_Cla1_Task1_ClearOverflow                  
+0     00010004  BOARD_Cla1_Task1_HasOverflowed                  
+0     00010008  BOARD_Cla1_Task1_IsPending                      
+0     0001000c  BOARD_Cla1_Task1_IsRunning                      
+0     00021f24  BOARD_Cla1_Task8_ClearOverflow                  
+0     00021ea3  BOARD_Cla1_Task8_Force                          
+0     00021f8a  BOARD_Cla1_Task8_HasOverflowed                  
+0     00021f8f  BOARD_Cla1_Task8_IsPending                      
+0     00021f94  BOARD_Cla1_Task8_IsRunning                      
+0     0000856e  BOARD_Cla_FastAdc_Read                          
+0     000214a1  BOARD_Cpu1_IsrHooks_Register                    
+0     00021f2a  BOARD_Cpu1_NestAllowInt1_Enter                  
+0     00010010  BOARD_Cpu1_NestAllowInt1_Exit                   
+0     00021ed2  BOARD_Cpu2ValidationGs2_Transfer                
+0     00020e53  BOARD_Cpu2_Boot_Release                         
+0     000214ba  BOARD_Cpu2_Reset_Hold                           
+0     0001f206  BOARD_CtrlTimebase_Start                        
+0     0001fdce  BOARD_DelayUs                                   
+0     00020289  BOARD_Device_Init                               
+0     00020ff6  BOARD_Dk9TripInject_Init                        
+0     00010014  BOARD_GlobalInt_Enable                          
+0     00021f99  BOARD_Interrupt_Init                            
+0     00021d09  BOARD_LedGreen_Write                            
+0     00021d15  BOARD_LedRed_Write                              
+0     00021d99  BOARD_MemCfgDiag_Read                           
+0     00020340  BOARD_NVM_SPI_init                              
+0     00020ee7  BOARD_NmiDiag_Read                              
+0     00021ed9  BOARD_NmiHandler_Register                       
+0     0001009b  BOARD_Relay_RuntimeOwner_Transfer               
+0     0001e3db  BOARD_Runtime_Init                              
+0     000216eb  BOARD_SYNC_OUT1_init                            
+0     000215e4  BOARD_SYNC_OUT4_init                            
+0     00020a14  BOARD_SafetyEarly_Init                          
+0     00021be3  BOARD_SafetyOff_Assert                          
+0     00021f66  BOARD_SafetyOff_IsAsserted                      
+0     000214d3  BOARD_SafetyPostInit_Reassert                   
+0     00021f30  BOARD_TimestampCount_Get                        
+0     00010018  BOARD_TimestampElapsed_Get                      
+0     0002010d  BOARD_Watchdog_Activate                         
+0     000213b7  BOARD_Watchdog_Service                          
+0     00021ffd  BOOTSYNC_BootPolicy_Get                         
+0     0001edbf  BOOTSYNC_Cpu1_StartCpu2Attempt                  
+0     000204d8  BOOTSYNC_Cpu1_WaitCpu2AppInit                   
+0     000206c9  BOOTSYNC_Cpu1_WaitCpu2LogicAliveChange          
+0     0001f0ad  BOOTSYNC_Cpu1_WaitCpu2Ready                     
+0     00021e1d  BSW_CoreErr_GetLastError                        
+0     00021251  BSW_CoreErr_Init                                
+0     00021da4  BSW_CoreErr_SetLastError                        
+0     00020f51  Board_init                                      
+0     00020be2  C$$EXIT                                         
+0     000217fb  CAN_init                                        
+0     0002126d  CAN_initModule                                  
+0     0001f56c  CAN_setBitTiming                                
+0     00020b15  CLA_init                                        
+0     00020de1  CLA_setTriggerSource                            
+0     00020e78  COMM_ARM_UART_init                              
+0     00020c83  COMM_DEBUG_UART_init                            
+0     000217fb  COMM_PARALLEL_CAN_init                          
+0     0001e530  COREMSG_Access_Command_Copy                     
+0     0001e5cf  COREMSG_Access_Command_ReadShared               
+0     0001f971  COREMSG_Access_FastInstant_WriteShared          
+0     00021c3d  COREMSG_Access_Identity_Copy                    
+0     000213eb  COREMSG_Access_Identity_Matches                 
+0     00021c4b  COREMSG_Access_Identity_ReadShared              
+0     0000fad7  COREMSG_Access_Parameter_Copy                   
+0     0000fbd7  COREMSG_Access_Parameter_ReadShared             
+0     00021d21  COREMSG_Access_Sequence_IsNewer                 
+0     00021c59  COREMSG_Access_Sequence_PublishBegin            
+0     00021f36  COREMSG_Access_Sequence_ResetBegin              
+0     0001007c  COREMSG_Access_Sequence_ResetCommit             
+0     000215fc  COREMSG_Access_SlowStatus_WriteShared           
+0     0001fa75  COREMSG_CommandCpu1_ApplyPending                
+0     00020835  COREMSG_CommandCpu1_CheckTimeout                
+0     00021614  COREMSG_CommandCpu1_ForceSafeOff                
+0     00021f9e  COREMSG_CommandCpu1_GetActiveCommand            
+0     0001001c  COREMSG_CommandCpu1_GetAppliedSeq               
+0     00021bb3  COREMSG_CommandCpu1_GetDiag                     
+0     000211c0  COREMSG_CommandCpu1_Init                        
+0     00021e27  COREMSG_CommandCpu1_IsSafeOff                   
+0     00021ee0  COREMSG_CommandCpu1_NmiSafeOff_Request          
+0     0001f357  COREMSG_CommandCpu1_Receive                     
+0     00021fa3  COREMSG_CommandCpu1_TakeClearApplied            
+0     00021fa8  COREMSG_Cpu1Snapshots_InitBegin                 
+0     00021fad  COREMSG_Cpu1Snapshots_InitCommit                
+0     00021315  COREMSG_FastInstantCpu1_Publish                 
+0     0001fa1f  COREMSG_ParameterCpu1_ApplyPending              
+0     00021ee7  COREMSG_ParameterCpu1_GetActive                 
+0     00010020  COREMSG_ParameterCpu1_GetAppliedVersion         
+0     00021bc3  COREMSG_ParameterCpu1_GetDiag                   
+0     000200cb  COREMSG_ParameterCpu1_GetPending                
+0     000219e3  COREMSG_ParameterCpu1_Init                      
+0     0001e66e  COREMSG_ParameterCpu1_Receive                   
+0     00021330  COREMSG_SlowStatusCpu1_Publish                  
+0     00021d2d  CORESTATE_Cpu1_BootAttemptBegin                 
+0     000218a3  CORESTATE_Cpu1_CheckCpu2Peer                    
+0     00021a68  CORESTATE_Cpu1_ClearFault                       
+0     0001009c  CORESTATE_Cpu1_DebugBarrier_Arm                 
+0     0001008b  CORESTATE_Cpu1_DebugBarrier_IsArmed             
+0     00010024  CORESTATE_Cpu1_GetBootAttemptCnt                
+0     00010028  CORESTATE_Cpu1_GetBootEpoch                     
+0     0001002c  CORESTATE_Cpu1_GetBootStep                      
+0     00010030  CORESTATE_Cpu1_GetCpu2BootEpoch                 
+0     00010034  CORESTATE_Cpu1_GetCpu2BootStep                  
+0     00021b0a  CORESTATE_Cpu1_GetCpu2ContractDiag              
+0     00010038  CORESTATE_Cpu1_GetCpu2FaultFlags                
+0     0001003c  CORESTATE_Cpu1_GetCpu2LastError                 
+0     00010040  CORESTATE_Cpu1_GetCpu2LastWarn                  
+0     00010044  CORESTATE_Cpu1_GetCpu2LogicAliveSeq             
+0     00010048  CORESTATE_Cpu1_GetCpu2RunState                  
+0     0001004c  CORESTATE_Cpu1_GetCpu2Status                    
+0     0001008d  CORESTATE_Cpu1_GetDebugBootSession              
+0     00021eee  CORESTATE_Cpu1_GetFaultFlags                    
+0     00010050  CORESTATE_Cpu1_GetLastError                     
+0     00010054  CORESTATE_Cpu1_GetRunState                      
+0     00021bf2  CORESTATE_Cpu1_InitOnce                         
+0     0001008f  CORESTATE_Cpu1_IsCpu2DebugBarrierCurrent        
+0     00010091  CORESTATE_Cpu1_IsCpu2DebugBootInitialized       
+0     00021eab  CORESTATE_Cpu1_IsCpu2StatePresent               
+0     00021fb2  CORESTATE_Cpu1_NmiFault_Latch                   
+0     00021fb7  CORESTATE_Cpu1_SetBootState                     
+0     00021b1b  CORESTATE_Cpu1_SetFault                         
+0     0001ee42  CPU1_AdcaInt1_Isr                               
+0     00020b15  CPU1_CLA1_init                                  
+0     00021a7a  CPU1_Cla_ControlFrame_Commit                    
+0     0001f633  CPU1_Cla_Diag_Update32k                         
+0     00010058  CPU1_Cla_Fault_IsLatched                        
+0     00021fbc  CPU1_Cla_Fault_Latch                            
+0     00020803  CPU1_Cla_Init                                   
+0     0001e974  CPU1_Cla_StartupConfig_Apply                    
+0     0001fe60  CPU1_Cla_Task8Init_Run                          
+0     0001e847  CPU1_CoreComm_Cpu2Boot_Run                      
+0     0001005c  CPU1_CoreComm_CtrlEnabled_IsSet                 
+0     00020caa  CPU1_CoreComm_FastExchange_Run                  
+0     00020866  CPU1_CoreComm_Init                              
+0     00020897  CPU1_CoreComm_NmiFault_Latch                    
+0     00010093  CPU1_CoreComm_NmiParityRecovery_Try             
+0     0000f7be  CPU1_CoreComm_Run1ms                            
+0     00021e77  CPU1_CoreComm_RunCommand8k                      
+0     00021096  CPU1_CoreComm_RunInputs                         
+0     00021d39  CPU1_CoreComm_Running_Enter                     
+0     00021d45  CPU1_CoreComm_StartupFailure_Indicate           
+0     00021016  CPU1_CoreComm_StartupParameters_Apply           
+0     0001eec2  CPU1_CoreComm_StartupParameters_Receive         
+0     00021ef5  CPU1_CoreComm_Timebase_Init                     
+0     0001f3c5  CPU1_Ctrl8k_Isr                                 
+0     00010058  CPU1_Ctrl_ClaFault_IsLatched                    
+0     0000f170  CPU1_Ctrl_ConfigApply                           
+0     0000e917  CPU1_Ctrl_Fast_Run                              
+0     0000f42c  CPU1_Ctrl_Init                                  
+0     0000fcd7  CPU1_Ctrl_InputsCommit                          
+0     00021f3c  CPU1_Ctrl_MeasurementSlowSnapshot_Take          
+0     00021fc1  CPU1_Ctrl_MeasurementSnapshot_Get               
+0     000206ff  CPU1_Ctrl_Run32k                                
+0     0001e70d  CPU1_Ctrl_Run8k                                 
+0     0001e31b  CPU1_Ctrl_RuntimeBoundary_ClaControl_Override   
+0     00010095  CPU1_Ctrl_RuntimeBoundary_DiagFallback_IsEnabled
+0     0001009d  CPU1_Ctrl_RuntimeBoundary_Observe32k            
+0     0001009e  CPU1_Ctrl_RuntimeBoundary_Observe8k             
+0     00010097  CPU1_Ctrl_RuntimeBoundary_OpenLoopCalc_IsAllowed
+0     00020a3f  CPU1_Ctrl_RuntimeBoundary_Policy_Get            
+0     000214ec  CPU1_Ctrl_RuntimeBoundary_SamplePolicy_Get      
+0     0000dd5c  CPU1_Ctrl_Sample_Run                            
+0     0000f2df  CPU1_Ctrl_StartupConfig_Get                     
+0     0001ff7a  CPU1_Dk9DcSidePinTest_Foreground                
+0     00020734  CPU1_Dk9DcSidePinTest_Init                      
+0     0002020d  CPU1_Dk9MilAdc_Foreground                       
+0     000207d0  CPU1_Dk9MilAdc_Init                             
+0     00020768  CPU1_Dk9MilAdc_OnCapture                        
+0     00021c01  CPU1_Measurement_EffectiveAdcCfg_Get            
+0     0001e8de  CPU1_Measurement_Init                           
+0     0001fb1c  CPU1_Measurement_Run8k                          
+0     0002079c  CPU1_Measurement_SlowSnapshot_Take              
+0     0000efe8  CPU1_Measurement_Snapshot_Get                   
+0     0001f694  CPU1_Nmi_Isr                                    
+0     0001fe17  CPU1_Param_CurrCtrlSnapshot_Get                 
+0     0001fd3a  CPU1_Param_Init                                 
+0     0000d464  CPU1_Param_MeasurementCfg_Build                 
+0     0002014d  CPU1_Param_OpenLoopSnapshot_Get                 
+0     0001f809  CPU1_Param_PllSnapshot_Get                      
+0     00010064  CPU1_Param_Version_Get                          
+0     00021fc6  CPU1_Safety_FastProtect_Run                     
+0     00021fcb  CPU1_Safety_Nmi_Init                            
+0     00021daf  CPU1_Safety_SafeOff_Run                         
+0     00021d51  CPU1_Safety_StartupFail_Stop                    
+0     00020b3e  CPU1_StackWatch_Init                            
+0     00020b67  CPU1_StackWatch_Run                             
+0     0001006c  CPU1_StackWatch_Sp_Get                          
+0     0001e31b  CPU1_Validation_ControlFrame_Get                
+0     00021702  CPU1_Validation_Foreground_Run                  
+0     0001f6f2  CPU1_Validation_Init                            
+0     00021c67  CPU1_Validation_Run1ms_Hook                     
+0     00021be3  CPU1_Validation_SafeOff_Run                     
+0     00021dba  CTRL_CarrierSync_Init                           
+0     00021dba  CTRL_CarrierSync_Reset                          
+0     0001ecb5  CTRL_CarrierSync_Run                            
+0     00008bc8  CTRL_CurrLoop_Init                              
+0     00008adc  CTRL_CurrLoop_Reset                             
+0     0000841e  CTRL_CurrLoop_Run                               
+0     00008e70  CTRL_CurrLoop_SetConfig                         
+0     00008c36  CTRL_InvPwm_Init                                
+0     00008dc0  CTRL_InvPwm_Reset                               
+0     00009114  CTRL_InvPwm_Run                                 
+0     00021a8c  CTRL_OpenLoop_Init                              
+0     00020548  CTRL_OpenLoop_Reset                             
+0     000211dd  CTRL_OpenLoop_Run                               
+0     0001ffbf  CTRL_PhaseGen_FreqSet                           
+0     00021289  CTRL_PhaseGen_Init                              
+0     000211fa  CTRL_PhaseGen_Run                               
+0     00021dc5  CTRL_PhaseGen_Seed                              
+0     00021505  CTRL_SoftPLL_Advance                            
+0     00021c75  CTRL_SoftPLL_Init                               
+0     000210b4  CTRL_SoftPLL_Reset                              
+0     0001f918  CTRL_SoftPLL_Run                                
+0     0002057f  CTRL_SoftPLL_SetConfig                          
+0     00020e9d  CTRL_VoltLoop_Init                              
+0     00021fd0  CTRL_VoltLoop_Reset                             
+0     0000f9d6  CTRL_VoltLoop_Run                               
+0     00021405  CTRL_VoltLoop_SetConfig                         
+0     00008000  Cla1Task1                                       
+0     000089ca  Cla1Task8                                       
+0     000218df  DK9_CARRIER_SYNC_CAPTURE_INPUT_init             
+0     0002162c  DK9_FAULT_RESET_SHADOW_init                     
+0     0001e0d0  DK9_SMOKE_ADCA_init                             
+0     000218f3  DK9_TEST_BAT1_TRIP_init                         
+0     00021907  DK9_TEST_BAT2_TRIP_init                         
+0     0002191b  DK9_TEST_INV_TRIP_init                          
+0     0002192f  DK9_TEST_PV_TRIP_init                           
+0     0001e195  DK9_VALIDATION_ADCB_init                        
+0     0001e258  DK9_VALIDATION_ADCC_init                        
+0     00021a9e  DK9_VALIDATION_BAT1_TRIP_init                   
+0     00021b2c  DK9_VALIDATION_BAT2_TRIP_init                   
+0     00021b3d  DK9_VALIDATION_INV_TRIP_init                    
+0     00021b4e  DK9_VALIDATION_PV_TRIP_init                     
+0     00021f42  DK9_XBAR_BAT1_TRIP_init                         
+0     00021f48  DK9_XBAR_BAT2_TRIP_init                         
+0     00021f4e  DK9_XBAR_CARRIER_SYNC_CAPTURE_init              
+0     00021f54  DK9_XBAR_INV_TRIP_init                          
+0     00021f5a  DK9_XBAR_PV_TRIP_init                           
+0     0000ecbe  Device_enableAllPeripherals                     
+0     00020289  Device_init                                     
+0     0001eba4  ECAP_init                                       
+0     0002110e  ECAP_setEmulationMode                           
+0     00021e80  EPWMXBAR_init                                   
+0     0000c000  EPWM_init                                       
+0     0002184f  GPIO_init                                       
+0     0001f277  GPIO_setAnalogMode                              
+0     000205b6  GPIO_setControllerCore                          
+0     000208c8  GPIO_setDirectionMode                           
+0     0001faca  GPIO_setPadConfig                               
+0     000205ed  GPIO_setPinConfig                               
+0     00020624  GPIO_setQualificationMode                       
+0     00021dd0  INPUTXBAR_init                                  
+0     00021d5d  INTERRUPT_init                                  
+0     0003b000  IPC_CPU1_To_CPU2_GetBuffer                      
+0     0003a0c0  IPC_CPU1_To_CPU2_PutBuffer                      
+0     000249c8  IPC_Instance                                    
+0     00021c83  IPC_Port_AbortTx                                
+0     00021c91  IPC_Port_Ack                                    
+0     0002042d  IPC_Port_SyncWithTimeout                        
+0     00021e89  IPC_Port_TimeUs_Get                             
+0     00010060  IPC_Port_Timebase_Set                           
+0     0002112c  IPC_Port_Timeout_IsExpired                      
+0     00021644  IPC_Port_TryNotify                              
+0     000217cf  Interrupt_defaultHandler                        
+0     0002065b  Interrupt_enable                                
+0     00021e31  Interrupt_illegalOperationHandler               
+0     000202c6  Interrupt_initModule                            
+0     0002114a  Interrupt_initVectorTable                       
+0     00021e3b  Interrupt_nmiHandler                            
+0     0000ee5e  MEMCFG_init                                     
+0     0001ea8e  MemCfg_getInitStatus                            
+0     00021719  MemCfg_getUncorrErrorAddress                    
+0     0001ef3f  MemCfg_initSections                             
+0     00020e07  MemCfg_setGSRAMControllerSel                    
+0     00020466  MemCfg_setLSRAMControllerSel                    
+0     0001e487  MemCfg_setProtection                            
+0     00021ab0  PARAMBIND_Cpu1_Init                             
+0     0001e66e  PARAMBIND_Cpu1_Receive                          
+0     0000da60  PinMux_init                                     
+0     0001fd3a  RTM_Cpu1Param_Init                              
+0     0002165c  RTM_Cpu1Param_Read                              
+0     00010064  RTM_Cpu1Param_Version_Get                       
+0     00020cf8  SCHED_Cpu1_Ctrl8kTiming_Update                  
+0     0002134b  SCHED_Cpu1_Init                                 
+0     00021e45  SCHED_Cpu1_Release1msIfDue                      
+0     00020aeb  SCHED_Cpu1_Run1msTask                           
+0     00021730  SCHED_Cpu1_Timing32k_Update                     
+0     000219bb  SCHED_Cpu1_Validation_Release1ms                
+0     00020340  SPI_init                                        
+0     0001f7ad  SPI_setConfig                                   
+0     00021b5f  SYNC_init                                       
+0     00020f93  SysCtl_controlCPU2Reset                         
+0     000001b1  SysCtl_delay                                    
+0     0001f507  SysCtl_getClock                                 
+0     00021453  SysCtl_getLowSpeedClock                         
+0     0000f69e  SysCtl_isPLLValid                               
+0     0001fea7  SysCtl_selectOscSource                          
+0     0001ff34  SysCtl_selectXTAL                               
+0     00020ec2  SysCtl_selectXTALSingleEnded                    
+0     0000f578  SysCtl_setClock                                 
+0     00021fd5  UART_init                                       
+0     0001f750  UART_setConfig                                  
+0     00010068  UTILS_Filter_Lpf1_Reset                         
+0     00021d69  UTILS_Filter_Lpf1_Run                           
+0     00020fb4  UTILS_Math_ClampI64ToI32                        
+0     00021de6  UTILS_Math_Cos                                  
+0     00021f03  UTILS_Math_Sin                                  
+0     00020a6a  UTILS_Math_SqrtU32                              
+0     0001007f  UTILS_Math_SquareI16                            
+0     00010082  UTILS_Pi_Reset                                  
+0     0000917e  UTILS_Pi_ResetCla                               
+0     00021df1  UTILS_Pi_Run                                    
+0     00008ca2  UTILS_Pi_RunCla                                 
+0     00020044  UTILS_Pi_RunError                               
+0     00008f10  UTILS_Pi_TrackOutputCla                         
+0     00020b90  UTILS_Pi_TrackOutputError                       
+0     000212a5  UTILS_Pos_Neg_Seq_Init                          
+0     0001eb19  UTILS_Pos_Neg_Seq_Run                           
+0     00020303  UTILS_Ramp_Run                                  
+0     00021036  UTILS_Transform_Clarke                          
+0     0002175e  UTILS_Transform_InvClarke                       
+0     000090ee  UTILS_Transform_InvClarkeCla                    
+0     000219f6  UTILS_Transform_InvPark                         
+0     00009072  UTILS_Transform_InvParkCla                      
+0     00021ac2  UTILS_Transform_Park                            
+0     0001fc55  XBAR_setEPWMMuxConfig                           
+0     000001e4  __TI_CINIT_Base                                 
+0     000001f8  __TI_CINIT_Limit                                
+0     000001f8  __TI_CINIT_Warm                                 
+0     000001ce  __TI_Handler_Table_Base                         
+0     000001d4  __TI_Handler_Table_Limit                        
+0     0000e700  __TI_STACK_END                                  
+abs   00000700  __TI_STACK_SIZE                                 
+0     00020a95  __TI_auto_init_nobinit_nopinit                  
+0     0002289a  __TI_cleanup_ptr                                
+0     000209b9  __TI_decompress_lzss                            
+0     00021eb3  __TI_decompress_none                            
+0     0002289c  __TI_dtors_ptr                                  
+0     00022898  __TI_enable_exit_profile_output                 
+abs   ffffffff  __TI_pprof_out_hndl                             
+abs   ffffffff  __TI_prof_data_size                             
+abs   ffffffff  __TI_prof_data_start                            
+0     00021f60  __TI_zero_init                                  
+0     00021168  __c28xabi_cmpll                                 
+0     0002117a  __c28xabi_cmpull                                
+0     0001ec2d  __c28xabi_divf                                  
+0     0000f8cf  __c28xabi_divll                                 
+0     0000f945  __c28xabi_divull                                
+0     0000f90b  __c28xabi_modll                                 
+0     0000f974  __c28xabi_modull                                
+0     000219cf  __c28xabi_mpyll                                 
+abs   ffffffff  __c_args__                                      
+0     0000b800  __claUTILS_Transform_InvClarkeCla_sp            
+0     0000b800  __claUTILS_Transform_InvParkCla_sp              
+0     00010085  __error__                                       
+0     0000e000  __stack                                         
+0     00021af8  _args_main                                      
+0     0002159b  _c_int00                                        
+0     000228a2  _lock                                           
+0     00021e9a  _nop                                            
+0     00021e96  _register_lock                                  
+0     00021e92  _register_unlock                                
+0     0001009f  _system_post_cinit                              
+0     00010099  _system_pre_init                                
+0     000228a4  _unlock                                         
+0     00020be2  abort                                           
+0     00000000  code_start                                      
+0     00020be4  exit                                            
+0     00022834  g_stBoardDk9TripInjectWatch                     
+0     0002285c  g_stBoardSafetyWatch                            
+0     00001480  g_stClaToCpuMsg                                 
+0     0003a000  g_stCoreCommC1FastInstMsg                       
+0     0003a040  g_stCoreCommC1SlowStsMsg                        
+0     0003a094  g_stCoreCommC1State                             
+0     0003b0c0  g_stCoreCommC2CmdMsg                            
+0     0003b100  g_stCoreCommC2ParamMsg                          
+0     0003b088  g_stCoreCommC2State                             
+0     00022700  g_stCoreCommCpu1Watch                           
+0     00022014  g_stCpu1CarrierSyncWatch                        
+0     00022009  g_stCpu1ClaRuntimeWatch                         
+0     00022842  g_stCpu1ClaWatch                                
+0     0002241e  g_stCpu1Dk9DcSidePinWatch                       
+0     00022554  g_stCpu1Dk9MilAdcWatch                          
+0     000014d8  g_stCpu1Dk9MilClaAdcWatch                       
+0     0002243c  g_stCpu1MeasurementWatch                        
+0     0002201e  g_stCpu1OpenLoopWatch                           
+0     00022882  g_stCpu1StackWatch                              
+0     0002278e  g_stCpu1ValidationCmd                           
+0     000227c0  g_stCpu1ValidationWatch                         
+0     00001500  g_stCpuToClaMsg                                 
+0     0000ba00  g_stCpuToClaStartupCfg                          
+0     00024000  g_stRtmCpu1ParamLocalTable                      
+0     00024a9e  g_stRtmParamInfo                                
+0     00022808  g_stSchedCpu1Watch                              
+0     000238bd  g_uiRtmCpu1ParamLocalCount                      
+0     0001f49e  main                                            
+0     00021a55  memcmp                                          
+0     00021076  memcpy                                          
+0     00021f11  memset                                          
+
+
+GLOBAL SYMBOLS: SORTED BY Symbol Address 
+
+page  address   name                                            
+----  -------   ----                                            
+0     00000000  code_start                                      
+0     000001b1  SysCtl_delay                                    
+0     000001ce  __TI_Handler_Table_Base                         
+0     000001d4  __TI_Handler_Table_Limit                        
+0     000001e4  __TI_CINIT_Base                                 
+0     000001f8  __TI_CINIT_Limit                                
+0     000001f8  __TI_CINIT_Warm                                 
+0     00001480  g_stClaToCpuMsg                                 
+0     000014d8  g_stCpu1Dk9MilClaAdcWatch                       
+0     00001500  g_stCpuToClaMsg                                 
+0     00008000  Cla1Task1                                       
+0     0000841e  CTRL_CurrLoop_Run                               
+0     0000856e  BOARD_Cla_FastAdc_Read                          
+0     000089ca  Cla1Task8                                       
+0     00008adc  CTRL_CurrLoop_Reset                             
+0     00008bc8  CTRL_CurrLoop_Init                              
+0     00008c36  CTRL_InvPwm_Init                                
+0     00008ca2  UTILS_Pi_RunCla                                 
+0     00008dc0  CTRL_InvPwm_Reset                               
+0     00008e70  CTRL_CurrLoop_SetConfig                         
+0     00008f10  UTILS_Pi_TrackOutputCla                         
+0     00009072  UTILS_Transform_InvParkCla                      
+0     000090ee  UTILS_Transform_InvClarkeCla                    
+0     00009114  CTRL_InvPwm_Run                                 
+0     0000917e  UTILS_Pi_ResetCla                               
+0     0000b800  __claUTILS_Transform_InvClarkeCla_sp            
+0     0000b800  __claUTILS_Transform_InvParkCla_sp              
+0     0000ba00  g_stCpuToClaStartupCfg                          
+0     0000c000  EPWM_init                                       
+0     0000d464  CPU1_Param_MeasurementCfg_Build                 
+0     0000da60  PinMux_init                                     
+0     0000dd5c  CPU1_Ctrl_Sample_Run                            
+0     0000df9c  ADC_setINLTrim                                  
+0     0000e000  __stack                                         
+0     0000e700  __TI_STACK_END                                  
+0     0000e917  CPU1_Ctrl_Fast_Run                              
+0     0000ecbe  Device_enableAllPeripherals                     
+0     0000ee5e  MEMCFG_init                                     
+0     0000efe8  CPU1_Measurement_Snapshot_Get                   
+0     0000f170  CPU1_Ctrl_ConfigApply                           
+0     0000f2df  CPU1_Ctrl_StartupConfig_Get                     
+0     0000f42c  CPU1_Ctrl_Init                                  
+0     0000f578  SysCtl_setClock                                 
+0     0000f69e  SysCtl_isPLLValid                               
+0     0000f7be  CPU1_CoreComm_Run1ms                            
+0     0000f8cf  __c28xabi_divll                                 
+0     0000f90b  __c28xabi_modll                                 
+0     0000f945  __c28xabi_divull                                
+0     0000f974  __c28xabi_modull                                
+0     0000f9d6  CTRL_VoltLoop_Run                               
+0     0000fad7  COREMSG_Access_Parameter_Copy                   
+0     0000fbd7  COREMSG_Access_Parameter_ReadShared             
+0     0000fcd7  CPU1_Ctrl_InputsCommit                          
+0     00010000  BOARD_CarrierSyncPeriod_Active_Get              
+0     00010004  BOARD_Cla1_Task1_HasOverflowed                  
+0     00010008  BOARD_Cla1_Task1_IsPending                      
+0     0001000c  BOARD_Cla1_Task1_IsRunning                      
+0     00010010  BOARD_Cpu1_NestAllowInt1_Exit                   
+0     00010014  BOARD_GlobalInt_Enable                          
+0     00010018  BOARD_TimestampElapsed_Get                      
+0     0001001c  COREMSG_CommandCpu1_GetAppliedSeq               
+0     00010020  COREMSG_ParameterCpu1_GetAppliedVersion         
+0     00010024  CORESTATE_Cpu1_GetBootAttemptCnt                
+0     00010028  CORESTATE_Cpu1_GetBootEpoch                     
+0     0001002c  CORESTATE_Cpu1_GetBootStep                      
+0     00010030  CORESTATE_Cpu1_GetCpu2BootEpoch                 
+0     00010034  CORESTATE_Cpu1_GetCpu2BootStep                  
+0     00010038  CORESTATE_Cpu1_GetCpu2FaultFlags                
+0     0001003c  CORESTATE_Cpu1_GetCpu2LastError                 
+0     00010040  CORESTATE_Cpu1_GetCpu2LastWarn                  
+0     00010044  CORESTATE_Cpu1_GetCpu2LogicAliveSeq             
+0     00010048  CORESTATE_Cpu1_GetCpu2RunState                  
+0     0001004c  CORESTATE_Cpu1_GetCpu2Status                    
+0     00010050  CORESTATE_Cpu1_GetLastError                     
+0     00010054  CORESTATE_Cpu1_GetRunState                      
+0     00010058  CPU1_Cla_Fault_IsLatched                        
+0     00010058  CPU1_Ctrl_ClaFault_IsLatched                    
+0     0001005c  CPU1_CoreComm_CtrlEnabled_IsSet                 
+0     00010060  IPC_Port_Timebase_Set                           
+0     00010064  CPU1_Param_Version_Get                          
+0     00010064  RTM_Cpu1Param_Version_Get                       
+0     00010068  UTILS_Filter_Lpf1_Reset                         
+0     0001006c  CPU1_StackWatch_Sp_Get                          
+0     0001007c  COREMSG_Access_Sequence_ResetCommit             
+0     0001007f  UTILS_Math_SquareI16                            
+0     00010082  UTILS_Pi_Reset                                  
+0     00010085  __error__                                       
+0     0001008b  CORESTATE_Cpu1_DebugBarrier_IsArmed             
+0     0001008d  CORESTATE_Cpu1_GetDebugBootSession              
+0     0001008f  CORESTATE_Cpu1_IsCpu2DebugBarrierCurrent        
+0     00010091  CORESTATE_Cpu1_IsCpu2DebugBootInitialized       
+0     00010093  CPU1_CoreComm_NmiParityRecovery_Try             
+0     00010095  CPU1_Ctrl_RuntimeBoundary_DiagFallback_IsEnabled
+0     00010097  CPU1_Ctrl_RuntimeBoundary_OpenLoopCalc_IsAllowed
+0     00010099  _system_pre_init                                
+0     0001009b  BOARD_Relay_RuntimeOwner_Transfer               
+0     0001009c  CORESTATE_Cpu1_DebugBarrier_Arm                 
+0     0001009d  CPU1_Ctrl_RuntimeBoundary_Observe32k            
+0     0001009e  CPU1_Ctrl_RuntimeBoundary_Observe8k             
+0     0001009f  _system_post_cinit                              
+0     0001e0d0  DK9_SMOKE_ADCA_init                             
+0     0001e195  DK9_VALIDATION_ADCB_init                        
+0     0001e258  DK9_VALIDATION_ADCC_init                        
+0     0001e31b  CPU1_Ctrl_RuntimeBoundary_ClaControl_Override   
+0     0001e31b  CPU1_Validation_ControlFrame_Get                
+0     0001e3db  BOARD_Runtime_Init                              
+0     0001e487  MemCfg_setProtection                            
+0     0001e530  COREMSG_Access_Command_Copy                     
+0     0001e5cf  COREMSG_Access_Command_ReadShared               
+0     0001e66e  COREMSG_ParameterCpu1_Receive                   
+0     0001e66e  PARAMBIND_Cpu1_Receive                          
+0     0001e70d  CPU1_Ctrl_Run8k                                 
+0     0001e847  CPU1_CoreComm_Cpu2Boot_Run                      
+0     0001e8de  CPU1_Measurement_Init                           
+0     0001e974  CPU1_Cla_StartupConfig_Apply                    
+0     0001ea8e  MemCfg_getInitStatus                            
+0     0001eb19  UTILS_Pos_Neg_Seq_Run                           
+0     0001eba4  BOARD_CARRIER_SYNC_ECAP1_init                   
+0     0001eba4  ECAP_init                                       
+0     0001ec2d  __c28xabi_divf                                  
+0     0001ecb5  CTRL_CarrierSync_Run                            
+0     0001edbf  BOOTSYNC_Cpu1_StartCpu2Attempt                  
+0     0001ee42  CPU1_AdcaInt1_Isr                               
+0     0001eec2  CPU1_CoreComm_StartupParameters_Receive         
+0     0001ef3f  MemCfg_initSections                             
+0     0001f0ad  BOOTSYNC_Cpu1_WaitCpu2Ready                     
+0     0001f206  BOARD_CtrlTimebase_Start                        
+0     0001f277  GPIO_setAnalogMode                              
+0     0001f357  COREMSG_CommandCpu1_Receive                     
+0     0001f3c5  CPU1_Ctrl8k_Isr                                 
+0     0001f49e  main                                            
+0     0001f507  SysCtl_getClock                                 
+0     0001f56c  CAN_setBitTiming                                
+0     0001f633  CPU1_Cla_Diag_Update32k                         
+0     0001f694  CPU1_Nmi_Isr                                    
+0     0001f6f2  CPU1_Validation_Init                            
+0     0001f750  UART_setConfig                                  
+0     0001f7ad  SPI_setConfig                                   
+0     0001f809  CPU1_Param_PllSnapshot_Get                      
+0     0001f864  BOARD_AdcFastSample_Capture                     
+0     0001f918  CTRL_SoftPLL_Run                                
+0     0001f971  COREMSG_Access_FastInstant_WriteShared          
+0     0001fa1f  COREMSG_ParameterCpu1_ApplyPending              
+0     0001fa75  COREMSG_CommandCpu1_ApplyPending                
+0     0001faca  GPIO_setPadConfig                               
+0     0001fb1c  CPU1_Measurement_Run8k                          
+0     0001fc55  XBAR_setEPWMMuxConfig                           
+0     0001fd3a  CPU1_Param_Init                                 
+0     0001fd3a  RTM_Cpu1Param_Init                              
+0     0001fd85  ADC_setVREF                                     
+0     0001fdce  BOARD_DelayUs                                   
+0     0001fe17  CPU1_Param_CurrCtrlSnapshot_Get                 
+0     0001fe60  CPU1_Cla_Task8Init_Run                          
+0     0001fea7  SysCtl_selectOscSource                          
+0     0001feee  BOARD_CarrierSyncOutput_Set                     
+0     0001ff34  SysCtl_selectXTAL                               
+0     0001ff7a  CPU1_Dk9DcSidePinTest_Foreground                
+0     0001ffbf  CTRL_PhaseGen_FreqSet                           
+0     00020000  BOARD_CarrierSyncError_Read                     
+0     00020044  UTILS_Pi_RunError                               
+0     000200cb  COREMSG_ParameterCpu1_GetPending                
+0     0002010d  BOARD_Watchdog_Activate                         
+0     0002014d  CPU1_Param_OpenLoopSnapshot_Get                 
+0     0002020d  CPU1_Dk9MilAdc_Foreground                       
+0     00020289  BOARD_Device_Init                               
+0     00020289  Device_init                                     
+0     000202c6  Interrupt_initModule                            
+0     00020303  UTILS_Ramp_Run                                  
+0     00020340  BOARD_NVM_SPI_init                              
+0     00020340  SPI_init                                        
+0     0002042d  IPC_Port_SyncWithTimeout                        
+0     00020466  MemCfg_setLSRAMControllerSel                    
+0     000204d8  BOOTSYNC_Cpu1_WaitCpu2AppInit                   
+0     00020548  CTRL_OpenLoop_Reset                             
+0     0002057f  CTRL_SoftPLL_SetConfig                          
+0     000205b6  GPIO_setControllerCore                          
+0     000205ed  GPIO_setPinConfig                               
+0     00020624  GPIO_setQualificationMode                       
+0     0002065b  Interrupt_enable                                
+0     000206c9  BOOTSYNC_Cpu1_WaitCpu2LogicAliveChange          
+0     000206ff  CPU1_Ctrl_Run32k                                
+0     00020734  CPU1_Dk9DcSidePinTest_Init                      
+0     00020768  CPU1_Dk9MilAdc_OnCapture                        
+0     0002079c  CPU1_Measurement_SlowSnapshot_Take              
+0     000207d0  CPU1_Dk9MilAdc_Init                             
+0     00020803  CPU1_Cla_Init                                   
+0     00020835  COREMSG_CommandCpu1_CheckTimeout                
+0     00020866  CPU1_CoreComm_Init                              
+0     00020897  CPU1_CoreComm_NmiFault_Latch                    
+0     000208c8  GPIO_setDirectionMode                           
+0     000209b9  __TI_decompress_lzss                            
+0     000209e7  BOARD_CarrierSyncPeriod_Apply                   
+0     00020a14  BOARD_SafetyEarly_Init                          
+0     00020a3f  CPU1_Ctrl_RuntimeBoundary_Policy_Get            
+0     00020a6a  UTILS_Math_SqrtU32                              
+0     00020a95  __TI_auto_init_nobinit_nopinit                  
+0     00020aeb  SCHED_Cpu1_Run1msTask                           
+0     00020b15  CLA_init                                        
+0     00020b15  CPU1_CLA1_init                                  
+0     00020b3e  CPU1_StackWatch_Init                            
+0     00020b67  CPU1_StackWatch_Run                             
+0     00020b90  UTILS_Pi_TrackOutputError                       
+0     00020be2  C$$EXIT                                         
+0     00020be2  abort                                           
+0     00020be4  exit                                            
+0     00020c83  COMM_DEBUG_UART_init                            
+0     00020caa  CPU1_CoreComm_FastExchange_Run                  
+0     00020cf8  SCHED_Cpu1_Ctrl8kTiming_Update                  
+0     00020dbb  BOARD_BootTimebase_Start                        
+0     00020de1  CLA_setTriggerSource                            
+0     00020e07  MemCfg_setGSRAMControllerSel                    
+0     00020e53  BOARD_Cpu2_Boot_Release                         
+0     00020e78  COMM_ARM_UART_init                              
+0     00020e9d  CTRL_VoltLoop_Init                              
+0     00020ec2  SysCtl_selectXTALSingleEnded                    
+0     00020ee7  BOARD_NmiDiag_Read                              
+0     00020f51  Board_init                                      
+0     00020f93  SysCtl_controlCPU2Reset                         
+0     00020fb4  UTILS_Math_ClampI64ToI32                        
+0     00020ff6  BOARD_Dk9TripInject_Init                        
+0     00021016  CPU1_CoreComm_StartupParameters_Apply           
+0     00021036  UTILS_Transform_Clarke                          
+0     00021076  memcpy                                          
+0     00021096  CPU1_CoreComm_RunInputs                         
+0     000210b4  CTRL_SoftPLL_Reset                              
+0     0002110e  ECAP_setEmulationMode                           
+0     0002112c  IPC_Port_Timeout_IsExpired                      
+0     0002114a  Interrupt_initVectorTable                       
+0     00021168  __c28xabi_cmpll                                 
+0     0002117a  __c28xabi_cmpull                                
+0     00021186  ADC_setMode                                     
+0     000211a3  BOARD_AdcFastSample_Get                         
+0     000211c0  COREMSG_CommandCpu1_Init                        
+0     000211dd  CTRL_OpenLoop_Run                               
+0     000211fa  CTRL_PhaseGen_Run                               
+0     00021251  BSW_CoreErr_Init                                
+0     0002126d  CAN_initModule                                  
+0     00021289  CTRL_PhaseGen_Init                              
+0     000212a5  UTILS_Pos_Neg_Seq_Init                          
+0     00021315  COREMSG_FastInstantCpu1_Publish                 
+0     00021330  COREMSG_SlowStatusCpu1_Publish                  
+0     0002134b  SCHED_Cpu1_Init                                 
+0     000213b7  BOARD_Watchdog_Service                          
+0     000213eb  COREMSG_Access_Identity_Matches                 
+0     00021405  CTRL_VoltLoop_SetConfig                         
+0     00021453  SysCtl_getLowSpeedClock                         
+0     000214a1  BOARD_Cpu1_IsrHooks_Register                    
+0     000214ba  BOARD_Cpu2_Reset_Hold                           
+0     000214d3  BOARD_SafetyPostInit_Reassert                   
+0     000214ec  CPU1_Ctrl_RuntimeBoundary_SamplePolicy_Get      
+0     00021505  CTRL_SoftPLL_Advance                            
+0     0002159b  _c_int00                                        
+0     000215b4  BOARD_CPU1_LED_GREEN_init                       
+0     000215cc  BOARD_CPU1_LED_RED_init                         
+0     000215e4  BOARD_SYNC_OUT4_init                            
+0     000215fc  COREMSG_Access_SlowStatus_WriteShared           
+0     00021614  COREMSG_CommandCpu1_ForceSafeOff                
+0     0002162c  DK9_FAULT_RESET_SHADOW_init                     
+0     00021644  IPC_Port_TryNotify                              
+0     0002165c  RTM_Cpu1Param_Read                              
+0     000216eb  BOARD_SYNC_OUT1_init                            
+0     00021702  CPU1_Validation_Foreground_Run                  
+0     00021719  MemCfg_getUncorrErrorAddress                    
+0     00021730  SCHED_Cpu1_Timing32k_Update                     
+0     0002175e  UTILS_Transform_InvClarke                       
+0     000217cf  Interrupt_defaultHandler                        
+0     000217fb  CAN_init                                        
+0     000217fb  COMM_PARALLEL_CAN_init                          
+0     0002184f  GPIO_init                                       
+0     000218a3  CORESTATE_Cpu1_CheckCpu2Peer                    
+0     000218df  DK9_CARRIER_SYNC_CAPTURE_INPUT_init             
+0     000218f3  DK9_TEST_BAT1_TRIP_init                         
+0     00021907  DK9_TEST_BAT2_TRIP_init                         
+0     0002191b  DK9_TEST_INV_TRIP_init                          
+0     0002192f  DK9_TEST_PV_TRIP_init                           
+0     000219bb  SCHED_Cpu1_Validation_Release1ms                
+0     000219cf  __c28xabi_mpyll                                 
+0     000219e3  COREMSG_ParameterCpu1_Init                      
+0     000219f6  UTILS_Transform_InvPark                         
+0     00021a55  memcmp                                          
+0     00021a68  CORESTATE_Cpu1_ClearFault                       
+0     00021a7a  CPU1_Cla_ControlFrame_Commit                    
+0     00021a8c  CTRL_OpenLoop_Init                              
+0     00021a9e  DK9_VALIDATION_BAT1_TRIP_init                   
+0     00021ab0  PARAMBIND_Cpu1_Init                             
+0     00021ac2  UTILS_Transform_Park                            
+0     00021af8  _args_main                                      
+0     00021b0a  CORESTATE_Cpu1_GetCpu2ContractDiag              
+0     00021b1b  CORESTATE_Cpu1_SetFault                         
+0     00021b2c  DK9_VALIDATION_BAT2_TRIP_init                   
+0     00021b3d  DK9_VALIDATION_INV_TRIP_init                    
+0     00021b4e  DK9_VALIDATION_PV_TRIP_init                     
+0     00021b5f  SYNC_init                                       
+0     00021bb3  COREMSG_CommandCpu1_GetDiag                     
+0     00021bc3  COREMSG_ParameterCpu1_GetDiag                   
+0     00021be3  BOARD_SafetyOff_Assert                          
+0     00021be3  CPU1_Validation_SafeOff_Run                     
+0     00021bf2  CORESTATE_Cpu1_InitOnce                         
+0     00021c01  CPU1_Measurement_EffectiveAdcCfg_Get            
+0     00021c3d  COREMSG_Access_Identity_Copy                    
+0     00021c4b  COREMSG_Access_Identity_ReadShared              
+0     00021c59  COREMSG_Access_Sequence_PublishBegin            
+0     00021c67  CPU1_Validation_Run1ms_Hook                     
+0     00021c75  CTRL_SoftPLL_Init                               
+0     00021c83  IPC_Port_AbortTx                                
+0     00021c91  IPC_Port_Ack                                    
+0     00021cbb  ASYSCTL_init                                    
+0     00021d09  BOARD_LedGreen_Write                            
+0     00021d15  BOARD_LedRed_Write                              
+0     00021d21  COREMSG_Access_Sequence_IsNewer                 
+0     00021d2d  CORESTATE_Cpu1_BootAttemptBegin                 
+0     00021d39  CPU1_CoreComm_Running_Enter                     
+0     00021d45  CPU1_CoreComm_StartupFailure_Indicate           
+0     00021d51  CPU1_Safety_StartupFail_Stop                    
+0     00021d5d  INTERRUPT_init                                  
+0     00021d69  UTILS_Filter_Lpf1_Run                           
+0     00021d99  BOARD_MemCfgDiag_Read                           
+0     00021da4  BSW_CoreErr_SetLastError                        
+0     00021daf  CPU1_Safety_SafeOff_Run                         
+0     00021dba  CTRL_CarrierSync_Init                           
+0     00021dba  CTRL_CarrierSync_Reset                          
+0     00021dc5  CTRL_PhaseGen_Seed                              
+0     00021dd0  INPUTXBAR_init                                  
+0     00021de6  UTILS_Math_Cos                                  
+0     00021df1  UTILS_Pi_Run                                    
+0     00021e1d  BSW_CoreErr_GetLastError                        
+0     00021e27  COREMSG_CommandCpu1_IsSafeOff                   
+0     00021e31  Interrupt_illegalOperationHandler               
+0     00021e3b  Interrupt_nmiHandler                            
+0     00021e45  SCHED_Cpu1_Release1msIfDue                      
+0     00021e77  CPU1_CoreComm_RunCommand8k                      
+0     00021e80  EPWMXBAR_init                                   
+0     00021e89  IPC_Port_TimeUs_Get                             
+0     00021e92  _register_unlock                                
+0     00021e96  _register_lock                                  
+0     00021e9a  _nop                                            
+0     00021e9b  ADC_setOffsetTrim                               
+0     00021ea3  BOARD_Cla1_Task8_Force                          
+0     00021eab  CORESTATE_Cpu1_IsCpu2StatePresent               
+0     00021eb3  __TI_decompress_none                            
+0     00021ecb  ADC_init                                        
+0     00021ed2  BOARD_Cpu2ValidationGs2_Transfer                
+0     00021ed9  BOARD_NmiHandler_Register                       
+0     00021ee0  COREMSG_CommandCpu1_NmiSafeOff_Request          
+0     00021ee7  COREMSG_ParameterCpu1_GetActive                 
+0     00021eee  CORESTATE_Cpu1_GetFaultFlags                    
+0     00021ef5  CPU1_CoreComm_Timebase_Init                     
+0     00021f03  UTILS_Math_Sin                                  
+0     00021f11  memset                                          
+0     00021f18  BOARD_BootTimeUs_Get                            
+0     00021f1e  BOARD_Cla1_Task1_ClearOverflow                  
+0     00021f24  BOARD_Cla1_Task8_ClearOverflow                  
+0     00021f2a  BOARD_Cpu1_NestAllowInt1_Enter                  
+0     00021f30  BOARD_BootTimerCount_Get                        
+0     00021f30  BOARD_TimestampCount_Get                        
+0     00021f36  COREMSG_Access_Sequence_ResetBegin              
+0     00021f3c  CPU1_Ctrl_MeasurementSlowSnapshot_Take          
+0     00021f42  DK9_XBAR_BAT1_TRIP_init                         
+0     00021f48  DK9_XBAR_BAT2_TRIP_init                         
+0     00021f4e  DK9_XBAR_CARRIER_SYNC_CAPTURE_init              
+0     00021f54  DK9_XBAR_INV_TRIP_init                          
+0     00021f5a  DK9_XBAR_PV_TRIP_init                           
+0     00021f60  __TI_zero_init                                  
+0     00021f66  BOARD_SafetyOff_IsAsserted                      
+0     00021f8a  BOARD_Cla1_Task8_HasOverflowed                  
+0     00021f8f  BOARD_Cla1_Task8_IsPending                      
+0     00021f94  BOARD_Cla1_Task8_IsRunning                      
+0     00021f99  BOARD_Interrupt_Init                            
+0     00021f9e  COREMSG_CommandCpu1_GetActiveCommand            
+0     00021fa3  COREMSG_CommandCpu1_TakeClearApplied            
+0     00021fa8  COREMSG_Cpu1Snapshots_InitBegin                 
+0     00021fad  COREMSG_Cpu1Snapshots_InitCommit                
+0     00021fb2  CORESTATE_Cpu1_NmiFault_Latch                   
+0     00021fb7  CORESTATE_Cpu1_SetBootState                     
+0     00021fbc  CPU1_Cla_Fault_Latch                            
+0     00021fc1  CPU1_Ctrl_MeasurementSnapshot_Get               
+0     00021fc6  CPU1_Safety_FastProtect_Run                     
+0     00021fcb  CPU1_Safety_Nmi_Init                            
+0     00021fd0  CTRL_VoltLoop_Reset                             
+0     00021fd5  UART_init                                       
+0     00021ffd  BOOTSYNC_BootPolicy_Get                         
+0     00022009  g_stCpu1ClaRuntimeWatch                         
+0     00022014  g_stCpu1CarrierSyncWatch                        
+0     0002201e  g_stCpu1OpenLoopWatch                           
+0     0002241e  g_stCpu1Dk9DcSidePinWatch                       
+0     0002243c  g_stCpu1MeasurementWatch                        
+0     00022554  g_stCpu1Dk9MilAdcWatch                          
+0     00022700  g_stCoreCommCpu1Watch                           
+0     0002278e  g_stCpu1ValidationCmd                           
+0     000227c0  g_stCpu1ValidationWatch                         
+0     00022808  g_stSchedCpu1Watch                              
+0     00022834  g_stBoardDk9TripInjectWatch                     
+0     00022842  g_stCpu1ClaWatch                                
+0     0002285c  g_stBoardSafetyWatch                            
+0     00022882  g_stCpu1StackWatch                              
+0     00022898  __TI_enable_exit_profile_output                 
+0     0002289a  __TI_cleanup_ptr                                
+0     0002289c  __TI_dtors_ptr                                  
+0     000228a2  _lock                                           
+0     000228a4  _unlock                                         
+0     000238bd  g_uiRtmCpu1ParamLocalCount                      
+0     00024000  g_stRtmCpu1ParamLocalTable                      
+0     000249c8  IPC_Instance                                    
+0     00024a9e  g_stRtmParamInfo                                
+0     0003a000  g_stCoreCommC1FastInstMsg                       
+0     0003a040  g_stCoreCommC1SlowStsMsg                        
+0     0003a094  g_stCoreCommC1State                             
+0     0003a0c0  IPC_CPU1_To_CPU2_PutBuffer                      
+0     0003b000  IPC_CPU1_To_CPU2_GetBuffer                      
+0     0003b088  g_stCoreCommC2State                             
+0     0003b0c0  g_stCoreCommC2CmdMsg                            
+0     0003b100  g_stCoreCommC2ParamMsg                          
+abs   00000700  __TI_STACK_SIZE                                 
+abs   ffffffff  __TI_pprof_out_hndl                             
+abs   ffffffff  __TI_prof_data_size                             
+abs   ffffffff  __TI_prof_data_start                            
+abs   ffffffff  __c_args__                                      
+
+[417 symbols]

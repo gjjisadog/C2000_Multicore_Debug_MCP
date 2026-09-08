@@ -1,0 +1,32 @@
+# CCS includes this file before the generated build rules.  The generated
+# pre-build recipe is prefixed with '-' by CCS, so make itself cannot stop on
+# that recipe's exit code.  ccs_prebuild.bat publishes this marker only after
+# SysConfig, board-profile, and RTM generation have all passed.
+
+.PHONY: ccs-prebuild-marker-invalidate ccs-prebuild-fail-closed
+
+# Invalidate any prior run before CCS executes its ignored-error pre-build
+# recipe. This prerequisite also runs when the batch/script cannot start.
+pre-build: ccs-prebuild-marker-invalidate
+
+ifeq ($(OS),Windows_NT)
+ccs-prebuild-marker-invalidate:
+	@if exist "ccs_prebuild.success" (del /q "ccs_prebuild.success" >nul 2>nul & if exist "ccs_prebuild.success" (echo error: unable to invalidate previous pre-build success marker. 1>&2 & exit /b 1))
+else
+ccs-prebuild-marker-invalidate:
+	@rm -f "ccs_prebuild.success"
+	@test ! -e "ccs_prebuild.success" || { echo "error: unable to invalidate previous pre-build success marker." >&2; exit 1; }
+endif
+
+# ORDERED_OBJS is defined before makefile.init is included.  CCS quotes the
+# entries in this variable, while the generated object rules do not.
+CCS_PREBUILD_OBJECTS := $(subst ",,$(ORDERED_OBJS))
+$(CCS_PREBUILD_OBJECTS): | ccs-prebuild-fail-closed
+
+ifeq ($(OS),Windows_NT)
+ccs-prebuild-fail-closed:
+	@if not exist "ccs_prebuild.success" (echo error: pre-build success marker missing; refusing C2000 compilation. 1>&2 & exit /b 1)
+else
+ccs-prebuild-fail-closed:
+	@test -f "ccs_prebuild.success" || { echo "error: pre-build success marker missing; refusing C2000 compilation." >&2; exit 1; }
+endif
