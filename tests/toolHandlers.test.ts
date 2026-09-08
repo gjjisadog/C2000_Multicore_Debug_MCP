@@ -915,7 +915,10 @@ describe("tool handlers", () => {
       cpu2MapSha256: await sha256File(files.cpu2MapPath)
     };
     const adapter = new PhaseChangingOwnershipAdapter([0x10], {
-      expressionValues: { "ipc.responsePass": { value: "1" } }
+      expressionValues: {
+        "ipc.responsePass": { value: "1" },
+        "safety.symbolsReady": { value: "1" }
+      }
     });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
@@ -931,6 +934,10 @@ describe("tool handlers", () => {
       ...files,
       ...hashes,
       programPreparation: "symbols-only",
+      preStartupSafetyGuard: {
+        conditions: [{ coreId: 0, expression: "safety.symbolsReady", expected: "1" }],
+        haltCoreIds: [0, 2]
+      },
       resetType: "cpu",
       runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
       ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
@@ -962,6 +969,63 @@ describe("tool handlers", () => {
     expect(adapter.ownershipWrites).toEqual([]);
     expect(result.effectsApplied).not.toContain("program-load");
     expect(result.effectsApplied).not.toContain("ram-ownership-change");
+    const cpu2Symbols = adapter.events.indexOf("symbols:2:cpu2.out");
+    const safetyGuard = adapter.events.indexOf("evaluate:0:safety.symbolsReady");
+    const firstHalt = adapter.events.indexOf("halt:0");
+    expect(cpu2Symbols).toBeGreaterThanOrEqual(0);
+    expect(safetyGuard).toBeGreaterThan(cpu2Symbols);
+    expect(firstHalt).toBeGreaterThan(safetyGuard);
+    expect(result.safetyGuardChecks).toEqual([
+      expect.objectContaining({ phase: "symbols-loaded-before-startup", matched: true })
+    ]);
+  });
+
+  test("symbols-only safety guard remains fail-closed after symbols load and before reset", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-symbols-guard-fail-"));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const adapter = new PhaseChangingOwnershipAdapter([0x10], {
+      expressionValues: {
+        "ipc.responsePass": { value: "1" },
+        "safety.symbolsReady": { value: "0" }
+      }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-symbols-only-guard-fail", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      programPreparation: "symbols-only",
+      preStartupSafetyGuard: {
+        conditions: [{ coreId: 0, expression: "safety.symbolsReady", expected: "1" }],
+        haltCoreIds: [0, 2]
+      },
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "SafetyGuardViolation" })
+    }));
+    expect(adapter.events).toEqual([
+      "symbols:0:cpu1.out",
+      "symbols:2:cpu2.out",
+      "evaluate:0:safety.symbolsReady",
+      "halt:0",
+      "halt:2"
+    ]);
+    expect(adapter.events.some(event => event.startsWith("reset:"))).toBe(false);
+    expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
   });
 
   test("runIpcAcceptance keeps CPU1 owner-first RAM preparation before CPU2 load", async () => {

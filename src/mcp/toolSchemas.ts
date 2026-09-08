@@ -372,6 +372,10 @@ export const expressionConditionSchema = z.object({
 });
 export const workflowRunModeSchema = z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]);
 const programPreparationSchema = z.enum(["load", "symbols-only"]).default("load");
+const preStartupSafetyGuardSchema = z.object({
+  conditions: z.array(expressionConditionSchema).min(1).max(128),
+  haltCoreIds: z.array(z.number().int()).min(1).max(2).default([0, 2])
+}).strict().describe("For durable symbols-only IPC, evaluate after symbols load and before reset/run; a mismatch fails closed and halts the declared cores.");
 const ipcArtifactHashShape = {
   cpu1OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   cpu2OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
@@ -661,6 +665,7 @@ const runIpcAcceptanceObjectSchema = z.object({
     .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   loadSequence: ipcLoadSequenceSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
+  preStartupSafetyGuard: preStartupSafetyGuardSchema.optional(),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive(),
   intervalMs: z.number().int().positive().default(100),
@@ -673,7 +678,7 @@ const runIpcAcceptanceObjectSchema = z.object({
 
 export const runIpcAcceptanceSchema = runIpcAcceptanceObjectSchema;
 
-export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true }).extend({
+export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true, preStartupSafetyGuard: true }).extend({
   boardId: z.string().min(1).optional(),
   sessionMode: z.enum(["ephemeral", "interactive"]).default("ephemeral"),
   idleTimeoutMs: z.number().int().positive().optional(),

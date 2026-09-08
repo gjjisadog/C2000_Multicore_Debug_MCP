@@ -190,32 +190,18 @@ export class DebugWorkflowService {
     // partially reset or partially loaded multicore session behind.
     const ramOwnership = await this.analyzeRamOwnership({ maps });
     performedSteps.push("artifactPreflight", "analyzeRamOwnership");
+    if (input.preStartupSafetyGuard) {
+      assertPreStartupSafetyGuardScope(input.preStartupSafetyGuard, coreIds);
+    }
 
-    setStage("initial-halt");
-    const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
-    performedSteps.push("haltCores");
-    assertBatchSucceeded("haltCores", initialHalt);
-    setStage("reset");
-    const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
-    performedSteps.push("resetCores");
-    assertBatchSucceeded("resetCores", reset);
-    const cpu1Program = {
-      coreId: input.cpu1CoreId,
-      programUri: input.cpu1OutPath,
-      mapUri: input.cpu1MapPath,
-      loadPolicy: input.loadPolicy,
-      allowDestructiveFlashReload: input.allowDestructiveFlashReload
-    };
-    const cpu2Program = {
-      coreId: input.cpu2CoreId,
-      programUri: input.cpu2OutPath,
-      mapUri: input.cpu2MapPath,
-      loadPolicy: input.loadPolicy,
-      allowDestructiveFlashReload: input.allowDestructiveFlashReload
-    };
-    let load: ToolResult;
-    setStage("program-load");
+    let load: ToolResult | undefined;
+    const safetyGuardChecks: ToolResult[] = [];
     if (input.programPreparation === "symbols-only") {
+      // Resident Flash has no program-load side effect. Load both symbol
+      // tables while the connect-only durable session is still at its safe
+      // halted baseline, then evaluate durable safety expressions against the
+      // now-available symbols before any reset or run authority is exercised.
+      setStage("symbols-load");
       const symbolLoadResults: ToolResult[] = [];
       const cpu1Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu1CoreId, input.cpu1OutPath);
       symbolLoadResults.push({
@@ -245,7 +231,38 @@ export class DebugWorkflowService {
         targetFlashVerified: false,
         note: SYMBOLS_ONLY_FLASH_NOTE
       };
-    } else {
+      assertBatchSucceeded("loadSymbols", load);
+      if (input.preStartupSafetyGuard) {
+        setStage("pre-startup-safety-guard");
+        safetyGuardChecks.push(await this.verifyPreStartupSafetyGuard(input.sessionId, input.preStartupSafetyGuard));
+        performedSteps.push("verifyPreStartupSafetyGuard");
+      }
+    }
+
+    setStage("initial-halt");
+    const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
+    performedSteps.push("haltCores");
+    assertBatchSucceeded("haltCores", initialHalt);
+    setStage("reset");
+    const reset = await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
+    performedSteps.push("resetCores");
+    assertBatchSucceeded("resetCores", reset);
+    const cpu1Program = {
+      coreId: input.cpu1CoreId,
+      programUri: input.cpu1OutPath,
+      mapUri: input.cpu1MapPath,
+      loadPolicy: input.loadPolicy,
+      allowDestructiveFlashReload: input.allowDestructiveFlashReload
+    };
+    const cpu2Program = {
+      coreId: input.cpu2CoreId,
+      programUri: input.cpu2OutPath,
+      mapUri: input.cpu2MapPath,
+      loadPolicy: input.loadPolicy,
+      allowDestructiveFlashReload: input.allowDestructiveFlashReload
+    };
+    if (input.programPreparation !== "symbols-only") {
+      setStage("program-load");
       if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
         const cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
         assertBatchSucceeded("loadCpu1Program", cpu1Load);
@@ -260,8 +277,14 @@ export class DebugWorkflowService {
         load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
         performedSteps.push("loadPrograms");
       }
+      assertBatchSucceeded("loadPrograms", load);
     }
-    assertBatchSucceeded(input.programPreparation === "symbols-only" ? "loadSymbols" : "loadPrograms", load);
+    if (!load) {
+      throw new DebugMcpError("BatchOperationFailed", "IPC acceptance did not produce a program or symbol preparation result", {
+        sessionId: input.sessionId,
+        programPreparation: input.programPreparation
+      });
+    }
     setStage("post-load-halt");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
@@ -383,6 +406,7 @@ export class DebugWorkflowService {
       }),
       ipcReady,
       optimization,
+      ...(safetyGuardChecks.length > 0 ? { safetyGuardChecks } : {}),
       ...(timeoutRecovery ? { timeoutRecovery } : {}),
       diagnosis,
       performance: {
@@ -853,6 +877,43 @@ export class DebugWorkflowService {
     }));
   }
 
+  private async verifyPreStartupSafetyGuard(
+    sessionId: string,
+    guard: { conditions: ExpressionCondition[]; haltCoreIds: number[] }
+  ): Promise<ToolResult> {
+    let evidence: ToolResult;
+    try {
+      const conditions = await this.evaluateConditions(sessionId, guard.conditions);
+      evidence = {
+        phase: "symbols-loaded-before-startup",
+        checkedAt: new Date().toISOString(),
+        matched: conditions.every(condition => condition.matched === true),
+        conditions
+      };
+      if (evidence.matched === true) return evidence;
+    } catch (error) {
+      evidence = {
+        phase: "symbols-loaded-before-startup",
+        checkedAt: new Date().toISOString(),
+        matched: false,
+        evaluationError: toStructuredError(error)
+      };
+    }
+
+    let halt: ToolResult;
+    try {
+      halt = await this.manager.haltCores(sessionId, guard.haltCoreIds as CoreId[]);
+      assertBatchSucceeded("preStartupSafetyGuardHalt", halt);
+    } catch (error) {
+      halt = { success: false, error: toStructuredError(error) };
+    }
+    throw new DebugMcpError(
+      "SafetyGuardViolation",
+      "A durable safety guard did not match or could not be evaluated after symbols were loaded; a halt was issued before startup",
+      { sessionId, evidence, haltCoreIds: guard.haltCoreIds, halt }
+    );
+  }
+
   private async waitForExpressionSet(
     sessionId: string,
     conditions: ExpressionCondition[],
@@ -1297,6 +1358,22 @@ function assertBatchSucceeded(label: string, result: ToolResult): void {
   if (failed.length > 0) {
     throw new DebugMcpError("BatchOperationFailed", `${label} failed for ${failed.length} item(s)`, {
       failed
+    });
+  }
+}
+
+function assertPreStartupSafetyGuardScope(
+  guard: { conditions: Array<{ coreId: number }>; haltCoreIds: number[] },
+  coreIds: readonly number[]
+): void {
+  const allowed = new Set(coreIds);
+  const invalidConditionCoreIds = [...new Set(guard.conditions.map(condition => condition.coreId).filter(coreId => !allowed.has(coreId)))];
+  const invalidHaltCoreIds = [...new Set(guard.haltCoreIds.filter(coreId => !allowed.has(coreId)))];
+  if (invalidConditionCoreIds.length > 0 || invalidHaltCoreIds.length > 0) {
+    throw new DebugMcpError("StartupContractInvalid", "The pre-startup safety guard must remain within the IPC workflow core scope", {
+      allowedCoreIds: [...allowed],
+      invalidConditionCoreIds,
+      invalidHaltCoreIds
     });
   }
 }

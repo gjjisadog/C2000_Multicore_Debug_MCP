@@ -176,6 +176,12 @@ export class StepRegistry {
           startupPreset: step.startupPreset,
           resetType: step.resetType,
           programPreparation: step.programPreparation,
+          ...(step.programPreparation === "symbols-only" && plan.safetyGuards ? {
+            preStartupSafetyGuard: {
+              conditions: plan.safetyGuards.conditions,
+              haltCoreIds: plan.safetyGuards.haltCoreIds
+            }
+          } : {}),
           cpu1OutSha256: artifacts?.cpu1OutSha256,
           cpu2OutSha256: artifacts?.cpu2OutSha256,
           cpu1MapSha256: artifacts?.cpu1MapSha256,

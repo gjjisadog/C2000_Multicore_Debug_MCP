@@ -6,7 +6,7 @@
 export const runtimeContract = {
   rpcProtocolVersion: 1,
   durableTestPlanVersion: 3,
-  runIpcAcceptanceVersion: 3
+  runIpcAcceptanceVersion: 4
 } as const;
 
 export type RuntimeContract = typeof runtimeContract;

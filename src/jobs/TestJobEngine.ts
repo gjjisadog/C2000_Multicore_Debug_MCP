@@ -801,6 +801,11 @@ function isAbortError(error: unknown): boolean {
 }
 
 function guardBeforeStep(step: TestPlanStep): boolean {
+  // A symbols-only IPC step loads the resident-image symbols inside the
+  // workflow before evaluating the durable guard. Running the generic
+  // before-step guard here would evaluate firmware expressions before those
+  // symbols exist and fail closed for the wrong reason.
+  if (step.type === "runIpcAcceptance" && step.programPreparation === "symbols-only") return false;
   return guardAfterStep(step) && step.type !== "reconnectAfterTargetReset";
 }
 
@@ -809,6 +814,10 @@ function guardAfterStep(step: TestPlanStep): boolean {
   // expressions here creates a false failure (`identifier not found`) before
   // the first load/run step has made those expressions readable.
   if (step.type === "launchMulticore" && !step.loadPrograms) return false;
+  // The symbols-only IPC workflow records and enforces its guard at the
+  // pre-reset boundary; do not add a second post-IPC guard at a different
+  // target state.
+  if (step.type === "runIpcAcceptance" && step.programPreparation === "symbols-only") return false;
   return step.type !== "cleanup" && step.type !== "restorePrograms";
 }
 

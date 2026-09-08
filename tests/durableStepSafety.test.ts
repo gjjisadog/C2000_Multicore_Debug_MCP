@@ -297,6 +297,60 @@ describe("durable step cleanup and output safety", () => {
     fixture.store.close();
   });
 
+  test("defers the durable symbols-only safety guard until after the workflow loads symbols", async () => {
+    const calls: Array<{ toolName: string; input: Record<string, unknown> }> = [];
+    const fixture = await createFixture({
+      async invokeTool(toolName, input) {
+        const record = input as Record<string, unknown>;
+        calls.push({ toolName, input: record });
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_runIpcAcceptance") return {
+          success: true,
+          sessionId: "dbg-current",
+          safetyGuardChecks: [{ phase: "symbols-loaded-before-startup", matched: true }]
+        };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    const jobId = String(fixture.engine.submit({
+      planVersion: 1,
+      name: "symbols-only-guard-boundary",
+      boardIds: ["board-a"],
+      artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out", cpu1MapPath: "/fw/cpu1.map", cpu2MapPath: "/fw/cpu2.map" },
+      safetyGuards: {
+        conditions: [{ coreId: 0, expression: "g_safe", operator: "eq", expected: 1 }],
+        haltCoreIds: [0, 2],
+        intervalMs: 1
+      },
+      steps: [
+        { type: "launchMulticore", loadPrograms: false },
+        {
+          type: "runIpcAcceptance",
+          programPreparation: "symbols-only",
+          ipcReadyExpressions: [{ coreId: 0, expression: "g_ready", expected: 1 }]
+        },
+        { type: "cleanup" }
+      ]
+    }).jobId);
+
+    expect((await waitForTerminal(fixture.runs, jobId)).status).toBe("PASSED");
+    expect(calls.map(call => call.toolName)).toEqual([
+      "c2000_launchMulticoreDebug",
+      "c2000_runIpcAcceptance",
+      "c2000_closeDebugSession"
+    ]);
+    expect(calls[1]?.input).toEqual(expect.objectContaining({
+      programPreparation: "symbols-only",
+      preStartupSafetyGuard: {
+        conditions: [expect.objectContaining({ coreId: 0, expression: "g_safe", expected: 1 })],
+        haltCoreIds: [0, 2]
+      }
+    }));
+    await fixture.engine.stop();
+    fixture.store.close();
+  });
+
   test("keeps guards active while reset target is readable, pauses on disconnect, and resumes after reconnect", async () => {
     const calls: string[] = [];
     let snapshots = 0;
