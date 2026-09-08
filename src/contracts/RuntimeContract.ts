@@ -5,8 +5,8 @@
  */
 export const runtimeContract = {
   rpcProtocolVersion: 1,
-  durableTestPlanVersion: 2,
-  runIpcAcceptanceVersion: 2
+  durableTestPlanVersion: 3,
+  runIpcAcceptanceVersion: 3
 } as const;
 
 export type RuntimeContract = typeof runtimeContract;
@@ -38,4 +38,3 @@ export function compareRuntimeContract(value: unknown): RuntimeContractCompatibi
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-
