@@ -45,6 +45,7 @@ export type DebugErrorCode =
   | "DaemonAuthenticationFailed"
   | "DaemonProtocolError"
   | "DaemonInstanceInvalid"
+  | "DaemonContractMismatch"
   | "ToolNotFound"
   | "WorkerHeartbeatTimeout"
   | "WorkerCommandTimeout"

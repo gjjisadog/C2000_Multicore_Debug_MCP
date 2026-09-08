@@ -2,6 +2,7 @@ import { z } from "zod";
 import { canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
+import { allowDestructiveFlashReloadSchema } from "../contracts/FlashReloadContract.js";
 import { buildVerificationInputSchema } from "../verification/build/BuildSchemas.js";
 import { mapVerificationInputSchema } from "../verification/map/MapSchemas.js";
 import { regressionPlanSchema } from "../verification/regression/RegressionSchemas.js";
@@ -370,17 +371,25 @@ export const expressionConditionSchema = z.object({
   expected: z.union([z.string(), z.number(), z.boolean()])
 });
 export const workflowRunModeSchema = z.enum(["cpu1_boots_cpu2", "debugger_runs_both", "cpu2_pre_running"]);
+const programPreparationSchema = z.enum(["load", "symbols-only"]).default("load");
+const ipcArtifactHashShape = {
+  cpu1OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2OutSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu1MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  cpu2MapSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional()
+};
 export const submitMultiBoardIpcAcceptanceSchema = z.object({
   boardIds: z.array(z.string().min(1)).min(1),
-  artifacts: z.object({ cpu1OutPath: z.string().min(1), cpu2OutPath: z.string().min(1), cpu1MapPath: z.string().min(1).optional(), cpu2MapPath: z.string().min(1).optional(), outputDir: z.string().min(1).optional() }),
+  artifacts: testArtifactsSchema,
   parallelism: z.number().int().positive().optional(),
   timeoutMs: z.number().int().positive().default(10000),
   intervalMs: z.number().int().positive().default(100),
   startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
   resetType: resetTypeSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
+  programPreparation: programPreparationSchema,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize repeated CPU2 Flash programming in each durable board session"),
   loadSequence: ipcLoadSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
   runSequence: ipcRunSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
@@ -465,7 +474,7 @@ export const loadProgramSchema = sessionCoreSchema.extend({
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image")
 });
 
@@ -596,7 +605,7 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
   settleMs: z.number().int().nonnegative().default(250)
 });
@@ -644,9 +653,11 @@ const runIpcAcceptanceObjectSchema = z.object({
   cpu2MapPath: z.string().min(1),
   startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
   resetType: resetTypeSchema.default("default"),
+  programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
+  ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   loadSequence: ipcLoadSequenceSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
@@ -707,7 +718,7 @@ export const runReloadAndDiagnoseSchema = z.object({
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).default("require-map"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
@@ -762,7 +773,7 @@ export const launchCoreSchema = z.object({
   mapUri: z.string().min(1).optional(),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
-  allowDestructiveFlashReload: z.boolean().default(false)
+  allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
     .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
   connect: z.boolean().default(true),
   load: z.boolean().default(true),

@@ -16,6 +16,10 @@ export async function ensureDaemon(config: C2000McpConfig): Promise<DiscoveredDa
   try {
     return await discoverDaemon(config);
   } catch (error) {
+    // A live daemon with an incompatible contract must be updated through the
+    // maintenance flow. Never try to start a second daemon or replace the
+    // existing process behind its back.
+    if (error instanceof DebugMcpError && error.code === "DaemonContractMismatch") throw error;
     if (!daemon.autoStart) throw error;
   }
   await launchDetachedDaemon();
