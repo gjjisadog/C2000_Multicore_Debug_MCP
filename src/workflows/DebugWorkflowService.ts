@@ -30,6 +30,8 @@ type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
 type ExpressionReadSet = z.infer<typeof expressionReadSetSchema>;
 
+const SYMBOLS_ONLY_FLASH_NOTE = "Symbols loaded; target Flash contents were not verified by this workflow.";
+
 export class DebugWorkflowService {
   constructor(
     private readonly manager: DebugSessionManager,
@@ -135,6 +137,7 @@ export class DebugWorkflowService {
       resetType: input.resetType,
       loadSequence: input.loadSequence,
       runSequence: input.runSequence,
+      programPreparation: input.programPreparation,
       timeoutMs: input.timeoutMs,
       intervalMs: input.intervalMs
     };
@@ -210,23 +213,55 @@ export class DebugWorkflowService {
       loadPolicy: input.loadPolicy,
       allowDestructiveFlashReload: input.allowDestructiveFlashReload
     };
-    let load;
+    let load: ToolResult;
     setStage("program-load");
-    if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
-      const cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
-      assertBatchSucceeded("loadCpu1Program", cpu1Load);
-      performedSteps.push("loadCpu1Program");
-      await this.manager.runCore(input.sessionId, input.cpu1CoreId);
-      performedSteps.push("runCpu1BeforeCpu2Load");
-      await sleep(input.loadSequence.cpu1SettleMs);
-      const cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
-      load = { sessionId: input.sessionId, results: [...cpu1Load.results, ...cpu2Load.results] };
-      performedSteps.push("loadCpu2Program");
+    if (input.programPreparation === "symbols-only") {
+      const symbolLoadResults: ToolResult[] = [];
+      const cpu1Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu1CoreId, input.cpu1OutPath);
+      symbolLoadResults.push({
+        ...cpu1Symbols,
+        success: true,
+        loaded: false,
+        skipped: false,
+        targetMemoryWritten: false,
+        targetFlashVerified: false
+      });
+      performedSteps.push("loadCpu1Symbols");
+      const cpu2Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu2CoreId, input.cpu2OutPath);
+      symbolLoadResults.push({
+        ...cpu2Symbols,
+        success: true,
+        loaded: false,
+        skipped: false,
+        targetMemoryWritten: false,
+        targetFlashVerified: false
+      });
+      performedSteps.push("loadCpu2Symbols");
+      load = {
+        sessionId: input.sessionId,
+        mode: "symbols-only",
+        results: symbolLoadResults,
+        targetMemoryWritten: false,
+        targetFlashVerified: false,
+        note: SYMBOLS_ONLY_FLASH_NOTE
+      };
     } else {
-      load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
-      performedSteps.push("loadPrograms");
+      if (input.loadSequence.mode === "cpu1-run-before-cpu2") {
+        const cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
+        assertBatchSucceeded("loadCpu1Program", cpu1Load);
+        performedSteps.push("loadCpu1Program");
+        await this.manager.runCore(input.sessionId, input.cpu1CoreId);
+        performedSteps.push("runCpu1BeforeCpu2Load");
+        await sleep(input.loadSequence.cpu1SettleMs);
+        const cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
+        load = { sessionId: input.sessionId, results: [...cpu1Load.results, ...cpu2Load.results] };
+        performedSteps.push("loadCpu2Program");
+      } else {
+        load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
+        performedSteps.push("loadPrograms");
+      }
     }
-    assertBatchSucceeded("loadPrograms", load);
+    assertBatchSucceeded(input.programPreparation === "symbols-only" ? "loadSymbols" : "loadPrograms", load);
     setStage("post-load-halt");
     const postLoadHalt = await this.manager.haltCores(input.sessionId, coreIds);
     performedSteps.push("haltCoresAfterLoad");
@@ -237,13 +272,8 @@ export class DebugWorkflowService {
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
       { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
-    ], artifactPreflight);
+    ], artifactPreflight, input.programPreparation === "symbols-only" ? load.results : undefined);
     performedSteps.push("checkElfFreshness");
-    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
-      input.sessionId,
-      input.verifyRuntimeRamOwnership,
-      ramOwnership.ownershipActions
-    );
     setStage("run-sequence");
     let cpu2Release: ToolResult | undefined;
     if (runPlan.releaseCpu2BeforeCpu1) {
@@ -278,6 +308,13 @@ export class DebugWorkflowService {
     if (timeoutRecovery) {
       performedSteps.push("haltAndResolvePcOnTimeout");
     }
+    setStage("runtime-ram-ownership");
+    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+      input.sessionId,
+      input.verifyRuntimeRamOwnership,
+      ramOwnership.ownershipActions
+    );
+    performedSteps.push("verifyRuntimeRamOwnership");
     setStage("diagnosis");
     const diagnosis = await this.buildBootHandoffDiagnosis({
       sessionId: input.sessionId,
@@ -301,7 +338,9 @@ export class DebugWorkflowService {
       mcpToolCalls: [],
       approvalClass: "workflow-confirmation",
       effectsApplied: [
-        "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read",
+        "target-halt", "target-reset",
+        ...(input.programPreparation === "symbols-only" ? ["symbol-load"] : ["program-load", "ram-ownership-change"]),
+        "target-run", "target-read",
         ...(cpu2Release ? ["target-disconnect", "target-connect"] : [])
       ],
       sessionId: input.sessionId,
@@ -316,6 +355,17 @@ export class DebugWorkflowService {
       initialHalt,
       reset,
       load,
+      programPreparation: input.programPreparation,
+      ...(input.programPreparation === "symbols-only" ? {
+        targetFlashVerified: false,
+        programPreparationEvidence: {
+          mode: "symbols-only",
+          symbolsLoaded: true,
+          targetMemoryWritten: false,
+          targetFlashVerified: false,
+          note: SYMBOLS_ONLY_FLASH_NOTE
+        }
+      } : {}),
       postLoadHalt,
       snapshot,
       artifactPreflight,
@@ -871,7 +921,12 @@ export class DebugWorkflowService {
     return { halt, pc };
   }
 
-  private async checkElfFreshness(sessionId: string, programs: Array<{ coreId: CoreId; outPath?: string }>, artifactPreflight?: ToolResult) {
+  private async checkElfFreshness(
+    sessionId: string,
+    programs: Array<{ coreId: CoreId; outPath?: string }>,
+    artifactPreflight?: ToolResult,
+    preparationResults?: ToolResult[]
+  ) {
     const preflightFiles = Array.isArray(artifactPreflight?.hostFiles)
       ? artifactPreflight.hostFiles.filter((item: unknown): item is ToolResult => Boolean(item) && typeof item === "object")
       : [];
@@ -880,22 +935,29 @@ export class DebugWorkflowService {
       .map(async program => {
         const expectedPath = this.manager.normalizeArtifactUri(program.outPath);
         const loadedProgramInfo = await this.manager.getLoadedProgramInfo(sessionId, program.coreId);
+        const preparationResult = preparationResults?.find(item => item.coreId === program.coreId);
         const metadata = await fileMetadata(expectedPath);
         const preflightFile = preflightFiles.find(item => item.path === expectedPath);
         const preflightStable = !preflightFile
           || (preflightFile.fileSize === metadata.fileSize && preflightFile.fileMTime === metadata.fileMTime && preflightFile.sha256 === metadata.sha256);
-        const fresh = loadedProgramInfo?.programUri === expectedPath
+        const loadedProgramFresh = loadedProgramInfo?.programUri === expectedPath
           && loadedProgramInfo.fileSize === metadata.fileSize
-          && loadedProgramInfo.sha256 === metadata.sha256
-          && preflightStable;
+          && loadedProgramInfo.sha256 === metadata.sha256;
+        const symbolsFresh = preparationResult?.success === true
+          && preparationResult.symbolsLoaded === true
+          && preparationResult.targetMemoryWritten === false
+          && preparationResult.programUri === expectedPath
+          && preparationResult.fileSize === metadata.fileSize
+          && preparationResult.sha256 === metadata.sha256;
         return {
           coreId: program.coreId,
           expectedPath,
-          fresh,
+          fresh: (loadedProgramInfo ? loadedProgramFresh : symbolsFresh) && preflightStable,
           preflightStable,
           ...(preflightFile ? { preflightFile } : {}),
           hostFile: metadata,
-          loadedProgramInfo
+          loadedProgramInfo,
+          ...(preparationResult ? { preparationResult } : {})
         };
       }));
     return {
@@ -978,6 +1040,10 @@ async function assertIpcArtifactSet(input: {
   cpu2OutPath: string;
   cpu1MapPath: string;
   cpu2MapPath: string;
+  cpu1OutSha256?: string;
+  cpu2OutSha256?: string;
+  cpu1MapSha256?: string;
+  cpu2MapSha256?: string;
   ipcReadyExpressions?: ExpressionCondition[];
 }, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
   const normalizedInput = {
@@ -1006,7 +1072,6 @@ async function assertIpcArtifactSet(input: {
   }));
   issues.push(...fileChecks.filter((issue): issue is string => issue !== undefined));
   const hostFiles = await Promise.all(files
-    .filter(([label]) => label.endsWith("output"))
     .map(async ([label, filePath]) => {
       try {
         const metadata = await fileMetadata(filePath);
@@ -1015,6 +1080,19 @@ async function assertIpcArtifactSet(input: {
         return undefined;
       }
     }));
+  const hashDeclarations = [
+    { field: "cpu1OutSha256", label: "CPU1 output", path: normalizedInput.cpu1OutPath, expected: input.cpu1OutSha256 },
+    { field: "cpu2OutSha256", label: "CPU2 output", path: normalizedInput.cpu2OutPath, expected: input.cpu2OutSha256 },
+    { field: "cpu1MapSha256", label: "CPU1 map", path: normalizedInput.cpu1MapPath, expected: input.cpu1MapSha256 },
+    { field: "cpu2MapSha256", label: "CPU2 map", path: normalizedInput.cpu2MapPath, expected: input.cpu2MapSha256 }
+  ];
+  issues.push(...hashDeclarations.flatMap(declaration => {
+    if (!declaration.expected) return [];
+    const actual = hostFiles.find(file => file?.path === declaration.path)?.sha256;
+    return actual && actual.toLowerCase() !== declaration.expected.toLowerCase()
+      ? [`${declaration.label} SHA-256 does not match declared hash: ${declaration.path}`]
+      : [];
+  }));
   const artifactSemantics = await validateIpcArtifactSymbols({
     cpu1CoreId: input.cpu1CoreId,
     cpu2CoreId: input.cpu2CoreId,
@@ -1050,6 +1128,9 @@ async function assertIpcArtifactSet(input: {
       cpu2MapPath: normalizedInput.cpu2MapPath
     },
     hostFiles: hostFiles.filter(item => item !== undefined),
+    declaredHashes: hashDeclarations
+      .filter((declaration): declaration is typeof declaration & { expected: string } => Boolean(declaration.expected))
+      .map(declaration => ({ field: declaration.field, path: declaration.path, sha256: declaration.expected })),
     programPair,
     mapPair,
     artifactSemantics

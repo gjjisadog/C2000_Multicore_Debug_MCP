@@ -168,12 +168,18 @@ export class StepRegistry {
         return { success: true, sessionId: activeSessionId, reset, reconnect, reloadMode: step.reload, reload, ...capture };
       }
       case "runIpcAcceptance":
+        await this.preflightDeclaredArtifactHashes(artifacts);
         return this.tools.invokeTool("c2000_runIpcAcceptance", fenced(context, requiredSession({
           sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2,
           cpu1OutPath: artifacts?.cpu1OutPath, cpu2OutPath: artifacts?.cpu2OutPath,
           cpu1MapPath: artifacts?.cpu1MapPath, cpu2MapPath: artifacts?.cpu2MapPath,
           startupPreset: step.startupPreset,
           resetType: step.resetType,
+          programPreparation: step.programPreparation,
+          cpu1OutSha256: artifacts?.cpu1OutSha256,
+          cpu2OutSha256: artifacts?.cpu2OutSha256,
+          cpu1MapSha256: artifacts?.cpu1MapSha256,
+          cpu2MapSha256: artifacts?.cpu2MapSha256,
           loadPolicy: step.loadPolicy,
           allowDestructiveFlashReload: step.allowDestructiveFlashReload,
           loadSequence: step.loadSequence,
