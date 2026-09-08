@@ -1,0 +1,13 @@
+interface:
+  display_name: "C2000 IPC Debug"
+  short_description: "F28P65x IPC startup and failure diagnosis."
+  default_prompt: "Use $c2000-ipc-debug to run or diagnose a clean F28P65x CPU1/CPU2 IPC startup."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "c2000_multicore"
+      description: "c2000-multicore-mcp server exposing explicit CPU1/CPU2 IPC workflows and evidence."
+
+policy:
+  allow_implicit_invocation: true

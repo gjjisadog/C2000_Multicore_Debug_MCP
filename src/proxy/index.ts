@@ -9,6 +9,7 @@ import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 import { CapabilitySessionManager } from "../mcp/capabilities.js";
 import { Logger } from "../utils/logger.js";
 import { capabilityAuditToOutcomeEvent } from "../analytics/OutcomeAnalyticsService.js";
+import { compareRuntimeContract, runtimeContractIdentity } from "../contracts/RuntimeContract.js";
 
 export interface C2000McpProxyRuntime {
   server: McpServer;
@@ -82,18 +83,25 @@ function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<str
   const daemonVersion = typeof server.version === "string" ? server.version : undefined;
   const daemonSha = typeof build.sourceRevision === "string" ? build.sourceRevision : undefined;
   const proxySha = runtimeBuildInfo().sourceRevision ?? undefined;
-  const mismatch = (daemonVersion !== undefined && daemonVersion !== SERVER_VERSION)
+  const versionMismatch = (daemonVersion !== undefined && daemonVersion !== SERVER_VERSION)
     || (daemonSha !== undefined && proxySha !== undefined && daemonSha !== "unknown" && proxySha !== "unknown" && daemonSha.toLowerCase() !== proxySha.toLowerCase());
+  const contractCompatibility = compareRuntimeContract(health.contracts);
+  const mismatch = versionMismatch || !contractCompatibility.compatible;
   const configuration = asRecord(health.configuration);
   const tools = asRecord(health.tools);
   return {
     ...health,
     runtimeVersionMismatch: mismatch,
-    configuration: { ...configuration, runtimeVersionMismatch: mismatch },
-    tools: { ...tools, runtimeVersionMismatch: mismatch },
+    runtimeContractMismatch: !contractCompatibility.compatible,
+    configuration: {
+      ...configuration,
+      runtimeVersionMismatch: mismatch,
+      runtimeContractMismatch: !contractCompatibility.compatible
+    },
+    tools: { ...tools, runtimeVersionMismatch: mismatch, runtimeContractMismatch: !contractCompatibility.compatible },
     runtimeIdentity: {
-      proxy: { mcpVersion: SERVER_VERSION, mcpGitSha: proxySha ?? "unknown" },
-      daemon: { mcpVersion: daemonVersion ?? "unknown", mcpGitSha: daemonSha ?? "unknown" }
+      proxy: { mcpVersion: SERVER_VERSION, mcpGitSha: proxySha ?? "unknown", contracts: runtimeContractIdentity() },
+      daemon: { mcpVersion: daemonVersion ?? "unknown", mcpGitSha: daemonSha ?? "unknown", contracts: health.contracts ?? null }
     }
   };
 }

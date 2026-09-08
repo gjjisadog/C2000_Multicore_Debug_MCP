@@ -1,0 +1,51 @@
+{
+  "board_evidence_note": "DK9/DK8 target-board evidence and formal bringup Markdown/Evidence_Index updates are bound to milestones, board runs, ABI/safety architecture changes, releases, or explicit audit requests—not to every master merge. Ordinary merges keep machine-readable gate-plan/summary (or CI checks) only.",
+  "ccs_configurations": [
+    "CPU1_FLASH",
+    "CPU2_FLASH"
+  ],
+  "ccs_required": true,
+  "changed_paths": [
+    "project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c"
+  ],
+  "classification_error": null,
+  "diff_base": "github/master",
+  "escalation_reasons": [
+    "unallowlisted path(s): project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c"
+  ],
+  "fail_closed": true,
+  "head": "HEAD",
+  "head_sha": "a974e36102e4ec4c6e073413a803968d42a7748f",
+  "host_profile": "full",
+  "matched_rules": [
+    "unclassified"
+  ],
+  "path_classifications": [
+    {
+      "ccs_scope": "all_four",
+      "class": "unknown",
+      "path": "project/hybrid30k/validation/dk9/cpu2/cpu2_product_validation.c",
+      "rule_id": "unclassified",
+      "sysconfig_required": true,
+      "tier_hint": "firmware-or-unknown"
+    }
+  ],
+  "policy_effective_date": "2026-08-26",
+  "policy_version": "2026.08.29.1",
+  "python_compat_required": true,
+  "python_compatibility_tests": [
+    "tests.test_change_impact",
+    "tests.test_host_gate_runner",
+    "tests.test_ai_task_protocol",
+    "tests.test_param_gen",
+    "tests.test_param_excel",
+    "tests.test_param_architecture_final",
+    "tests.test_param_wrap_style"
+  ],
+  "reason": "shared dual-core, build surface, mixed cores, unknown path, empty diff, or fail-closed default",
+  "review_hits": [],
+  "schema_version": 1,
+  "selected_tier": "firmware-or-unknown",
+  "sysconfig_reason": "fail-closed after unavailable or ambiguous board impact",
+  "sysconfig_required": true
+}

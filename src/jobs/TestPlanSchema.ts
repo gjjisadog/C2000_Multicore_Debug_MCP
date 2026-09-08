@@ -2,6 +2,7 @@ import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
 import { workflowStartupContractIssues } from "../debug/startupContract.js";
+import { allowDestructiveFlashReloadSchema } from "../contracts/FlashReloadContract.js";
 
 export const testArtifactsSchema = z.object({
   cpu1OutPath: z.string().min(1).max(4096),
@@ -165,6 +166,7 @@ const runSequenceStepSchema = z.object({
   runCpu2: sequence.runCpu2 ?? (sequence.runMode !== "cpu1_boots_cpu2")
 })).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence);
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
+const programPreparationSchema = z.enum(["load", "symbols-only"]).default("load");
 const baseStep = { on: onSchema.optional() };
 
 /**
@@ -219,7 +221,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
   }).strict(),
   z.object({
     type: z.literal("restorePrograms"), on: z.literal("always"),
-    allowDestructiveFlashReload: z.boolean().default(false),
+    allowDestructiveFlashReload: allowDestructiveFlashReloadSchema,
     artifacts: z.object({ cpu1: restoreArtifactSchema(0), cpu2: restoreArtifactSchema(2) }).strict()
   }).strict(),
   z.object({
@@ -229,7 +231,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     settleMs: z.number().int().nonnegative().max(DURABLE_PLAN_LIMITS.maxSettleMs).default(250),
     reload: z.enum(["none", "symbols", "programs"]).default("symbols"),
     loadPolicy: loadPolicySchema.default("if-changed"),
-    allowDestructiveFlashReload: z.boolean().default(false),
+    allowDestructiveFlashReload: allowDestructiveFlashReloadSchema,
     reads: z.array(expressionReadStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads)
   }).strict(),
   z.object({
@@ -238,8 +240,9 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100),
     startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
+    programPreparation: programPreparationSchema,
     loadPolicy: loadPolicySchema.default("always"),
-    allowDestructiveFlashReload: z.boolean().default(false),
+    allowDestructiveFlashReload: allowDestructiveFlashReloadSchema,
     loadSequence: loadSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
     runSequence: runSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
     runMode: runModeStepSchema.optional(),
@@ -255,7 +258,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     type: z.literal("runReloadAndDiagnose"), ...baseStep,
     timeoutMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxTimeoutMs).optional(),
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).optional(),
-    allowDestructiveFlashReload: z.boolean().default(false)
+    allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
   }).strict(),
   z.object({ type: z.literal("runFullDebugBundle"), ...baseStep }).strict(),
   z.object({ type: z.literal("cleanup"), ...baseStep }).strict(),
@@ -563,7 +566,7 @@ function migrateLegacyStep(value: unknown): Record<string, unknown> {
       for (const key of ["startupPreset", "resetType", "runSequence"]) if (key in step) migrated[key] = step[key];
       break;
     case "runIpcAcceptance":
-      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "loadPolicy", "allowDestructiveFlashReload", "loadSequence", "runSequence", "runMode", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
+      for (const key of ["timeoutMs", "intervalMs", "startupPreset", "resetType", "programPreparation", "loadPolicy", "allowDestructiveFlashReload", "loadSequence", "runSequence", "runMode", "ipcReadyExpressions", "verifyRuntimeRamOwnership"]) {
         if (key in step) migrated[key] = step[key];
       }
       break;

@@ -1,6 +1,7 @@
 import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { RuntimeContract } from "../contracts/RuntimeContract.js";
 
 export interface DaemonRuntimePaths {
   runtimeDir: string;
@@ -17,6 +18,8 @@ export interface DebugDaemonInstance {
   authTokenFile: string;
   databasePath: string;
   version: string;
+  /** Optional so an older instance file remains readable during maintenance. */
+  contract?: RuntimeContract;
 }
 
 export function daemonRuntimePaths(runtimeDir: string): DaemonRuntimePaths {

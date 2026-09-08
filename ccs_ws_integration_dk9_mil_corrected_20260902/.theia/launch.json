@@ -1,0 +1,51 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Hybrid30K DK8_PROD - CPU1/CPU2 FLASH",
+            "type": "ccs-debug",
+            "request": "launch",
+            "targetConfig": "C:/Users/11981/Documents/Hybrid_Platform-integration-dk9-mil-hw-rework-review-20260902/project/hybrid30k/board/targetConfigs/TMS320F28P650DK8.ccxml",
+            "connections": [
+                {
+                    "name": "Texas Instruments XDS110 USB Debug Probe_0",
+                    "cores": [
+                        {
+                            "name": "C28xx_CPU1",
+                            "autoConnect": true,
+                            "program": "C:/Users/11981/Documents/C2000_Debug_MCP/ccs_ws_integration_dk9_mil_corrected_20260902/Hybrid30K_CPU1_DK8_PROD/CPU1_FLASH/Hybrid30K_CPU1_DK8_PROD.out"
+                        },
+                        {
+                            "name": "C28xx_CPU2",
+                            "autoConnect": true,
+                            "program": "C:/Users/11981/Documents/C2000_Debug_MCP/ccs_ws_integration_dk9_mil_corrected_20260902/Hybrid30K_CPU2_DK8_PROD/CPU2_FLASH/Hybrid30K_CPU2_DK8_PROD.out"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "Hybrid30K DK9_LAUNCHXL - CPU1/CPU2 FLASH",
+            "type": "ccs-debug",
+            "request": "launch",
+            "targetConfig": "C:/Users/11981/Documents/Hybrid_Platform-integration-dk9-mil-hw-rework-review-20260902/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml",
+            "connections": [
+                {
+                    "name": "Texas Instruments XDS110 USB Debug Probe_0",
+                    "cores": [
+                        {
+                            "name": "C28xx_CPU1",
+                            "autoConnect": true,
+                            "program": "C:/Users/11981/Documents/C2000_Debug_MCP/ccs_ws_integration_dk9_mil_corrected_20260902/Hybrid30K_CPU1_DK9_LAUNCHXL/CPU1_FLASH/Hybrid30K_CPU1_DK9_LAUNCHXL.out"
+                        },
+                        {
+                            "name": "C28xx_CPU2",
+                            "autoConnect": true,
+                            "program": "C:/Users/11981/Documents/C2000_Debug_MCP/ccs_ws_integration_dk9_mil_corrected_20260902/Hybrid30K_CPU2_DK9_LAUNCHXL/CPU2_FLASH/Hybrid30K_CPU2_DK9_LAUNCHXL.out"
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

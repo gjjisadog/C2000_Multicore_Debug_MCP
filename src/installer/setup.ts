@@ -349,7 +349,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
   let skillDirectory: string | undefined;
   const skillDirectories: string[] = [];
   if (options.installSkill) {
-    for (const skillName of ["c2000-multicore-debug", "c2000-skill-improver"]) {
+    for (const skillName of ["c2000-multicore-debug", "c2000-ipc-debug", "c2000-skill-improver"]) {
       const skillSource = path.join(packageRoot, "skills", skillName);
       if (!await exists(skillSource)) continue;
       const codexHome = path.resolve(env.CODEX_HOME ?? path.join(homeDirectory, ".codex"));

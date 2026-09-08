@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import type { C2000McpConfig } from "./config/config.schema.js";
+import { runtimeContractIdentity } from "./contracts/RuntimeContract.js";
 
 declare const __C2000_RUNTIME_BUNDLED__: boolean;
 declare const __C2000_RUNTIME_BUILT_AT__: string;
@@ -64,6 +65,7 @@ export function buildServerHealth(
     capabilityMode?: "dynamic" | "static";
     activeCriticalImprovementRegression?: boolean;
     runtimeVersionMismatch?: boolean;
+    runtimeContractMismatch?: boolean;
   } = {}
 ) {
   const adapterMode = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
@@ -81,6 +83,7 @@ export function buildServerHealth(
       uptimeSeconds: Math.floor(process.uptime()),
       build: runtimeBuildInfo()
     },
+    contracts: runtimeContractIdentity(),
     configuration: {
       adapterMode,
       toolProfile,
@@ -89,6 +92,7 @@ export function buildServerHealth(
       activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0,
       activeCriticalImprovementRegression: dynamicCapabilities.activeCriticalImprovementRegression ?? false,
       runtimeVersionMismatch: dynamicCapabilities.runtimeVersionMismatch ?? false,
+      runtimeContractMismatch: dynamicCapabilities.runtimeContractMismatch ?? false,
       profile: {
         effective: toolProfile,
         source: process.env.C2000_MCP_TOOL_PROFILE
@@ -125,7 +129,8 @@ export function buildServerHealth(
       registeredNames: registeredToolNames,
       activeCapabilityCount: dynamicCapabilities.activeCapabilityCount ?? 0,
       activeCriticalImprovementRegression: dynamicCapabilities.activeCriticalImprovementRegression ?? false,
-      runtimeVersionMismatch: dynamicCapabilities.runtimeVersionMismatch ?? false
+      runtimeVersionMismatch: dynamicCapabilities.runtimeVersionMismatch ?? false,
+      runtimeContractMismatch: dynamicCapabilities.runtimeContractMismatch ?? false
     }
   };
 }

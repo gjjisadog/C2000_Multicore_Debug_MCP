@@ -1,0 +1,1605 @@
+******************************************************************************
+             TMS320C2000 Linker PC v25.11.1                    
+******************************************************************************
+>> Linked Wed Sep  2 10:26:59 2026
+
+OUTPUT FILE NAME:   <Hybrid30K_F28P65x_CPU2.out>
+ENTRY POINT SYMBOL: "code_start"  address: 00000000
+
+
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  BEGIN                 00000000   00000002  00000002  00000000  RWIX
+  BOOT_RSVD             00000002   000001af  00000000  000001af  RWIX
+  RAMM0                 000001b1   0000024f  00000070  000001df  RWIX
+  RAMM1_STACK           00000400   000003f8  000003f8  00000000  RWIX
+  RAMM1_GUARD           000007f8   00000008  00000000  00000008  RWIX
+  CLATOCPURAM           00001480   00000080  00000000  00000080  RWIX
+  CPUTOCLARAM           00001500   00000080  00000000  00000080  RWIX
+  CLATODMARAM           00001680   00000080  00000000  00000080  RWIX
+  DMATOCLARAM           00001700   00000080  00000000  00000080  RWIX
+  RAMD2_STACK           00008000   00001000  00000d30  000002d0  RWIX
+  RAMD2_WORK            00009000   00001000  00001000  00000000  RWIX
+  RAMD3_RAMFUNC         0000a000   00001000  00000fff  00000001  RWIX
+  RAMD3_DATA            0000b000   00001000  00000fff  00000001  RWIX
+  RAMGS2_VALIDATION     00014000   00002000  000014c6  00000b3a  RWIX
+  RAMGS3                00016000   00002000  00002000  00000000  RWIX
+  RAMGS4                00018000   00002000  00001fff  00000001  RWIX
+  CPU1TOCPU2RAM         0003a000   00000400  0000014e  000002b2  RWIX
+  CPU2TOCPU1RAM         0003b000   00000400  00000144  000002bc  RWIX
+  CANA_MSG_RAM          00049000   00000800  00000000  00000800  RWIX
+  CANB_MSG_RAM          0004b000   00000800  00000000  00000800  RWIX
+  RESET                 003fffc0   00000002  00000000  00000002  RWIX
+
+
+SECTION ALLOCATION MAP
+
+ output                                  attributes/
+section   page    origin      length       input sections
+--------  ----  ----------  ----------   ----------------
+codestart 
+*          0    00000000    00000002     
+                  00000000    00000002     f28p65x_codestartbranch.obj (codestart)
+
+.switch    0    000001b2    00000048     
+                  000001b2    00000026     cpu2_product_validation.obj (.switch:CPU2_Product_PcControl_Read)
+                  000001d8    00000022     cpu2_product_validation.obj (.switch:CPU2_Product_PcControl_Write)
+
+.cinit     0    000001fa    00000028     
+                  000001fa    0000000d     (.cinit..data.load) [load image, compression = lzss]
+                  00000207    00000001     --HOLE-- [fill = 0]
+                  00000208    00000006     (__TI_handler_table)
+                  0000020e    00000004     (.cinit..bss.load) [load image, compression = zero_init]
+                  00000212    00000004     (.cinit..freertosStaticStack.load) [load image, compression = zero_init]
+                  00000216    0000000c     (__TI_cinit_table)
+
+.freertosStaticStack 
+*          0    00008000    00000c00     UNINITIALIZED
+                  00008000    00000c00     cpu2_rtos.obj (.freertosStaticStack)
+
+.cpu2RtosConst 
+*          0    00008c00    00000130     
+                  00008c00    000000bc     cpu2_rtos.obj (.const)
+                  00008cbc    0000003b     cpu2_rtos.obj (.const:.string)
+                  00008cf7    00000001     --HOLE-- [fill = 0]
+                  00008cf8    00000038     cpu2_rtos.obj (.const:s_astCpu2RtosTaskCfg)
+
+.uartbDma 
+*          0    00009000    00000140     UNINITIALIZED
+                  00009000    00000140     board_uartb_dma.obj (.uartbDma)
+
+.TI.ramfunc 
+*          0    0000a000    00000047     
+                  0000a000    0000002c     cpu2_core_comm.obj (.TI.ramfunc:prvCPU2_CoreComm_DebugWatch_Update)
+                  0000a02c    00000017     boot_sync.obj (.TI.ramfunc:prvBOOTSYNC_Cpu2_WaitCpu1SyncPoint)
+                  0000a043    00000004     driverlib.lib : sysctl.obj (.TI.ramfunc)
+
+.reset     0    003fffc0    00000000     DSECT
+
+.stack     0    00000400    000003f8     UNINITIALIZED
+                  00000400    000003f8     --HOLE--
+
+.bss       0    0000b000    00000df2     UNINITIALIZED
+                  0000b000    00000382     cpu2_calc.obj (.bss)
+                  0000b382    00000032     tasks.obj (.bss:pxReadyTasksLists)
+                  0000b3b4    0000000c     cpu2_safety.obj (.bss)
+                  0000b3c0    000002de     cpu2_product_validation.obj (.bss)
+                  0000b69e    00000020     cpu2_rtos.obj (.bss:s_astCpu2CommQueueStorage)
+                  0000b6be    00000002     ipc_port.obj (.bss)
+                  0000b6c0    0000022e     cpu2_core_comm.obj (.bss)
+                  0000b8ee    0000000a     bsw_core_err.obj (.bss)
+                  0000b8f8    00000007     cpu2_relay_control.obj (.bss)
+                  0000b8ff    00000001     --HOLE--
+                  0000b900    000001ee     cpu2_rtos.obj (.bss)
+                  0000baee    00000004     board_uartb_dma.obj (.bss:s_ulBoardUartBRxReadWords)
+                  0000baf2    00000002     rtm_cpu2_param.obj (.bss)
+                  0000baf4    00000002     tasks.obj (.bss:xIdleTaskHandles)
+                  0000baf6    0000000a     --HOLE--
+                  0000bb00    000000e4     cpu2_param_table.obj (.bss)
+                  0000bbe4    0000001c     cpu2_param.obj (.bss:retain)
+                  0000bc00    00000066     cpu2_param.obj (.bss)
+                  0000bc66    0000001a     --HOLE--
+                  0000bc80    0000005e     cpu2_validation.obj (.bss)
+                  0000bcde    0000001e     board_uartb_dma.obj (.bss)
+                  0000bcfc    00000004     --HOLE--
+                  0000bd00    00000058     cpu2_monitor_backend.obj (.bss)
+                  0000bd58    00000028     --HOLE--
+                  0000bd80    00000046     core_msg_cpu2.obj (.bss)
+                  0000bdc6    0000002c     tasks.obj (.bss)
+
+.init_array 
+*          0    000001b1    00000000     UNINITIALIZED
+
+.data      0    0000bdf2    0000001d     UNINITIALIZED
+                  0000bdf2    0000000e     tasks.obj (.data)
+                  0000be00    00000006     rts2800_fpu64_eabi.lib : exit.c.obj (.data)
+                  0000be06    00000004     port.obj (.data)
+                  0000be0a    00000002     rts2800_fpu64_eabi.lib : _lock.c.obj (.data:_lock)
+                  0000be0c    00000002                            : _lock.c.obj (.data:_unlock)
+                  0000be0e    00000001     tasks.obj (.data:xYieldPendings)
+
+MSGRAM_CPU1_TO_CPU2 
+*          0    0003a000    00000148     UNINITIALIZED
+                  0003a000    00000094     core_msg_storage.obj (MSGRAM_CPU1_TO_CPU2)
+                  0003a094    00000016     core_state.obj (MSGRAM_CPU1_TO_CPU2)
+                  0003a0aa    00000016     --HOLE--
+                  0003a0c0    00000088     driverlib.lib : ipc.obj (MSGRAM_CPU1_TO_CPU2)
+
+MSGRAM_CPU1_TO_CPU2_BOOT_INJECT 
+*          0    0003a148    00000006     UNINITIALIZED
+                  0003a148    00000006     core_state.obj (MSGRAM_CPU1_TO_CPU2_BOOT_INJECT)
+
+MSGRAM_CPU2_TO_CPU1 
+*          0    0003b000    00000144     UNINITIALIZED
+                  0003b000    00000088     driverlib.lib : ipc.obj (MSGRAM_CPU2_TO_CPU1)
+                  0003b088    00000016     core_state.obj (MSGRAM_CPU2_TO_CPU1)
+                  0003b09e    00000022     --HOLE--
+                  0003b0c0    00000084     core_msg_storage.obj (MSGRAM_CPU2_TO_CPU1)
+
+.text.1    0    00009140    00000ec0     
+                  00009140    0000009f     core_msg_access.obj (.text:COREMSG_Access_Command_WriteShared)
+                  000091df    0000009e     logic_frt.obj (.text:prvLOGIC_Frt_DelayAvgRun)
+                  0000927d    0000009d     cpu2_product_validation.obj (.text:CPU2_Product_PcControl_Write)
+                  0000931a    0000009d     driverlib.lib : dma.obj (.text:DMA_configMode)
+                  000093b7    0000009b     tasks.obj (.text:xTaskIncrementTick)
+                  00009452    00000099     cpu2_core_comm.obj (.text:CPU2_CoreComm_RxStatus_Run)
+                  000094eb    00000093     cpu2_product_validation.obj (.text:prvCPU2_Product_ValidationControl_Update)
+                  0000957e    0000008f     cpu2_rtos.obj (.text:prvCPU2_Rtos_LogicTask)
+                  0000960d    0000008d     board_uartb_dma.obj (.text:BOARD_UartB_Backend_Init)
+                  0000969a    00000087     cpu2_core_comm.obj (.text:CPU2_CoreComm_FastRawBlock_Capture)
+                  00009721    00000086     legacy_osc_protocol.obj (.text:CPU2_LegacyOsc_Parser_Push)
+                  000097a7    00000086     cpu2_param.obj (.text:CPU2_Param_Init)
+                  0000982d    00000086     cpu2_safety.obj (.text:CPU2_Safety_Run1ms)
+                  000098b3    00000082     cpu2_core_comm.obj (.text:CPU2_CoreComm_Init)
+                  00009935    0000007e     tasks.obj (.text:xTaskRemoveFromEventList)
+                  000099b3    0000007c     cpu2_product_validation.obj (.text:CPU2_Product_FaultTask_Run)
+                  00009a2f    00000079     cpu2_core_comm.obj (.text:CPU2_CoreComm_MeasurementDiag_Update)
+                  00009aa8    00000077     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_ConfigRangeIsValid)
+                  00009b1f    00000076     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_Receive)
+                  00009b95    00000073     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_DiagnosticRead)
+                  00009c08    00000072     cpu2_product_validation.obj (.text:CPU2_Product_EmsTask_Run)
+                  00009c7a    00000071     cpu2_core_comm.obj (.text:CPU2_CoreComm_Update)
+                  00009ceb    00000071     cpu2_product_validation.obj (.text:CPU2_Product_PcControl_Read)
+                  00009d5c    00000070     logic_frt.obj (.text:LOGIC_Frt_ConfigValidate)
+                  00009dcc    0000006f     board_uartb_dma.obj (.text:prvBOARD_UartB_Isr)
+                  00009e3b    00000001     cpu2_monitor_backend.obj (.text:CPU2_MonitorBackend_TxDone)
+                  00009e3c    0000006d     board_uartb_dma.obj (.text:BOARD_UartB_RxTake)
+                  00009ea9    0000006d     queue.obj (.text:xQueueGenericReset)
+                  00009f16    00000069     core_msg_cpu2.obj (.text:COREMSG_FastInstantCpu2_Receive)
+                  00009f7f    00000069     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C1Respond)
+                  00009fe8    00000018     core_msg_access.obj (.text:COREMSG_Access_SlowStatus_Copy)
+
+.text.2    0    0000a048    00000fb8     
+                  0000a048    00000066     cpu2_param.obj (.text:CPU2_Param_Boot_Init)
+                  0000a0ae    00000066     cpu2_rtos.obj (.text:prvCPU2_Rtos_CommTask)
+                  0000a114    00000065     cpu2_param.obj (.text:CPU2_Param_Run1ms)
+                  0000a179    00000001     tasks.obj (.text:prvIdleTask)
+                  0000a17a    00000065     cpu2_rtos.obj (.text:CPU2_Rtos_Init)
+                  0000a1df    00000065     queue.obj (.text:xQueueGenericSendFromISR)
+                  0000a244    00000064     cpu2_param.obj (.text:prvCPU2_Param_RatedCandidate_Check)
+                  0000a2a8    00000062     board_uartb_dma.obj (.text:prvBOARD_UartB_DmaRxConfigure)
+                  0000a30a    00000062     tasks.obj (.text:prvInitialiseNewTask)
+                  0000a36c    00000061     logic_frt.obj (.text:prvLOGIC_Frt_RecoveryStep)
+                  0000a3cd    0000005f     cpu2_product_state.obj (.text:CPU2_ProductState_Run)
+                  0000a42c    0000005f     cpu2_frt.obj (.text:prvCPU2_Frt_Config_Sync)
+                  0000a48b    0000005e     ctrl_voltage_rms.obj (.text:CTRL_VoltRms_Run)
+                  0000a4e9    0000005e     cpu2_product_validation.obj (.text:prvCPU2_Product_VoltageRmsConfig_Build)
+                  0000a547    0000005d     driverlib.lib : uart.obj (.text:UART_setConfig)
+                  0000a5a4    0000005d     cpu2_frt.obj (.text:prvCPU2_Frt_GridSeq_Q12ToLogicPeak)
+                  0000a601    0000005d     port.obj (.text:pxPortInitialiseStack)
+                  0000a65e    0000005c     tasks.obj (.text:prvAddCurrentTaskToDelayedList)
+                  0000a6ba    0000005c     board_uartb_dma.obj (.text:prvBOARD_UartB_DmaTxConfigure)
+                  0000a716    0000005c     cpu2_product_validation.obj (.text:prvCPU2_Product_MeasurementInput_Update)
+                  0000a772    0000005b     tasks.obj (.text:prvAddNewTaskToReadyList)
+                  0000a7cd    0000005b     logic_frt.obj (.text:prvLOGIC_Frt_CaptureEvent)
+                  0000a828    00000057     core_msg_access.obj (.text:COREMSG_Access_FastInstant_Copy)
+                  0000a87f    00000057     core_msg_access.obj (.text:COREMSG_Access_FastInstant_ReadShared)
+                  0000a8d6    00000057     cpu2_validation.obj (.text:CPU2_Validation_Watch_Publish)
+                  0000a92d    00000057     board_uartb_dma.obj (.text:prvBOARD_UartB_TxDmaIsr)
+                  0000a984    00000056     legacy_osc_protocol.obj (.text:CPU2_LegacyOsc_FrameEncode)
+                  0000a9da    00000055     tasks.obj (.text:vTaskSwitchContext)
+                  0000aa2f    00000053     cpu2_calc.obj (.text:prvCPU2_Calc_RmsState_Reset)
+                  0000aa82    00000051     tasks.obj (.text:xTaskDelayUntil)
+                  0000aad3    00000050     board_uartb_dma.obj (.text:BOARD_UartB_TxSubmit)
+                  0000ab23    00000050     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_ValueRead)
+                  0000ab73    00000050     cpu2_param.obj (.text:prvCPU2_Param_RatedView_Store)
+                  0000abc3    0000004f     cpu2_param.obj (.text:CPU2_Param_MeasView_Get)
+                  0000ac12    0000004f     cpu2_param.obj (.text:prvCPU2_Param_ControlCandidate_Check)
+                  0000ac61    0000004d     bsw_state_machine.obj (.text:BSW_StateMachine_Run)
+                  0000acae    0000004c     cpu2_product_validation.obj (.text:prvCPU2_Product_ValidationWatch_Update)
+                  0000acfa    0000004c     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_TypeRangeIsValid)
+                  0000ad46    0000004b     rtm_cpu2_param.obj (.text:RTM_Cpu2Param_Init)
+                  0000ad91    0000004a     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_SnapshotValue)
+                  0000addb    00000049     board_cpu2.obj (.text:BOARD_DelayUs)
+                  0000ae24    00000049     cpu2_validation.obj (.text:CPU2_Validation_ControlCommand_Take)
+                  0000ae6d    00000049     cpu2_rtos.obj (.text:prvCPU2_Rtos_EmsTask)
+                  0000aeb6    00000049     cpu2_rtos.obj (.text:prvCPU2_Rtos_FaultTask)
+                  0000aeff    00000048     cpu2_calc.obj (.text:CPU2_Calc_DiagGet)
+                  0000af47    00000048     cpu2_rtos.obj (.text:prvCPU2_Rtos_TaskCreateAll)
+                  0000af8f    00000048     tasks.obj (.text:prvCreateStaticTask)
+                  0000afd7    00000029     cpu2_core_comm.obj (.text:CPU2_CoreComm_MonitorSnapshot_Copy)
+
+.const.1   0    0000be10    000001f0     
+                  0000be10    00000030     cpu2_product_state.obj (.const:s_stStateTable)
+                  0000be40    00000150     cpu2_product_validation.obj (.const)
+                  0000bf90    00000050     driverlib.lib : cputimer.obj (.const:.string)
+                  0000bfe0    00000020     cpu2_product_state.obj (.const)
+
+.const.2   0    00014000    000012f4     
+                  00014000    00000720     cpu2_param_table.obj (.const:g_stRtmCpu2ParamLocalTable)
+                  00014720    00000020     cpu2_product_state.obj (.const:s_stStateOutput)
+                  00014740    00000256     logic_frt.obj (.const)
+                  00014996    00000026     cpu2_safety.obj (.const)
+                  000149bc    00000004     cpu2_monitor_transport.obj (.const)
+                  000149c0    0000022a     cpu2_core_comm.obj (.const)
+                  00014bea    00000204     cpu2_monitor_backend_map.obj (.const:g_astCpu2MonitorVariableMap)
+                  00014dee    0000000a     bsw_state_machine.obj (.const)
+                  00014df8    00000008     cpu2_param_table.obj (.const:retain)
+                  00014e00    0000010c     cpu2_param.obj (.const)
+                  00014f0c    000000c0     cpu2_product_state.obj (.const:s_stTransitionTable)
+                  00014fcc    0000009a     queue.obj (.const:.string)
+                  00015066    00000098     driverlib.lib : uart.obj (.const:.string)
+                  000150fe    00000097                   : dma.obj (.const:.string)
+                  00015195    00000001     tasks.obj (.const)
+                  00015196    00000091     cpu2_monitor_transport.obj (.const:.string)
+                  00015227    00000014     tasks.obj (.const:ucExpectedStackBytes$1)
+                  0001523b    00000005     cpu2_monitor_backend.obj (.const:$P$T0$1)
+                  00015240    0000008c     cpu2_monitor_backend.obj (.const)
+                  000152cc    0000001a     cpu2_logic.obj (.const)
+                  000152e6    00000007     cpu2_relay_control.obj (.const)
+                  000152ed    00000001     --HOLE-- [fill = 0]
+                  000152ee    00000004     rtm_cpu2_param.obj (.const)
+                  000152f2    00000002     cpu2_param_table.obj (.const)
+
+.const.3   0    00015300    0000006c     
+                  00015300    0000006c     core_msg_cpu2.obj (.const)
+
+.const.4   0    00015380    00000060     
+                  00015380    00000060     ctrl_voltage_rms.obj (.const)
+
+.const.5   0    00015400    0000008e     
+                  00015400    00000049     cpu2_frt.obj (.const)
+                  00015449    00000001     --HOLE-- [fill = 0]
+                  0001544a    00000044     driverlib.lib : ipc.obj (.const:IPC_Instance)
+
+.const.6   0    000154c0    00000078     
+                  000154c0    00000040     cpu2_calc.obj (.const)
+                  00015500    00000038     cpu2_validation.obj (.const)
+
+.text.3    0    00016000    00002000     
+                  00016000    00000238     cpu2_product_validation.obj (.text:CPU2_Product_Run1ms)
+                  00016238    00000236     cpu2_product_validation.obj (.text:prvCPU2_Product_VoltageRms_Run1ms)
+                  0001646e    0000021a     cpu2_param.obj (.text:prvCPU2_Param_ActiveImage_Load)
+                  00016688    000001c3     cpu2_calc.obj (.text:CPU2_Calc_Run1ms)
+                  0001684b    000001ac     logic_frt.obj (.text:LOGIC_Frt_Run1ms)
+                  000169f7    00000192     device.obj (.text:Device_enableAllPeripherals)
+                  00016b89    00000168     logic_frt.obj (.text:prvLOGIC_Frt_ApplyLimit)
+                  00016cf1    00000156     cpu2_param.obj (.text:CPU2_Param_FrtView_Get)
+                  00016e47    0000014c     cpu2_param.obj (.text:CPU2_Param_OffgridCtrlView_Get)
+                  00016f93    0000014c     cpu2_product_validation.obj (.text:prvCPU2_Product_CommandCompose)
+                  000170df    00000130     cpu2_param.obj (.text:prvCPU2_Param_CalcRatedValue)
+                  0001720f    00000001     board_relay.obj (.text:BOARD_RelayDomain_Disable)
+                  00017210    00000112     logic_frt.obj (.text:prvLOGIC_Frt_AverageRun)
+                  00017322    00000107     rts2800_fpu64_eabi.lib : ll_div28.asm.obj (.text)
+                  00017429    00000100     core_msg_access.obj (.text:COREMSG_Access_Parameter_WriteShared)
+                  00017529    000000e9     cpu2_calc.obj (.text:CPU2_Calc_InvRmsRun1ms)
+                  00017612    000000dc     logic_frt.obj (.text:prvLOGIC_Frt_ApplyFaultOutput)
+                  000176ee    000000db     cpu2_frt.obj (.text:CPU2_Frt_Run1ms)
+                  000177c9    000000d6     cpu2_product_validation.obj (.text:CPU2_Product_Init)
+                  0001789f    000000cf     cpu2_param.obj (.text:prvCPU2_Param_RatedSource_Load)
+                  0001796e    000000b3     cpu2_core_comm.obj (.text:prvCPU2_CoreComm_PeerEpoch_Rebaseline)
+                  00017a21    000000b3     queue.obj (.text:xQueueGenericSend)
+                  00017ad4    000000b0     cpu2_frt.obj (.text:prvCPU2_Frt_Config_Build)
+                  00017b84    000000af     freertos_portasm_cgt25.obj (.text)
+                  00017c33    000000ac     cpu2_logic.obj (.text:CPU2_Logic_Run1ms)
+                  00017cdf    000000a6     board_uartb_dma.obj (.text:prvBOARD_UartB_RxDmaIsr)
+                  00017d85    000000a6     queue.obj (.text:xQueueReceive)
+                  00017e2b    000000a6     tasks.obj (.text:xTaskResumeAll)
+                  00017ed1    000000a3     logic_frt.obj (.text:prvLOGIC_Frt_RecoveryRun)
+                  00017f74    00000087     cpu2_core_comm.obj (.text:CPU2_CoreComm_FastExchange_Isr)
+                  00017ffb    00000005     board_cpu2.obj (.text:BOARD_Interrupt_Init)
+
+.text.4    0    00018000    00001f57     
+                  00018000    00000047     cpu2_rtos.obj (.text:prvCPU2_Rtos_StackWatch_Update)
+                  00018047    00000046     driverlib.lib : dma.obj (.text:DMA_configWrap)
+                  0001808d    00000046     cpu2_product_state.obj (.text:prvCPU2_ProductState_DesiredModeResolve)
+                  000180d3    00000044     boot_sync.obj (.text:BOOTSYNC_Cpu2_WaitCpu1Release)
+                  00018117    00000044     cpu2_core_comm.obj (.text:CPU2_CoreComm_FastRawBlock_Take)
+                  0001815b    00000044     utils_pi.obj (.text:UTILS_Pi_RunError)
+                  0001819f    00000044     ctrl_voltage_rms.obj (.text:prvCTRL_VoltRms_Phase_Run)
+                  000181e3    00000043     cpu2_logic.obj (.text:prvCPU2_Logic_ProductFacts_Build)
+                  00018226    00000043     logic_frt.obj (.text:prvLOGIC_Frt_ThresholdsValid)
+                  00018269    00000001     rts2800_fpu64_eabi.lib : startup.c.obj (.text)
+                  0001826a    00000042     cpu2_calc.obj (.text:prvCPU2_Calc_RmsRing_Clear)
+                  000182ac    00000041     queue.obj (.text:xQueueGenericCreateStatic)
+                  000182ed    00000040     cpu2_product_validation.obj (.text:prvCPU2_Product_MeasurementConsumer_Take)
+                  0001832d    0000003e     cpu2_rtos.obj (.text:CPU2_Rtos_CommEvent_PostRxReadyFromIsr)
+                  0001836b    0000003e     port.obj (.text:vPortSetupTimerInterrupt)
+                  000183a9    0000003d     driverlib.lib : interrupt.obj (.text:Interrupt_initModule)
+                  000183e6    0000003c                   : dma.obj (.text:DMA_configTransfer)
+                  00018422    0000003c     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2StartValidate)
+                  0001845e    0000003c     tasks.obj (.text:prvCreateIdleTasks)
+                  0001849a    0000003b     cpu2_safety.obj (.text:CPU2_Safety_FaultClear_AppliedTake)
+                  000184d5    0000003b     bsw_state_machine.obj (.text:prvBSW_StateMachine_Config_IsValid)
+                  00018510    0000003b     tasks.obj (.text:xTaskCheckForTimeOut)
+                  0001854b    0000003a     queue.obj (.text:prvCopyDataToQueue)
+                  00018585    00000039     ipc_port.obj (.text:IPC_Port_SyncWithTimeout)
+                  000185be    00000039     cpu2_calc.obj (.text:prvCPU2_Calc_InvRmsRing_Clear)
+                  000185f7    00000038     cpu2_safety.obj (.text:CPU2_Safety_Command_Apply)
+                  0001862f    00000038     queue.obj (.text:prvUnlockQueue)
+                  00018667    00000037     driverlib.lib : dma.obj (.text:DMA_configBurst)
+                  0001869e    00000037                   : interrupt.obj (.text:Interrupt_enable)
+                  000186d5    00000036     core_msg_cpu2.obj (.text:COREMSG_ParameterCpu2_Init)
+                  0001870b    00000035     cpu2_calc.obj (.text:CPU2_Calc_ResultGet)
+                  00018740    00000035     cpu2_rtos.obj (.text:prvCPU2_Rtos_LoadWatch_Update)
+                  00018775    00000034     bsw_state_machine.obj (.text:prvBSW_StateMachine_Target_Find)
+                  000187a9    00000034     logic_frt.obj (.text:prvLOGIC_Frt_ZeroHysteresis)
+                  000187dd    00000033     cpu2_rtos.obj (.text:CPU2_Rtos_CommEvent_PostRxReadyFromTask)
+                  00018810    00000033     cpu2_validation.obj (.text:CPU2_Validation_Init)
+                  00018843    00000033     ctrl_voltage_rms.obj (.text:prvCTRL_VoltRms_Reset)
+                  00018876    00000033     logic_frt.obj (.text:prvLOGIC_Frt_SupportCurr)
+                  000188a9    00000032     logic_frt.obj (.text:LOGIC_Frt_ConfigApply)
+                  000188db    00000031     cpu2_monitor_transport.obj (.text:CPU2_MonitorTransport_RxDrain)
+                  0001890c    00000031     cpu2_product_validation.obj (.text:prvCPU2_Product_SnapshotsConsume)
+                  0001893d    00000030     bsw_state_machine.obj (.text:BSW_StateMachine_Init)
+                  0001896d    00000030     cpu2_rtos.obj (.text:CPU2_Rtos_CommEvent_PostFromIsr)
+                  0001899d    0000002e     core_msg_cpu2.obj (.text:COREMSG_ParameterCpu2_Publish)
+                  000189cb    0000002e     rts2800_fpu64_eabi.lib : copy_decompress_lzss.c.obj (.text:decompress:lzss)
+                  000189f9    0000002e     logic_frt.obj (.text:prvLOGIC_Frt_EnterFault)
+                  00018a27    0000002d     cpu2_rtos.obj (.text:prvCPU2_Rtos_IsrWindowComplete)
+                  00018a54    0000002c     cpu2_safety.obj (.text:CPU2_Safety_StartupFail_Stop)
+                  00018a80    0000002c     ctrl_voltage_rms.obj (.text:CTRL_VoltRms_Init)
+                  00018aac    0000002c     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_ForceOff)
+                  00018ad8    0000002c     logic_frt.obj (.text:prvLOGIC_Frt_MutationTimer)
+                  00018b04    0000002b     cpu2_core_comm.obj (.text:CPU2_CoreComm_Publish)
+                  00018b2f    0000002b     rtm_cpu2_param.obj (.text:RTM_Cpu2Param_Read)
+                  00018b5a    0000002b     utils_math.obj (.text:UTILS_Math_SqrtU32)
+                  00018b85    0000002b     rts2800_fpu64_eabi.lib : autoinit.c.obj (.text:__TI_auto_init_nobinit_nopinit)
+                  00018bb0    0000002b     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C3Parse)
+                  00018bdb    0000002b     cpu2_param.obj (.text:prvCPU2_Param_GcdU64)
+                  00018c06    0000002b     ctrl_voltage_rms.obj (.text:prvCTRL_VoltRms_Config_IsValid)
+                  00018c31    0000002a     rts2800_fpu64_eabi.lib : l_div28.asm.obj (.text)
+                  00018c5b    00000029     cpu2_product_state.obj (.text:prvCPU2_ProductState_ReasonUpdate)
+                  00018c84    00000029     rts2800_fpu64_eabi.lib : exit.c.obj (.text)
+                  00018cad    00000028     cpu2_calc.obj (.text:CPU2_Calc_InvRmsResultGet)
+                  00018cd5    00000028     driverlib.lib : uart.obj (.text:UART_disableModule)
+                  00018cfd    00000028     ipc_port.obj (.text:prvIPC_Port_WaitFlagClearUntil)
+                  00018d25    00000027     core_state.obj (.text:prvCORESTATE_State_Init)
+                  00018d4c    00000026     board_cpu2.obj (.text:BOARD_BootTimebase_Start)
+                  00018d72    00000026     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2StopValidate)
+                  00018d98    00000026     ipc_port.obj (.text:prvIPC_Port_WaitRemoteStsSetUntil)
+                  00018dbe    00000026     logic_frt.obj (.text:prvLOGIC_Frt_TriggerState)
+                  00018de4    00000025     rtm_cpu2_param.obj (.text:CPU2_MonitorParam_Read)
+                  00018e09    00000025     driverlib.lib : dma.obj (.text:DMA_configAddresses)
+                  00018e2e    00000025     board_uartb_dma.obj (.text:prvBOARD_UartB_RxWriteIndex)
+                  00018e53    00000024     cpu2_rtos.obj (.text:prvCPU2_Rtos_ValidationCommEvent_Poll)
+                  00018e77    00000024     tasks.obj (.text:prvInitialiseTaskLists)
+                  00018e9b    00000023     cpu2_calc.obj (.text:CPU2_Calc_RmsWindowSet)
+                  00018ebe    00000023     cpu2_product_validation.obj (.text:CPU2_Product_MonitorLocal_Read)
+                  00018ee1    00000023     cpu2_rtos.obj (.text:CPU2_Rtos_IpcIsrLoad_Update)
+                  00018f04    00000023     driverlib.lib : dma.obj (.text:DMA_isBaseValid)
+                  00018f27    00000023     logic_frt.obj (.text:LOGIC_Frt_Reset)
+                  00018f4a    00000023     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_EntryValidate)
+                  00018f6d    00000022     board_profile.obj (.text:BOARD_TimebaseInfo_Get)
+                  00018f8f    00000022     cpu2_logic.obj (.text:CPU2_Logic_InputBuildWithPermissions)
+                  00018fb1    00000022     logic_frt.obj (.text:prvLOGIC_Frt_RmsMax)
+                  00018fd3    00000022     logic_frt.obj (.text:prvLOGIC_Frt_RmsMin)
+                  00018ff5    00000021     utils_math.obj (.text:UTILS_Math_ClampI64ToI32)
+                  00019016    00000021     cpu2_main.obj (.text:main)
+                  00019037    00000021     core_msg_cpu2.obj (.text:prvCOREMSG_CommandTx_Reset)
+                  00019058    00000021     logic_frt.obj (.text:prvLOGIC_Frt_OutputNormal)
+                  00019079    00000020     cpu2_product_state.obj (.text:CPU2_ProductState_Init)
+                  00019099    00000020     rts2800_fpu64_eabi.lib : memcpy.c.obj (.text)
+                  000190b9    0000001f     cpu2_rtos.obj (.text:CPU2_Rtos_Critical_Exit)
+                  000190d8    0000001f     ctrl_voltage_rms.obj (.text:CTRL_VoltRms_SetConfig)
+                  000190f7    0000001f     cpu2_monitor_transport.obj (.text:prvCPU2_MonitorTransport_EventCallback)
+                  00019116    0000001f     logic_frt.obj (.text:prvLOGIC_Frt_RampI16)
+                  00019135    0000001f     tasks.obj (.text:vTaskStartScheduler)
+                  00019154    0000001e     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_CheckTimeout)
+                  00019172    0000001e     cpu2_relay_control.obj (.text:CPU2_RelayControl_Run1ms)
+                  00019190    0000001e     ipc_port.obj (.text:IPC_Port_Timeout_IsExpired)
+                  000191ae    0000001e     driverlib.lib : interrupt.obj (.text:Interrupt_initVectorTable)
+                  000191cc    0000001e     logic_frt.obj (.text:LOGIC_Frt_Init)
+                  000191ea    0000001e     logic_frt.obj (.text:prvLOGIC_Frt_VoltRefPeak)
+                  00019208    0000001e     rts2800_fpu64_eabi.lib : ll_cmp28.asm.obj (.text)
+                  00019226    0000001d     logic_frt.obj (.text:prvLOGIC_Frt_MutationHv)
+                  00019243    0000001d     logic_frt.obj (.text:prvLOGIC_Frt_MutationLv)
+                  00019260    0000001c     board_uartb_dma.obj (.text:BOARD_UartB_RxPending_Get)
+                  0001927c    0000001c     bsw_core_err.obj (.text:BSW_CoreErr_Init)
+                  00019298    0000001c     core_state.obj (.text:CORESTATE_Cpu2_IsCpu1DebugBarrierCurrent)
+                  000192b4    0000001c     cpu2_calc.obj (.text:prvCPU2_Calc_InvRmsResult_Store)
+                  000192d0    0000001c     cpu2_calc.obj (.text:prvCPU2_Calc_Result_Store)
+                  000192ec    0000001c     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_ValueLoad)
+                  00019308    0000001b     core_msg_cpu2.obj (.text:COREMSG_CommandCpu2_Publish)
+                  00019323    0000001b     cpu2_calc.obj (.text:CPU2_Calc_Init)
+                  0001933e    0000001b     cpu2_core_comm.obj (.text:CPU2_CoreComm_WaitCpu1Release)
+                  00019359    0000001b     driverlib.lib : uart.obj (.text:UART_enableModule)
+                  00019374    0000001b     board_uartb_dma.obj (.text:prvBOARD_UartB_RxProducerWordCount)
+                  0001938f    0000001b     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_Dispatch)
+                  000193aa    0000001b     param_msg_bind.obj (.text:prvPARAMBIND_LocalIdentity)
+                  000193c5    0000001b     list.obj (.text:vListInsert)
+                  000193e0    0000001b     tasks.obj (.text:vTaskPlaceOnEventList)
+                  000193fb    0000001a     cpu2_product_validation.obj (.text:prvCPU2_Product_Rtos_Init)
+                  00019415    00000019     cpu2_relay_control.obj (.text:CPU2_RelayControl_Request)
+                  0001942e    00000019     device.obj (.text:SysCtl_enablePeripheral)
+                  00019447    00000019     cpu2_frt.obj (.text:prvCPU2_Frt_GridSeqInput_IsValid)
+                  00019460    00000019     cpu2_param.obj (.text:prvCPU2_Param_S16_Read)
+                  00019479    00000019     cpu2_param.obj (.text:prvCPU2_Param_U16_Read)
+                  00019492    00000019     logic_frt.obj (.text:prvLOGIC_Frt_ApplyPendingIfSafe)
+                  000194ab    00000019     rts2800_fpu64_eabi.lib : boot28.asm.obj (.text)
+                  000194c4    00000018     core_msg_access.obj (.text:COREMSG_Access_SlowStatus_ReadShared)
+                  000194dc    00000018     cpu2_safety.obj (.text:CPU2_Safety_ParamFail_Apply)
+                  000194f4    00000018     cpu2_validation.obj (.text:CPU2_Validation_LogicAlive_CanPublish)
+                  0001950c    00000018     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2Parse)
+                  00019524    00000018     cpu2_param.obj (.text:prvCPU2_Param_RatedCandidate_Evaluate)
+                  0001953c    00000018     logic_frt.obj (.text:prvLOGIC_Frt_StatusSet)
+                  00019554    00000017     cpu2_param.obj (.text:CPU2_Param_RatedView_Get)
+                  0001956b    00000017     cpu2_validation.obj (.text:CPU2_Validation_SyntheticEvidence_IsGranted)
+                  00019582    00000017     driverlib.lib : cputimer.obj (.text:CPUTimer_isBaseValid)
+                  00019599    00000017     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C0Respond)
+                  000195b0    00000017     cpu2_param.obj (.text:prvCPU2_Param_U32_Read)
+                  000195c7    00000017     cpu2_rtos.obj (.text:prvCPU2_Rtos_FatalStop)
+                  000195de    00000016     core_msg_cpu2.obj (.text:COREMSG_FastInstantCpu2_CheckTimeout)
+                  000195f4    00000016     cpu2_relay_control.obj (.text:CPU2_RelayControl_Init)
+                  0001960a    00000016     cpu2_rtos.obj (.text:CPU2_Rtos_Critical_Enter)
+                  00019620    00000016     driverlib.lib : interrupt.obj (.text:Interrupt_defaultHandler)
+                  00019636    00000016     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_BypassFallback)
+                  0001964c    00000016     logic_frt.obj (.text:prvLOGIC_Frt_HvTrigger)
+                  00019662    00000016     logic_frt.obj (.text:prvLOGIC_Frt_LvTrigger)
+                  00019678    00000016     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_ValueStore)
+                  0001968e    00000016     tasks.obj (.text:uxTaskGetStackHighWaterMark)
+                  000196a4    00000016     tasks.obj (.text:xTaskCreateStatic)
+                  000196ba    00000015     cpu2_monitor_backend.obj (.text:CPU2_MonitorBackend_Init)
+                  000196cf    00000015     driverlib.lib : uart.obj (.text:UART_isBaseValid)
+                  000196e4    00000015     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_FrameSubmit)
+                  000196f9    00000015     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_ScopeChannelValid)
+                  0001970e    00000015     cpu2_product_state.obj (.text:prvCPU2_ProductState_SafetyReasonGet)
+                  00019723    00000015     cpu2_product_validation.obj (.text:prvCPU2_Product_VoltagePiCfg)
+                  00019738    00000015     cpu2_rtos.obj (.text:prvCPU2_Rtos_LoadPct_Get)
+                  0001974d    00000015     logic_frt.obj (.text:prvLOGIC_Frt_ExitThreshold)
+                  00019762    00000014     core_msg_cpu2.obj (.text:prvCOREMSG_FastInstant_SequenceIsNext)
+                  00019776    00000014     legacy_osc_protocol.obj (.text:prvCPU2_LegacyOsc_CommandSupported)
+                  0001978a    00000014     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2Respond)
+                  0001979e    00000014     queue.obj (.text:prvCopyDataFromQueue)
+                  000197b2    00000014     queue.obj (.text:prvIsQueueFull)
+                  000197c6    00000014     logic_frt.obj (.text:prvLOGIC_Frt_OutputZero)
+                  000197da    00000014     rts2800_fpu64_eabi.lib : ll_mpy28.asm.obj (.text)
+                  000197ee    00000013     cpu2_core_comm.obj (.text:CPU2_CoreComm_SlowStatusTimeout_Get)
+                  00019801    00000013     driverlib.lib : cputimer.obj (.text:CPUTimer_setEmulationMode)
+                  00019814    00000013     param_msg_bind.obj (.text:PARAMBIND_Cpu2_Publish)
+                  00019827    00000013     rtm_cpu2_param.obj (.text:RTM_Cpu2Param_Metadata_Get)
+                  0001983a    00000013     core_state.obj (.text:prvCORESTATE_CoreErrSink_Register)
+                  0001984d    00000013     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2CandidateBuild)
+                  00019860    00000013     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_MapFind)
+                  00019873    00000013     rts2800_fpu64_eabi.lib : memcmp.c.obj (.text)
+                  00019886    00000012     cpu2_param.obj (.text:CPU2_Param_IsApplied)
+                  00019898    00000012     param_msg_bind.obj (.text:PARAMBIND_Cpu2_Init)
+                  000198aa    00000012     board_uartb_dma.obj (.text:prvBOARD_UartB_RxDmaBoundaryLost)
+                  000198bc    00000012     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_BypassTransferReady)
+                  000198ce    00000012     rts2800_fpu64_eabi.lib : args_main.c.obj (.text)
+                  000198e0    00000011     legacy_osc_protocol.obj (.text:CPU2_LegacyOsc_Checksum)
+                  000198f1    00000011     cpu2_logic.obj (.text:CPU2_Logic_Init)
+                  00019902    00000011     cpu2_monitor_backend.obj (.text:CPU2_MonitorBackend_RxByte)
+                  00019913    00000011     cpu2_monitor_transport.obj (.text:CPU2_MonitorTransport_TxSubmit)
+                  00019924    00000011     cpu2_param.obj (.text:CPU2_Param_ActiveImage_Get)
+                  00019935    00000011     utils_rms.obj (.text:UTILS_Rms_Calc)
+                  00019946    00000011     ctrl_voltage_rms.obj (.text:prvCTRL_VoltRms_PICfg_IsValid)
+                  00019957    00000011     queue.obj (.text:prvInitialiseNewQueue)
+                  00019968    00000011     logic_frt.obj (.text:prvLOGIC_Frt_ControlVoltagePeak)
+                  00019979    00000011     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_EntryFind)
+                  0001998a    00000011     list.obj (.text:uxListRemove)
+                  0001999b    00000010     cpu2_monitor_transport.obj (.text:CPU2_MonitorTransport_Init)
+                  000199ab    00000010     board_uartb_dma.obj (.text:prvBOARD_UartB_RxReadWords_Publish)
+                  000199bb    00000010     legacy_osc_protocol.obj (.text:prvCPU2_LegacyOsc_Reset)
+                  000199cb    00000010     port.obj (.text:xPortStartScheduler)
+                  000199db    0000000f     core_state.obj (.text:CORESTATE_Cpu2_Init)
+                  000199ea    0000000f     cpu2_product_validation.obj (.text:CPU2_Product_ControlInput_Set)
+                  000199f9    0000000f     cpu2_safety.obj (.text:CPU2_Safety_FaultClear_Published)
+                  00019a08    0000000f     driverlib.lib : ipc.obj (.text:Interrupt_unregister)
+                  00019a17    0000000f     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C2AtomicCommit)
+                  00019a26    0000000f     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_GenLostToBypass)
+                  00019a35    0000000f     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_GridComplete)
+                  00019a44    0000000f     queue.obj (.text:prvIsQueueEmpty)
+                  00019a53    0000000f     logic_frt.obj (.text:prvLOGIC_Frt_HypotI16)
+                  00019a62    0000000f     logic_frt.obj (.text:prvLOGIC_Frt_RmsToPeak)
+                  00019a71    0000000f     tasks.obj (.text:prvResetNextTaskUnblockTime)
+                  00019a80    0000000e     core_msg_access.obj (.text:COREMSG_Access_Identity_Copy)
+                  00019a8e    0000000e     core_msg_access.obj (.text:COREMSG_Access_Identity_WriteShared)
+                  00019a9c    0000000e     core_msg_access.obj (.text:COREMSG_Access_Sequence_PublishBegin)
+                  00019aaa    0000000e     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_Init)
+                  00019ab8    0000000e     cpu2_core_comm.obj (.text:CPU2_CoreComm_AppInitOk_Set)
+                  00019ac6    0000000e     cpu2_param.obj (.text:CPU2_Param_IsValid)
+                  00019ad4    0000000e     ipc_port.obj (.text:IPC_Port_AbortTx)
+                  00019ae2    0000000e     ipc_port.obj (.text:IPC_Port_Ack)
+                  00019af0    0000000e     bsw_state_machine.obj (.text:prvBSW_StateMachine_Time_Add)
+                  00019afe    0000000e     cpu2_product_state.obj (.text:prvCPU2_ProductState_StopRequested)
+                  00019b0c    0000000e     logic_frt.obj (.text:prvLOGIC_Frt_AddSaturate)
+                  00019b1a    0000000e     tasks.obj (.text:xTaskGetIdleTaskHandle)
+                  00019b28    0000000d     device.obj (.text:Device_init)
+                  00019b35    0000000d     driverlib.lib : interrupt.obj (.text:Interrupt_disableGlobal)
+                  00019b42    0000000d                   : interrupt.obj (.text:Interrupt_enableGlobal)
+                  00019b4f    0000000d     board_uartb_dma.obj (.text:prvBOARD_UartB_RxReadWords_Get)
+                  00019b5c    0000000d     core_msg_cpu2.obj (.text:prvCOREMSG_ChannelRx_Rebaseline)
+                  00019b69    0000000d     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_GenLostToOffGrid)
+                  00019b76    0000000c     core_msg_access.obj (.text:COREMSG_Access_Sequence_IsNewer)
+                  00019b82    0000000c     core_msg_cpu2.obj (.text:COREMSG_FastInstantCpu2_GetDiag)
+                  00019b8e    0000000c     core_msg_cpu2.obj (.text:COREMSG_FastInstantCpu2_Init)
+                  00019b9a    0000000c     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_GetDiag)
+                  00019ba6    0000000c     core_state.obj (.text:CORESTATE_Cpu2_ValidateCpu1Abi)
+                  00019bb2    0000000c     cpu2_frt.obj (.text:CPU2_Frt_Init)
+                  00019bbe    0000000c     cpu2_relay_control.obj (.text:CPU2_RelayControl_Command_IsAllowed)
+                  00019bca    0000000c     cpu2_safety.obj (.text:CPU2_Safety_CtrlFault_Latch)
+                  00019bd6    0000000c     cpu2_safety.obj (.text:CPU2_Safety_Init)
+                  00019be2    0000000c     board.obj (.text:INTERRUPT_init)
+                  00019bee    0000000c     cpu2_calc.obj (.text:prvCPU2_Calc_ContinuityFault_Set)
+                  00019bfa    0000000c     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C3Respond)
+                  00019c06    0000000c     cpu2_safety.obj (.text:prvCPU2_Safety_SequenceIsNewer)
+                  00019c12    0000000c     logic_frt.obj (.text:prvLOGIC_Frt_ClampToCurr)
+                  00019c1e    0000000c     port.obj (.text:vPortSetupSWInterrupt)
+                  00019c2a    0000000b     bsw_core_err.obj (.text:BSW_CoreErr_SetLastError)
+                  00019c35    0000000b     cpu2_calc.obj (.text:CPU2_Calc_Reset)
+                  00019c40    0000000b     legacy_osc_protocol.obj (.text:CPU2_LegacyOsc_Parser_Init)
+                  00019c4b    0000000b     utils_pi.obj (.text:UTILS_Pi_Run)
+                  00019c56    0000000b     bsw_state_machine.obj (.text:prvBSW_StateMachine_Action_Entry)
+                  00019c61    0000000b     bsw_state_machine.obj (.text:prvBSW_StateMachine_Action_Exit)
+                  00019c6c    0000000b     bsw_state_machine.obj (.text:prvBSW_StateMachine_Action_Run)
+                  00019c77    0000000b     cpu2_calc.obj (.text:prvCPU2_Calc_Window_Valid)
+                  00019c82    0000000b     cpu2_product_state.obj (.text:prvCPU2_ProductState_DesiredIs)
+                  00019c8d    0000000b     cpu2_validation.obj (.text:prvCPU2_Validation_SnapshotBegin)
+                  00019c98    0000000b     list.obj (.text:vListInitialise)
+                  00019ca3    0000000b     tasks.obj (.text:xTaskGetTickCount)
+                  00019cae    0000000a     bsw_core_err.obj (.text:BSW_CoreErr_GetLastError)
+                  00019cb8    0000000a     core_state.obj (.text:CORESTATE_Cpu2_SetAppInitOk)
+                  00019cc2    0000000a     cpu2_core_comm.obj (.text:CPU2_CoreComm_PeerBlocked_Get)
+                  00019ccc    0000000a     cpu2_rtos.obj (.text:CPU2_Rtos_AssertFailure_Stop)
+                  00019cd6    0000000a     board_cpu2.obj (.text:DMA_initController)
+                  00019ce0    0000000a     driverlib.lib : interrupt.obj (.text:Interrupt_illegalOperationHandler)
+                  00019cea    0000000a                   : interrupt.obj (.text:Interrupt_nmiHandler)
+                  00019cf4    0000000a     bsw_state_machine.obj (.text:prvBSW_StateMachine_Transition_Inc)
+                  00019cfe    0000000a     core_state.obj (.text:prvCORESTATE_CoreErr_SetLastError)
+                  00019d08    0000000a     legacy_osc_protocol.obj (.text:prvCPU2_LegacyOsc_PushWord)
+                  00019d12    0000000a     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_GenUnavailable)
+                  00019d1c    0000000a     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_NoGridOrBackup)
+                  00019d26    0000000a     cpu2_relay_control.obj (.text:prvCPU2_RelayControl_BlockedApply)
+                  00019d30    0000000a     cpu2_relay_control.obj (.text:prvCPU2_RelayControl_SafeOffApply)
+                  00019d3a    0000000a     rtm_cpu2_param.obj (.text:prvRTM_Cpu2Param_ValueIsUnsigned)
+                  00019d44    0000000a     cpu2_rtos.obj (.text:vApplicationGetIdleTaskMemory)
+                  00019d4e    0000000a     port.obj (.text:vPortExitCritical)
+                  00019d58    00000009     core_state.obj (.text:CORESTATE_Cpu2_SetReady)
+                  00019d61    00000009     cpu2_rtos.obj (.text:CPU2_Rtos_StartScheduler)
+                  00019d6a    00000009     ipc_port.obj (.text:IPC_Port_TimeUs_Get)
+                  00019d73    00000009     board_uartb_dma.obj (.text:prvBOARD_UartB_Callback)
+                  00019d7c    00000009     tasks.obj (.text:prvTaskCheckFreeStackSpace)
+                  00019d85    00000009     rts2800_fpu64_eabi.lib : _lock.c.obj (.text)
+                  00019d8e    00000008     core_state.obj (.text:CORESTATE_Cpu2_IsCpu1StatePresent)
+                  00019d96    00000008     cpu2_core_comm.obj (.text:CPU2_CoreComm_RuntimeDiag_MarkRunning)
+                  00019d9e    00000008     cpu2_rtos.obj (.text:CPU2_Rtos_CommEvent_RxReadyConsumed)
+                  00019da6    00000008     rts2800_fpu64_eabi.lib : copy_decompress_none.c.obj (.text:decompress:none)
+                  00019dae    00000008     f28p65x_codestartbranch.obj (.text)
+                  00019db6    00000008     cpu2_relay_control.obj (.text:prvCPU2_RelayControl_WireMode_IsValid)
+                  00019dbe    00000008     cpu2_rtos.obj (.text:prvCPU2_Rtos_CommEvent_Drop)
+                  00019dc6    00000008     cpu2_rtos.obj (.text:prvCPU2_Rtos_IsrWindowAccumulate)
+                  00019dce    00000008     cpu2_safety.obj (.text:prvCPU2_Safety_FaultClear_Reset)
+                  00019dd6    00000008     logic_frt.obj (.text:prvLOGIC_Frt_ModeUsesZeroThreshold)
+                  00019dde    00000008     port.obj (.text:vPortEnterCritical)
+                  00019de6    00000008     tasks.obj (.text:vTaskInternalSetTimeOutState)
+                  00019dee    00000007     boot_sync.obj (.text:BOOTSYNC_Cpu2_MarkAppInitOk)
+                  00019df5    00000007     core_state.obj (.text:CORESTATE_Cpu2_ClearReady)
+                  00019dfc    00000007     core_state.obj (.text:CORESTATE_Cpu2_DebugBarrier_Ack)
+                  00019e03    00000007     core_state.obj (.text:CORESTATE_Cpu2_GetCpu1FaultFlags)
+                  00019e0a    00000007     cpu2_monitor_transport.obj (.text:CPU2_MonitorTransport_RxPoll1ms)
+                  00019e11    00000007     cpu2_product_state.obj (.text:CPU2_ProductState_StateGet)
+                  00019e18    00000007     cpu2_product_validation.obj (.text:prvCPU2_Product_MeasurementConsumer_Rebaseline)
+                  00019e1f    00000007     rts2800_fpu64_eabi.lib : memset.c.obj (.text)
+                  00019e26    00000007     cpu2_rtos.obj (.text:vApplicationStackOverflowHook)
+                  00019e2d    00000006     board_cpu2.obj (.text:BOARD_BootTimeUs_Get)
+                  00019e33    00000006     core_state.obj (.text:CORESTATE_Cpu2_ClearFault)
+                  00019e39    00000006     core_state.obj (.text:CORESTATE_Cpu2_LogicAliveIncrement)
+                  00019e3f    00000006     cpu2_core_comm.obj (.text:CPU2_CoreComm_BootReady_Set)
+                  00019e45    00000006     cpu2_core_comm.obj (.text:CPU2_CoreComm_CommandEndpoint_Reset)
+                  00019e4b    00000006     cpu2_core_comm.obj (.text:CPU2_CoreComm_Fault_Set)
+                  00019e51    00000006     cpu2_safety.obj (.text:CPU2_Safety_LogicFault_Get)
+                  00019e57    00000006     rts2800_fpu64_eabi.lib : copy_zero_init.c.obj (.text:decompress:ZI)
+                  00019e5d    00000006     cpu2_logic.obj (.text:prvCPU2_Logic_Channel_IsValid)
+                  00019e63    00000006     cpu2_logic.obj (.text:prvCPU2_Logic_RunMode_IsValid)
+                  00019e69    00000006     cpu2_monitor_backend.obj (.text:prvCPU2_Monitor_C3Reject)
+                  00019e6f    00000006     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_BypassUnavailable)
+                  00019e75    00000006     ipc_port.obj (.text:prvIPC_Port_MapPeer)
+                  00019e7b    00000005     board.obj (.text:Board_init)
+                  00019e80    00000005     core_msg_cpu2.obj (.text:COREMSG_FastInstantCpu2_Rebaseline)
+                  00019e85    00000005     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_Rebaseline)
+                  00019e8a    00000005     core_state.obj (.text:CORESTATE_Cpu2_SetBootState)
+                  00019e8f    00000005     core_state.obj (.text:CORESTATE_Cpu2_SetFault)
+                  00019e94    00000005     ctrl_voltage_rms.obj (.text:CTRL_VoltRms_Reset)
+                  00019e99    00000005     core_state.obj (.text:prvCORESTATE_CoreErr_GetLastError)
+                  00019e9e    00000005     core_state.obj (.text:prvCORESTATE_CoreErr_SetLastWarn)
+                  00019ea3    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_DesiredBypass)
+                  00019ea8    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_DesiredGen)
+                  00019ead    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_DesiredGrid)
+                  00019eb2    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_DesiredOffGrid)
+                  00019eb7    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_Guard_DesiredOpen)
+                  00019ebc    00000005     cpu2_product_state.obj (.text:prvCPU2_ProductState_OutputSafeSet)
+                  00019ec1    00000005     cpu2_validation.obj (.text:prvCPU2_Validation_SnapshotEnd)
+                  00019ec6    00000005     tasks.obj (.text:vTaskMissedYield)
+                  00019ecb    00000004     board_cpu2.obj (.text:BOARD_GlobalInt_Enable)
+                  00019ecf    00000004     board_cpu2.obj (.text:BOARD_PieGroup1_Ack)
+                  00019ed3    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxConsumedWords_Get)
+                  00019ed7    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxDmaEventCount_Get)
+                  00019edb    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxDmaOverrunCount_Get)
+                  00019edf    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxPollKickCount_Get)
+                  00019ee3    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxRingOverflowCount_Get)
+                  00019ee7    00000004     board_uartb_dma.obj (.text:BOARD_UartB_RxUartErrorCount_Get)
+                  00019eeb    00000004     board_uartb_dma.obj (.text:BOARD_UartB_TxBusyCount_Get)
+                  00019eef    00000004     board_uartb_dma.obj (.text:BOARD_UartB_TxCompleteCount_Get)
+                  00019ef3    00000004     board_uartb_dma.obj (.text:BOARD_UartB_TxDropCount_Get)
+                  00019ef7    00000004     board_uartb_dma.obj (.text:BOARD_UartB_TxSubmitCount_Get)
+                  00019efb    00000004     core_msg_cpu2.obj (.text:COREMSG_SlowStatusCpu2_GetPublishedSeq)
+                  00019eff    00000004     core_state.obj (.text:CORESTATE_Cpu2_GetBootInjectMask)
+                  00019f03    00000004     core_state.obj (.text:CORESTATE_Cpu2_GetBootStep)
+                  00019f07    00000004     core_state.obj (.text:CORESTATE_Cpu2_GetCpu1BootEpoch)
+                  00019f0b    00000004     cpu2_core_comm.obj (.text:CPU2_CoreComm_TickMs_Get)
+                  00019f0f    00000004     cpu2_param.obj (.text:CPU2_Param_FaultFlags_Get)
+                  00019f13    00000004     cpu2_safety.obj (.text:CPU2_Safety_CtrlBlocked_Get)
+                  00019f17    00000004     cpu2_safety.obj (.text:CPU2_Safety_FaultClear_Prepare)
+                  00019f1b    00000004     ipc_port.obj (.text:IPC_Port_Timebase_Set)
+                  00019f1f    00000004     rtm_cpu2_param.obj (.text:RTM_Cpu2Param_Version_Get)
+                  00019f23    00000004     core_state.obj (.text:prvCORESTATE_BootEpoch_Next)
+                  00019f27    00000004     cpu2_rtos.obj (.text:prvCPU2_Rtos_TimeElapsed_Get)
+                  00019f2b    00000004     ctrl_voltage_rms.obj (.text:prvCTRL_VoltRms_PICfg_Get)
+                  00019f2f    00000004     tasks.obj (.text:uxTaskGetNumberOfTasks)
+                  00019f33    00000004     list.obj (.text:vListInitialiseItem)
+                  00019f37    00000004     tasks.obj (.text:vTaskSuspendAll)
+                  00019f3b    00000003     board_cpu2.obj (.text:BOARD_GlobalInt_Disable)
+                  00019f3e    00000003     core_state.obj (.text:CORESTATE_Cpu2_LocalState_Get)
+                  00019f41    00000003     cpu2_core_comm.obj (.text:CPU2_CoreComm_RxStatus_Get)
+                  00019f44    00000003     cpu2_frt.obj (.text:CPU2_Frt_Reset)
+                  00019f47    00000003     utils_math.obj (.text:UTILS_Math_SquareI16)
+                  00019f4a    00000003     utils_pi.obj (.text:UTILS_Pi_Reset)
+                  00019f4d    00000003     device.obj (.text:__error__)
+                  00019f50    00000003     core_state.obj (.text:prvCORESTATE_LocalState_Get)
+                  00019f53    00000002     cpu2_calc.obj (.text:prvCPU2_Calc_SamplesToBlocks)
+                  00019f55    00000002     rts2800_fpu64_eabi.lib : pre_init.c.obj (.text)
+
+.const.7   0    00019f58    000000a8     
+                  00019f58    0000009f     tasks.obj (.const:.string)
+                  00019ff7    00000001     cpu2_monitor_backend_map.obj (.const)
+                  00019ff8    00000008     bsw_core_err.obj (.const)
+
+MODULE SUMMARY
+
+       Module                         code    ro data   rw data
+       ------                         ----    -------   -------
+    .\app\ctrl\08_voltage_rms\src\
+       ctrl_voltage_rms.obj           357     96        0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         357     96        0      
+                                                               
+    .\app\logic\02_frt\src\
+       logic_frt.obj                  2751    598       0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         2751    598       0      
+                                                               
+    .\freertos\kernel\
+       tasks.obj                      1294    180       111    
+       queue.obj                      806     154       0      
+       list.obj                       59      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         2159    334       111    
+                                                               
+    .\freertos\port\
+       port.obj                       201     0         4      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         201     0         4      
+                                                               
+    .\platform\bsw\multi_core\src\
+       ipc_port.obj                   212     0         2      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         212     0         2      
+                                                               
+    .\platform\bsw\services\src\
+       bsw_core_err.obj               49      8         10     
+    +--+------------------------------+-------+---------+---------+
+       Total:                         49      8         10     
+                                                               
+    .\platform\bsw\services\state_machine\src\
+       bsw_state_machine.obj          293     10        0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         293     10        0      
+                                                               
+    .\platform\os\freertos\port\
+       freertos_portasm_cgt25.obj     175     0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         175     0         0      
+                                                               
+    .\platform\utils\03_math\src\
+       utils_math.obj                 79      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         79      0         0      
+                                                               
+    .\platform\utils\04_pi\src\
+       utils_pi.obj                   82      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         82      0         0      
+                                                               
+    .\platform\utils\07_rms\src\
+       utils_rms.obj                  17      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         17      0         0      
+                                                               
+    .\project\hybrid30k\board\generated\dk9_launchxl\cpu2\
+       board.obj                      17      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         17      0         0      
+                                                               
+    .\project\hybrid30k\board\src\
+       board_uartb_dma.obj            1072    0         354    
+       board_cpu2.obj                 143     0         0      
+       board_profile.obj              34      0         0      
+       board_relay.obj                1       0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         1250    0         354    
+                                                               
+    .\project\hybrid30k\dsp\core_comm\src\
+       core_msg_cpu2.obj              532     108       70     
+       core_msg_access.obj            691     0         0      
+       core_msg_storage.obj           0       0         280    
+       core_state.obj                 225     0         50     
+       boot_sync.obj                  98      0         0      
+       param_msg_bind.obj             64      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         1610    108       400    
+                                                               
+    .\project\hybrid30k\dsp\cpu2\generated\
+       cpu2_monitor_backend_map.obj   0       517       0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         0       517       0      
+                                                               
+    .\project\hybrid30k\dsp\cpu2\src\
+       cpu2_rtos.obj                  1126    303       3598   
+       cpu2_product_validation.obj    2814    408       734    
+       cpu2_param.obj                 2614    268       130    
+       cpu2_core_comm.obj             1265    554       558    
+       cpu2_calc.obj                  1209    64        898    
+       cpu2_monitor_backend.obj       761     145       88     
+       cpu2_product_state.obj         474     304       0      
+       cpu2_frt.obj                   623     73        0      
+       rtm_cpu2_param.obj             485     4         2      
+       cpu2_safety.obj                390     38        12     
+       cpu2_logic.obj                 302     26        0      
+       legacy_osc_protocol.obj        294     0         0      
+       cpu2_monitor_transport.obj     120     149       0      
+       cpu2_relay_control.obj         117     7         7      
+       cpu2_main.obj                  33      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         12627   2343      6027   
+                                                               
+    .\project\hybrid30k\rtm\generated\cpu2\
+       cpu2_param_table.obj           0       1834      228    
+    +--+------------------------------+-------+---------+---------+
+       Total:                         0       1834      228    
+                                                               
+    .\project\hybrid30k\validation\dk9\cpu2\
+       cpu2_validation.obj            274     56        94     
+    +--+------------------------------+-------+---------+---------+
+       Total:                         274     56        94     
+                                                               
+    .\ti\device\source\
+       device.obj                     443     0         0      
+       f28p65x_codestartbranch.obj    10      0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         453     0         0      
+                                                               
+    C:/Users/11981/Documents/Hybrid_Platform/.worktrees/dk9-mil-hw-rework-corrected-20260902/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib/ccs/Debug/driverlib.lib
+       dma.obj                        414     151       0      
+       ipc.obj                        15      68        272    
+       uart.obj                       181     152       0      
+       interrupt.obj                  214     0         0      
+       cputimer.obj                   42      80        0      
+       sysctl.obj                     4       0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         870     451       272    
+                                                               
+    D:\ccs21.0\ccs\tools\compiler\ti-cgt-c2000_25.11.1.LTS\lib\rts2800_fpu64_eabi.lib
+       ll_div28.asm.obj               263     0         0      
+       exit.c.obj                     41      0         6      
+       copy_decompress_lzss.c.obj     46      0         0      
+       autoinit.c.obj                 43      0         0      
+       l_div28.asm.obj                42      0         0      
+       memcpy.c.obj                   32      0         0      
+       ll_cmp28.asm.obj               30      0         0      
+       boot28.asm.obj                 25      0         0      
+       ll_mpy28.asm.obj               20      0         0      
+       memcmp.c.obj                   19      0         0      
+       args_main.c.obj                18      0         0      
+       _lock.c.obj                    9       0         4      
+       copy_decompress_none.c.obj     8       0         0      
+       memset.c.obj                   7       0         0      
+       copy_zero_init.c.obj           6       0         0      
+       pre_init.c.obj                 2       0         0      
+       startup.c.obj                  1       0         0      
+    +--+------------------------------+-------+---------+---------+
+       Total:                         612     0         10     
+                                                               
+       Stack:                         0       0         1016   
+       Linker Generated:              0       39        0      
+    +--+------------------------------+-------+---------+---------+
+       Grand Total:                   24088   6394      8528   
+
+
+LINKER GENERATED COPY TABLES
+
+__TI_cinit_table @ 00000216 records: 3, size/record: 4, table size: 12
+	.data: load addr=000001fa, load size=0000000d bytes, run addr=0000bdf2, run size=0000001d bytes, compression=lzss
+	.bss: load addr=0000020e, load size=00000004 bytes, run addr=0000b000, run size=00000df2 bytes, compression=zero_init
+	.freertosStaticStack: load addr=00000212, load size=00000004 bytes, run addr=00008000, run size=00000c00 bytes, compression=zero_init
+
+
+LINKER GENERATED HANDLER TABLE
+
+__TI_handler_table @ 00000208 records: 3, size/record: 2, table size: 6
+	index: 0, handler: __TI_zero_init
+	index: 1, handler: __TI_decompress_lzss
+	index: 2, handler: __TI_decompress_none
+
+
+GLOBAL DATA SYMBOLS: SORTED BY DATA PAGE
+
+address     data page           name
+--------    ----------------    ----
+00000400      10 (00000400)     __stack
+
+0000b6c0     2db (0000b6c0)     g_stCoreCommCpu2Watch
+
+0000b914     2e4 (0000b900)     g_stCpu2RtosValidationCommMailbox
+
+0000ba40     2e9 (0000ba40)     g_stCpu2RtosWatch
+
+0000bbe4     2ef (0000bbc0)     g_stCpu2ParamRuntimeIdentityWatch
+
+0000bc8a     2f2 (0000bc80)     g_stCpu2ValidationCmd
+
+0000bcc0     2f3 (0000bcc0)     g_stCpu2ValidationWatch
+
+0000bdf8     2f7 (0000bdc0)     pxCurrentTCB
+
+0000be00     2f8 (0000be00)     __TI_enable_exit_profile_output
+0000be02     2f8 (0000be00)     __TI_cleanup_ptr
+0000be04     2f8 (0000be00)     __TI_dtors_ptr
+0000be06     2f8 (0000be00)     bYield
+0000be07     2f8 (0000be00)     bPreemptive
+0000be08     2f8 (0000be00)     ulCriticalNesting
+0000be0a     2f8 (0000be00)     _lock
+0000be0c     2f8 (0000be00)     _unlock
+
+00014000     500 (00014000)     g_stRtmCpu2ParamLocalTable
+
+00014bea     52f (00014bc0)     g_astCpu2MonitorVariableMap
+
+00014df8     537 (00014dc0)     g_stRtmParamInfo
+
+000152f2     54b (000152c0)     g_uiRtmCpu2ParamLocalCount
+000152f3     54b (000152c0)     g_uiRtmCpu2ParamOrderConstraintCount
+
+0001544a     551 (00015440)     IPC_Instance
+
+00019ff7     67f (00019fc0)     g_uiCpu2MonitorVariableMapCount
+
+0003a000     e80 (0003a000)     g_stCoreCommC1FastInstMsg
+
+0003a040     e81 (0003a040)     g_stCoreCommC1SlowStsMsg
+
+0003a094     e82 (0003a080)     g_stCoreCommC1State
+
+0003a0c0     e83 (0003a0c0)     IPC_CPU1_To_CPU2_PutBuffer
+
+0003a148     e85 (0003a140)     g_ulCoreCommBootInjectMask
+0003a14a     e85 (0003a140)     g_ulCoreCommDebugBootSession
+0003a14c     e85 (0003a140)     g_ulCoreCommDebugBootCpu2Epoch
+
+0003b000     ec0 (0003b000)     IPC_CPU1_To_CPU2_GetBuffer
+
+0003b088     ec2 (0003b080)     g_stCoreCommC2State
+
+0003b0c0     ec3 (0003b0c0)     g_stCoreCommC2CmdMsg
+
+0003b100     ec4 (0003b100)     g_stCoreCommC2ParamMsg
+
+
+GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name 
+
+page  address   name                                       
+----  -------   ----                                       
+0     00019e2d  BOARD_BootTimeUs_Get                       
+0     00018d4c  BOARD_BootTimebase_Start                   
+0     0000addb  BOARD_DelayUs                              
+0     00019b28  BOARD_Device_Init                          
+0     00019cd6  BOARD_Dma_Init                             
+0     00019f3b  BOARD_GlobalInt_Disable                    
+0     00019ecb  BOARD_GlobalInt_Enable                     
+0     00017ffb  BOARD_Interrupt_Init                       
+0     00019ecf  BOARD_PieGroup1_Ack                        
+0     0001720f  BOARD_RelayDomain_Disable                  
+0     00019e7b  BOARD_Runtime_Init                         
+0     00018f6d  BOARD_TimebaseInfo_Get                     
+0     0000960d  BOARD_UartB_Backend_Init                   
+0     00019ed3  BOARD_UartB_RxConsumedWords_Get            
+0     00019ed7  BOARD_UartB_RxDmaEventCount_Get            
+0     00019edb  BOARD_UartB_RxDmaOverrunCount_Get          
+0     00019260  BOARD_UartB_RxPending_Get                  
+0     00019edf  BOARD_UartB_RxPollKickCount_Get            
+0     00019ee3  BOARD_UartB_RxRingOverflowCount_Get        
+0     00009e3c  BOARD_UartB_RxTake                         
+0     00019ee7  BOARD_UartB_RxUartErrorCount_Get           
+0     00019eeb  BOARD_UartB_TxBusyCount_Get                
+0     00019eef  BOARD_UartB_TxCompleteCount_Get            
+0     00019ef3  BOARD_UartB_TxDropCount_Get                
+0     0000aad3  BOARD_UartB_TxSubmit                       
+0     00019ef7  BOARD_UartB_TxSubmitCount_Get              
+0     00019dee  BOOTSYNC_Cpu2_MarkAppInitOk                
+0     00019d58  BOOTSYNC_Cpu2_MarkReady                    
+0     000180d3  BOOTSYNC_Cpu2_WaitCpu1Release              
+0     00019cae  BSW_CoreErr_GetLastError                   
+0     0001927c  BSW_CoreErr_Init                           
+0     00019c2a  BSW_CoreErr_SetLastError                   
+0     0001893d  BSW_StateMachine_Init                      
+0     0000ac61  BSW_StateMachine_Run                       
+0     00019e7b  Board_init                                 
+0     00018c84  C$$EXIT                                    
+0     00009140  COREMSG_Access_Command_WriteShared         
+0     0000a828  COREMSG_Access_FastInstant_Copy            
+0     0000a87f  COREMSG_Access_FastInstant_ReadShared      
+0     00019a80  COREMSG_Access_Identity_Copy               
+0     00019a8e  COREMSG_Access_Identity_WriteShared        
+0     00017429  COREMSG_Access_Parameter_WriteShared       
+0     00019b76  COREMSG_Access_Sequence_IsNewer            
+0     00019a9c  COREMSG_Access_Sequence_PublishBegin       
+0     00009fe8  COREMSG_Access_SlowStatus_Copy             
+0     000194c4  COREMSG_Access_SlowStatus_ReadShared       
+0     00019037  COREMSG_CommandCpu2_InitBaseline           
+0     00019308  COREMSG_CommandCpu2_Publish                
+0     00019037  COREMSG_CommandCpu2_ResetEndpoint          
+0     000195de  COREMSG_FastInstantCpu2_CheckTimeout       
+0     00019b82  COREMSG_FastInstantCpu2_GetDiag            
+0     00019b8e  COREMSG_FastInstantCpu2_Init               
+0     00019e80  COREMSG_FastInstantCpu2_Rebaseline         
+0     00009f16  COREMSG_FastInstantCpu2_Receive            
+0     000186d5  COREMSG_ParameterCpu2_Init                 
+0     0001899d  COREMSG_ParameterCpu2_Publish              
+0     00019154  COREMSG_SlowStatusCpu2_CheckTimeout        
+0     00019b9a  COREMSG_SlowStatusCpu2_GetDiag             
+0     00019efb  COREMSG_SlowStatusCpu2_GetPublishedSeq     
+0     00019aaa  COREMSG_SlowStatusCpu2_Init                
+0     00019e85  COREMSG_SlowStatusCpu2_Rebaseline          
+0     00009b1f  COREMSG_SlowStatusCpu2_Receive             
+0     00019e33  CORESTATE_Cpu2_ClearFault                  
+0     00019df5  CORESTATE_Cpu2_ClearReady                  
+0     00019dfc  CORESTATE_Cpu2_DebugBarrier_Ack            
+0     00019eff  CORESTATE_Cpu2_GetBootInjectMask           
+0     00019f03  CORESTATE_Cpu2_GetBootStep                 
+0     00019f07  CORESTATE_Cpu2_GetCpu1BootEpoch            
+0     00019e03  CORESTATE_Cpu2_GetCpu1FaultFlags           
+0     000199db  CORESTATE_Cpu2_Init                        
+0     00019298  CORESTATE_Cpu2_IsCpu1DebugBarrierCurrent   
+0     00019d8e  CORESTATE_Cpu2_IsCpu1StatePresent          
+0     00019f3e  CORESTATE_Cpu2_LocalState_Get              
+0     00019e39  CORESTATE_Cpu2_LogicAliveIncrement         
+0     00019cb8  CORESTATE_Cpu2_SetAppInitOk                
+0     00019e8a  CORESTATE_Cpu2_SetBootState                
+0     00019e8f  CORESTATE_Cpu2_SetFault                    
+0     00019d58  CORESTATE_Cpu2_SetReady                    
+0     00019ba6  CORESTATE_Cpu2_ValidateCpu1Abi             
+0     0000aeff  CPU2_Calc_DiagGet                          
+0     00019323  CPU2_Calc_Init                             
+0     00018cad  CPU2_Calc_InvRmsResultGet                  
+0     00017529  CPU2_Calc_InvRmsRun1ms                     
+0     00019c35  CPU2_Calc_Reset                            
+0     0001870b  CPU2_Calc_ResultGet                        
+0     00018e9b  CPU2_Calc_RmsWindowSet                     
+0     00016688  CPU2_Calc_Run1ms                           
+0     00019ab8  CPU2_CoreComm_AppInitOk_Set                
+0     00019e3f  CPU2_CoreComm_BootReady_Set                
+0     00019e8a  CPU2_CoreComm_BootState_Set                
+0     00019e45  CPU2_CoreComm_CommandEndpoint_Reset        
+0     00017f74  CPU2_CoreComm_FastExchange_Isr             
+0     0000969a  CPU2_CoreComm_FastRawBlock_Capture         
+0     00018117  CPU2_CoreComm_FastRawBlock_Take            
+0     00019e4b  CPU2_CoreComm_Fault_Set                    
+0     000098b3  CPU2_CoreComm_Init                         
+0     00019e39  CPU2_CoreComm_LogicAlive_Increment         
+0     00009a2f  CPU2_CoreComm_MeasurementDiag_Update       
+0     0000afd7  CPU2_CoreComm_MonitorSnapshot_Copy         
+0     00019898  CPU2_CoreComm_ParamEndpoint_Init           
+0     00019814  CPU2_CoreComm_Param_Publish                
+0     00019cc2  CPU2_CoreComm_PeerBlocked_Get              
+0     00019e03  CPU2_CoreComm_PeerFaultFlags_Get           
+0     00018b04  CPU2_CoreComm_Publish                      
+0     00019d96  CPU2_CoreComm_RuntimeDiag_MarkRunning      
+0     00019f41  CPU2_CoreComm_RxStatus_Get                 
+0     00009452  CPU2_CoreComm_RxStatus_Run                 
+0     000197ee  CPU2_CoreComm_SlowStatusTimeout_Get        
+0     00019efb  CPU2_CoreComm_SlowStsSeq_Get               
+0     00019f0b  CPU2_CoreComm_TickMs_Get                   
+0     00009c7a  CPU2_CoreComm_Update                       
+0     0001933e  CPU2_CoreComm_WaitCpu1Release              
+0     00019bb2  CPU2_Frt_Init                              
+0     00019f44  CPU2_Frt_Reset                             
+0     000176ee  CPU2_Frt_Run1ms                            
+0     000198e0  CPU2_LegacyOsc_Checksum                    
+0     0000a984  CPU2_LegacyOsc_FrameEncode                 
+0     00019c40  CPU2_LegacyOsc_Parser_Init                 
+0     00009721  CPU2_LegacyOsc_Parser_Push                 
+0     000198f1  CPU2_Logic_Init                            
+0     00018f8f  CPU2_Logic_InputBuildWithPermissions       
+0     00017c33  CPU2_Logic_Run1ms                          
+0     000196ba  CPU2_MonitorBackend_Init                   
+0     00019902  CPU2_MonitorBackend_RxByte                 
+0     00009e3b  CPU2_MonitorBackend_TxDone                 
+0     00018de4  CPU2_MonitorParam_Read                     
+0     0001999b  CPU2_MonitorTransport_Init                 
+0     000188db  CPU2_MonitorTransport_RxDrain              
+0     00019e0a  CPU2_MonitorTransport_RxPoll1ms            
+0     00019913  CPU2_MonitorTransport_TxSubmit             
+0     00019924  CPU2_Param_ActiveImage_Get                 
+0     0000a048  CPU2_Param_Boot_Init                       
+0     00019f0f  CPU2_Param_FaultFlags_Get                  
+0     00016cf1  CPU2_Param_FrtView_Get                     
+0     000097a7  CPU2_Param_Init                            
+0     00019886  CPU2_Param_IsApplied                       
+0     00019ac6  CPU2_Param_IsValid                         
+0     0000abc3  CPU2_Param_MeasView_Get                    
+0     00016e47  CPU2_Param_OffgridCtrlView_Get             
+0     00019554  CPU2_Param_RatedView_Get                   
+0     0000a114  CPU2_Param_Run1ms                          
+0     00019079  CPU2_ProductState_Init                     
+0     0000a3cd  CPU2_ProductState_Run                      
+0     00019e11  CPU2_ProductState_StateGet                 
+0     000199ea  CPU2_Product_ControlInput_Set              
+0     00009c08  CPU2_Product_EmsTask_Run                   
+0     000099b3  CPU2_Product_FaultTask_Run                 
+0     000177c9  CPU2_Product_Init                          
+0     00018ebe  CPU2_Product_MonitorLocal_Read             
+0     00009ceb  CPU2_Product_PcControl_Read                
+0     0000927d  CPU2_Product_PcControl_Write               
+0     00016000  CPU2_Product_Run1ms                        
+0     00019bbe  CPU2_RelayControl_Command_IsAllowed        
+0     000195f4  CPU2_RelayControl_Init                     
+0     00019415  CPU2_RelayControl_Request                  
+0     00019172  CPU2_RelayControl_Run1ms                   
+0     00019ccc  CPU2_Rtos_AssertFailure_Stop               
+0     0001896d  CPU2_Rtos_CommEvent_PostFromIsr            
+0     0001832d  CPU2_Rtos_CommEvent_PostRxReadyFromIsr     
+0     000187dd  CPU2_Rtos_CommEvent_PostRxReadyFromTask    
+0     00019d9e  CPU2_Rtos_CommEvent_RxReadyConsumed        
+0     0001960a  CPU2_Rtos_Critical_Enter                   
+0     000190b9  CPU2_Rtos_Critical_Exit                    
+0     0000a17a  CPU2_Rtos_Init                             
+0     00018ee1  CPU2_Rtos_IpcIsrLoad_Update                
+0     00018a27  CPU2_Rtos_IpcWindow_Commit                 
+0     00019d61  CPU2_Rtos_StartScheduler                   
+0     000185f7  CPU2_Safety_Command_Apply                  
+0     00019f13  CPU2_Safety_CtrlBlocked_Get                
+0     00019bca  CPU2_Safety_CtrlFault_Latch                
+0     0001849a  CPU2_Safety_FaultClear_AppliedTake         
+0     00019f17  CPU2_Safety_FaultClear_Prepare             
+0     000199f9  CPU2_Safety_FaultClear_Published           
+0     00019bd6  CPU2_Safety_Init                           
+0     00019e51  CPU2_Safety_LogicFault_Get                 
+0     000194dc  CPU2_Safety_ParamFail_Apply                
+0     0000982d  CPU2_Safety_Run1ms                         
+0     00018a54  CPU2_Safety_StartupFail_Stop               
+0     0000ae24  CPU2_Validation_ControlCommand_Take        
+0     00018810  CPU2_Validation_Init                       
+0     000194f4  CPU2_Validation_LogicAlive_CanPublish      
+0     0001956b  CPU2_Validation_SyntheticEvidence_IsGranted
+0     0000a8d6  CPU2_Validation_Watch_Publish              
+0     00019801  CPUTimer_setEmulationMode                  
+0     00018a80  CTRL_VoltRms_Init                          
+0     00019e94  CTRL_VoltRms_Reset                         
+0     0000a48b  CTRL_VoltRms_Run                           
+0     000190d8  CTRL_VoltRms_SetConfig                     
+0     00018e09  DMA_configAddresses                        
+0     00018667  DMA_configBurst                            
+0     0000931a  DMA_configMode                             
+0     000183e6  DMA_configTransfer                         
+0     00018047  DMA_configWrap                             
+0     000169f7  Device_enableAllPeripherals                
+0     00019b28  Device_init                                
+0     00019be2  INTERRUPT_init                             
+0     0003b000  IPC_CPU1_To_CPU2_GetBuffer                 
+0     0003a0c0  IPC_CPU1_To_CPU2_PutBuffer                 
+0     0001544a  IPC_Instance                               
+0     00019ad4  IPC_Port_AbortTx                           
+0     00019ae2  IPC_Port_Ack                               
+0     00018585  IPC_Port_SyncWithTimeout                   
+0     00019d6a  IPC_Port_TimeUs_Get                        
+0     00019f1b  IPC_Port_Timebase_Set                      
+0     00019190  IPC_Port_Timeout_IsExpired                 
+0     00019620  Interrupt_defaultHandler                   
+0     0001869e  Interrupt_enable                           
+0     00019ce0  Interrupt_illegalOperationHandler          
+0     000183a9  Interrupt_initModule                       
+0     000191ae  Interrupt_initVectorTable                  
+0     00019cea  Interrupt_nmiHandler                       
+0     000188a9  LOGIC_Frt_ConfigApply                      
+0     00009d5c  LOGIC_Frt_ConfigValidate                   
+0     000191cc  LOGIC_Frt_Init                             
+0     00018f27  LOGIC_Frt_Reset                            
+0     0001684b  LOGIC_Frt_Run1ms                           
+0     00019898  PARAMBIND_Cpu2_Init                        
+0     00019814  PARAMBIND_Cpu2_Publish                     
+0     0000ad46  RTM_Cpu2Param_Init                         
+0     00019827  RTM_Cpu2Param_Metadata_Get                 
+0     00018b2f  RTM_Cpu2Param_Read                         
+0     00019f1f  RTM_Cpu2Param_Version_Get                  
+0     0000a043  SysCtl_delay                               
+0     0000a547  UART_setConfig                             
+0     00018ff5  UTILS_Math_ClampI64ToI32                   
+0     00018b5a  UTILS_Math_SqrtU32                         
+0     00019f47  UTILS_Math_SquareI16                       
+0     00019f4a  UTILS_Pi_Reset                             
+0     00019c4b  UTILS_Pi_Run                               
+0     0001815b  UTILS_Pi_RunError                          
+0     00019935  UTILS_Rms_Calc                             
+0     00000216  __TI_CINIT_Base                            
+0     00000222  __TI_CINIT_Limit                           
+0     00000222  __TI_CINIT_Warm                            
+0     00000208  __TI_Handler_Table_Base                    
+0     0000020e  __TI_Handler_Table_Limit                   
+0     000007f8  __TI_STACK_END                             
+abs   000003f8  __TI_STACK_SIZE                            
+0     00018b85  __TI_auto_init_nobinit_nopinit             
+0     0000be02  __TI_cleanup_ptr                           
+0     000189cb  __TI_decompress_lzss                       
+0     00019da6  __TI_decompress_none                       
+0     0000be04  __TI_dtors_ptr                             
+0     0000be00  __TI_enable_exit_profile_output            
+abs   ffffffff  __TI_pprof_out_hndl                        
+abs   ffffffff  __TI_prof_data_size                        
+abs   ffffffff  __TI_prof_data_start                       
+0     00019e57  __TI_zero_init                             
+0     00019208  __c28xabi_cmpll                            
+0     0001921a  __c28xabi_cmpull                           
+0     00018c31  __c28xabi_divl                             
+0     00017322  __c28xabi_divll                            
+0     00018c4e  __c28xabi_divul                            
+0     00017398  __c28xabi_divull                           
+0     00018c40  __c28xabi_modl                             
+0     0001735e  __c28xabi_modll                            
+0     00018c55  __c28xabi_modul                            
+0     000173c7  __c28xabi_modull                           
+0     000197da  __c28xabi_mpyll                            
+abs   ffffffff  __c_args__                                 
+0     00019f4d  __error__                                  
+0     00000400  __stack                                    
+0     000198ce  _args_main                                 
+0     000194ab  _c_int00                                   
+0     0000be0a  _lock                                      
+0     00019d8d  _nop                                       
+0     00019d89  _register_lock                             
+0     00019d85  _register_unlock                           
+0     00018269  _system_post_cinit                         
+0     00019f55  _system_pre_init                           
+0     0000be0c  _unlock                                    
+0     00018c84  abort                                      
+0     0000be07  bPreemptive                                
+0     0000be06  bYield                                     
+0     00000000  code_start                                 
+0     00018c86  exit                                       
+0     00014bea  g_astCpu2MonitorVariableMap                
+0     0003a000  g_stCoreCommC1FastInstMsg                  
+0     0003a040  g_stCoreCommC1SlowStsMsg                   
+0     0003a094  g_stCoreCommC1State                        
+0     0003b0c0  g_stCoreCommC2CmdMsg                       
+0     0003b100  g_stCoreCommC2ParamMsg                     
+0     0003b088  g_stCoreCommC2State                        
+0     0000b6c0  g_stCoreCommCpu2Watch                      
+0     0000bbe4  g_stCpu2ParamRuntimeIdentityWatch          
+0     0000b914  g_stCpu2RtosValidationCommMailbox          
+0     0000ba40  g_stCpu2RtosWatch                          
+0     0000bc8a  g_stCpu2ValidationCmd                      
+0     0000bcc0  g_stCpu2ValidationWatch                    
+0     00014000  g_stRtmCpu2ParamLocalTable                 
+0     00014df8  g_stRtmParamInfo                           
+0     00019ff7  g_uiCpu2MonitorVariableMapCount            
+0     000152f2  g_uiRtmCpu2ParamLocalCount                 
+0     000152f3  g_uiRtmCpu2ParamOrderConstraintCount       
+0     0003a148  g_ulCoreCommBootInjectMask                 
+0     0003a14c  g_ulCoreCommDebugBootCpu2Epoch             
+0     0003a14a  g_ulCoreCommDebugBootSession               
+0     00017b84  getSTF                                     
+0     00019016  main                                       
+0     00019873  memcmp                                     
+0     00019099  memcpy                                     
+0     00019e1f  memset                                     
+0     00017b88  portRESTORE_FIRST_CONTEXT                  
+0     00017b93  portTICK_ISR                               
+0     00009dcc  prvBOARD_UartB_Isr                         
+0     00017cdf  prvBOARD_UartB_RxDmaIsr                    
+0     0000a92d  prvBOARD_UartB_TxDmaIsr                    
+0     0000bdf8  pxCurrentTCB                               
+0     0000a601  pxPortInitialiseStack                      
+0     0000be08  ulCriticalNesting                          
+0     0001998a  uxListRemove                               
+0     00019f2f  uxTaskGetNumberOfTasks                     
+0     0001968e  uxTaskGetStackHighWaterMark                
+0     00019d44  vApplicationGetIdleTaskMemory              
+0     00019e26  vApplicationStackOverflowHook              
+0     00019c98  vListInitialise                            
+0     00019f33  vListInitialiseItem                        
+0     000193c5  vListInsert                                
+0     00019dde  vPortEnterCritical                         
+0     00019d4e  vPortExitCritical                          
+0     00019c1e  vPortSetupSWInterrupt                      
+0     0001836b  vPortSetupTimerInterrupt                   
+0     00019de6  vTaskInternalSetTimeOutState               
+0     00019ec6  vTaskMissedYield                           
+0     000193e0  vTaskPlaceOnEventList                      
+0     00019135  vTaskStartScheduler                        
+0     00019f37  vTaskSuspendAll                            
+0     0000a9da  vTaskSwitchContext                         
+0     000199cb  xPortStartScheduler                        
+0     000182ac  xQueueGenericCreateStatic                  
+0     00009ea9  xQueueGenericReset                         
+0     00017a21  xQueueGenericSend                          
+0     0000a1df  xQueueGenericSendFromISR                   
+0     00017d85  xQueueReceive                              
+0     00018510  xTaskCheckForTimeOut                       
+0     000196a4  xTaskCreateStatic                          
+0     0000aa82  xTaskDelayUntil                            
+0     00019b1a  xTaskGetIdleTaskHandle                     
+0     00019ca3  xTaskGetTickCount                          
+0     000093b7  xTaskIncrementTick                         
+0     00009935  xTaskRemoveFromEventList                   
+0     00017e2b  xTaskResumeAll                             
+
+
+GLOBAL SYMBOLS: SORTED BY Symbol Address 
+
+page  address   name                                       
+----  -------   ----                                       
+0     00000000  code_start                                 
+0     00000208  __TI_Handler_Table_Base                    
+0     0000020e  __TI_Handler_Table_Limit                   
+0     00000216  __TI_CINIT_Base                            
+0     00000222  __TI_CINIT_Limit                           
+0     00000222  __TI_CINIT_Warm                            
+0     00000400  __stack                                    
+0     000007f8  __TI_STACK_END                             
+0     00009140  COREMSG_Access_Command_WriteShared         
+0     0000927d  CPU2_Product_PcControl_Write               
+0     0000931a  DMA_configMode                             
+0     000093b7  xTaskIncrementTick                         
+0     00009452  CPU2_CoreComm_RxStatus_Run                 
+0     0000960d  BOARD_UartB_Backend_Init                   
+0     0000969a  CPU2_CoreComm_FastRawBlock_Capture         
+0     00009721  CPU2_LegacyOsc_Parser_Push                 
+0     000097a7  CPU2_Param_Init                            
+0     0000982d  CPU2_Safety_Run1ms                         
+0     000098b3  CPU2_CoreComm_Init                         
+0     00009935  xTaskRemoveFromEventList                   
+0     000099b3  CPU2_Product_FaultTask_Run                 
+0     00009a2f  CPU2_CoreComm_MeasurementDiag_Update       
+0     00009b1f  COREMSG_SlowStatusCpu2_Receive             
+0     00009c08  CPU2_Product_EmsTask_Run                   
+0     00009c7a  CPU2_CoreComm_Update                       
+0     00009ceb  CPU2_Product_PcControl_Read                
+0     00009d5c  LOGIC_Frt_ConfigValidate                   
+0     00009dcc  prvBOARD_UartB_Isr                         
+0     00009e3b  CPU2_MonitorBackend_TxDone                 
+0     00009e3c  BOARD_UartB_RxTake                         
+0     00009ea9  xQueueGenericReset                         
+0     00009f16  COREMSG_FastInstantCpu2_Receive            
+0     00009fe8  COREMSG_Access_SlowStatus_Copy             
+0     0000a043  SysCtl_delay                               
+0     0000a048  CPU2_Param_Boot_Init                       
+0     0000a114  CPU2_Param_Run1ms                          
+0     0000a17a  CPU2_Rtos_Init                             
+0     0000a1df  xQueueGenericSendFromISR                   
+0     0000a3cd  CPU2_ProductState_Run                      
+0     0000a48b  CTRL_VoltRms_Run                           
+0     0000a547  UART_setConfig                             
+0     0000a601  pxPortInitialiseStack                      
+0     0000a828  COREMSG_Access_FastInstant_Copy            
+0     0000a87f  COREMSG_Access_FastInstant_ReadShared      
+0     0000a8d6  CPU2_Validation_Watch_Publish              
+0     0000a92d  prvBOARD_UartB_TxDmaIsr                    
+0     0000a984  CPU2_LegacyOsc_FrameEncode                 
+0     0000a9da  vTaskSwitchContext                         
+0     0000aa82  xTaskDelayUntil                            
+0     0000aad3  BOARD_UartB_TxSubmit                       
+0     0000abc3  CPU2_Param_MeasView_Get                    
+0     0000ac61  BSW_StateMachine_Run                       
+0     0000ad46  RTM_Cpu2Param_Init                         
+0     0000addb  BOARD_DelayUs                              
+0     0000ae24  CPU2_Validation_ControlCommand_Take        
+0     0000aeff  CPU2_Calc_DiagGet                          
+0     0000afd7  CPU2_CoreComm_MonitorSnapshot_Copy         
+0     0000b6c0  g_stCoreCommCpu2Watch                      
+0     0000b914  g_stCpu2RtosValidationCommMailbox          
+0     0000ba40  g_stCpu2RtosWatch                          
+0     0000bbe4  g_stCpu2ParamRuntimeIdentityWatch          
+0     0000bc8a  g_stCpu2ValidationCmd                      
+0     0000bcc0  g_stCpu2ValidationWatch                    
+0     0000bdf8  pxCurrentTCB                               
+0     0000be00  __TI_enable_exit_profile_output            
+0     0000be02  __TI_cleanup_ptr                           
+0     0000be04  __TI_dtors_ptr                             
+0     0000be06  bYield                                     
+0     0000be07  bPreemptive                                
+0     0000be08  ulCriticalNesting                          
+0     0000be0a  _lock                                      
+0     0000be0c  _unlock                                    
+0     00014000  g_stRtmCpu2ParamLocalTable                 
+0     00014bea  g_astCpu2MonitorVariableMap                
+0     00014df8  g_stRtmParamInfo                           
+0     000152f2  g_uiRtmCpu2ParamLocalCount                 
+0     000152f3  g_uiRtmCpu2ParamOrderConstraintCount       
+0     0001544a  IPC_Instance                               
+0     00016000  CPU2_Product_Run1ms                        
+0     00016688  CPU2_Calc_Run1ms                           
+0     0001684b  LOGIC_Frt_Run1ms                           
+0     000169f7  Device_enableAllPeripherals                
+0     00016cf1  CPU2_Param_FrtView_Get                     
+0     00016e47  CPU2_Param_OffgridCtrlView_Get             
+0     0001720f  BOARD_RelayDomain_Disable                  
+0     00017322  __c28xabi_divll                            
+0     0001735e  __c28xabi_modll                            
+0     00017398  __c28xabi_divull                           
+0     000173c7  __c28xabi_modull                           
+0     00017429  COREMSG_Access_Parameter_WriteShared       
+0     00017529  CPU2_Calc_InvRmsRun1ms                     
+0     000176ee  CPU2_Frt_Run1ms                            
+0     000177c9  CPU2_Product_Init                          
+0     00017a21  xQueueGenericSend                          
+0     00017b84  getSTF                                     
+0     00017b88  portRESTORE_FIRST_CONTEXT                  
+0     00017b93  portTICK_ISR                               
+0     00017c33  CPU2_Logic_Run1ms                          
+0     00017cdf  prvBOARD_UartB_RxDmaIsr                    
+0     00017d85  xQueueReceive                              
+0     00017e2b  xTaskResumeAll                             
+0     00017f74  CPU2_CoreComm_FastExchange_Isr             
+0     00017ffb  BOARD_Interrupt_Init                       
+0     00018047  DMA_configWrap                             
+0     000180d3  BOOTSYNC_Cpu2_WaitCpu1Release              
+0     00018117  CPU2_CoreComm_FastRawBlock_Take            
+0     0001815b  UTILS_Pi_RunError                          
+0     00018269  _system_post_cinit                         
+0     000182ac  xQueueGenericCreateStatic                  
+0     0001832d  CPU2_Rtos_CommEvent_PostRxReadyFromIsr     
+0     0001836b  vPortSetupTimerInterrupt                   
+0     000183a9  Interrupt_initModule                       
+0     000183e6  DMA_configTransfer                         
+0     0001849a  CPU2_Safety_FaultClear_AppliedTake         
+0     00018510  xTaskCheckForTimeOut                       
+0     00018585  IPC_Port_SyncWithTimeout                   
+0     000185f7  CPU2_Safety_Command_Apply                  
+0     00018667  DMA_configBurst                            
+0     0001869e  Interrupt_enable                           
+0     000186d5  COREMSG_ParameterCpu2_Init                 
+0     0001870b  CPU2_Calc_ResultGet                        
+0     000187dd  CPU2_Rtos_CommEvent_PostRxReadyFromTask    
+0     00018810  CPU2_Validation_Init                       
+0     000188a9  LOGIC_Frt_ConfigApply                      
+0     000188db  CPU2_MonitorTransport_RxDrain              
+0     0001893d  BSW_StateMachine_Init                      
+0     0001896d  CPU2_Rtos_CommEvent_PostFromIsr            
+0     0001899d  COREMSG_ParameterCpu2_Publish              
+0     000189cb  __TI_decompress_lzss                       
+0     00018a27  CPU2_Rtos_IpcWindow_Commit                 
+0     00018a54  CPU2_Safety_StartupFail_Stop               
+0     00018a80  CTRL_VoltRms_Init                          
+0     00018b04  CPU2_CoreComm_Publish                      
+0     00018b2f  RTM_Cpu2Param_Read                         
+0     00018b5a  UTILS_Math_SqrtU32                         
+0     00018b85  __TI_auto_init_nobinit_nopinit             
+0     00018c31  __c28xabi_divl                             
+0     00018c40  __c28xabi_modl                             
+0     00018c4e  __c28xabi_divul                            
+0     00018c55  __c28xabi_modul                            
+0     00018c84  C$$EXIT                                    
+0     00018c84  abort                                      
+0     00018c86  exit                                       
+0     00018cad  CPU2_Calc_InvRmsResultGet                  
+0     00018d4c  BOARD_BootTimebase_Start                   
+0     00018de4  CPU2_MonitorParam_Read                     
+0     00018e09  DMA_configAddresses                        
+0     00018e9b  CPU2_Calc_RmsWindowSet                     
+0     00018ebe  CPU2_Product_MonitorLocal_Read             
+0     00018ee1  CPU2_Rtos_IpcIsrLoad_Update                
+0     00018f27  LOGIC_Frt_Reset                            
+0     00018f6d  BOARD_TimebaseInfo_Get                     
+0     00018f8f  CPU2_Logic_InputBuildWithPermissions       
+0     00018ff5  UTILS_Math_ClampI64ToI32                   
+0     00019016  main                                       
+0     00019037  COREMSG_CommandCpu2_InitBaseline           
+0     00019037  COREMSG_CommandCpu2_ResetEndpoint          
+0     00019079  CPU2_ProductState_Init                     
+0     00019099  memcpy                                     
+0     000190b9  CPU2_Rtos_Critical_Exit                    
+0     000190d8  CTRL_VoltRms_SetConfig                     
+0     00019135  vTaskStartScheduler                        
+0     00019154  COREMSG_SlowStatusCpu2_CheckTimeout        
+0     00019172  CPU2_RelayControl_Run1ms                   
+0     00019190  IPC_Port_Timeout_IsExpired                 
+0     000191ae  Interrupt_initVectorTable                  
+0     000191cc  LOGIC_Frt_Init                             
+0     00019208  __c28xabi_cmpll                            
+0     0001921a  __c28xabi_cmpull                           
+0     00019260  BOARD_UartB_RxPending_Get                  
+0     0001927c  BSW_CoreErr_Init                           
+0     00019298  CORESTATE_Cpu2_IsCpu1DebugBarrierCurrent   
+0     00019308  COREMSG_CommandCpu2_Publish                
+0     00019323  CPU2_Calc_Init                             
+0     0001933e  CPU2_CoreComm_WaitCpu1Release              
+0     000193c5  vListInsert                                
+0     000193e0  vTaskPlaceOnEventList                      
+0     00019415  CPU2_RelayControl_Request                  
+0     000194ab  _c_int00                                   
+0     000194c4  COREMSG_Access_SlowStatus_ReadShared       
+0     000194dc  CPU2_Safety_ParamFail_Apply                
+0     000194f4  CPU2_Validation_LogicAlive_CanPublish      
+0     00019554  CPU2_Param_RatedView_Get                   
+0     0001956b  CPU2_Validation_SyntheticEvidence_IsGranted
+0     000195de  COREMSG_FastInstantCpu2_CheckTimeout       
+0     000195f4  CPU2_RelayControl_Init                     
+0     0001960a  CPU2_Rtos_Critical_Enter                   
+0     00019620  Interrupt_defaultHandler                   
+0     0001968e  uxTaskGetStackHighWaterMark                
+0     000196a4  xTaskCreateStatic                          
+0     000196ba  CPU2_MonitorBackend_Init                   
+0     000197da  __c28xabi_mpyll                            
+0     000197ee  CPU2_CoreComm_SlowStatusTimeout_Get        
+0     00019801  CPUTimer_setEmulationMode                  
+0     00019814  CPU2_CoreComm_Param_Publish                
+0     00019814  PARAMBIND_Cpu2_Publish                     
+0     00019827  RTM_Cpu2Param_Metadata_Get                 
+0     00019873  memcmp                                     
+0     00019886  CPU2_Param_IsApplied                       
+0     00019898  CPU2_CoreComm_ParamEndpoint_Init           
+0     00019898  PARAMBIND_Cpu2_Init                        
+0     000198ce  _args_main                                 
+0     000198e0  CPU2_LegacyOsc_Checksum                    
+0     000198f1  CPU2_Logic_Init                            
+0     00019902  CPU2_MonitorBackend_RxByte                 
+0     00019913  CPU2_MonitorTransport_TxSubmit             
+0     00019924  CPU2_Param_ActiveImage_Get                 
+0     00019935  UTILS_Rms_Calc                             
+0     0001998a  uxListRemove                               
+0     0001999b  CPU2_MonitorTransport_Init                 
+0     000199cb  xPortStartScheduler                        
+0     000199db  CORESTATE_Cpu2_Init                        
+0     000199ea  CPU2_Product_ControlInput_Set              
+0     000199f9  CPU2_Safety_FaultClear_Published           
+0     00019a80  COREMSG_Access_Identity_Copy               
+0     00019a8e  COREMSG_Access_Identity_WriteShared        
+0     00019a9c  COREMSG_Access_Sequence_PublishBegin       
+0     00019aaa  COREMSG_SlowStatusCpu2_Init                
+0     00019ab8  CPU2_CoreComm_AppInitOk_Set                
+0     00019ac6  CPU2_Param_IsValid                         
+0     00019ad4  IPC_Port_AbortTx                           
+0     00019ae2  IPC_Port_Ack                               
+0     00019b1a  xTaskGetIdleTaskHandle                     
+0     00019b28  BOARD_Device_Init                          
+0     00019b28  Device_init                                
+0     00019b76  COREMSG_Access_Sequence_IsNewer            
+0     00019b82  COREMSG_FastInstantCpu2_GetDiag            
+0     00019b8e  COREMSG_FastInstantCpu2_Init               
+0     00019b9a  COREMSG_SlowStatusCpu2_GetDiag             
+0     00019ba6  CORESTATE_Cpu2_ValidateCpu1Abi             
+0     00019bb2  CPU2_Frt_Init                              
+0     00019bbe  CPU2_RelayControl_Command_IsAllowed        
+0     00019bca  CPU2_Safety_CtrlFault_Latch                
+0     00019bd6  CPU2_Safety_Init                           
+0     00019be2  INTERRUPT_init                             
+0     00019c1e  vPortSetupSWInterrupt                      
+0     00019c2a  BSW_CoreErr_SetLastError                   
+0     00019c35  CPU2_Calc_Reset                            
+0     00019c40  CPU2_LegacyOsc_Parser_Init                 
+0     00019c4b  UTILS_Pi_Run                               
+0     00019c98  vListInitialise                            
+0     00019ca3  xTaskGetTickCount                          
+0     00019cae  BSW_CoreErr_GetLastError                   
+0     00019cb8  CORESTATE_Cpu2_SetAppInitOk                
+0     00019cc2  CPU2_CoreComm_PeerBlocked_Get              
+0     00019ccc  CPU2_Rtos_AssertFailure_Stop               
+0     00019cd6  BOARD_Dma_Init                             
+0     00019ce0  Interrupt_illegalOperationHandler          
+0     00019cea  Interrupt_nmiHandler                       
+0     00019d44  vApplicationGetIdleTaskMemory              
+0     00019d4e  vPortExitCritical                          
+0     00019d58  BOOTSYNC_Cpu2_MarkReady                    
+0     00019d58  CORESTATE_Cpu2_SetReady                    
+0     00019d61  CPU2_Rtos_StartScheduler                   
+0     00019d6a  IPC_Port_TimeUs_Get                        
+0     00019d85  _register_unlock                           
+0     00019d89  _register_lock                             
+0     00019d8d  _nop                                       
+0     00019d8e  CORESTATE_Cpu2_IsCpu1StatePresent          
+0     00019d96  CPU2_CoreComm_RuntimeDiag_MarkRunning      
+0     00019d9e  CPU2_Rtos_CommEvent_RxReadyConsumed        
+0     00019da6  __TI_decompress_none                       
+0     00019dde  vPortEnterCritical                         
+0     00019de6  vTaskInternalSetTimeOutState               
+0     00019dee  BOOTSYNC_Cpu2_MarkAppInitOk                
+0     00019df5  CORESTATE_Cpu2_ClearReady                  
+0     00019dfc  CORESTATE_Cpu2_DebugBarrier_Ack            
+0     00019e03  CORESTATE_Cpu2_GetCpu1FaultFlags           
+0     00019e03  CPU2_CoreComm_PeerFaultFlags_Get           
+0     00019e0a  CPU2_MonitorTransport_RxPoll1ms            
+0     00019e11  CPU2_ProductState_StateGet                 
+0     00019e1f  memset                                     
+0     00019e26  vApplicationStackOverflowHook              
+0     00019e2d  BOARD_BootTimeUs_Get                       
+0     00019e33  CORESTATE_Cpu2_ClearFault                  
+0     00019e39  CORESTATE_Cpu2_LogicAliveIncrement         
+0     00019e39  CPU2_CoreComm_LogicAlive_Increment         
+0     00019e3f  CPU2_CoreComm_BootReady_Set                
+0     00019e45  CPU2_CoreComm_CommandEndpoint_Reset        
+0     00019e4b  CPU2_CoreComm_Fault_Set                    
+0     00019e51  CPU2_Safety_LogicFault_Get                 
+0     00019e57  __TI_zero_init                             
+0     00019e7b  BOARD_Runtime_Init                         
+0     00019e7b  Board_init                                 
+0     00019e80  COREMSG_FastInstantCpu2_Rebaseline         
+0     00019e85  COREMSG_SlowStatusCpu2_Rebaseline          
+0     00019e8a  CORESTATE_Cpu2_SetBootState                
+0     00019e8a  CPU2_CoreComm_BootState_Set                
+0     00019e8f  CORESTATE_Cpu2_SetFault                    
+0     00019e94  CTRL_VoltRms_Reset                         
+0     00019ec6  vTaskMissedYield                           
+0     00019ecb  BOARD_GlobalInt_Enable                     
+0     00019ecf  BOARD_PieGroup1_Ack                        
+0     00019ed3  BOARD_UartB_RxConsumedWords_Get            
+0     00019ed7  BOARD_UartB_RxDmaEventCount_Get            
+0     00019edb  BOARD_UartB_RxDmaOverrunCount_Get          
+0     00019edf  BOARD_UartB_RxPollKickCount_Get            
+0     00019ee3  BOARD_UartB_RxRingOverflowCount_Get        
+0     00019ee7  BOARD_UartB_RxUartErrorCount_Get           
+0     00019eeb  BOARD_UartB_TxBusyCount_Get                
+0     00019eef  BOARD_UartB_TxCompleteCount_Get            
+0     00019ef3  BOARD_UartB_TxDropCount_Get                
+0     00019ef7  BOARD_UartB_TxSubmitCount_Get              
+0     00019efb  COREMSG_SlowStatusCpu2_GetPublishedSeq     
+0     00019efb  CPU2_CoreComm_SlowStsSeq_Get               
+0     00019eff  CORESTATE_Cpu2_GetBootInjectMask           
+0     00019f03  CORESTATE_Cpu2_GetBootStep                 
+0     00019f07  CORESTATE_Cpu2_GetCpu1BootEpoch            
+0     00019f0b  CPU2_CoreComm_TickMs_Get                   
+0     00019f0f  CPU2_Param_FaultFlags_Get                  
+0     00019f13  CPU2_Safety_CtrlBlocked_Get                
+0     00019f17  CPU2_Safety_FaultClear_Prepare             
+0     00019f1b  IPC_Port_Timebase_Set                      
+0     00019f1f  RTM_Cpu2Param_Version_Get                  
+0     00019f2f  uxTaskGetNumberOfTasks                     
+0     00019f33  vListInitialiseItem                        
+0     00019f37  vTaskSuspendAll                            
+0     00019f3b  BOARD_GlobalInt_Disable                    
+0     00019f3e  CORESTATE_Cpu2_LocalState_Get              
+0     00019f41  CPU2_CoreComm_RxStatus_Get                 
+0     00019f44  CPU2_Frt_Reset                             
+0     00019f47  UTILS_Math_SquareI16                       
+0     00019f4a  UTILS_Pi_Reset                             
+0     00019f4d  __error__                                  
+0     00019f55  _system_pre_init                           
+0     00019ff7  g_uiCpu2MonitorVariableMapCount            
+0     0003a000  g_stCoreCommC1FastInstMsg                  
+0     0003a040  g_stCoreCommC1SlowStsMsg                   
+0     0003a094  g_stCoreCommC1State                        
+0     0003a0c0  IPC_CPU1_To_CPU2_PutBuffer                 
+0     0003a148  g_ulCoreCommBootInjectMask                 
+0     0003a14a  g_ulCoreCommDebugBootSession               
+0     0003a14c  g_ulCoreCommDebugBootCpu2Epoch             
+0     0003b000  IPC_CPU1_To_CPU2_GetBuffer                 
+0     0003b088  g_stCoreCommC2State                        
+0     0003b0c0  g_stCoreCommC2CmdMsg                       
+0     0003b100  g_stCoreCommC2ParamMsg                     
+abs   000003f8  __TI_STACK_SIZE                            
+abs   ffffffff  __TI_pprof_out_hndl                        
+abs   ffffffff  __TI_prof_data_size                        
+abs   ffffffff  __TI_prof_data_start                       
+abs   ffffffff  __c_args__                                 
+
+[342 symbols]

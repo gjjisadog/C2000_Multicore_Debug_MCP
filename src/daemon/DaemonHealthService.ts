@@ -2,6 +2,7 @@ import type { DebugDaemonInstance } from "./DaemonInstanceFile.js";
 import type { DatabaseConsistencyReport } from "../storage/DatabaseConsistencyChecker.js";
 import type { BoardExecutionSnapshot } from "../jobs/BoardExecutionSemaphore.js";
 import type { BoardRecord } from "../boards/types.js";
+import { runtimeContractIdentity } from "../contracts/RuntimeContract.js";
 
 export interface DaemonHealthSnapshot {
   instanceId: string;
@@ -31,6 +32,7 @@ export function createDaemonHealth(
     schedulerReady: true
   };
   return {
+    contracts: runtimeContractIdentity(),
     daemon,
     workers,
     boards: {

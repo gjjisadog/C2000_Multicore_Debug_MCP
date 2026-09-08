@@ -4,6 +4,7 @@ import { resolveDaemonConfig } from "../daemon/DaemonConfig.js";
 import { daemonRuntimePaths, readDaemonAuthToken, readDaemonInstance, removeDaemonInstance, type DebugDaemonInstance } from "../daemon/DaemonInstanceFile.js";
 import { LocalRpcClient } from "../rpc/RpcServer.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { compareRuntimeContract } from "../contracts/RuntimeContract.js";
 
 export interface DiscoveredDaemon {
   instance: DebugDaemonInstance;
@@ -60,8 +61,28 @@ export async function discoverDaemon(config: C2000McpConfig): Promise<Discovered
         reportedInstanceId: reportedId
       });
     }
+    const compatibility = compareRuntimeContract(health.contracts);
+    if (!compatibility.compatible) {
+      throw new DebugMcpError(
+        "DaemonContractMismatch",
+        "c2000-debugd is running with an incompatible MCP frontend/daemon contract; complete the safe daemon maintenance update before submitting a test plan",
+        {
+          instanceId: instance.instanceId,
+          daemonVersion: instance.version,
+          expectedContract: compatibility.expected,
+          actualContract: compatibility.actual ?? null,
+          mismatchedContractFields: compatibility.mismatches,
+          targetAccessAttempted: false
+        }
+      );
+    }
     return { instance, client, health };
   } catch (error) {
+    if (error instanceof DebugMcpError && error.code === "DaemonContractMismatch") {
+      // The daemon is live but incompatible. Preserve its discovery files so
+      // maintenance tooling can identify and update that exact instance.
+      throw error;
+    }
     await removeDaemonInstance(paths, instance.instanceId);
     if (error instanceof DebugMcpError) throw error;
     throw new DebugMcpError("DaemonUnavailable", "c2000-debugd did not answer its health check", {

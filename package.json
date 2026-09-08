@@ -105,6 +105,7 @@
     "python/README.md",
     "python/src/c2000_hil/*.py",
     "skills/c2000-multicore-debug/**",
+    "skills/c2000-ipc-debug/**",
     "skills/c2000-skill-improver/**",
     "README.md",
     "CHANGELOG.md"

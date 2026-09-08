@@ -1,0 +1,301 @@
+******************************************************************************
+             TMS320C2000 Linker PC v25.11.1                    
+******************************************************************************
+>> Linked Thu Aug 27 15:17:59 2026
+
+OUTPUT FILE NAME:   <CPU1_BOOT_DK9_VALIDATION.out>
+ENTRY POINT SYMBOL: "code_start"  address: 00080000
+
+
+MEMORY CONFIGURATION
+
+         name            origin    length      used     unused   attr    fill
+----------------------  --------  ---------  --------  --------  ----  --------
+  BOOT_RSVD             00000002   000001af  00000000  000001af  RWIX
+  RAMM0                 000001b1   0000024f  00000000  0000024f  RWIX
+  RAMM1                 00000400   00000400  00000000  00000400  RWIX
+  RAMD0                 0000c000   00002000  00000000  00002000  RWIX
+  RAMD1_STACK           0000e000   00000700  00000700  00000000  RWIX
+  RAMD1_GUARD           0000e700   00000020  00000008  00000018  RWIX
+  RAMD1_WORK            0000e720   000018e0  0000000a  000018d6  RWIX
+  BEGIN                 00080000   00000002  00000002  00000000  RWIX
+  FLASH_BOOT            00080002   00017ffe  0000030d  00017cf1  RWIX
+  BOOT_METADATA_A       00098000   00000400  00000000  00000400  RWIX
+  BOOT_METADATA_B       00098400   00000400  00000000  00000400  RWIX
+  UPDATE_METADATA_A     00098800   00000400  00000000  00000400  RWIX
+  UPDATE_METADATA_B     00098c00   00000400  00000000  00000400  RWIX
+  RELEASE_MANIFEST_A    00099000   00000400  00000000  00000400  RWIX
+  RELEASE_MANIFEST_B    00099400   00000400  00000000  00000400  RWIX
+  FLASH_RESERVED        00099800   00006800  00000000  00006800  RWIX
+  FLASH_BANK1_GUARD     000a0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK2_GUARD     000c0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK3_GUARD     000e0000   00020000  00000000  00020000  RWIX
+  FLASH_BANK4_GUARD     00100000   00020000  00000000  00020000  RWIX
+  RESET                 003fffc0   00000002  00000000  00000002  RWIX
+
+
+SECTION ALLOCATION MAP
+
+ output                                  attributes/
+section   page    origin      length       input sections
+--------  ----  ----------  ----------   ----------------
+codestart 
+*          0    00080000    00000002     
+                  00080000    00000002     f28p65x_codestartbranch.obj (codestart)
+
+.text      0    00080008    000002c7     
+                  00080008    0000006a     boot_target_f28p65x.obj (.text:BOOT_Target_SafeOffAssert)
+                  00080072    00000046     boot_main.obj (.text:main)
+                  000800b8    0000003d     driverlib.lib : interrupt.obj (.text:Interrupt_initModule)
+                  000800f5    0000002e     rts2800_fpu64_eabi.lib : copy_decompress_lzss.c.obj (.text:decompress:lzss)
+                  00080123    0000002b                            : autoinit.c.obj (.text:__TI_auto_init_nobinit_nopinit)
+                  0008014e    00000029                            : exit.c.obj (.text)
+                  00080177    00000022     boot_target_f28p65x.obj (.text:BOOT_Target_InitMinimal)
+                  00080199    00000021     driverlib.lib : sysctl.obj (.text:SysCtl_controlCPU2Reset)
+                  000801ba    00000020     rts2800_fpu64_eabi.lib : memcpy.c.obj (.text)
+                  000801da    0000001e     driverlib.lib : interrupt.obj (.text:Interrupt_initVectorTable)
+                  000801f8    0000001a     boot_target_f28p65x.obj (.text:BOOT_Target_PreJump)
+                  00080212    00000019     rts2800_fpu64_eabi.lib : boot28.asm.obj (.text)
+                  0008022b    00000016     driverlib.lib : interrupt.obj (.text:Interrupt_defaultHandler)
+                  00080241    00000012     rts2800_fpu64_eabi.lib : args_main.c.obj (.text)
+                  00080253    0000000e     boot_target_f28p65x.obj (.text:BOOT_Target_Cpu2HoldReset)
+                  00080261    0000000e     boot_main.obj (.text:prvBOOT_FailClosed)
+                  0008026f    0000000d     boot_trace.obj (.text:BOOT_Trace_Reset)
+                  0008027c    0000000d     driverlib.lib : interrupt.obj (.text:Interrupt_disableGlobal)
+                  00080289    0000000a     boot_jump.obj (.text:BOOT_Jump_AddressValidate)
+                  00080293    0000000a     driverlib.lib : interrupt.obj (.text:Interrupt_illegalOperationHandler)
+                  0008029d    0000000a                   : interrupt.obj (.text:Interrupt_nmiHandler)
+                  000802a7    00000009     rts2800_fpu64_eabi.lib : _lock.c.obj (.text)
+                  000802b0    00000008                            : copy_decompress_none.c.obj (.text:decompress:none)
+                  000802b8    00000008     f28p65x_codestartbranch.obj (.text)
+                  000802c0    00000004     boot_target_f28p65x.obj (.text:BOOT_Target_FatalLoop)
+                  000802c4    00000004     boot_trace.obj (.text:BOOT_Trace_Record)
+                  000802c8    00000002     boot_jump_thunk.obj (.text)
+                  000802ca    00000002     boot_target_f28p65x.obj (.text:prvBOOT_TargetPowerEpwmCount)
+                  000802cc    00000002     rts2800_fpu64_eabi.lib : pre_init.c.obj (.text)
+                  000802ce    00000001                            : startup.c.obj (.text)
+
+.cinit     0    00080308    00000012     
+                  00080308    00000009     (.cinit..data.load) [load image, compression = lzss]
+                  00080311    00000001     --HOLE-- [fill = 0]
+                  00080312    00000004     (__TI_handler_table)
+                  00080316    00000004     (__TI_cinit_table)
+
+.reset     0    003fffc0    00000000     DSECT
+
+.stack     0    0000e000    00000700     UNINITIALIZED
+                  0000e000    00000700     --HOLE--
+
+BOOT_TRACE 
+*          0    0000e700    00000008     UNINITIALIZED
+                  0000e700    00000008     boot_trace.obj (BOOT_TRACE)
+
+.init_array 
+*          0    00080008    00000000     UNINITIALIZED
+
+.data      0    0000e720    0000000a     UNINITIALIZED
+                  0000e720    00000006     rts2800_fpu64_eabi.lib : exit.c.obj (.data)
+                  0000e726    00000002                            : _lock.c.obj (.data:_lock)
+                  0000e728    00000002                            : _lock.c.obj (.data:_unlock)
+
+.const     0    000802d0    00000034     
+                  000802d0    00000034     boot_target_f28p65x.obj (.const:s_astPowerEpwm)
+
+.TI.ramfunc 
+*          0    0000c000    00000000     UNINITIALIZED
+
+MODULE SUMMARY
+
+       Module                        code   ro data   rw data
+       ------                        ----   -------   -------
+    .\project\hybrid30k\bootloader\cpu1\src\
+       boot_target_f28p65x.obj       186    52        0      
+       boot_main.obj                 84     0         0      
+       boot_trace.obj                17     0         8      
+       boot_jump.obj                 10     0         0      
+       boot_jump_thunk.obj           2      0         0      
+    +--+-----------------------------+------+---------+---------+
+       Total:                        299    52        8      
+                                                             
+    .\ti\device\source\
+       f28p65x_codestartbranch.obj   10     0         0      
+    +--+-----------------------------+------+---------+---------+
+       Total:                        10     0         0      
+                                                             
+    C:/Users/11981/Documents/Hybrid_Platform/.worktrees/codex-phase2b-bank0-jump-validation/third_party/ti/c2000ware-core-sdk/f28p65x/runtime/driverlib/f28p65x/driverlib/ccs/Debug/driverlib.lib
+       interrupt.obj                 146    0         0      
+       sysctl.obj                    33     0         0      
+    +--+-----------------------------+------+---------+---------+
+       Total:                        179    0         0      
+                                                             
+    D:\ccs21.0\ccs\tools\compiler\ti-cgt-c2000_25.11.1.LTS\lib\rts2800_fpu64_eabi.lib
+       exit.c.obj                    41     0         6      
+       copy_decompress_lzss.c.obj    46     0         0      
+       autoinit.c.obj                43     0         0      
+       memcpy.c.obj                  32     0         0      
+       boot28.asm.obj                25     0         0      
+       args_main.c.obj               18     0         0      
+       _lock.c.obj                   9      0         4      
+       copy_decompress_none.c.obj    8      0         0      
+       pre_init.c.obj                2      0         0      
+       startup.c.obj                 1      0         0      
+    +--+-----------------------------+------+---------+---------+
+       Total:                        225    0         10     
+                                                             
+       Stack:                        0      0         1792   
+       Linker Generated:             0      17        0      
+    +--+-----------------------------+------+---------+---------+
+       Grand Total:                  713    69        1810   
+
+
+LINKER GENERATED COPY TABLES
+
+__TI_cinit_table @ 00080316 records: 1, size/record: 4, table size: 4
+	.data: load addr=00080308, load size=00000009 bytes, run addr=0000e720, run size=0000000a bytes, compression=lzss
+
+
+LINKER GENERATED HANDLER TABLE
+
+__TI_handler_table @ 00080312 records: 2, size/record: 2, table size: 4
+	index: 0, handler: __TI_decompress_lzss
+	index: 1, handler: __TI_decompress_none
+
+
+GLOBAL DATA SYMBOLS: SORTED BY DATA PAGE
+
+address     data page           name
+--------    ----------------    ----
+0000e000     380 (0000e000)     __stack
+
+0000e700     39c (0000e700)     g_stBootTrace
+0000e720     39c (0000e700)     __TI_enable_exit_profile_output
+0000e722     39c (0000e700)     __TI_cleanup_ptr
+0000e724     39c (0000e700)     __TI_dtors_ptr
+0000e726     39c (0000e700)     _lock
+0000e728     39c (0000e700)     _unlock
+
+
+GLOBAL SYMBOLS: SORTED ALPHABETICALLY BY Name 
+
+page  address   name                             
+----  -------   ----                             
+abs   000a0000  BOOT_CPU1_APP_ENTRY              
+0     00080289  BOOT_Jump_AddressValidate        
+0     00080253  BOOT_Target_Cpu2HoldReset        
+0     000802c0  BOOT_Target_FatalLoop            
+0     00080177  BOOT_Target_InitMinimal          
+0     000802c8  BOOT_Target_JumpCpu1App          
+0     000801f8  BOOT_Target_PreJump              
+0     00080008  BOOT_Target_SafeOffAssert        
+0     000802c4  BOOT_Trace_Record                
+0     0008026f  BOOT_Trace_Reset                 
+0     0008014e  C$$EXIT                          
+0     0008022b  Interrupt_defaultHandler         
+0     00080293  Interrupt_illegalOperationHandler
+0     000800b8  Interrupt_initModule             
+0     000801da  Interrupt_initVectorTable        
+0     0008029d  Interrupt_nmiHandler             
+0     0000c000  RamfuncsLoadEnd                  
+abs   00000000  RamfuncsLoadSize                 
+0     0000c000  RamfuncsLoadStart                
+0     0000c000  RamfuncsRunEnd                   
+abs   00000000  RamfuncsRunSize                  
+0     0000c000  RamfuncsRunStart                 
+0     00080199  SysCtl_controlCPU2Reset          
+0     00080316  __TI_CINIT_Base                  
+0     0008031a  __TI_CINIT_Limit                 
+0     0008031a  __TI_CINIT_Warm                  
+0     00080312  __TI_Handler_Table_Base          
+0     00080316  __TI_Handler_Table_Limit         
+0     0000e700  __TI_STACK_END                   
+abs   00000700  __TI_STACK_SIZE                  
+0     00080123  __TI_auto_init_nobinit_nopinit   
+0     0000e722  __TI_cleanup_ptr                 
+0     000800f5  __TI_decompress_lzss             
+0     000802b0  __TI_decompress_none             
+0     0000e724  __TI_dtors_ptr                   
+0     0000e720  __TI_enable_exit_profile_output  
+abs   ffffffff  __TI_pprof_out_hndl              
+abs   ffffffff  __TI_prof_data_size              
+abs   ffffffff  __TI_prof_data_start             
+abs   ffffffff  __c_args__                       
+0     0000e000  __stack                          
+0     00080241  _args_main                       
+0     00080212  _c_int00                         
+0     0000e726  _lock                            
+0     000802af  _nop                             
+0     000802ab  _register_lock                   
+0     000802a7  _register_unlock                 
+0     000802ce  _system_post_cinit               
+0     000802cc  _system_pre_init                 
+0     0000e728  _unlock                          
+0     0008014e  abort                            
+0     00080000  code_start                       
+0     00080150  exit                             
+0     0000e700  g_stBootTrace                    
+0     00080072  main                             
+0     000801ba  memcpy                           
+
+
+GLOBAL SYMBOLS: SORTED BY Symbol Address 
+
+page  address   name                             
+----  -------   ----                             
+0     0000c000  RamfuncsLoadEnd                  
+0     0000c000  RamfuncsLoadStart                
+0     0000c000  RamfuncsRunEnd                   
+0     0000c000  RamfuncsRunStart                 
+0     0000e000  __stack                          
+0     0000e700  __TI_STACK_END                   
+0     0000e700  g_stBootTrace                    
+0     0000e720  __TI_enable_exit_profile_output  
+0     0000e722  __TI_cleanup_ptr                 
+0     0000e724  __TI_dtors_ptr                   
+0     0000e726  _lock                            
+0     0000e728  _unlock                          
+0     00080000  code_start                       
+0     00080008  BOOT_Target_SafeOffAssert        
+0     00080072  main                             
+0     000800b8  Interrupt_initModule             
+0     000800f5  __TI_decompress_lzss             
+0     00080123  __TI_auto_init_nobinit_nopinit   
+0     0008014e  C$$EXIT                          
+0     0008014e  abort                            
+0     00080150  exit                             
+0     00080177  BOOT_Target_InitMinimal          
+0     00080199  SysCtl_controlCPU2Reset          
+0     000801ba  memcpy                           
+0     000801da  Interrupt_initVectorTable        
+0     000801f8  BOOT_Target_PreJump              
+0     00080212  _c_int00                         
+0     0008022b  Interrupt_defaultHandler         
+0     00080241  _args_main                       
+0     00080253  BOOT_Target_Cpu2HoldReset        
+0     0008026f  BOOT_Trace_Reset                 
+0     00080289  BOOT_Jump_AddressValidate        
+0     00080293  Interrupt_illegalOperationHandler
+0     0008029d  Interrupt_nmiHandler             
+0     000802a7  _register_unlock                 
+0     000802ab  _register_lock                   
+0     000802af  _nop                             
+0     000802b0  __TI_decompress_none             
+0     000802c0  BOOT_Target_FatalLoop            
+0     000802c4  BOOT_Trace_Record                
+0     000802c8  BOOT_Target_JumpCpu1App          
+0     000802cc  _system_pre_init                 
+0     000802ce  _system_post_cinit               
+0     00080312  __TI_Handler_Table_Base          
+0     00080316  __TI_CINIT_Base                  
+0     00080316  __TI_Handler_Table_Limit         
+0     0008031a  __TI_CINIT_Limit                 
+0     0008031a  __TI_CINIT_Warm                  
+abs   00000000  RamfuncsLoadSize                 
+abs   00000000  RamfuncsRunSize                  
+abs   00000700  __TI_STACK_SIZE                  
+abs   000a0000  BOOT_CPU1_APP_ENTRY              
+abs   ffffffff  __TI_pprof_out_hndl              
+abs   ffffffff  __TI_prof_data_size              
+abs   ffffffff  __TI_prof_data_start             
+abs   ffffffff  __c_args__                       
+
+[56 symbols]

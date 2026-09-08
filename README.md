@@ -108,7 +108,8 @@ boundary. Mock remains simulation evidence only. See
 
 The base Skill is canonical at `skills/c2000-multicore-debug/`; `.skills/` is a
 generated mirror checked by `npm run verify:skill-sync`. The independent
-`c2000-skill-improver` Skill and `src/evolution/` data layer support bounded
+`c2000-ipc-debug` Skill adds IPC-specific startup/test-method diagnosis, while
+the `c2000-skill-improver` Skill and `src/evolution/` data layer support bounded
 ADD/DELETE/REPLACE candidate edits, separated validation sets, promotion gates,
 and a rejected-edit buffer. No evolution run overwrites production
 `SKILL.md`; see [docs/skill-evolution.md](docs/skill-evolution.md).
@@ -864,6 +865,20 @@ This repository includes a lightweight Codex Skill at:
 ```
 
 The skill teaches Codex to prefer high-level `c2000-multicore-mcp` workflow tools for F28P65x CPU1/CPU2 debugging, especially `c2000_launchAndRunIpcAcceptance` when no session exists and `c2000_runIpcAcceptance` for an existing connected session, instead of chaining many atomic MCP calls that may each trigger an approval dialog.
+
+For IPC-ready failures and acceptance-test diagnosis, the focused skill is:
+
+```text
+.skills/c2000-ipc-debug/SKILL.md
+```
+
+It separates target-side boot/IPC timeouts from artifact, debugger-session, and
+test-sequencing false negatives, and keeps RAM owner-first loading distinct
+from Flash firmware-owned CPU2 handoff. Invoke it explicitly when needed:
+
+```text
+Use $c2000-ipc-debug to diagnose why F28P65x CPU1/CPU2 did not reach IPC-ready.
+```
 
 To make the skill discoverable by Codex, copy or symlink the folder into your Codex skills directory:
 

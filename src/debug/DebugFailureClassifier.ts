@@ -123,14 +123,14 @@ export function classifyIpcAcceptance(input: IpcOptimizationInput): IpcOptimizat
   if (input.elfFreshness?.allFresh === false) {
     return feedback("ELF_STALE", "host-artifact-repair", "The loaded program metadata does not match the host artifact; rebuild or reload the exact .out before interpreting IPC state.", ["elfFreshness", "artifactPair", "programSha256"], failedConditions);
   }
-  if (input.runtimeRamOwnership?.requested && input.runtimeRamOwnership.matched === false) {
-    return feedback("RAM_OWNERSHIP_UNVERIFIED", "manual-firmware-review", "Runtime GS/flash ownership verification did not match; inspect linker-map ownership and startup assignment before another run.", ["ramOwnership", "runtimeRamOwnership", "firstFailure"], failedConditions);
-  }
   if (failedConditions.some(condition => condition.errorCode)) {
     return feedback("IPC_EXPRESSION_UNREADABLE", "manual-firmware-review", "At least one IPC condition was not readable; verify symbols, map/output pairing, and the firmware diagnostic profile.", ["firstFailure", "ipcReady.conditions", "elfFreshness"], failedConditions);
   }
   if (input.ipcReady?.timedOut) {
     return feedback("IPC_READY_TIMEOUT", "read-only-diagnosis", "IPC readiness timed out; use the first-failure snapshot and final PC as evidence, then inspect the first unmet condition before any retry.", ["firstFailure", "ipcReady.conditions", "timeoutRecovery.pc", "runPlan"], failedConditions);
+  }
+  if (input.runtimeRamOwnership?.requested && input.runtimeRamOwnership.matched === false) {
+    return feedback("RAM_OWNERSHIP_UNVERIFIED", "manual-firmware-review", "Runtime GS/flash ownership verification did not match; inspect linker-map ownership and startup assignment before another run.", ["ramOwnership", "runtimeRamOwnership", "firstFailure"], failedConditions);
   }
   if (input.ipcReady?.matched === false) {
     return feedback("IPC_CONDITION_MISMATCH", "read-only-diagnosis", "IPC conditions did not match; compare the first and final condition values and keep the current session halted for diagnosis.", ["firstFailure", "ipcReady.conditions", "runPlan"], failedConditions);

@@ -1,0 +1,63 @@
+Hybrid30K CPU1 Memory Budget
+============================
+Result: REVIEW
+Unit: C28x 16-bit addressable words
+Source map: C:\Users\11981\Documents\C2000_Debug_MCP\ccs_ws_dk9_rework_20260902_mainline\Hybrid30K_CPU1_DK9_LAUNCHXL\CPU1_FLASH\Hybrid30K_CPU1_DK9_LAUNCHXL.map
+Map SHA-256: ab8aeffac21f1ff00211ed0130c54206f808af8632d62804ddd20deab938ed27
+
+Physical Regions
+----------------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+FLASH_BANK0                0x00CDF7   0x01FFFE   0x013207   40.23%  PASS
+FLASH_BANK1                0x000000   0x020000   0x020000    0.00%  RESERVED
+FLASH_BANK2                0x000000   0x020000   0x020000    0.00%  RESERVED
+RAMD0                      0x0004BF   0x002000   0x001B41   14.83%  PASS
+RAMD1_STACK                0x000700   0x000700   0x000000  100.00%  CONTRACT_PASS
+RAMD1_GUARD                0x000000   0x000020   0x000020    0.00%  RESERVED
+RAMD1_WORK                 0x000000   0x0018E0   0x0018E0    0.00%  UNUSED
+RAMD4                      0x000000   0x002000   0x002000    0.00%  RESERVED
+RAMD5                      0x000000   0x002000   0x002000    0.00%  RESERVED
+RAMLS0_6                   0x002E6E   0x003800   0x000992   82.91%  REVIEW
+RAMLS7                     0x000225   0x000800   0x0005DB   26.81%  PASS
+RAMLS8                     0x0007AB   0x002000   0x001855   23.96%  PASS
+RAMLS9                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS0                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS1                     0x000000   0x002000   0x002000    0.00%  UNUSED
+RAMGS2                     0x000000   0x002000   0x002000    0.00%  UNUSED
+
+CLA Program
+-----------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+CLA_PROGRAM                0x002E6E   0x003800   0x000992   82.91%  REVIEW
+Section Cla1Prog: 0x002E6E
+
+CLA Data
+--------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+CLA_DATA                   0x000225   0x000800   0x0005DB   26.81%  PASS
+.const_cla       0x000008
+.scratchpad      0x000087
+.bss_cla         0x000000
+Cla1DataRam      0x000196
+LS7 total used:  0x000225
+
+CPU1 C Stack
+------------
+Region/Metric             Used       Total      Headroom   Usage    Status
+------------------------  ---------  ---------  ---------  -------  ---------------------
+RAMD1_STACK                0x000700   0x000700   0x000000  100.00%  CONTRACT_PASS
+Static Allocation (.stack): 0x000700
+Dedicated region allocation: 0x000700 / 0x000700
+Projectspec --stack_size: 0x000700
+Static reservation contract: CONTRACT_PASS
+Generic usage thresholds: NOT_APPLICABLE
+Runtime Peak: N/A (requires target runtime measurement)
+Runtime interface: CPU1_StackWatch_Run / g_stCpu1StackWatch
+
+Diagnostics
+-----------
+[REVIEW] MEMORY_BUDGET_REVIEW: RAMLS0_6 usage 82.91% requires review
+[REVIEW] MEMORY_BUDGET_REVIEW: CLA_PROGRAM usage 82.91% requires review
