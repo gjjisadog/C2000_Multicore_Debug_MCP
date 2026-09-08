@@ -788,6 +788,219 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("runIpcAcceptance verifies runtime RAM ownership after IPC readiness observes the post-start value", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-runtime-ownership-phase-"));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const adapter = new PhaseChangingOwnershipAdapter([0, 0x10], {
+      expressionValues: { "ipc.responsePass": { value: "1" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-runtime-ownership-phase", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      ipcReady: expect.objectContaining({ matched: true, timedOut: false }),
+      runtimeRamOwnership: expect.objectContaining({ requested: true, matched: true, expectedMask: 0x10, actualValue: 0x10 })
+    }));
+    expect(adapter.ownershipReads).toEqual([0, 0x10]);
+    const lastReadyEvaluation = Math.max(...adapter.events
+      .map((event, index) => event.startsWith("evaluate:") ? index : -1));
+    expect(adapter.events.indexOf("run:2")).toBeGreaterThanOrEqual(0);
+    expect(adapter.events.indexOf("readMemory:16")).toBeGreaterThan(lastReadyEvaluation);
+    expect(result.performedSteps.indexOf("waitForIpcReady")).toBeLessThan(result.performedSteps.indexOf("verifyRuntimeRamOwnership"));
+    expect(result.performedSteps.indexOf("verifyRuntimeRamOwnership")).toBeLessThan(result.performedSteps.indexOf("diagnoseBootHandoff"));
+  });
+
+  test("runIpcAcceptance keeps IPC timeout as the first failure when runtime ownership also mismatches", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-timeout-ownership-"));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const adapter = new PhaseChangingOwnershipAdapter([0, 0], {
+      expressionValues: { "ipc.responsePass": { value: "0" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-timeout-ownership", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 5,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      ipcReady: expect.objectContaining({ matched: false, timedOut: true }),
+      runtimeRamOwnership: expect.objectContaining({ requested: true, matched: false }),
+      diagnosis: expect.objectContaining({ diagnosisCode: "IPC_READY_TIMEOUT", severity: "error" }),
+      optimization: expect.objectContaining({ failureSignature: "IPC_READY_TIMEOUT" })
+    }));
+    expect(result.performedSteps.indexOf("waitForIpcReady")).toBeLessThan(result.performedSteps.indexOf("haltAndResolvePcOnTimeout"));
+    expect(result.performedSteps.indexOf("haltAndResolvePcOnTimeout")).toBeLessThan(result.performedSteps.indexOf("verifyRuntimeRamOwnership"));
+  });
+
+  test.each(["unsupported", "read-failure"] as const)("runIpcAcceptance cannot pass requested runtime ownership verification when the register is %s", async mode => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), `c2000-mcp-ipc-ownership-${mode}-`));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const adapter = mode === "unsupported"
+      ? new WorkflowRecordingAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } } })
+      : new OwnershipReadFailureAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } }});
+    if (mode === "unsupported") {
+      Object.defineProperty(adapter, "readMemory", { configurable: true, value: undefined });
+    }
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: `ipc-ownership-${mode}`, coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      ipcReady: expect.objectContaining({ matched: true }),
+      runtimeRamOwnership: expect.objectContaining({ requested: true })
+    }));
+    if (mode === "unsupported") {
+      expect(result.runtimeRamOwnership).toEqual(expect.objectContaining({ supported: false, skipped: true }));
+    } else {
+      expect(result.runtimeRamOwnership).toEqual(expect.objectContaining({ matched: false, error: expect.any(Object) }));
+    }
+  });
+
+  test("runIpcAcceptance symbols-only loads hashes and symbols without programming or GS ownership writes", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-symbols-only-"));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const hashes = {
+      cpu1OutSha256: await sha256File(files.cpu1OutPath),
+      cpu2OutSha256: await sha256File(files.cpu2OutPath),
+      cpu1MapSha256: await sha256File(files.cpu1MapPath),
+      cpu2MapSha256: await sha256File(files.cpu2MapPath)
+    };
+    const adapter = new PhaseChangingOwnershipAdapter([0x10], {
+      expressionValues: { "ipc.responsePass": { value: "1" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-symbols-only", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      ...hashes,
+      programPreparation: "symbols-only",
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      programPreparation: "symbols-only",
+      targetFlashVerified: false,
+      programPreparationEvidence: expect.objectContaining({
+        symbolsLoaded: true,
+        targetMemoryWritten: false,
+        targetFlashVerified: false,
+        note: expect.stringContaining("target Flash contents were not verified")
+      }),
+      load: expect.objectContaining({ mode: "symbols-only", targetMemoryWritten: false, targetFlashVerified: false }),
+      artifactPreflight: expect.objectContaining({ declaredHashes: expect.arrayContaining([
+        expect.objectContaining({ field: "cpu1OutSha256", sha256: hashes.cpu1OutSha256 }),
+        expect.objectContaining({ field: "cpu2MapSha256", sha256: hashes.cpu2MapSha256 })
+      ]) }),
+      elfFreshness: expect.objectContaining({ allFresh: true })
+    }));
+    expect(adapter.events).toEqual(expect.arrayContaining(["symbols:0:cpu1.out", "symbols:2:cpu2.out"]));
+    expect(adapter.events.some(event => event.startsWith("load:"))).toBe(false);
+    expect(adapter.events.some(event => event.startsWith("writeMemory:"))).toBe(false);
+    expect(adapter.ownershipWrites).toEqual([]);
+    expect(result.effectsApplied).not.toContain("program-load");
+    expect(result.effectsApplied).not.toContain("ram-ownership-change");
+  });
+
+  test("runIpcAcceptance keeps CPU1 owner-first RAM preparation before CPU2 load", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-owner-first-"));
+    const files = await createIpcWorkflowArtifacts(tempDir);
+    const adapter = new PhaseChangingOwnershipAdapter([0, 0x10], {
+      expressionValues: { "ipc.responsePass": { value: "1" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-owner-first", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events.length = 0;
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result.success).toBe(true);
+    expect(adapter.ownershipWrites).toEqual([0x10]);
+    const firstCpu1Run = adapter.events.indexOf("run:0");
+    const ownershipWrite = adapter.events.indexOf("writeMemory:16");
+    const cpu2Load = adapter.events.indexOf("load:2:cpu2.out");
+    expect(firstCpu1Run).toBeGreaterThanOrEqual(0);
+    expect(firstCpu1Run).toBeLessThan(ownershipWrite);
+    expect(ownershipWrite).toBeLessThan(cpu2Load);
+  });
+
   test("runIpcAcceptance uses supplied IPC conditions without evaluating default Hybrid symbols", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-custom-condition-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
