@@ -1066,7 +1066,7 @@ export class DebugSessionManager {
           results.push({ ...info, success: true, loaded: true, skipped: false });
         } catch (error) {
           results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
-          this.logger.error("program load failed", error);
+          this.logger.error("program load failed", toStructuredError(error));
         }
       }
       return { sessionId, results };

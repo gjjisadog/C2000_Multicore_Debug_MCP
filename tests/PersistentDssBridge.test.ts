@@ -1,4 +1,5 @@
 import net from "node:net";
+import { runInNewContext } from "node:vm";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,6 +38,54 @@ describe("XDS launch retry policy", () => {
 });
 
 describe("PersistentDssBridge", () => {
+  test("serializes bounded Java causes and stack frames without executing target commands", () => {
+    const source = persistentServerScriptSource("C:/ti/json2.js");
+    const helper = source.slice(source.indexOf("function describeCommandException("),
+      source.indexOf("function handleCommand("));
+    const cause = { toString: () => "Flash bank protected", getStackTrace: () => ["loader:42"],
+      getCause: () => null };
+    const exception = { javaException: { toString: () => "Load failed",
+      getStackTrace: () => Array(20).fill("x".repeat(300)), getCause: () => cause } };
+    const result = runInNewContext(helper + "describeCommandException(exception)", { exception });
+    expect(result.causes).toHaveLength(2);
+    expect(result.causes[0].stack).toHaveLength(8);
+    expect(result.causes[0].stack[0]).toHaveLength(256);
+    expect(result.causes[1].message).toBe("Flash bank protected");
+    const cycle: any = { toString: () => "cycle", getCause: () => cycle };
+    expect(runInNewContext(helper + "describeCommandException(exception)",
+      { exception: cycle }).causes).toHaveLength(1);
+  });
+
+  test("preserves bounded redacted failure output after session disposal", async () => {
+    const server = await startJsonLineServer(command => command.name === "shutdown"
+      ? { status: "OK", value: { shutdown: true } }
+      : { status: "FAIL", message: "Load failed " + TEST_AUTH_TOKEN,
+          details: { causes: [{ message: "Flash bank protected" }] } }, new Map());
+    let disposed = false;
+    const bridge = new PersistentDssBridge({ launcher: { async launch() {
+      return { host: "127.0.0.1", portsByCoreId: new Map([[2, server.port]]),
+        authToken: TEST_AUTH_TOKEN,
+        diagnostics: () => ({ stdoutTail: "x".repeat(13000),
+          stderrTail: "Flash failure " + TEST_AUTH_TOKEN, authToken: TEST_AUTH_TOKEN }),
+        dispose: async () => { disposed = true; } };
+    } } });
+    await bridge.createSession({ adapterSessionId: "failure-evidence", sessionName: "failure",
+      ccxmlPath: "/tmp/target.ccxml", coreMap });
+    let failure: DebugMcpError | undefined;
+    try {
+      await bridge.execute({ adapterSessionId: "failure-evidence", operation: "loadProgram",
+        coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
+        ccxmlPath: "/tmp/target.ccxml", programUri: "/tmp/cpu2.out" });
+    } catch (error) { failure = error as DebugMcpError; }
+    await bridge.disposeSession("failure-evidence");
+    expect(disposed).toBe(true);
+    expect(failure?.code).toBe("DssCommandFailed");
+    expect(JSON.stringify(failure)).not.toContain(TEST_AUTH_TOKEN);
+    expect(failure?.details.diagnostics).toEqual({ stdoutTail: "x".repeat(12000),
+      stderrTail: "Flash failure [REDACTED]" });
+    expect(failure?.details.response).toMatchObject({ details: { causes: [
+      { message: "Flash bank protected" }] } });
+  });
   afterEach(async () => {
     for (const socket of acceptedSockets.splice(0)) socket.destroy();
     await Promise.all(startedServers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));

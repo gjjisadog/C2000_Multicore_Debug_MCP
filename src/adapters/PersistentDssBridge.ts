@@ -113,10 +113,27 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     const dssCommand = toDssCommand(command);
     const response = await channel.execute({ ...dssCommand, authToken: session.handle.authToken }, command.timeoutMs ?? this.options.timeoutMs ?? 15000);
     if (response.status === "FAIL") {
-      throw new DebugMcpError("DssCommandFailed", String(response.message ?? "DSS command failed"), {
+      // Snapshot before disposal drops the in-memory DSS output. Never expose
+      // the handle/authToken or let diagnostics hide the original failure.
+      let diagnostics: Record<string, unknown> = {};
+      try {
+        const captured = session.handle.diagnostics?.() ?? {};
+        for (const key of ["stdoutTail", "stderrTail"] as const) {
+          if (typeof captured[key] === "string") {
+            diagnostics[key] = captured[key].split(session.handle.authToken)
+              .join("[REDACTED]").slice(-12000);
+          }
+        }
+      } catch {
+        diagnostics = { captureFailed: true };
+      }
+      const safeResponse = JSON.parse(JSON.stringify(response)
+        .split(session.handle.authToken).join("[REDACTED]")) as Record<string, unknown>;
+      throw new DebugMcpError("DssCommandFailed", String(safeResponse.message ?? "DSS command failed"), {
         command: command.operation,
         coreId: command.coreId,
-        response
+        response: safeResponse,
+        diagnostics
       });
     }
     const result = typeof response.value === "object" && response.value !== null
@@ -743,6 +760,28 @@ function withCoreIdentity(command, value) {
   return result;
 }
 
+function describeCommandException(ex) {
+  var causes = [];
+  var current = ex;
+  try { if (ex.javaException) current = ex.javaException; } catch (ignoreJava) {}
+  for (var depth = 0; current && depth < 4; depth++) {
+    var item = { message: String(current).slice(0, 2048), stack: [] };
+    try {
+      var frames = current.getStackTrace();
+      for (var frame = 0; frame < frames.length && frame < 8; frame++) {
+        item.stack.push(String(frames[frame]).slice(0, 256));
+      }
+    } catch (ignoreFrames) {}
+    causes.push(item);
+    try {
+      var next = current.getCause();
+      if (next === current) break;
+      current = next;
+    } catch (ignoreCause) { break; }
+  }
+  return { causes: causes };
+}
+
 function handleCommand(command) {
   if (command.name === "shutdown") {
     return { status: "OK", value: { shutdown: true } };
@@ -962,7 +1001,8 @@ function startCoreThread(port, boundCoreId) {
               commandName: command && command.name,
               message: String(ex)
             });
-            writeResponse(output, { status: "FAIL", message: String(ex) });
+            writeResponse(output, { status: "FAIL", message: String(ex).slice(0, 2048),
+              details: describeCommandException(ex) });
           }
           line = input.readLine();
         }
