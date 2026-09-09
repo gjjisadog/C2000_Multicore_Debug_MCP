@@ -1,5 +1,5 @@
 import type { DebugAdapter, AdapterCreateSessionOptions, AdapterSession } from "./types.js";
-import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetType, TargetState } from "../debug/types.js";
+import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetType, TargetRunState } from "../debug/types.js";
 import type { CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { formatExpressionAssignmentValue } from "./CcsScriptingBridge.js";
 import { PersistentDssBridge } from "./PersistentDssBridge.js";
@@ -152,15 +152,14 @@ export class CcsScriptingAdapter implements DebugAdapter {
     });
   }
 
-  async getState(session: AdapterSession, coreId: CoreId): Promise<TargetState> {
+  async getState(session: AdapterSession, coreId: CoreId): Promise<TargetRunState> {
     const result = await this.execute(session, coreId, { operation: "getState" });
     const core = this.requireCore(session, coreId);
     return {
       coreId,
       coreName: core.coreName,
       connected: Boolean(result.connected),
-      state: typeof result.state === "string" ? result.state as TargetState["state"] : "Unknown",
-      pc: typeof result.pc === "string" ? result.pc : undefined
+      state: typeof result.state === "string" ? result.state as TargetRunState["state"] : "Unknown"
     };
   }
 

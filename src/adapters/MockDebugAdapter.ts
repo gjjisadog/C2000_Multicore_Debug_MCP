@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DebugAdapter, AdapterCreateSessionOptions, AdapterSession } from "./types.js";
-import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetType, TargetState, TargetStateName } from "../debug/types.js";
+import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetType, TargetRunState, TargetStateName } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
 
 interface MockCoreState {
@@ -148,7 +148,7 @@ export class MockDebugAdapter implements DebugAdapter {
     return Number(raw);
   }
 
-  async getState(session: AdapterSession, coreId: CoreId): Promise<TargetState> {
+  async getState(session: AdapterSession, coreId: CoreId): Promise<TargetRunState> {
     const state = this.getCoreState(session, coreId);
     const core = session.coreMap.find(item => item.coreId === coreId);
     if (!core) {
@@ -158,8 +158,7 @@ export class MockDebugAdapter implements DebugAdapter {
       coreId,
       coreName: core.coreName,
       connected: state.connected,
-      state: state.connected ? state.state : "Disconnected",
-      pc: state.pc
+      state: state.connected ? state.state : "Disconnected"
     };
   }
 

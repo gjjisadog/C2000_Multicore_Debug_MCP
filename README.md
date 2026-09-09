@@ -302,7 +302,7 @@ This MCP must not wrap those TI official debug control tools for dual-core contr
 - `c2000_reset`
 - `c2000_connectTarget`
 - `c2000_disconnectTarget`
-- `c2000_getTargetState`
+- `c2000_getTargetState` (connection/run state only; it does not read PC)
 - `c2000_loadProgram`
 - `c2000_loadPrograms`
 - `c2000_getMulticoreSnapshot`
@@ -1014,7 +1014,7 @@ Phase 1:
 - `c2000_runCore`, `c2000_continue`
 - `c2000_haltCore`, `c2000_pause`
 - `c2000_reset`
-- `c2000_getTargetState`
+- `c2000_getTargetState` (connection/run state only; it does not read PC)
 - `c2000_loadProgram`
 - `c2000_loadPrograms`
 - `c2000_connectCores`
@@ -1027,7 +1027,7 @@ Phase 2:
 
 - `c2000_evaluateMany`
 - `c2000_getLoadedProgramInfo`
-- `c2000_resolvePc` (PC read succeeds even when symbol mapping is partial)
+- `c2000_resolvePc` (explicit PC read; it succeeds even when symbol mapping is partial)
 - `c2000_resolveAddress` (honest: no fake symbol/source map; often `success: false`, `partial: true`)
 - `c2000_waitUntilExpression`
 - `c2000_waitForExpressionSet`
@@ -1105,7 +1105,7 @@ Failures return:
 }
 ```
 
-Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores`, `c2000_resetCores`, and `c2000_runCores` return `success: false` with `error.code: "BatchOperationFailed"` if any per-core item in `results` fails. Clients should still inspect `results` for per-core diagnostics. Before a real program load, `c2000_loadPrograms` also fails closed with `error.code: "CoreNotConnected"`, `targetMemoryWritten: false`, and `nextAction: "c2000_connectCores"` when a known target core is disconnected; no item is programmed in that case.
+Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores`, `c2000_resetCores`, and `c2000_runCores` return `success: false` with `error.code: "BatchOperationFailed"` if any per-core item in `results` fails. Core-control batch results retain the returned `connected` and `state`; `c2000_runCores` only accepts `state: "Running"`, so a command that completes while the core is `Halted` is reported as a failed item. Clients should still inspect `results` for per-core diagnostics. Before a real program load, `c2000_loadPrograms` also fails closed with `error.code: "CoreNotConnected"`, `targetMemoryWritten: false`, and `nextAction: "c2000_connectCores"` when a known target core is disconnected; no item is programmed in that case.
 
 ## Typical RAM Debug Flow
 

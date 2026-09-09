@@ -43,11 +43,20 @@ export interface CreateDebugSessionOptions {
   allowAutoProbeAllocation?: boolean;
 }
 
-export interface TargetState {
+/**
+ * Target state returned by a status query.  This deliberately excludes PC:
+ * reading PC is a separate target operation because CCS may evaluate it in a
+ * way that perturbs real-time execution on another core.
+ */
+export interface TargetRunState {
   coreId: CoreId;
   coreName: string;
   connected: boolean;
   state: TargetStateName;
+}
+
+/** Full target evidence when a caller explicitly reads PC. */
+export interface TargetState extends TargetRunState {
   pc?: string;
 }
 
@@ -213,6 +222,8 @@ export interface CoreSnapshot {
 export interface BatchItemResult {
   coreId: CoreId;
   coreName?: string;
+  connected?: boolean;
+  state?: TargetStateName;
   success: boolean;
   programUri?: string;
   loaded?: boolean;

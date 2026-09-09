@@ -102,6 +102,18 @@ describe("DSS generated scripts", () => {
       expect(source).toContain(': "Disconnected"');
       expect(source).not.toContain('state: "Unknown"');
     }
+
+    const statusBlocks = [
+      [statelessSource, 'command.operation === "getState"', 'command.operation === "evaluateExpression"'],
+      [persistentSource, 'command.name === "getState"', 'command.name === "resolveAddress"']
+    ] as const;
+    for (const [source, startToken, endToken] of statusBlocks) {
+      const start = source.indexOf(startToken);
+      const end = source.indexOf(endToken, start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      expect(source.slice(start, end)).not.toContain('evaluate("PC")');
+    }
   });
 
   test("persistent DSS server registers cleanup for per-core DebugSessions and DebugServer", () => {

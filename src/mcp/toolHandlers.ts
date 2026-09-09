@@ -2075,7 +2075,7 @@ async function captureLaunchPreCleanupDiagnostics(options: {
   for (const core of options.cores) {
     targetState.push(await capture(`target-state:${core.coreId}`, async () => {
       const state = await options.manager.getTargetState(options.sessionId, core.coreId);
-      return { coreId: core.coreId, coreName: core.coreName, rawPc: state.pc ?? null, state };
+      return { coreId: core.coreId, coreName: core.coreName, state };
     }));
     resolvedPc.push(await capture(`pc:${core.coreId}`, async () => {
       const resolved = await options.manager.resolvePc(options.sessionId, core.coreId);

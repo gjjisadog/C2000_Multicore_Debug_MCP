@@ -156,7 +156,7 @@ describe("CcsScriptingAdapter", () => {
     }));
   });
 
-  test("returns state, PC, expression and address results for the requested core", async () => {
+  test("returns status without PC and keeps PC reading as an explicit operation", async () => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);
     const session = await adapter.createSession({ sessionName: "diag", ccxmlPath, coreMap });
@@ -165,8 +165,7 @@ describe("CcsScriptingAdapter", () => {
       coreId: 0,
       coreName: "C28xx_CPU1",
       connected: true,
-      state: "Halted",
-      pc: "0x00C4E1"
+      state: "Halted"
     });
     await expect(adapter.readPc(session, 2)).resolves.toBe("0x00C4E1");
     await expect(adapter.evaluateExpression(session, 0, "g_emHybrid30kCpu1Stage")).resolves.toEqual(
@@ -240,8 +239,7 @@ describe("CcsScriptingAdapter", () => {
       coreId: 0,
       coreName: "C28xx_CPU1",
       connected: false,
-      state: "Disconnected",
-      pc: "0x0"
+      state: "Disconnected"
     });
   });
 

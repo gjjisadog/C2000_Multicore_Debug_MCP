@@ -359,13 +359,9 @@ try {
   } else if (command.operation === "readPc") {
     result = { pc: String(debugSession.expression.evaluate("PC")) };
   } else if (command.operation === "getState") {
-    var pc = "0x0";
-    try {
-      pc = String(debugSession.expression.evaluate("PC"));
-    } catch (ignore) {}
     var connected = debugSession.target.isConnected();
     var state = connected ? (debugSession.target.isHalted() ? "Halted" : "Running") : "Disconnected";
-    result = { connected: connected, state: state, pc: pc };
+    result = { connected: connected, state: state };
   } else if (command.operation === "evaluateExpression") {
     var value = debugSession.expression.evaluate(command.expression);
     result = { expression: command.expression, success: true, value: String(value) };

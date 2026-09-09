@@ -2443,6 +2443,38 @@ describe("tool handlers", () => {
     );
   });
 
+  test("runCores returns the actual halted state and fails batch acceptance", async () => {
+    class HaltingRunAdapter extends MockDebugAdapter {
+      override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
+        await super.run(session, coreId);
+        await super.halt(session, coreId);
+      }
+    }
+
+    const handlers = createHandlers(new HaltingRunAdapter());
+    const created = await handlers.createDebugSession({ sessionName: "halted-run-batch", coreMap });
+    await handlers.connectTarget({ sessionId: created.sessionId, coreId: 2 });
+
+    const result = await handlers.runCores({ sessionId: created.sessionId, coreIds: [2] });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      sessionId: created.sessionId,
+      results: [expect.objectContaining({
+        coreId: 2,
+        coreName: "C28xx_CPU2",
+        connected: true,
+        state: "Halted",
+        success: false,
+        error: expect.objectContaining({ code: "TargetStateMismatch" })
+      })],
+      error: expect.objectContaining({
+        code: "BatchOperationFailed",
+        details: expect.objectContaining({ failed: [expect.objectContaining({ coreId: 2, state: "Halted" })] })
+      })
+    }));
+  });
+
   test("getSessionTopology exposes the logical core mapping without target control", async () => {
     const handlers = createHandlers();
     const created = await handlers.createDebugSession({

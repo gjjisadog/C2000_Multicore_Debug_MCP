@@ -6,7 +6,7 @@ import type {
   ExpressionAssignmentValue,
   ResolveResult,
   ResetType,
-  TargetState
+  TargetRunState
 } from "../debug/types.js";
 
 export interface AdapterSession {
@@ -45,7 +45,8 @@ export interface DebugAdapter {
   prepareFlashLoad?(session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void>;
   writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void>;
   readMemory?(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number>;
-  getState(session: AdapterSession, coreId: CoreId): Promise<TargetState>;
+  /** Read connection/run state only; use readPc for an explicit PC read. */
+  getState(session: AdapterSession, coreId: CoreId): Promise<TargetRunState>;
   readPc(session: AdapterSession, coreId: CoreId): Promise<string>;
   evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult>;
   evaluateExpressions?(

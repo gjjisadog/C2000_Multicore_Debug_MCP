@@ -295,7 +295,7 @@ export const perCoreDebugSessionMethods = {
   c2000_reset: "session.target.reset()",
   c2000_loadProgram: "session.memory.loadProgram(programUri)",
   c2000_loadSymbols: "session.symbol.load(programUri)",
-  c2000_getTargetState: "session.target.isConnected(), session.target.isHalted(), session.expression.evaluate(\"PC\")"
+  c2000_getTargetState: "session.target.isConnected(), session.target.isHalted()"
 } as const;
 
 export function getDebugBoundary() {

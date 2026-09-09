@@ -158,14 +158,70 @@ describe("DebugSessionManager", () => {
     await manager.connectTarget(session.sessionId, 0);
     await manager.haltCore(session.sessionId, 0);
     const halted = await manager.getTargetState(session.sessionId, 0);
-    expect(halted).toEqual(expect.objectContaining({ coreId: 0, connected: true, state: "Halted", pc: "0x00000000" }));
+    expect(halted).toEqual(expect.objectContaining({ coreId: 0, connected: true, state: "Halted" }));
+    expect(halted).not.toHaveProperty("pc");
 
     await manager.runCore(session.sessionId, 0);
     const snapshot = await manager.getMulticoreSnapshot(session.sessionId);
+    expect(snapshot.cores[0]).toEqual(expect.objectContaining({ pc: "0x00000000" }));
     expect(snapshot.cores).toEqual([
       expect.objectContaining({ coreId: 0, name: "C28xx_CPU1", coreName: "C28xx_CPU1", connected: true, state: "Running" }),
       expect.objectContaining({ coreId: 2, name: "C28xx_CPU2", coreName: "C28xx_CPU2", connected: false, state: "Disconnected" })
     ]);
+  });
+
+  test("does not read PC during status queries and reports a halted run as a failed batch item", async () => {
+    class TrackingHaltedRunAdapter extends MockDebugAdapter {
+      pcReadCount = 0;
+
+      override async readPc(session: AdapterSession, coreId: CoreId): Promise<string> {
+        this.pcReadCount += 1;
+        return super.readPc(session, coreId);
+      }
+
+      override async getState(session: AdapterSession, coreId: CoreId) {
+        return { ...(await super.getState(session, coreId)), pc: "0xDEADBEEF" };
+      }
+
+      override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
+        await super.run(session, coreId);
+        await super.halt(session, coreId);
+      }
+    }
+
+    const adapter = new TrackingHaltedRunAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "status-and-run-contract", coreMap });
+
+    await manager.connectTarget(session.sessionId, 2);
+    const status = await manager.getTargetState(session.sessionId, 2);
+    expect(status).toEqual(expect.objectContaining({
+      coreId: 2,
+      connected: true,
+      state: "Connected"
+    }));
+    expect(status).not.toHaveProperty("pc");
+    expect(adapter.pcReadCount).toBe(0);
+
+    const result = await manager.runCores(session.sessionId, [2]);
+    expect(result.results).toEqual([
+      expect.objectContaining({
+        coreId: 2,
+        coreName: "C28xx_CPU2",
+        connected: true,
+        state: "Halted",
+        success: false,
+        error: expect.objectContaining({
+          code: "TargetStateMismatch",
+          details: expect.objectContaining({ expectedState: "Running", actualState: "Halted" })
+        })
+      })
+    ]);
+    expect(adapter.pcReadCount).toBe(0);
+
+    const snapshot = await manager.getMulticoreSnapshot(session.sessionId, [2]);
+    expect(adapter.pcReadCount).toBe(1);
+    expect(snapshot.cores[0]).toEqual(expect.objectContaining({ coreId: 2, state: "Halted", pc: "0x00000000" }));
   });
 
   test("loads programs per core and records trustworthy file metadata", async () => {

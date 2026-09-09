@@ -24,7 +24,8 @@ import type {
   ResetType,
   ResolveResult,
   SessionTopology,
-  TargetState
+  TargetRunState,
+  TargetStateName
 } from "./types.js";
 import { defaultF28P65xCoreMap } from "./types.js";
 import { CoreSession } from "./CoreSession.js";
@@ -187,7 +188,6 @@ export class DebugSessionManager {
           const state = await this.adapter.getState(session.adapterSession, core.coreId);
           core.connected = state.connected;
           core.state = state.state;
-          core.pc = state.pc ?? core.pc;
           core.active = state.connected;
           cores.push({
             coreId: core.coreId,
@@ -355,11 +355,11 @@ export class DebugSessionManager {
     }
   }
 
-  async connectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  async connectTarget(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => this.connectTargetUnlocked(sessionId, coreId));
   }
 
-  private async connectTargetUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  private async connectTargetUnlocked(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.connect(session.adapterSession, coreId);
     core.connected = true;
@@ -369,7 +369,7 @@ export class DebugSessionManager {
     return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
-  async disconnectTarget(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  async disconnectTarget(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => {
       const { session, core } = this.requireCore(sessionId, coreId);
       await this.adapter.disconnect(session.adapterSession, coreId);
@@ -381,11 +381,11 @@ export class DebugSessionManager {
     });
   }
 
-  async runCore(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  async runCore(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => this.runCoreUnlocked(sessionId, coreId));
   }
 
-  private async runCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  private async runCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.run(session.adapterSession, coreId);
     core.state = "Running";
@@ -394,11 +394,11 @@ export class DebugSessionManager {
     return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
-  async haltCore(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  async haltCore(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => this.haltCoreUnlocked(sessionId, coreId));
   }
 
-  private async haltCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  private async haltCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.halt(session.adapterSession, coreId);
     core.state = "Halted";
@@ -407,11 +407,11 @@ export class DebugSessionManager {
     return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
-  async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetState> {
+  async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => this.resetCoreUnlocked(sessionId, coreId, resetType));
   }
 
-  private async resetCoreUnlocked(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetState> {
+  private async resetCoreUnlocked(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     await this.adapter.reset(session.adapterSession, coreId, resetType);
     core.state = "Halted";
@@ -420,17 +420,29 @@ export class DebugSessionManager {
     return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
-  async getTargetState(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  async getTargetState(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     return this.exclusive(sessionId, async () => this.getTargetStateUnlocked(sessionId, coreId));
   }
 
-  private async getTargetStateUnlocked(sessionId: string, coreId: CoreId): Promise<TargetState> {
+  private async getTargetStateUnlocked(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
     const state = await this.adapter.getState(session.adapterSession, coreId);
     core.connected = state.connected;
     core.state = state.state;
-    core.pc = state.pc ?? core.pc;
-    return { ...state, coreName: core.coreName };
+    return {
+      coreId: core.coreId,
+      coreName: core.coreName,
+      connected: state.connected,
+      state: state.state
+    };
+  }
+
+  /** Read PC only when a caller explicitly asks for PC evidence. */
+  private async readPcUnlocked(sessionId: string, coreId: CoreId): Promise<string> {
+    const { session, core } = this.requireCore(sessionId, coreId);
+    const pc = await this.adapter.readPc(session.adapterSession, coreId);
+    core.pc = pc;
+    return pc;
   }
 
   async loadProgram(sessionId: string, coreId: CoreId, programUri: string): Promise<LoadedProgramInfo> {
@@ -1148,15 +1160,15 @@ export class DebugSessionManager {
   }
 
   async haltCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.haltCoreUnlocked(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.haltCoreUnlocked(sessionId, coreId), "Halted");
   }
 
   async resetCores(sessionId: string, coreIds: CoreId[], resetType: ResetType = "default") {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.resetCoreUnlocked(sessionId, coreId, resetType));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.resetCoreUnlocked(sessionId, coreId, resetType), "Halted");
   }
 
   async runCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.runCoreUnlocked(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.runCoreUnlocked(sessionId, coreId), "Running");
   }
 
   async getMulticoreSnapshot(sessionId: string, coreIds?: CoreId[]): Promise<{ sessionId: string; cores: CoreSnapshot[] }> {
@@ -1171,6 +1183,9 @@ export class DebugSessionManager {
       : coreIds.map(coreId => this.requireCore(sessionId, coreId).core);
     for (const core of selectedCores) {
       const state = await this.getTargetStateUnlocked(sessionId, core.coreId);
+      const pc = state.connected
+        ? await this.readPcUnlocked(sessionId, core.coreId)
+        : core.pc;
       const loadedProgramInfo = this.loadedPrograms.get(sessionId, core.coreId);
       cores.push({
         coreId: core.coreId,
@@ -1178,7 +1193,7 @@ export class DebugSessionManager {
         name: core.coreName,
         connected: state.connected,
         state: state.state,
-        pc: state.pc,
+        pc,
         loadedProgram: loadedProgramInfo?.programUri,
         loadedProgramInfo
       });
@@ -1444,7 +1459,7 @@ export class DebugSessionManager {
 
   private async resolvePcUnlocked(sessionId: string, coreId: CoreId): Promise<ResolveResult> {
     const { session } = this.requireCore(sessionId, coreId);
-    const pc = await this.adapter.readPc(session.adapterSession, coreId);
+    const pc = await this.readPcUnlocked(sessionId, coreId);
     try {
       const resolved = await this.adapter.resolveAddress(session.adapterSession, coreId, pc);
       if (resolved.success !== true) {
@@ -1632,14 +1647,30 @@ export class DebugSessionManager {
   private async batchCoreOperation(
     sessionId: string,
     coreIds: CoreId[],
-    operation: (coreId: CoreId) => Promise<TargetState>
+    operation: (coreId: CoreId) => Promise<TargetRunState>,
+    expectedState?: TargetStateName
   ): Promise<{ sessionId: string; sequential: boolean; results: BatchItemResult[] }> {
     return this.exclusive(sessionId, async () => {
       const results: BatchItemResult[] = [];
       for (const coreId of coreIds) {
         try {
           const state = await operation(coreId);
-          results.push({ coreId, coreName: state.coreName, success: true });
+          const stateMatchesExpected = expectedState === undefined
+            || (state.connected && state.state === expectedState);
+          results.push({
+            coreId,
+            coreName: state.coreName,
+            connected: state.connected,
+            state: state.state,
+            success: stateMatchesExpected,
+            ...(stateMatchesExpected || expectedState === undefined ? {} : {
+              error: {
+                code: "TargetStateMismatch",
+                message: `Core ${coreId} did not reach expected state ${expectedState}; observed ${state.state}`,
+                details: { expectedState, actualState: state.state, connected: state.connected }
+              }
+            })
+          });
         } catch (error) {
           results.push({ coreId, success: false, error: toStructuredError(error) });
           this.logger.error("batch core operation failed", error);
@@ -1655,10 +1686,10 @@ export class DebugSessionManager {
     beforeSnapshot: MulticoreSnapshotLike;
     targetCoreId: CoreId;
     expectedTargetState: "Running" | "Halted";
-    command: () => Promise<TargetState>;
+    command: () => Promise<TargetRunState>;
     settleMs?: number;
   }) {
-    let commandResult: TargetState | { success: false; error: ReturnType<typeof toStructuredError> };
+    let commandResult: TargetRunState | { success: false; error: ReturnType<typeof toStructuredError> };
     const commandFailures: string[] = [];
     try {
       commandResult = await input.command();

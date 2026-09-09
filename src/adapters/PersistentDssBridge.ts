@@ -812,11 +812,9 @@ function handleCommand(command) {
     var assigned = session.expression.evaluate(assignment);
     return { status: "OK", value: withCoreIdentity(command, { expression: command.expression, assignedValue: String(command.valueExpression), success: true, value: String(assigned) }) };
   } else if (command.name === "getState") {
-    var pc = "0x0";
-    try { pc = String(session.expression.evaluate("PC")); } catch (ignore) {}
     var connected = session.target.isConnected();
     var state = connected ? (session.target.isHalted() ? "Halted" : "Running") : "Disconnected";
-    return { status: "OK", value: withCoreIdentity(command, { connected: connected, state: state, pc: pc }) };
+    return { status: "OK", value: withCoreIdentity(command, { connected: connected, state: state }) };
   } else if (command.name === "resolveAddress") {
     return {
       status: "OK",
