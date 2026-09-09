@@ -24,7 +24,7 @@ describe("job step semantics", () => {
 
   test("never retries a stale worker or lease context", () => {
     const policy = { maxAttempts: 3, backoffMs: 10, maxBackoffMs: 100, jitter: false, retryableErrors: [] };
-    for (const errorCode of ["LeaseExpired", "LeaseInvalidated", "LeaseFencingRejected", "LeaseWorkerMismatch", "WorkerGenerationChanged"]) {
+    for (const errorCode of ["LeaseExpired", "LeaseInvalidated", "LeaseFencingRejected", "LeaseWorkerMismatch", "WorkerGenerationChanged", "JobExecutionStale"]) {
       expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: 1, policy, errorCode })).toEqual({
         retry: false,
         reason: "STALE_WORKER_OR_LEASE_CONTEXT",

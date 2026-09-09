@@ -53,6 +53,7 @@ export type DebugErrorCode =
   | "WorkerEntrypointNotFound"
   | "WorkerIdentityMismatch"
   | "WorkerRestartLimitReached"
+  | "JobExecutionStale"
   | "DssUnresponsive"
   | "BoardQuarantined"
   | "BoardLeased"

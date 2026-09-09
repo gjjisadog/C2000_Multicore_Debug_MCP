@@ -851,6 +851,19 @@ const migrations: Migration[] = [
         ALTER TABLE improvement_proposals ADD COLUMN final_outcome TEXT;
       `);
     }
+  },
+  {
+    version: 17,
+    apply(store) {
+      // A job execution owner is a durable fencing token. It prevents an
+      // execution from an earlier daemon lifecycle from writing steps or
+      // terminal state after recovery has handed the job to a new engine.
+      store.exec(`
+        ALTER TABLE test_runs ADD COLUMN execution_owner_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_test_runs_execution_owner
+          ON test_runs(execution_owner_id);
+      `);
+    }
   }
 ];
 

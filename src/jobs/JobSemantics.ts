@@ -40,7 +40,8 @@ export function decideRetry(input: {
     "LeaseGenerationChanged",
     "LeaseWorkerMismatch",
     "WorkerGenerationChanged",
-    "WorkerIdentityMismatch"
+    "WorkerIdentityMismatch",
+    "JobExecutionStale"
   ]).has(input.errorCode)) {
     return { retry: false, reason: "STALE_WORKER_OR_LEASE_CONTEXT", backoffMs: 0, requiresReconcile: false };
   }

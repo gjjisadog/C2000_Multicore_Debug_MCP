@@ -9,6 +9,8 @@ import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { SessionRepository } from "../src/storage/repositories/SessionRepository.js";
 import { LeaseRepository } from "../src/storage/repositories/LeaseRepository.js";
+import { TestRunRepository, type TestRunBoardRecord, type TestRunRecord, type TestStepRecord } from "../src/storage/repositories/TestRunRepository.js";
+import { BoardRepository } from "../src/storage/repositories/BoardRepository.js";
 
 const directories: string[] = [];
 
@@ -17,6 +19,79 @@ afterEach(async () => {
 });
 
 describe("durable background test jobs", () => {
+  test("restarts a board flow with fresh logical attempts while retaining prior attempt evidence", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-attempt-recovery-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const runs = new TestRunRepository(store);
+    new BoardRepository(store).upsert({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: [] });
+    const jobId = "run-attempt-recovery";
+    const run: TestRunRecord = {
+      jobId, planName: "attempt-recovery", planVersion: 1, plan: { steps: [{ type: "delay", delayMs: 1 }] },
+      status: "RECOVERING", progressCurrent: 0, progressTotal: 1, submittedAt: new Date().toISOString(), cancelRequested: false, failurePolicy: {}
+    };
+    const board: TestRunBoardRecord = { jobId, boardId: "board-a", probeSerial: "A", status: "RUNNING", currentStepIndex: 0 };
+    const step: TestStepRecord = { stepRunId: "step-attempt-recovery", jobId, boardId: "board-a", stepIndex: 0, stepType: "delay", input: { type: "delay", delayMs: 1 }, status: "PENDING", attempt: 0, idempotencyClass: "READ_ONLY" };
+    runs.create(run, [board], [step]);
+    const first = runs.steps(jobId)[0]!;
+    runs.addStepAttempt({ step: first, attemptIndex: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), status: "FAILED", retryDecision: { retry: false }, backoffMs: 0 });
+    runs.updateStep({ ...first, status: "FAILED", attempt: 1, finishedAt: new Date().toISOString(), error: { code: "SessionNotFound" } });
+
+    runs.resetForBoardFlowRestart(jobId);
+    const restarted = runs.steps(jobId)[0]!;
+    expect(restarted).toEqual(expect.objectContaining({ status: "PENDING", attempt: 0 }));
+    expect(() => runs.addStepAttempt({ step: restarted, attemptIndex: 1, startedAt: new Date().toISOString(), finishedAt: new Date().toISOString(), status: "PASSED", retryDecision: { retry: false }, backoffMs: 0 })).not.toThrow();
+    expect(runs.stepAttempts(jobId).map(attempt => attempt.attemptIndex)).toEqual([1, 2]);
+    store.close();
+  });
+
+  test("fences a stale daemon execution before it can persist recovery results", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-execution-fence-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const runs = new TestRunRepository(store);
+    new BoardRepository(store).upsert({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: [] });
+    const jobId = "run-execution-fence";
+    runs.create(
+      { jobId, planName: "execution-fence", planVersion: 1, plan: { steps: [{ type: "delay", delayMs: 1 }] }, status: "QUEUED", progressCurrent: 0, progressTotal: 1, submittedAt: new Date().toISOString(), cancelRequested: false, failurePolicy: {} },
+      [{ jobId, boardId: "board-a", probeSerial: "A", status: "QUEUED", currentStepIndex: 0 }],
+      [{ stepRunId: "step-execution-fence", jobId, boardId: "board-a", stepIndex: 0, stepType: "delay", input: { type: "delay", delayMs: 1 }, status: "PENDING", attempt: 0, idempotencyClass: "READ_ONLY" }]
+    );
+
+    expect(runs.claimExecution(jobId, "exec-old")).toBe(true);
+    expect(runs.markRecovering()).toEqual([jobId]);
+    expect(runs.resetForBoardFlowRestart(jobId)).toBe(true);
+    expect(runs.claimExecution(jobId, "exec-new")).toBe(true);
+
+    const staleStep = runs.steps(jobId)[0]!;
+    expect(() => runs.addStepAttempt({
+      step: staleStep,
+      attemptIndex: 1,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      status: "FAILED",
+      retryDecision: { retry: false },
+      backoffMs: 0,
+      executionId: "exec-old"
+    })).toThrow("no longer owns");
+    expect(() => runs.updateStep({ ...staleStep, status: "FAILED", attempt: 1 }, "exec-old")).toThrow("no longer owns");
+    expect(() => runs.updateBoard({ ...runs.boards(jobId)[0]!, status: "FAILED" }, "exec-old")).toThrow("no longer owns");
+    expect(() => runs.updateStatus(jobId, "FAILED", {}, "exec-old")).toThrow("no longer owns");
+
+    expect(runs.addStepAttempt({
+      step: staleStep,
+      attemptIndex: 1,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      status: "PASSED",
+      retryDecision: { retry: false },
+      backoffMs: 0,
+      executionId: "exec-new"
+    })).toBe(1);
+    expect(runs.stepAttempts(jobId)).toHaveLength(1);
+    store.close();
+  });
+
   test("closes the current job session before releasing its board lease even without an explicit cleanup step", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-job-cleanup-"));
     directories.push(directory);

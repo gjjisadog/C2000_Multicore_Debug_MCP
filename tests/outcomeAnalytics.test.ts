@@ -187,6 +187,29 @@ describe("C2000 outcome analytics", () => {
     ]));
   });
 
+  test("returns a safe daemon-worker recovery path for stale lease failures", () => {
+    const service = createService();
+    const result = service.getEscalationRecommendations({
+      failureClass: "board-lease",
+      errorCode: "LeaseInvalidated",
+      stage: "session-cleanup",
+      boardId: "board-a"
+    }) as any;
+    expect(result.recommendations).toEqual([]);
+    expect(result.recoveryRecommendations).toEqual([
+      expect.objectContaining({
+        kind: "daemon-recovery",
+        tool: "c2000_recoverBoard",
+        dryRunArguments: { boardId: "board-a", dryRun: true },
+        restartArguments: { boardId: "board-a", dryRun: false },
+        safetyAllowed: true,
+        autoExecute: false,
+        targetAccessAttempted: false,
+        externalProcessTermination: false
+      })
+    ]);
+  });
+
   test("history is used only as a bounded association and stays low-confidence below five cases", () => {
     const repository = new InMemoryOutcomeEventStore();
     const service = createService({ repository });
@@ -275,7 +298,7 @@ describe("C2000 outcome analytics", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-outcome-analytics-"));
     roots.push(directory);
     const store = await SqliteStore.open(path.join(directory, "analytics.sqlite"));
-    expect(store.schemaVersion).toBe(16);
+    expect(store.schemaVersion).toBe(17);
     const repository = new OutcomeEventRepository(store);
     repository.append(event({ eventId: crypto.randomUUID(), kind: "tool_invocation", name: "c2000_getServerHealth" }));
     store.run(`

@@ -644,15 +644,17 @@ export class DebugDaemon {
   private async stopInternal(): Promise<void> {
     await this.improvementImplementation?.shutdown().catch(() => undefined);
     this.jobEngine?.beginStop();
+    await this.rpcServer?.close().catch(() => undefined);
+    await this.jobEngine?.stop().catch(() => undefined);
+    // The engine must settle all in-flight checkpoints before the durable
+    // recovery fence is applied. Otherwise a new daemon can start while the
+    // old execution still writes steps or performs session cleanup.
     if (this.testRuns) {
       const recovering = this.testRuns.markRecovering();
       for (const jobId of recovering) {
-        // Event writing remains available until after the engine has stopped.
         this.store && new EventRepository(this.store).append({ level: "warn", sourceType: "daemon", sourceId: this.instanceId, jobId, eventType: "JOB_MARKED_RECOVERING_ON_STOP", payload: {} });
       }
     }
-    await this.rpcServer?.close().catch(() => undefined);
-    await this.jobEngine?.stop().catch(() => undefined);
     await this.variableStreams?.stopAll().catch(() => undefined);
     await this.erad?.stopAll().catch(() => undefined);
     await this.workerSupervisor?.stopAll().catch(() => undefined);

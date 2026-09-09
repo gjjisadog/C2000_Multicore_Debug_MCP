@@ -1,5 +1,8 @@
 import { SqliteStore } from "../SqliteStore.js";
 import { randomUUID } from "node:crypto";
+import { DebugMcpError } from "../../utils/errors.js";
+
+const terminalStatuses = new Set(["PASSED", "FAILED", "PARTIAL", "CANCELLED", "NEEDS_MANUAL_INTERVENTION"]);
 
 export interface TestRunRecord {
   jobId: string;
@@ -82,22 +85,62 @@ export class TestRunRepository {
     return this.store.all<Record<string, unknown>>("SELECT * FROM test_steps WHERE job_id = ? AND (? IS NULL OR board_id = ?) ORDER BY board_id, step_index", [jobId, boardId ?? null, boardId ?? null]).map(mapStep);
   }
 
-  updateStatus(jobId: string, status: string, patch: Partial<Pick<TestRunRecord, "progressCurrent" | "startedAt" | "finishedAt" | "resultSummary" | "error">> = {}): void {
-    const current = this.get(jobId);
-    if (!current) throw new Error(`Test run not found: ${jobId}`);
-    this.store.run("UPDATE test_runs SET status = ?, progress_current = ?, started_at = ?, finished_at = ?, result_summary_json = ?, error_json = ? WHERE job_id = ?", [status, patch.progressCurrent ?? current.progressCurrent, patch.startedAt ?? current.startedAt ?? null, patch.finishedAt ?? current.finishedAt ?? null, JSON.stringify(patch.resultSummary ?? current.resultSummary ?? {}), patch.error ? JSON.stringify(patch.error) : current.error ? JSON.stringify(current.error) : null, jobId]);
+  updateStatus(jobId: string, status: string, patch: Partial<Pick<TestRunRecord, "progressCurrent" | "startedAt" | "finishedAt" | "resultSummary" | "error">> = {}, executionId?: string): void {
+    this.store.transaction(() => {
+      const current = this.get(jobId);
+      if (!current) throw new Error(`Test run not found: ${jobId}`);
+      if (executionId) this.assertExecutionOwnerInTransaction(jobId, executionId);
+      const result = this.store.run(
+        "UPDATE test_runs SET status = ?, progress_current = ?, started_at = ?, finished_at = ?, result_summary_json = ?, error_json = ?" + (executionId ? ", execution_owner_id = ?" : "") + " WHERE job_id = ?" + (executionId ? " AND execution_owner_id = ?" : ""),
+        [
+          status,
+          patch.progressCurrent ?? current.progressCurrent,
+          patch.startedAt ?? current.startedAt ?? null,
+          patch.finishedAt ?? current.finishedAt ?? null,
+          JSON.stringify(patch.resultSummary ?? current.resultSummary ?? {}),
+          patch.error ? JSON.stringify(patch.error) : current.error ? JSON.stringify(current.error) : null,
+          ...(executionId ? [executionId && !terminalStatuses.has(status) ? executionId : null] : []),
+          jobId,
+          ...(executionId ? [executionId] : [])
+        ]
+      );
+      if (executionId && result.changes !== 1) this.throwStaleExecution(jobId, executionId);
+    });
+  }
+
+  /** Atomically claims a queued/recovered run for one daemon execution. */
+  claimExecution(jobId: string, executionId: string, startedAt = new Date().toISOString()): boolean {
+    return this.store.transaction(() => {
+      const result = this.store.run(
+        "UPDATE test_runs SET execution_owner_id = ?, status = 'RUNNING', started_at = COALESCE(started_at, ?), finished_at = NULL, error_json = NULL WHERE job_id = ? AND status IN ('QUEUED', 'RECOVERING') AND execution_owner_id IS NULL",
+        [executionId, startedAt, jobId]
+      );
+      return result.changes === 1;
+    });
+  }
+
+  isExecutionOwner(jobId: string, executionId: string): boolean {
+    return Boolean(this.store.get<{ execution_owner_id: string }>("SELECT execution_owner_id FROM test_runs WHERE job_id = ? AND execution_owner_id = ?", [jobId, executionId]));
+  }
+
+  assertExecutionOwner(jobId: string, executionId: string): void {
+    this.store.transaction(() => this.assertExecutionOwnerInTransaction(jobId, executionId));
   }
 
   requestCancel(jobId: string): void {
     this.store.run("UPDATE test_runs SET cancel_requested = 1 WHERE job_id = ?", [jobId]);
   }
 
-  updateBoard(board: TestRunBoardRecord): void {
-    this.store.run("UPDATE test_run_boards SET status = ?, current_step_index = ?, session_id = ?, started_at = ?, finished_at = ?, error_json = ? WHERE job_id = ? AND board_id = ?", [board.status, board.currentStepIndex, board.sessionId ?? null, board.startedAt ?? null, board.finishedAt ?? null, board.error ? JSON.stringify(board.error) : null, board.jobId, board.boardId]);
+  updateBoard(board: TestRunBoardRecord, executionId?: string): void {
+    this.store.transaction(() => {
+      if (executionId) this.assertExecutionOwnerInTransaction(board.jobId, executionId);
+      this.store.run("UPDATE test_run_boards SET status = ?, current_step_index = ?, session_id = ?, started_at = ?, finished_at = ?, error_json = ? WHERE job_id = ? AND board_id = ?", [board.status, board.currentStepIndex, board.sessionId ?? null, board.startedAt ?? null, board.finishedAt ?? null, board.error ? JSON.stringify(board.error) : null, board.jobId, board.boardId]);
+    });
   }
 
-  updateStep(step: TestStepRecord): void {
+  updateStep(step: TestStepRecord, executionId?: string): void {
     this.store.transaction(() => {
+      if (executionId) this.assertExecutionOwnerInTransaction(step.jobId, executionId);
       this.store.run("UPDATE test_steps SET status = ?, attempt = ?, started_at = ?, finished_at = ?, output_json = ?, error_json = ? WHERE step_run_id = ?", [step.status, step.attempt, step.startedAt ?? null, step.finishedAt ?? null, step.output ? JSON.stringify(step.output) : null, step.error ? JSON.stringify(step.error) : null, step.stepRunId]);
       this.recalculateProgress(step.jobId);
     });
@@ -113,11 +156,25 @@ export class TestRunRepository {
     retryDecision: Record<string, unknown>;
     backoffMs: number;
     reconcileEvidence?: Record<string, unknown>;
-  }): void {
-    this.store.run(
-      "INSERT INTO test_step_attempts(attempt_id, step_run_id, job_id, board_id, attempt_index, started_at, finished_at, status, error_json, retry_decision_json, backoff_ms, reconcile_evidence_json) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      [`attempt-${randomUUID()}`, input.step.stepRunId, input.step.jobId, input.step.boardId, input.attemptIndex, input.startedAt, input.finishedAt, input.status, input.error ? JSON.stringify(input.error) : null, JSON.stringify(input.retryDecision), input.backoffMs, input.reconcileEvidence ? JSON.stringify(input.reconcileEvidence) : null]
-    );
+    executionId?: string;
+  }): number {
+    return this.store.transaction(() => {
+      if (input.executionId) this.assertExecutionOwnerInTransaction(input.step.jobId, input.executionId);
+      // `attempt` is the logical retry number for the current board-flow
+      // execution. A recovered flow starts that number over, while the
+      // durable attempt table must retain the previous evidence. Allocate a
+      // strictly increasing persisted index to satisfy its uniqueness rule.
+      const previousMax = Number(this.store.get<{ attempt_index: number }>(
+        "SELECT MAX(attempt_index) AS attempt_index FROM test_step_attempts WHERE step_run_id = ?",
+        [input.step.stepRunId]
+      )?.attempt_index ?? 0);
+      const attemptIndex = Math.max(input.attemptIndex, previousMax + 1);
+      this.store.run(
+        "INSERT INTO test_step_attempts(attempt_id, step_run_id, job_id, board_id, attempt_index, started_at, finished_at, status, error_json, retry_decision_json, backoff_ms, reconcile_evidence_json) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [`attempt-${randomUUID()}`, input.step.stepRunId, input.step.jobId, input.step.boardId, attemptIndex, input.startedAt, input.finishedAt, input.status, input.error ? JSON.stringify(input.error) : null, JSON.stringify(input.retryDecision), input.backoffMs, input.reconcileEvidence ? JSON.stringify(input.reconcileEvidence) : null]
+      );
+      return attemptIndex;
+    });
   }
 
   stepAttempts(jobId: string): Record<string, unknown>[] {
@@ -140,7 +197,9 @@ export class TestRunRepository {
     return this.store.transaction(() => {
       const jobs = this.store.all<{ job_id: string }>("SELECT job_id FROM test_runs WHERE status IN ('ALLOCATING', 'RUNNING', 'CANCEL_REQUESTED', 'CANCELLING')");
       for (const job of jobs) {
-        this.store.run("UPDATE test_runs SET status = 'RECOVERING' WHERE job_id = ?", [job.job_id]);
+        // Clearing the owner is the durable hand-off fence. Any old engine
+        // that reaches a persistence boundary after this point is rejected.
+        this.store.run("UPDATE test_runs SET status = 'RECOVERING', execution_owner_id = NULL WHERE job_id = ?", [job.job_id]);
         this.store.run("UPDATE test_steps SET status = 'INTERRUPTED', finished_at = ? WHERE job_id = ? AND status = 'RUNNING'", [new Date().toISOString(), job.job_id]);
       }
       return jobs.map(job => job.job_id);
@@ -148,12 +207,14 @@ export class TestRunRepository {
   }
 
   /** Replays only from a declared whole-board safety boundary, never from a stale persisted session. */
-  resetForBoardFlowRestart(jobId: string): void {
-    this.store.transaction(() => {
-      this.store.run("UPDATE test_runs SET status = 'QUEUED', started_at = NULL, finished_at = NULL, error_json = NULL WHERE job_id = ?", [jobId]);
+  resetForBoardFlowRestart(jobId: string): boolean {
+    return this.store.transaction(() => {
+      const result = this.store.run("UPDATE test_runs SET status = 'QUEUED', started_at = NULL, finished_at = NULL, error_json = NULL, execution_owner_id = NULL WHERE job_id = ? AND status = 'RECOVERING'", [jobId]);
+      if (result.changes !== 1) return false;
       this.store.run("UPDATE test_run_boards SET status = 'QUEUED', current_step_index = 0, session_id = NULL, started_at = NULL, finished_at = NULL, error_json = NULL WHERE job_id = ?", [jobId]);
-      this.store.run("UPDATE test_steps SET status = 'PENDING', started_at = NULL, finished_at = NULL, output_json = NULL, error_json = NULL WHERE job_id = ?", [jobId]);
+      this.store.run("UPDATE test_steps SET status = 'PENDING', attempt = 0, started_at = NULL, finished_at = NULL, output_json = NULL, error_json = NULL WHERE job_id = ?", [jobId]);
       this.recalculateProgress(jobId);
+      return true;
     });
   }
 
@@ -165,6 +226,15 @@ export class TestRunRepository {
     const queued = Number(this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM test_runs WHERE status = 'QUEUED'")?.count ?? 0);
     const running = Number(this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM test_runs WHERE status IN ('RUNNING', 'RECOVERING')")?.count ?? 0);
     return { queued, running };
+  }
+
+  private assertExecutionOwnerInTransaction(jobId: string, executionId: string): void {
+    const owner = this.store.get<{ execution_owner_id: string }>("SELECT execution_owner_id FROM test_runs WHERE job_id = ?", [jobId])?.execution_owner_id;
+    if (owner !== executionId) this.throwStaleExecution(jobId, executionId, owner);
+  }
+
+  private throwStaleExecution(jobId: string, executionId: string, currentOwner?: string): never {
+    throw new DebugMcpError("JobExecutionStale", "Durable job execution no longer owns the run", { jobId, executionId, currentOwner });
   }
 }
 

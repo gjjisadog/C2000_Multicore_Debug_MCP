@@ -70,6 +70,11 @@ export class TestJobEngine {
   }
 
   start(): void {
+    // Terminal jobs cannot legitimately retain board ownership. Retire every
+    // unreleased generation owned by those exact jobs before admitting new
+    // work; this also repairs legacy rows left with invalidated_at set but
+    // released_at NULL by older daemon versions.
+    this.releaseTerminalJobLeases();
     for (const run of this.options.runs.listUnfinished()) {
       let plan: TestPlan;
       try {
@@ -111,8 +116,12 @@ export class TestJobEngine {
           void this.exportTerminalEvidence(run.jobId, "NEEDS_MANUAL_INTERVENTION");
           continue;
         }
+        const reset = this.options.runs.resetForBoardFlowRestart(run.jobId);
+        // Another daemon/engine may have won the recovery hand-off. Only the
+        // owner that performed the RECOVERING -> QUEUED transition may emit
+        // the restart event or enqueue work.
+        if (!reset) continue;
         const releasedLeases = this.releaseRecoveredJobLeases(run.jobId);
-        this.options.runs.resetForBoardFlowRestart(run.jobId);
         this.options.events.append({ level: "info", sourceType: "job", sourceId: run.jobId, jobId: run.jobId, eventType: "JOB_RESTARTED_FROM_SAFE_BOUNDARY", payload: { nextStepIndex: decision.nextStepIndex, releasedRecoveredLeases: releasedLeases, recoveryEvidence: decision.evidence } });
       }
       this.schedule(run.jobId);
@@ -260,10 +269,11 @@ export class TestJobEngine {
     const run = this.options.runs.get(jobId);
     if (!run) return;
     const plan = parsePersistedTestPlan(run.plan);
+    const executionId = `exec-${randomUUID()}`;
+    if (!this.options.runs.claimExecution(jobId, executionId, run.startedAt ?? new Date().toISOString())) return;
     const abortController = new AbortController();
     this.abortControllers.set(jobId, abortController);
     if (run.cancelRequested) abortController.abort(new DOMException(`Test run ${jobId} cancelled`, "AbortError"));
-    this.options.runs.updateStatus(jobId, "RUNNING", { startedAt: run.startedAt ?? new Date().toISOString() });
     const boards = this.options.runs.boards(jobId);
     let groupPermits: BoardExecutionPermit[] | undefined;
     let groupLeases: LeasedBoard[] | undefined;
@@ -278,12 +288,13 @@ export class TestJobEngine {
       outcomes = await mapWithConcurrency(
         boards,
         Math.min(this.options.maxParallelBoards, plan.parallelism ?? this.options.maxParallelBoards),
-        board => this.executeBoard(jobId, plan, board, permitsByBoard.get(board.boardId), leasesByBoard.get(board.boardId))
+        board => this.executeBoard(jobId, plan, board, executionId, permitsByBoard.get(board.boardId), leasesByBoard.get(board.boardId))
       );
     } catch (error) {
+      if (isStaleJobExecution(error)) return;
       const structured = { ...toStructuredError(error) };
       outcomes = boards.map(board => {
-        this.options.runs.updateBoard({ ...board, status: "FAILED", finishedAt: new Date().toISOString(), error: structured });
+        this.options.runs.updateBoard({ ...board, status: "FAILED", finishedAt: new Date().toISOString(), error: structured }, executionId);
         return { success: false, cancelled: false };
       });
       this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_GROUP_RESOURCE_FAILED", payload: { error: structured } });
@@ -301,11 +312,16 @@ export class TestJobEngine {
     const cancelled = outcomes.every(outcome => outcome.cancelled);
     const status = cancelled ? "CANCELLED" : failed.length === 0 ? "PASSED" : plan.failurePolicy.continueHealthyBoards && failed.length < outcomes.length ? "PARTIAL" : "FAILED";
     const boardFailure = this.options.runs.boards(jobId).find(board => board.error)?.error;
-    this.options.runs.updateStatus(jobId, status, {
-      finishedAt: new Date().toISOString(),
-      resultSummary: { totalBoards: outcomes.length, passedBoards: outcomes.filter(outcome => outcome.success).length, failedBoards: failed.length, cancelledBoards: outcomes.filter(outcome => outcome.cancelled).length },
-      ...(boardFailure ? { error: boardFailure } : {})
-    });
+    try {
+      this.options.runs.updateStatus(jobId, status, {
+        finishedAt: new Date().toISOString(),
+        resultSummary: { totalBoards: outcomes.length, passedBoards: outcomes.filter(outcome => outcome.success).length, failedBoards: failed.length, cancelledBoards: outcomes.filter(outcome => outcome.cancelled).length },
+        ...(boardFailure ? { error: boardFailure } : {})
+      }, executionId);
+    } catch (error) {
+      if (isStaleJobExecution(error)) return;
+      throw error;
+    }
     this.options.events.append({ level: status === "PASSED" ? "info" : "warn", sourceType: "job", sourceId: jobId, jobId, eventType: "JOB_FINISHED", payload: { status } });
     await this.exportTerminalEvidence(jobId, status);
   }
@@ -418,19 +434,26 @@ export class TestJobEngine {
     }
   }
 
-  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, groupPermit?: BoardExecutionPermit, groupLease?: LeasedBoard): Promise<{ success: boolean; cancelled: boolean }> {
+  private async executeBoard(jobId: string, plan: TestPlan, board: TestRunBoardRecord, executionId: string, groupPermit?: BoardExecutionPermit, groupLease?: LeasedBoard): Promise<{ success: boolean; cancelled: boolean }> {
     const permit = groupPermit ?? await this.boardPermits.acquire(board.boardId, jobId);
-    const boardStart = new Date().toISOString();
-    let current = { ...board, status: "RUNNING", startedAt: boardStart };
-    this.options.runs.updateBoard(current);
+    let current = { ...board, status: "RUNNING", startedAt: new Date().toISOString() };
+    try {
+      this.options.runs.updateBoard(current, executionId);
+    } catch (error) {
+      if (!groupPermit) permit.release();
+      throw error;
+    }
     let lease = groupLease;
     try {
       lease ??= await this.acquireBoardLease(jobId, board.boardId);
     } catch (error) {
       const leaseError = { ...toStructuredError(error) };
-      this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError });
-      this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_BOARD_LEASE_FAILED", payload: { error: leaseError } });
-      if (!groupPermit) permit.release();
+      try {
+        this.options.runs.updateBoard({ ...current, status: "FAILED", finishedAt: new Date().toISOString(), error: leaseError }, executionId);
+        this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_BOARD_LEASE_FAILED", payload: { error: leaseError } });
+      } finally {
+        if (!groupPermit) permit.release();
+      }
       return { success: false, cancelled: false };
     }
     let sessionId = current.sessionId;
@@ -442,6 +465,10 @@ export class TestJobEngine {
     let lastError: Record<string, unknown> | undefined;
     const renew = setInterval(() => {
       try {
+        if (!this.options.runs.isExecutionOwner(jobId, executionId)) {
+          leaseLost = true;
+          return;
+        }
         this.options.registry.leases.renew(lease.lease.leaseId, lease.leaseToken, 30000);
         renewalFailures = 0;
       } catch (error) {
@@ -474,9 +501,10 @@ export class TestJobEngine {
       for (const step of steps) {
         if (this.stopping) break;
         if (leaseLost) {
-          this.options.runs.updateStep({ ...step, status: "SKIPPED", finishedAt: new Date().toISOString(), error: lastError });
+          this.options.runs.updateStep({ ...step, status: "SKIPPED", finishedAt: new Date().toISOString(), error: lastError }, executionId);
           continue;
         }
+        this.options.runs.assertExecutionOwner(jobId, executionId);
         const freshRun = this.options.runs.get(jobId);
         if (freshRun?.cancelRequested || this.abortControllers.get(jobId)?.signal.aborted) cancelled = true;
         const plannedStep = plan.steps[step.stepIndex]!;
@@ -488,16 +516,16 @@ export class TestJobEngine {
             status: "SKIPPED",
             finishedAt: new Date().toISOString(),
             output: { reason: "CONDITION_NOT_MATCHED", condition, previousOutcome }
-          });
+          }, executionId);
           continue;
         }
         current = { ...current, currentStepIndex: step.stepIndex };
-        this.options.runs.updateBoard(current);
+        this.options.runs.updateBoard(current, executionId);
         const policy = retryPolicyFor(plan, step.stepType);
         for (let attempt = step.attempt + 1; attempt <= policy.maxAttempts; attempt += 1) {
           const attemptStartedAt = new Date().toISOString();
           const running = { ...step, status: "RUNNING", attempt, startedAt: attemptStartedAt } as TestStepRecord;
-          this.options.runs.updateStep(running);
+          this.options.runs.updateStep(running, executionId);
           let failedToolOutput: Record<string, unknown> | undefined;
           try {
             if (stepRequiresLiveWorkerRoute(plannedStep.type)) {
@@ -523,6 +551,10 @@ export class TestJobEngine {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards(executionContext, sessionId, "before-step"));
             }
             let output = await this.steps.execute(executionContext);
+            // A daemon hand-off may fence this execution while a target
+            // command is in flight. Never persist that command's result under
+            // the new execution's ownership.
+            this.options.runs.assertExecutionOwner(jobId, executionId);
             if (output.success === false) {
               // Keep the complete bounded tool response available to the
               // terminal-step writer.  Launch failures use the compacting
@@ -535,7 +567,7 @@ export class TestJobEngine {
                 sessionId = output.sessionId;
                 sessionOpen = true;
                 current = { ...current, sessionId };
-                this.options.runs.updateBoard(current);
+                this.options.runs.updateBoard(current, executionId);
               }
               throw structuredToolFailure(output, step.stepType);
             }
@@ -550,7 +582,7 @@ export class TestJobEngine {
               sessionId = output.sessionId;
               if (plannedStep.type === "launchMulticore" && output.cleanedUp !== true) sessionOpen = true;
               current = { ...current, sessionId };
-              this.options.runs.updateBoard(current);
+              this.options.runs.updateBoard(current, executionId);
             }
             if (sessionOpen && sessionId && guardAfterStep(plannedStep)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards({ ...executionContext, sessionId }, sessionId, "after-step"));
@@ -568,14 +600,15 @@ export class TestJobEngine {
               sessionOpen = false;
               sessionId = undefined;
               current = { ...current, sessionId: undefined };
-              this.options.runs.updateBoard(current);
+              this.options.runs.updateBoard(current, executionId);
             }
             const finishedAt = new Date().toISOString();
-            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0 });
-            this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt, output });
+            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "PASSED", retryDecision: { retry: false, reason: "PASSED" }, backoffMs: 0, executionId });
+            this.options.runs.updateStep({ ...running, status: "PASSED", finishedAt, output }, executionId);
             break;
           } catch (error) {
             const structured = { ...toStructuredError(error) };
+            if (isStaleJobExecution(error)) throw error;
             const optimization = classifyDebugFailure(structured);
             const structuredWithOptimization = { ...structured, optimization };
             if (isAbortError(error)) cancelled = true;
@@ -600,7 +633,7 @@ export class TestJobEngine {
               }
             }
             const finishedAt = new Date().toISOString();
-            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "FAILED", error: structuredWithOptimization, retryDecision, backoffMs: retryDecision.backoffMs, reconcileEvidence });
+            this.options.runs.addStepAttempt({ step, attemptIndex: attempt, startedAt: attemptStartedAt, finishedAt, status: "FAILED", error: structuredWithOptimization, retryDecision, backoffMs: retryDecision.backoffMs, reconcileEvidence, executionId });
             if (retryDecision.retry && !cancelled) {
               this.options.events.append({ level: "warn", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_STEP_RETRY", payload: { stepType: step.stepType, attempt, error: structuredWithOptimization, retryDecision, reconcileEvidence } });
               await abortableBackoff(retryDecision.backoffMs, this.abortControllers.get(jobId)?.signal);
@@ -618,7 +651,7 @@ export class TestJobEngine {
                 optimization
               }
               : { retryDecision, reconcileEvidence, optimization };
-            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: persistedFailureOutput });
+            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: persistedFailureOutput }, executionId);
             this.options.events.append({
               level: cancelled ? "warn" : "error",
               sourceType: "job",
@@ -642,11 +675,13 @@ export class TestJobEngine {
         }
       }
     } catch (error) {
+      if (isStaleJobExecution(error)) throw error;
       failed = true;
       lastError = { ...toStructuredError(error) };
     } finally {
       clearInterval(renew);
-      if (sessionId && sessionOpen) {
+      let executionFenceLost = !this.options.runs.isExecutionOwner(jobId, executionId);
+      if (!executionFenceLost && sessionId && sessionOpen) {
         const closingSessionId = sessionId;
         try {
           const cleanup = await this.options.tools.invokeTool("c2000_closeDebugSession", {
@@ -657,51 +692,65 @@ export class TestJobEngine {
           sessionOpen = false;
           sessionId = undefined;
           current = { ...current, sessionId: undefined };
-          this.options.runs.updateBoard(current);
+          this.options.runs.updateBoard(current, executionId);
+          this.options.runs.assertExecutionOwner(jobId, executionId);
           this.options.events.append({ level: "info", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLOSED", payload: { sessionId: closingSessionId } });
         } catch (error) {
-          failed = true;
-          cancelled = false;
-          const cleanupFailure = { ...toStructuredError(error) };
-          const cleanupError = extractCleanupError(cleanupFailure);
-          const primaryError = lastError;
-          lastError = primaryError
-            ? withSecondaryError(primaryError, "cleanupError", cleanupError)
-            : cleanupError;
-          try {
-            this.options.registry.transition(board.boardId, "QUARANTINED", {
-              code: "JobSessionCleanupFailed",
-              message: "Job session could not be closed while its fenced lease was still held; board ownership requires operator recovery",
-              jobId,
-              sessionId,
-              cleanupError,
-              ...(cleanupFailure.code !== cleanupError.code ? { cleanupFailure } : {}),
-              ...(primaryError ? { primaryError } : {})
-            });
-          } catch (quarantineError) {
-            const quarantineFailure = { ...toStructuredError(quarantineError) };
+          // A recovery hand-off has already fenced this execution. Do not use
+          // the stale context to close or quarantine the new board route.
+          if (isStaleJobExecution(error) || !this.options.runs.isExecutionOwner(jobId, executionId)) {
+            executionFenceLost = true;
+          } else {
+            failed = true;
+            cancelled = false;
+            const cleanupFailure = { ...toStructuredError(error) };
+            const cleanupError = extractCleanupError(cleanupFailure);
+            const primaryError = lastError;
             lastError = primaryError
-              ? withSecondaryError(
-                withSecondaryError(primaryError, "cleanupError", cleanupError),
-                "quarantineError",
-                quarantineFailure
-              )
-              : {
-                code: "JobSessionCleanupAndQuarantineFailed",
-                message: "Session cleanup failed and board quarantine could not be persisted",
-                details: { sessionId, cleanupError, cleanupFailure, quarantineError: quarantineFailure }
-              };
+              ? withSecondaryError(primaryError, "cleanupError", cleanupError)
+              : cleanupError;
+            try {
+              this.options.registry.transition(board.boardId, "QUARANTINED", {
+                code: "JobSessionCleanupFailed",
+                message: "Job session could not be closed while its fenced lease was still held; board ownership requires operator recovery",
+                jobId,
+                sessionId,
+                cleanupError,
+                ...(cleanupFailure.code !== cleanupError.code ? { cleanupFailure } : {}),
+                ...(primaryError ? { primaryError } : {})
+              });
+            } catch (quarantineError) {
+              const quarantineFailure = { ...toStructuredError(quarantineError) };
+              lastError = primaryError
+                ? withSecondaryError(
+                  withSecondaryError(primaryError, "cleanupError", cleanupError),
+                  "quarantineError",
+                  quarantineFailure
+                )
+                : {
+                  code: "JobSessionCleanupAndQuarantineFailed",
+                  message: "Session cleanup failed and board quarantine could not be persisted",
+                  details: { sessionId, cleanupError, cleanupFailure, quarantineError: quarantineFailure }
+                };
+            }
+            this.options.runs.assertExecutionOwner(jobId, executionId);
+            this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLEANUP_FAILED", payload: { sessionId, error: lastError } });
           }
-          this.options.events.append({ level: "error", sourceType: "job", sourceId: jobId, jobId, boardId: board.boardId, eventType: "JOB_SESSION_CLEANUP_FAILED", payload: { sessionId, error: lastError } });
         }
       }
-      if (!groupLease) {
-        try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* lease expiry will be reconciled */ }
+      try {
+        if (!groupLease) {
+          try { this.options.registry.leases.release(lease.lease.leaseId, lease.leaseToken); } catch { /* lease expiry will be reconciled */ }
+        }
+        if (!executionFenceLost) {
+          const status = cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED";
+          current = { ...current, status, sessionId, finishedAt: new Date().toISOString(), ...(lastError ? { error: lastError } : {}) };
+          this.options.runs.updateBoard(current, executionId);
+        }
+      } finally {
+        if (!groupPermit) permit.release();
       }
-      const status = cancelled ? "CANCELLED" : failed ? "FAILED" : "PASSED";
-      current = { ...current, status, sessionId, finishedAt: new Date().toISOString(), ...(lastError ? { error: lastError } : {}) };
-      this.options.runs.updateBoard(current);
-      if (!groupPermit) permit.release();
+      if (executionFenceLost) this.options.runs.assertExecutionOwner(jobId, executionId);
     }
     return { success: !failed && !cancelled, cancelled };
   }
@@ -757,6 +806,24 @@ export class TestJobEngine {
     return this.options.runs.boards(jobId)
       .filter(board => this.options.registry.leases.releaseForRecoveredJob(board.boardId, jobId))
       .map(board => board.boardId);
+  }
+
+  private releaseTerminalJobLeases(): void {
+    const terminalStatuses = Array.from(terminalTestRunStatuses);
+    for (const run of this.options.runs.list(terminalStatuses)) {
+      const releasedBoards = this.options.runs.boards(run.jobId)
+        .filter(board => this.options.registry.leases.releaseForRecoveredJob(board.boardId, run.jobId))
+        .map(board => board.boardId);
+      if (releasedBoards.length === 0) continue;
+      this.options.events.append({
+        level: "warn",
+        sourceType: "lease",
+        sourceId: run.jobId,
+        jobId: run.jobId,
+        eventType: "JOB_TERMINAL_LEASES_RELEASED",
+        payload: { releasedBoards, reason: "terminal-job-reconciliation" }
+      });
+    }
   }
 
   private reconcileCanGroup(jobId: string, plan: TestPlan) {
@@ -974,6 +1041,10 @@ function extractCleanupError(failure: Record<string, unknown>): Record<string, u
       workflowCleanupFailure: failure
     }
   };
+}
+
+function isStaleJobExecution(error: unknown): boolean {
+  return toStructuredError(error).code === "JobExecutionStale";
 }
 
 function abortableBackoff(ms: number, signal?: AbortSignal): Promise<void> {
