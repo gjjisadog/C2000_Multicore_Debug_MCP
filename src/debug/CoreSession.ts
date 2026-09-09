@@ -7,7 +7,7 @@ export class CoreSession {
   connected = false;
   active = false;
   state: TargetStateName = "Disconnected";
-  pc = "0x00000000";
+  pc?: string;
 
   constructor(config: CoreConfig) {
     this.coreId = config.coreId;

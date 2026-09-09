@@ -200,7 +200,7 @@ describe("DSS generated scripts", () => {
 
     for (const source of [statelessSource, persistentSource]) {
       expect(source).toContain("function applyTargetReset(session, resetType)");
-      expect(source).toContain('if (type === "system")');
+      expect(source).toContain('type === "system"');
       expect(source).toContain('if (type === "restart")');
       expect(source).toContain("session.target.reset()");
       expect(source).toContain("Address-to-source mapping is not implemented");

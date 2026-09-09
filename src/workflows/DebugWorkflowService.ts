@@ -135,6 +135,7 @@ export class DebugWorkflowService {
     const effectiveStartup = {
       startupPreset: input.startupPreset ?? null,
       resetType: input.resetType,
+      postLoadResetType: input.postLoadResetType ?? null,
       loadSequence: input.loadSequence,
       runSequence: input.runSequence,
       programPreparation: input.programPreparation,
@@ -177,6 +178,9 @@ export class DebugWorkflowService {
     const performedSteps: string[] = [];
     const maps = this.normalizeMaps(mapsFromPaths(input));
     const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
+    if (input.postLoadResetType && !runPlan.releaseCpu2BeforeCpu1) {
+      throw new DebugMcpError("StartupContractInvalid", "postLoadResetType requires firmware-owned CPU2 boot");
+    }
     if (runPlan.releaseCpu2BeforeCpu1 && (runPlan.coreOrder.length !== 1 || runPlan.coreOrder[0] !== input.cpu1CoreId)) {
       throw new DebugMcpError("Cpu2BootReleaseSequenceInvalid", "CPU2 release-before-CPU1 requires a CPU1-only run plan", {
         sessionId: input.sessionId,
@@ -299,14 +303,28 @@ export class DebugWorkflowService {
     performedSteps.push("checkElfFreshness");
     setStage("run-sequence");
     let cpu2Release: ToolResult | undefined;
+    let postLoadReset: ToolResult | undefined;
     if (runPlan.releaseCpu2BeforeCpu1) {
+      setStage("cpu2-connect-initialization-disable");
+      const preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu2CoreId);
+      performedSteps.push("disableCpu2ConnectInitialization");
       setStage("cpu2-release");
       cpu2Release = {
+        preparation,
         disconnected: await this.manager.disconnectTarget(input.sessionId, input.cpu2CoreId),
         mode: "disconnect-before-cpu1"
       };
       performedSteps.push("disconnectCpu2BeforeCpu1");
+      // The CPU2 Flash plugin may leave CPU1 at a loader PC in shared RAM.
+      // Never resume that PC. Only CPU1 is restarted; it owns CPU2 boot.
+      if (input.programPreparation !== "symbols-only" || input.postLoadResetType) {
+        setStage("post-load-cpu1-reset");
+        postLoadReset = await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
+          input.postLoadResetType ?? "restart");
+        performedSteps.push("resetCpu1AfterLoad");
+      }
     }
+    setStage("run-sequence");
     for (const coreId of runPlan.coreOrder) {
       await this.manager.runCore(input.sessionId, coreId);
       performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
@@ -364,7 +382,7 @@ export class DebugWorkflowService {
         "target-halt", "target-reset",
         ...(input.programPreparation === "symbols-only" ? ["symbol-load"] : ["program-load", "ram-ownership-change"]),
         "target-run", "target-read",
-        ...(cpu2Release ? ["target-disconnect", "target-connect"] : [])
+        ...(cpu2Release ? ["debugger-gel-unload", "target-disconnect", "target-connect"] : [])
       ],
       sessionId: input.sessionId,
       device: input.device,
@@ -390,6 +408,7 @@ export class DebugWorkflowService {
         }
       } : {}),
       postLoadHalt,
+      ...(postLoadReset ? { postLoadReset } : {}),
       snapshot,
       artifactPreflight,
       ramOwnership,
@@ -521,7 +540,7 @@ export class DebugWorkflowService {
       let postLoadResetHalt: ToolResult | undefined;
       let cpu2Release: ToolResult | undefined;
       const postLoadBoot = input.postLoadBoot;
-      if (postLoadBoot) {
+      if (postLoadBoot && !postLoadBoot.releaseCpu2BeforeCpu1) {
         workflowStage = "post-load-reset";
         postLoadReset = await this.manager.resetCores(input.sessionId, coreIds, postLoadBoot.resetType as ResetType);
         performedSteps.push("resetCoresAfterLoad");
@@ -541,12 +560,24 @@ export class DebugWorkflowService {
       const runCpu1 = postLoadBoot?.runCpu1 ?? input.runCpu1;
       const runCpu2 = postLoadBoot?.runCpu2 ?? input.runCpu2;
       if (postLoadBoot?.releaseCpu2BeforeCpu1) {
+        workflowStage = "cpu2-connect-initialization-disable";
+        const preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu2CoreId);
+        performedSteps.push("disableCpu2ConnectInitialization");
         workflowStage = "cpu2-release";
         cpu2Release = {
+          preparation,
           disconnected: await this.manager.disconnectTarget(input.sessionId, input.cpu2CoreId),
           mode: "disconnect-before-cpu1"
         };
         performedSteps.push("disconnectCpu2BeforeCpu1");
+        // Firmware owns CPU2 boot. A system reset may hold CPU2 in reset, so do
+        // not reset/halt/read that core again until CPU1 has released it.
+        workflowStage = "post-load-cpu1-reset";
+        postLoadReset = await this.manager.resetCores(
+          input.sessionId, [input.cpu1CoreId], postLoadBoot.resetType as ResetType
+        );
+        performedSteps.push("resetCpu1AfterLoad");
+        assertBatchSucceeded("resetCpu1AfterLoad", postLoadReset);
       }
       if (runCpu1) {
         workflowStage = "run-sequence";
@@ -602,7 +633,7 @@ export class DebugWorkflowService {
         approvalClass: "workflow-confirmation",
         effectsApplied: [
           "target-halt", "target-reset", "program-load", "ram-ownership-change", "target-run", "target-read",
-          ...(cpu2Release ? ["target-disconnect", "target-connect"] : [])
+          ...(cpu2Release ? ["debugger-gel-unload", "target-disconnect", "target-connect"] : [])
         ],
         sessionId: input.sessionId,
         device: input.device,

@@ -11,6 +11,7 @@ const coreMap = [
 const ccxmlPath = "/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml";
 
 class RecordingBridge implements CcsScriptingBridge {
+  readonly supportsFirmwareHandoff = true;
   readonly sessions: CcsBridgeCreateSessionOptions[] = [];
   readonly commands: CcsScriptingCommand[] = [];
   readonly disposedSessions: string[] = [];
@@ -26,6 +27,15 @@ class RecordingBridge implements CcsScriptingBridge {
   async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
     this.commands.push(command);
     const identity = { coreId: command.coreId, coreName: command.coreName };
+    if (command.operation === "reset") {
+      return {
+        ...identity, requestedResetType: command.resetType, effectiveResetType: command.resetType,
+        resetName: "CPU Reset", mechanism: "ResetType.issueReset", completion: "halt-observed"
+      };
+    }
+    if (command.operation === "prepareFirmwareHandoff") {
+      return { ...identity, gelInitializationDisabled: true };
+    }
     if (command.operation === "getState") {
       return { ...identity, connected: true, state: "Halted", pc: "0x00C4E1" };
     }
@@ -46,6 +56,34 @@ class RecordingBridge implements CcsScriptingBridge {
 }
 
 describe("CcsScriptingAdapter", () => {
+  test("returns matching reset evidence and rejects absent or mismatched evidence", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "reset-proof", ccxmlPath, coreMap });
+    await expect(adapter.reset(session, 2, "cpu")).resolves.toMatchObject({
+      requestedResetType: "cpu", effectiveResetType: "cpu", completion: "halt-observed"
+    });
+    for (const evidence of [{}, {
+      requestedResetType: "system", effectiveResetType: "cpu", resetName: "CPU Reset",
+      mechanism: "target.reset", completion: "halt-observed"
+    }]) {
+      bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName, ...evidence });
+      await expect(adapter.reset(session, 0, "system")).rejects.toMatchObject({ code: "DssCommandFailed" });
+    }
+  });
+
+  test("handoff is core-explicit and requires persistent GEL suppression evidence", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "handoff-proof", ccxmlPath, coreMap });
+    await adapter.prepareFirmwareHandoff(session, 2);
+    expect(bridge.commands).toEqual([expect.objectContaining({ operation: "prepareFirmwareHandoff", coreId: 2 })]);
+    bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName });
+    await expect(adapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "DssCommandFailed" });
+    const statelessAdapter = new CcsScriptingAdapter({}, { execute: bridge.execute });
+    await expect(statelessAdapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
+  });
+
   test("registers a logical CCS session with the bridge before core commands are executed", async () => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);

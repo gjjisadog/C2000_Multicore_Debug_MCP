@@ -658,6 +658,7 @@ const runIpcAcceptanceObjectSchema = z.object({
   cpu2MapPath: z.string().min(1),
   startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
   resetType: resetTypeSchema.default("default"),
+  postLoadResetType: resetTypeSchema.optional().describe("CPU1-only reset after CPU2 disconnect for firmware-owned boot. Defaults to restart after program load; unavailable explicit reset types fail closed."),
   programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
   ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
