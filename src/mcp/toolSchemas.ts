@@ -154,7 +154,8 @@ export const getEscalationRecommendationsSchema = z.object({
   stage: z.string().trim().min(1).max(96).optional(),
   errorCode: z.string().trim().min(1).max(128).optional(),
   failureClass: z.enum(OUTCOME_FAILURE_CLASSES).optional(),
-  jobId: z.string().trim().min(1).max(128).optional()
+  jobId: z.string().trim().min(1).max(128).optional(),
+  boardId: z.string().trim().min(1).max(128).optional()
 });
 
 export const generateImprovementProposalsSchema = z.object({

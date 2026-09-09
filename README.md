@@ -1837,10 +1837,14 @@ limited horizon. Advanced users can query workflow, tool, and capability
 summaries with `c2000_getWorkflowAnalytics`, `c2000_getToolAnalytics`, and
 `c2000_getCapabilityAnalytics`. The default surface adds only the read-only
 `c2000_getEscalationRecommendations` guide: after a structured workflow
-failure, ask for the smallest safety-allowed capability, open it explicitly
-with a reason, and close it when finished. Recommendations are deterministic
-guidance only; they never open a capability, select `full`, mutate the Tool
-Surface, or replace approval/effects/lease checks.
+failure, ask for the smallest safety-allowed capability or, for a board-lease
+or worker failure, follow the daemon-owned worker recovery sequence. Pass
+`boardId` when known to receive concrete `c2000_recoverBoard` arguments.
+Recommendations are deterministic guidance only; they never open a
+capability, restart a worker, select `full`, mutate the Tool Surface, or
+replace approval/effects/lease checks. A worker recovery always starts with
+`dryRun=true`; invalidated, expired, fenced, and worker-mismatched lease or
+session contexts must not be reused.
 
 | Use case | Safety | Surface |
 | --- | --- | --- |

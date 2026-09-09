@@ -43,6 +43,10 @@ export class BoardWorkerSupervisor {
   }
 
   async startAll(): Promise<void> {
+    // A daemon instance owns only the workers it starts. Retire persisted
+    // healthy rows from an earlier daemon before publishing new routes, so
+    // health counts cannot keep dead workers alive across restarts.
+    this.options.workers.markStaleForDaemon(this.options.daemonInstanceId);
     for (const board of this.options.registry.list()) {
       await this.startBoard(board.boardId);
     }
@@ -187,12 +191,16 @@ export class BoardWorkerSupervisor {
     restartTimes.push(now);
     if (managed) {
       this.workers.delete(boardId);
-      await managed.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      this.options.registry.setWorker(boardId, undefined);
+      // Fence and release the old lease before stopping the worker. Any new
+      // command using the old context is rejected before target access.
       this.options.registry.leases.invalidateForWorkerRestart(
         boardId,
         managed.client.workerInstanceId,
         `worker-restart:${reason}`
       );
+      await managed.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      this.options.workers.markStopped(managed.client.workerInstanceId, `worker-restart:${reason}`);
     }
     this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, workerGeneration: managed?.workerGeneration, eventType: "WORKER_RESTARTING", payload: { reason, ...details } });
     const client = await this.startBoard(boardId);
@@ -206,7 +214,11 @@ export class BoardWorkerSupervisor {
     this.watchdog = undefined;
     const managed = Array.from(this.workers.values());
     this.workers.clear();
-    await Promise.allSettled(managed.map(entry => entry.client.stop(this.workerConfig.shutdownTimeoutMs)));
+    await Promise.allSettled(managed.map(async entry => {
+      this.options.registry.setWorker(entry.client.boardId, undefined);
+      await entry.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      this.options.workers.markStopped(entry.client.workerInstanceId, "supervisor-stop-all");
+    }));
   }
 
   private handleHeartbeat(heartbeat: WorkerHeartbeat): void {

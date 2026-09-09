@@ -84,10 +84,15 @@ export class BoardLeaseManager {
    */
   releaseForRecoveredJob(boardId: string, ownerJobId: string): boolean {
     return this.store.transaction(() => {
-      const existing = this.leases.activeForBoard(boardId);
-      if (!existing || existing.ownerJobId !== ownerJobId) return false;
-      this.leases.release(existing.leaseId, new Date().toISOString());
-      this.boards.setLease(boardId, undefined);
+      const now = new Date().toISOString();
+      const recovered = this.leases.unreleasedForBoard(boardId)
+        .filter(lease => lease.ownerJobId === ownerJobId);
+      if (recovered.length === 0) return false;
+      for (const lease of recovered) this.leases.release(lease.leaseId, now);
+
+      // Do not clear a newer lease belonging to another job. Re-point the
+      // board row to the newest still-active generation, if one exists.
+      this.boards.setLease(boardId, this.leases.activeForBoard(boardId)?.leaseId);
       return true;
     });
   }

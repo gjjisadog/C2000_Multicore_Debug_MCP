@@ -64,6 +64,30 @@ export class WorkerRepository {
     return row ? mapWorker(row) : undefined;
   }
 
+  markStopped(workerInstanceId: string, reason = "supervisor-stop"): void {
+    this.store.run(
+      "UPDATE workers SET status = 'STOPPED', current_command_id = NULL, owned_dss_processes_json = '[]', last_error_json = ? WHERE worker_instance_id = ?",
+      [JSON.stringify({ code: "WorkerStopped", reason }), workerInstanceId]
+    );
+  }
+
+  /** Fence persisted workers from an earlier daemon before new routes start. */
+  markStaleForDaemon(daemonInstanceId: string, reason = "daemon-restarted"): string[] {
+    return this.store.transaction(() => {
+      const rows = this.store.all<{ worker_instance_id: string }>(
+        "SELECT worker_instance_id FROM workers WHERE daemon_instance_id <> ? AND status IN ('STARTING', 'READY', 'RUNNING')",
+        [daemonInstanceId]
+      );
+      for (const row of rows) {
+        this.store.run(
+          "UPDATE workers SET status = 'STOPPED', current_command_id = NULL, owned_dss_processes_json = '[]', last_error_json = ? WHERE worker_instance_id = ?",
+          [JSON.stringify({ code: "WorkerStopped", reason }), row.worker_instance_id]
+        );
+      }
+      return rows.map(row => row.worker_instance_id);
+    });
+  }
+
   countHealthy(): { total: number; healthy: number; unhealthy: number } {
     const total = Number(this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM workers")?.count ?? 0);
     const healthy = Number(this.store.get<{ count: number }>("SELECT COUNT(*) AS count FROM workers WHERE status IN ('STARTING', 'READY', 'RUNNING')")?.count ?? 0);

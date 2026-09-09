@@ -27,6 +27,17 @@ export class LeaseRepository {
     return row ? mapLease(row) : undefined;
   }
 
+  /**
+   * Return every unreleased generation, including invalidated generations.
+   * Invalidated rows are no longer active, but they still need terminal
+   * release bookkeeping so recovery cannot leave `released_at` NULL forever.
+   */
+  unreleasedForBoard(boardId: string): Array<BoardLease & { leaseTokenHash: string }> {
+    return this.store
+      .all<LeaseRow>("SELECT * FROM board_leases WHERE board_id = ? AND released_at IS NULL ORDER BY fencing_token DESC", [boardId])
+      .map(mapLease);
+  }
+
   activeForBoardByLeaseId(leaseId: string): (BoardLease & { leaseTokenHash: string }) | undefined {
     const row = this.store.get<LeaseRow>("SELECT * FROM board_leases WHERE lease_id = ? AND released_at IS NULL AND invalidated_at IS NULL", [leaseId]);
     return row ? mapLease(row) : undefined;
@@ -45,7 +56,10 @@ export class LeaseRepository {
   }
 
   invalidate(leaseId: string, invalidatedAt: string, reason: string): void {
-    this.store.run("UPDATE board_leases SET invalidated_at = ?, invalidation_reason = ? WHERE lease_id = ? AND invalidated_at IS NULL", [invalidatedAt, reason, leaseId]);
+    // Invalidating a lease fences it immediately; releasing it in the same
+    // transaction makes the lifecycle terminal and prevents stale rows from
+    // remaining apparently owned forever after worker/session recovery.
+    this.store.run("UPDATE board_leases SET invalidated_at = ?, invalidation_reason = ?, released_at = COALESCE(released_at, ?) WHERE lease_id = ? AND invalidated_at IS NULL", [invalidatedAt, reason, invalidatedAt, leaseId]);
   }
 
   renew(leaseId: string, expiresAt: string, renewedAt: string): void {

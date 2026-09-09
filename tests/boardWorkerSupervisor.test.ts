@@ -88,6 +88,7 @@ describe("board worker supervisor", () => {
       await supervisor.startAll();
       const leaseA = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-a", workerInstanceId: registry.get("board-a").currentWorkerInstanceId!, ttlMs: 1000 });
       const leaseB = registry.leases.acquire({ boardId: "board-b", ownerJobId: "job-b", workerInstanceId: registry.get("board-b").currentWorkerInstanceId!, ttlMs: 1000 });
+      const oldWorkerA = registry.get("board-a").currentWorkerInstanceId!;
       await expect(supervisor.invokeBoard("board-a", "c2000_getTargetState", { __leaseContext: leaseA.context }, 5)).rejects.toMatchObject({ code: "WorkerCommandTimeout" });
       expect(starts.get("board-a")).toBe(2);
       expect(starts.get("board-b")).toBe(1);
@@ -97,6 +98,7 @@ describe("board worker supervisor", () => {
         expect.objectContaining({ code: "LeaseInvalidated" })
       );
       expect(registry.leases.active("board-b")?.leaseId).toBe(leaseB.lease.leaseId);
+      expect(new WorkerRepository(store).get(oldWorkerA)?.status).toBe("STOPPED");
       await expect(supervisor.invokeBoard("board-b", "c2000_getTargetState", { __leaseContext: leaseB.context }, 5)).resolves.toEqual(expect.objectContaining({ success: true, boardId: "board-b" }));
       await expect(supervisor.invokeBoard("board-b", "c2000_launchMulticoreDebugSafe", {
         __leaseContext: leaseB.context,

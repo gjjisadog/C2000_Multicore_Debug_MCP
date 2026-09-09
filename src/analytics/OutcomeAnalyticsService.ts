@@ -99,6 +99,7 @@ export interface EscalationRecommendationInput {
   errorCode?: string;
   failureClass?: string;
   jobId?: string;
+  boardId?: string;
 }
 
 interface FailureContext {
@@ -107,6 +108,7 @@ interface FailureContext {
   errorCode?: string;
   workflow?: string;
   jobId?: string;
+  boardId?: string;
 }
 
 interface CapabilityRule {
@@ -115,6 +117,13 @@ interface CapabilityRule {
   failureClasses: readonly OutcomeFailureClass[];
   stagePattern?: RegExp;
   baseConfidence: number;
+}
+
+interface RecoveryRule {
+  tool: string;
+  reason: string;
+  failureClasses: readonly OutcomeFailureClass[];
+  stagePattern?: RegExp;
 }
 
 const CAPABILITY_RULES: readonly CapabilityRule[] = [
@@ -163,6 +172,15 @@ const CAPABILITY_RULES: readonly CapabilityRule[] = [
     failureClasses: ["can"],
     stagePattern: /can|soak|campaign|bus/i,
     baseConfidence: 0.66
+  }
+];
+
+const RECOVERY_RULES: readonly RecoveryRule[] = [
+  {
+    tool: "c2000_recoverBoard",
+    reason: "The failure is owned by the daemon lease/worker boundary. Retire the stale daemon-owned worker through a dry-run recovery before any new target workflow.",
+    failureClasses: ["board-lease", "worker"],
+    stagePattern: /lease|worker|cleanup|recover|fenc/i
   }
 ];
 
@@ -466,9 +484,47 @@ export class OutcomeAnalyticsService {
       .sort((left, right) => right.stageMatch - left.stageMatch
         || right.historicalSupport - left.historicalSupport
         || left.active - right.active
-        || left.memberCount - right.memberCount
-        || left.recommendation.capability.localeCompare(right.recommendation.capability))
+      || left.memberCount - right.memberCount
+      || left.recommendation.capability.localeCompare(right.recommendation.capability))
       .map(item => item.recommendation);
+    const recoveryRecommendations = RECOVERY_RULES
+      .filter(rule => rule.failureClasses.includes(context.failureClass))
+      .filter(rule => !rule.stagePattern || !context.stage || rule.stagePattern.test(context.stage))
+      .flatMap(rule => {
+        const safetyAllowed = definitionsForSafetyProfile(this.currentProfile()).some(tool => tool.name === rule.tool);
+        const recommendationId = randomUUID();
+        const boardId = context.boardId;
+        const dryRunArguments = boardId ? { boardId, dryRun: true } : undefined;
+        const restartArguments = boardId ? { boardId, dryRun: false } : undefined;
+        return [{
+          recommendationId,
+          kind: "daemon-recovery",
+          tool: rule.tool,
+          reason: context.stage ? `${rule.reason} Observed stage: ${context.stage}.` : rule.reason,
+          source: "static-rule",
+          safetyAllowed,
+          blockedBySafety: safetyAllowed ? [] : [rule.tool],
+          targetAccessAttempted: false,
+          externalProcessTermination: false,
+          autoExecute: false,
+          ...(dryRunArguments ? { dryRunArguments } : {}),
+          ...(restartArguments ? { restartArguments } : {}),
+          ...(boardId ? {} : { requiredInput: ["boardId"] }),
+          nextSteps: boardId
+            ? [
+              "Re-read c2000_getDaemonHealth and c2000_listBoards.",
+              "Call c2000_recoverBoard with dryRun=true and confirm the worker is daemon-owned.",
+              "Only after the dry-run confirms the owned identity, call c2000_recoverBoard with dryRun=false.",
+              "Re-read c2000_listBoards; acquire a fresh lease and session before any target command."
+            ]
+            : [
+              "Use c2000_getDaemonHealth and c2000_listBoards to identify the affected board.",
+              "Call c2000_recoverBoard with dryRun=true for that board.",
+              "Only after the dry-run confirms the daemon-owned identity, perform the explicit worker recovery.",
+              "Do not reuse the expired, invalidated, fenced, or worker-mismatched lease/session."
+            ]
+        }];
+      });
     return {
       analyticsAvailable: eventsResult.available,
       failure: context,
@@ -476,6 +532,7 @@ export class OutcomeAnalyticsService {
       activeToolSurfaceProfile: this.currentSurface(),
       activeCapabilities: this.currentCapabilities(),
       recommendations,
+      recoveryRecommendations,
     };
   }
 
@@ -495,7 +552,8 @@ export class OutcomeAnalyticsService {
       ...((boundedLabel(input.stage) ?? evidence?.stage) ? { stage: boundedLabel(input.stage) ?? evidence?.stage } : {}),
       ...((boundedLabel(input.errorCode) ?? evidence?.errorCode) ? { errorCode: boundedLabel(input.errorCode) ?? evidence?.errorCode } : {}),
       ...((boundedLabel(input.workflow) ?? (evidence?.kind === "workflow_run" ? evidence.name : undefined)) ? { workflow: boundedLabel(input.workflow) ?? evidence?.name } : {}),
-      ...(boundedLabel(input.jobId) ? { jobId: boundedLabel(input.jobId) } : {})
+      ...(boundedLabel(input.jobId) ? { jobId: boundedLabel(input.jobId) } : {}),
+      ...(boundedLabel(input.boardId) ? { boardId: boundedLabel(input.boardId) } : {})
     };
   }
 

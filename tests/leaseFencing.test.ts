@@ -64,9 +64,31 @@ describe("lease fencing", () => {
     expect(registry.leases.invalidateForWorkerRestart("board-a", "worker-1", "test")).toBe(true);
     expect(registry.leases.active("board-a")).toBeUndefined();
     expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+    expect(store.get<{ released_at: string | null; invalidated_at: string | null; worker_instance_id: string }>("SELECT released_at, invalidated_at, worker_instance_id FROM board_leases WHERE lease_id = ?", [leased.lease.leaseId])).toEqual(expect.objectContaining({
+      released_at: expect.any(String),
+      invalidated_at: expect.any(String),
+      worker_instance_id: "worker-1"
+    }));
     expect(() => registry.leases.validate(leased.context)).toThrowError(
       expect.objectContaining({ code: "LeaseInvalidated" })
     );
+    store.close();
+  });
+
+  test("recovery retires a legacy invalidated lease that still has no released timestamp", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-lease-legacy-recovery-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "test.sqlite"));
+    const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.setWorker("board-a", "worker-old");
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-old", workerInstanceId: "worker-old", ttlMs: 1000 });
+    const invalidatedAt = new Date().toISOString();
+    store.run("UPDATE board_leases SET invalidated_at = ?, invalidation_reason = ? WHERE lease_id = ?", [invalidatedAt, "legacy-worker-restart", leased.lease.leaseId]);
+
+    expect(registry.leases.releaseForRecoveredJob("board-a", "job-old")).toBe(true);
+    expect(store.get<{ released_at: string | null }>("SELECT released_at FROM board_leases WHERE lease_id = ?", [leased.lease.leaseId])?.released_at).toEqual(expect.any(String));
+    expect(registry.leases.releaseForRecoveredJob("board-a", "job-old")).toBe(false);
     store.close();
   });
 });
