@@ -22,6 +22,14 @@ verification through `c2000-multicore-mcp`.
 - Preserve daemon ownership, worker identity, board permits, lease/fencing
   context, safety guards, and durable `jobId` semantics. Never add a second
   target job engine or a general shell tool.
+- A board lease proves probe ownership, not the identity of the firmware
+  resident on the target. A new lease or worker generation invalidates the
+  target identity; only a controlled MCP program load under the current lease
+  may establish it again. Record the per-core `.out` SHA-256 and target
+  generation with every resident-symbol or observation conclusion.
+- Treat `UNKNOWN` or hash-mismatched target identity as a hard stop. Do not
+  load old Scope symbols, reconnect an old observation session, or infer that
+  Flash is unchanged from a lease alone.
 
 ## Workflow priority
 
@@ -29,6 +37,11 @@ verification through `c2000-multicore-mcp`.
    roots, and the applicable tool contract.
 2. For target work, use one server-side workflow or one durable job. Register a
    serial-bound board and wait for its worker before touching a target.
+   Check `c2000_listBoards` before target access; if target identity is
+   `UNKNOWN`, load the exact CPU1/CPU2 pair through the current lease before
+   starting symbols, Scope, DLOG, ERAD, or Variable Stream observation.
+   Never continue an old session after a lease release, worker restart, or
+   external debugger access.
 3. Route normal tasks through the default `safe` + `agent` surface:
    - CPU1/CPU2 IPC startup and acceptance → `c2000_launchAndRunIpcAcceptance`.
    - IPC acceptance with an existing session → `c2000_runIpcAcceptance`.
@@ -181,6 +194,10 @@ lease, safety, or hardware evidence.
   stop and inspect durable evidence.
 - Do not automatically kill external CCS/DebugServer processes. Recovery is
   limited to daemon-owned identities and remains dry-run by default.
+- Treat each board as a single-writer target. Do not run two debug/Scope tasks
+  against one probe, and do not call `c2000_recoverBoard` while an active lease
+  exists. Use its dry-run first; after a session or worker handoff, require a
+  fresh lease, fresh session, and fresh target-image identity.
 - Do not repeat CPU2 Flash programming without explicit destructive reload
   authorization; use symbol loading for resident Flash.
 - Do not assign PWM, contactor, power-stage, or HV control variables as part of

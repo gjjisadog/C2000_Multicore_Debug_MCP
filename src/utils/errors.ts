@@ -134,6 +134,8 @@ export type DebugErrorCode =
   | "SessionInvalidated"
   | "SessionIdentityMismatch"
   | "SessionAlreadyOpen"
+  | "TargetImageIdentityUnknown"
+  | "TargetImageMismatch"
   | "ResetCoreScopeInvalid"
   | "WorkerGenerationChanged"
   | "LeaseGenerationChanged"

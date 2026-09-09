@@ -24,11 +24,39 @@ export interface BoardRecord extends BoardRegistration {
   status: BoardStatus;
   currentWorkerInstanceId?: string;
   currentLeaseId?: string;
+  targetIdentity: BoardTargetIdentity;
   lastHeartbeatAt?: string;
   lastSeenAt?: string;
   lastError?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Host-side identity evidence for the image currently believed to be on the
+ * physical target.  UNKNOWN is deliberate: a new lease, worker restart, or
+ * external target access invalidates the previous belief until MCP performs a
+ * controlled program load again.
+ */
+export interface BoardTargetIdentity {
+  status: "UNKNOWN" | "KNOWN";
+  generation: number;
+  updatedAt: string;
+  reason?: string;
+  programs: Record<string, TargetProgramIdentity>;
+}
+
+export interface TargetProgramIdentity {
+  coreId: number;
+  programUri: string;
+  sha256: string;
+  loadedAt: string;
+}
+
+export interface TargetProgramMutation {
+  coreId: number;
+  programUri: string;
+  sha256: string;
 }
 
 export interface BoardLease {

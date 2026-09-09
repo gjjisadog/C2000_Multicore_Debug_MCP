@@ -9,6 +9,9 @@ import type { VariableStreamService } from "../observability/VariableStreamServi
 import type { DlogService } from "../observability/DlogService.js";
 import type { EradService } from "../observability/EradService.js";
 import type { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
+import { fileMetadata } from "../utils/fileHash.js";
+import { normalizeProgramUri } from "../utils/pathUtils.js";
+import type { TargetProgramMutation } from "../boards/types.js";
 
 /** Routes board-bound tools to a single worker without changing sessionId/coreId semantics. */
 export class DaemonToolRouter implements C2000ToolInvoker {
@@ -21,7 +24,8 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     private readonly registry: BoardRegistry,
     private readonly workers: BoardWorkerSupervisor,
     private readonly sessions: SessionRepository,
-    private readonly analytics?: OutcomeAnalyticsService
+    private readonly analytics?: OutcomeAnalyticsService,
+    private readonly workspacePath?: string
   ) {}
 
   setVariableStreamService(service: VariableStreamService): void {
@@ -89,25 +93,34 @@ export class DaemonToolRouter implements C2000ToolInvoker {
 
   private async invokeToolInternal(toolName: string, input: unknown): Promise<Record<string, unknown>> {
     if (this.variableStreams) {
-      if (toolName === "c2000_startVariableStream") return this.variableStreams.start(input);
+      if (toolName === "c2000_startVariableStream") {
+        this.assertObserverTargetIdentity(toolName, input);
+        return this.variableStreams.start(input);
+      }
       if (toolName === "c2000_stopVariableStream") return this.variableStreams.stop(input);
       if (toolName === "c2000_getVariableStreamStatus") return this.variableStreams.status(input);
       if (toolName === "c2000_readVariableSamples") return this.variableStreams.readSamples(input);
       if (toolName === "c2000_exportVariableStream") return this.variableStreams.export(input);
     }
     if (this.dlog) {
-      if (toolName === "c2000_describeDlogBuffer") return this.dlog.describe(input);
-      if (toolName === "c2000_getDlogStatus") return this.dlog.status(input);
-      if (toolName === "c2000_readDlogBuffer") return this.dlog.read(input);
-      if (toolName === "c2000_exportDlog") return this.dlog.export(input);
+      if (["c2000_describeDlogBuffer", "c2000_getDlogStatus", "c2000_readDlogBuffer", "c2000_exportDlog"].includes(toolName)) {
+        this.assertObserverTargetIdentity(toolName, input);
+        if (toolName === "c2000_describeDlogBuffer") return this.dlog.describe(input);
+        if (toolName === "c2000_getDlogStatus") return this.dlog.status(input);
+        if (toolName === "c2000_readDlogBuffer") return this.dlog.read(input);
+        return this.dlog.export(input);
+      }
     }
     if (this.erad) {
-      if (toolName === "c2000_getEradCapabilities") return this.erad.capabilities(input);
-      if (toolName === "c2000_configureEradProfile") return this.erad.configure(input);
-      if (toolName === "c2000_startEradProfile") return this.erad.start(input);
-      if (toolName === "c2000_stopEradProfile") return this.erad.stop(input);
-      if (toolName === "c2000_readEradProfile") return this.erad.read(input);
-      if (toolName === "c2000_exportEradProfile") return this.erad.export(input);
+      if (["c2000_getEradCapabilities", "c2000_configureEradProfile", "c2000_startEradProfile", "c2000_stopEradProfile", "c2000_readEradProfile", "c2000_exportEradProfile"].includes(toolName)) {
+        this.assertObserverTargetIdentity(toolName, input);
+        if (toolName === "c2000_getEradCapabilities") return this.erad.capabilities(input);
+        if (toolName === "c2000_configureEradProfile") return this.erad.configure(input);
+        if (toolName === "c2000_startEradProfile") return this.erad.start(input);
+        if (toolName === "c2000_stopEradProfile") return this.erad.stop(input);
+        if (toolName === "c2000_readEradProfile") return this.erad.read(input);
+        return this.erad.export(input);
+      }
     }
     if (toolName === "c2000_launchMultiBoardDebug") {
       return this.launchMultiBoard(input);
@@ -119,8 +132,16 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         const interactive = this.interactiveLeases.get(sessionId);
         const timeoutMs = this.workers.commandTimeoutMs(toolName, input);
         if (interactive) this.registry.leases.renew(interactive.lease.leaseId, interactive.leaseToken, leaseTtlMs(timeoutMs));
+        await this.assertResidentImageIdentity(session.boardId, toolName, input);
         const invocation = this.withLeaseInput(input, interactive);
-        const result = await this.workers.invokeBoard(session.boardId, toolName, invocation, timeoutMs);
+        let result: Record<string, unknown>;
+        try {
+          result = await this.workers.invokeBoard(session.boardId, toolName, invocation, timeoutMs);
+        } catch (error) {
+          this.invalidateTargetIdentityAfterFailure(session.boardId, toolName, input);
+          throw error;
+        }
+        this.recordTargetMutation(session.boardId, toolName, input, result);
         if (toolName === "c2000_closeDebugSession" && isConfirmedSessionClose(result, sessionId)) {
           this.sessions.close(sessionId);
           this.releaseInteractiveLease(sessionId);
@@ -142,7 +163,15 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       const timeoutMs = this.workers.commandTimeoutMs(toolName, input);
       const interactive = supplied ? undefined : await this.acquireInteractiveLease(boardId, leaseTtlMs(timeoutMs));
       try {
-        const result = await this.workers.invokeBoard(boardId, toolName, this.withLeaseInput(input, interactive), timeoutMs);
+        await this.assertResidentImageIdentity(boardId, toolName, input);
+        let result: Record<string, unknown>;
+        try {
+          result = await this.workers.invokeBoard(boardId, toolName, this.withLeaseInput(input, interactive), timeoutMs);
+        } catch (error) {
+          this.invalidateTargetIdentityAfterFailure(boardId, toolName, input);
+          throw error;
+        }
+        this.recordTargetMutation(boardId, toolName, input, result);
         if (result.cleanedUp === true && typeof result.sessionId === "string") {
           // A workflow may return the failed session identity as evidence after
           // successfully disposing it in the worker. Never resurrect that
@@ -228,6 +257,74 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     return true;
   }
 
+  /**
+   * Resident-symbol and observation operations are valid only when the
+   * current lease has a known target-image identity.  The check happens in
+   * the daemon before the worker is invoked, so a stale Scope session cannot
+   * reset/run a target with mismatched symbols.
+   */
+  private async assertResidentImageIdentity(boardId: string, toolName: string, input: unknown): Promise<void> {
+    const requirements = residentImageRequirements(toolName, input);
+    if (requirements.length === 0) return;
+    const identity = this.registry.requireKnownTargetIdentity(boardId, requirements.map(item => item.coreId));
+    for (const requirement of requirements) {
+      if (!requirement.programUri) continue;
+      const expected = identity.programs[String(requirement.coreId)];
+      try {
+        const metadata = await fileMetadata(normalizeProgramUri(requirement.programUri, this.workspacePath));
+        if (metadata.sha256 !== expected?.sha256) {
+          throw new DebugMcpError("TargetImageMismatch", "Requested symbols do not match the image recorded for the resident target", {
+            boardId,
+            coreId: requirement.coreId,
+            targetGeneration: identity.generation,
+            expectedSha256: expected?.sha256,
+            requestedSha256: metadata.sha256,
+            requestedProgramUri: normalizeProgramUri(requirement.programUri, this.workspacePath),
+            nextAction: "Discard the old observation session and load the exact CPU1/CPU2 image pair under one fresh board lease."
+          });
+        }
+      } catch (error) {
+        if (error instanceof DebugMcpError) throw error;
+        throw new DebugMcpError("TargetImageMismatch", "The requested resident-image artifact could not be hashed for identity verification", {
+          boardId,
+          coreId: requirement.coreId,
+          programUri: requirement.programUri,
+          targetGeneration: identity.generation,
+          cause: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+
+  private assertObserverTargetIdentity(toolName: string, input: unknown): void {
+    const values = record(input);
+    const boardId = typeof values.boardId === "string" ? values.boardId : undefined;
+    const coreIds = observerCoreIds(toolName, values);
+    if (!boardId || coreIds.length === 0) return;
+    this.registry.requireKnownTargetIdentity(boardId, coreIds);
+  }
+
+  private recordTargetMutation(boardId: string, toolName: string, input: unknown, result: Record<string, unknown>): void {
+    if (!isTargetMutationTool(toolName)) return;
+    // The single-core load handler returns LoadedProgramInfo directly and
+    // therefore has no batch-level `loaded: true` marker.  Its successful
+    // result is nevertheless authoritative target-write evidence.
+    const collected = collectTargetProgramMutations(result, toolName === "c2000_loadProgram");
+    if (collected.failed > 0 || (shouldAttemptProgramMutation(toolName, input) && result.success === false && collected.programs.length === 0)) {
+      this.registry.markTargetIdentityUnknown(boardId, `target-operation-failed:${toolName}`);
+      return;
+    }
+    if (collected.programs.length > 0) {
+      this.registry.recordTargetPrograms(boardId, collected.programs, `target-operation:${toolName}`);
+    }
+  }
+
+  private invalidateTargetIdentityAfterFailure(boardId: string, toolName: string, input: unknown): void {
+    if (isTargetMutationTool(toolName) && shouldAttemptProgramMutation(toolName, input)) {
+      this.registry.markTargetIdentityUnknown(boardId, `target-operation-threw:${toolName}`);
+    }
+  }
+
   private async launchMultiBoard(input: unknown): Promise<Record<string, unknown>> {
     const values = record(input);
     const boards = Array.isArray(values.boards) ? values.boards : [];
@@ -248,6 +345,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           ...workerInput,
           __leaseContext: interactive.context
         }, timeoutMs);
+        this.recordTargetMutation(boardId, "c2000_launchMulticoreDebug", boardInput, result);
         const sessionPersisted = this.persistCreatedSession(boardId, boardInput, result);
         if (sessionPersisted && typeof result.sessionId === "string") {
           this.interactiveLeases.set(result.sessionId, interactive);
@@ -256,6 +354,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         }
         return { boardId, probeSerial: this.registry.get(boardId).probeSerial, ...result };
       } catch (error) {
+        this.invalidateTargetIdentityAfterFailure(boardId, "c2000_launchMulticoreDebug", boardInput);
         this.releaseLease(interactive);
         throw error;
       }
@@ -282,6 +381,109 @@ export class DaemonToolRouter implements C2000ToolInvoker {
 
 function readLease(input: unknown): unknown {
   return record(input).__leaseContext;
+}
+
+interface ImageRequirement {
+  coreId: number;
+  programUri?: string;
+}
+
+function residentImageRequirements(toolName: string, input: unknown): ImageRequirement[] {
+  const values = record(input);
+  if (toolName === "c2000_loadSymbols" && typeof values.coreId === "number" && typeof values.programUri === "string") {
+    return [{ coreId: values.coreId, programUri: values.programUri }];
+  }
+  if ((toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance") && values.programPreparation === "symbols-only") {
+    return [
+      ...(typeof values.cpu1CoreId === "number" ? [{ coreId: values.cpu1CoreId, programUri: stringValue(values.cpu1OutPath) }] : []),
+      ...(typeof values.cpu2CoreId === "number" ? [{ coreId: values.cpu2CoreId, programUri: stringValue(values.cpu2OutPath) }] : [])
+    ];
+  }
+  return [];
+}
+
+function observerCoreIds(toolName: string, input: Record<string, unknown>): number[] {
+  const observerTools = new Set([
+    "c2000_startVariableStream",
+    "c2000_describeDlogBuffer",
+    "c2000_getDlogStatus",
+    "c2000_readDlogBuffer",
+    "c2000_exportDlog",
+    "c2000_getEradCapabilities",
+    "c2000_configureEradProfile",
+    "c2000_startEradProfile",
+    "c2000_stopEradProfile",
+    "c2000_readEradProfile",
+    "c2000_exportEradProfile"
+  ]);
+  return observerTools.has(toolName) && typeof input.coreId === "number" ? [input.coreId] : [];
+}
+
+function isTargetMutationTool(toolName: string): boolean {
+  return new Set([
+    "c2000_loadProgram",
+    "c2000_loadPrograms",
+    "c2000_reloadResetRunToMain",
+    "c2000_launchMulticoreDebug",
+    "c2000_launchMulticoreDebugSafe",
+    "c2000_launchMulticoreDebugWithActions",
+    "c2000_launchAndRunIpcAcceptance",
+    "c2000_runIpcAcceptance",
+    "c2000_runReloadAndDiagnose"
+  ]).has(toolName);
+}
+
+function shouldAttemptProgramMutation(toolName: string, input: unknown): boolean {
+  const values = record(input);
+  if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance") {
+    return values.programPreparation !== "symbols-only";
+  }
+  if (toolName === "c2000_launchMulticoreDebug" || toolName === "c2000_launchMulticoreDebugSafe" || toolName === "c2000_launchMulticoreDebugWithActions") {
+    return values.loadPrograms !== false;
+  }
+  return true;
+}
+
+function collectTargetProgramMutations(value: unknown, rootWasLoaded = false): { programs: TargetProgramMutation[]; failed: number } {
+  const programs = new Map<string, TargetProgramMutation>();
+  let failed = 0;
+  const seen = new Set<object>();
+  const visit = (candidate: unknown, fromLoadedProgramInfo = false, assumedLoaded = false): void => {
+    if (!candidate || typeof candidate !== "object") return;
+    if (seen.has(candidate as object)) return;
+    seen.add(candidate as object);
+    if (Array.isArray(candidate)) {
+      candidate.forEach(item => visit(item, fromLoadedProgramInfo));
+      return;
+    }
+    const current = candidate as Record<string, unknown>;
+    const hasProgramIdentity = typeof current.coreId === "number" &&
+      typeof current.programUri === "string" &&
+      typeof current.sha256 === "string" &&
+      /^[a-f0-9]{64}$/i.test(current.sha256);
+    const targetWritten = current.loaded === true || current.targetMemoryWritten === true || fromLoadedProgramInfo || assumedLoaded;
+    if (hasProgramIdentity) {
+      if (current.success === false) {
+        failed += 1;
+      } else if (targetWritten) {
+        const item: TargetProgramMutation = {
+          coreId: current.coreId as number,
+          programUri: current.programUri as string,
+          sha256: String(current.sha256).toLowerCase()
+        };
+        programs.set(`${item.coreId}:${item.sha256}`, item);
+      }
+    }
+    for (const [key, child] of Object.entries(current)) {
+      visit(child, fromLoadedProgramInfo || key === "loadedProgramInfo");
+    }
+  };
+  visit(value, false, rootWasLoaded);
+  return { programs: [...programs.values()], failed };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function randomId(): string {

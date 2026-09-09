@@ -35,6 +35,19 @@ describe("daemon / proxy lifecycle", () => {
       const created = await first.invokeTool("c2000_createDebugSession", { sessionName: "survives-proxy" });
       expect(created.success).toBe(true);
       const sessionId = String(created.sessionId);
+      expect(await first.invokeTool("c2000_recoverBoard", { boardId: "board-a" })).toEqual(expect.objectContaining({
+        success: true,
+        dryRun: true,
+        action: "BLOCKED_ACTIVE_BOARD_LEASE",
+        blocked: expect.objectContaining({ code: "ActiveBoardLease", ownerJobId: expect.any(String) })
+      }));
+      expect(await first.invokeTool("c2000_recoverBoard", { boardId: "board-a", dryRun: false })).toEqual(expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({
+          code: "ProbeRecoveryBlocked",
+          details: expect.objectContaining({ boardId: "board-a", blockedBy: expect.objectContaining({ code: "ActiveBoardLease" }) })
+        })
+      }));
       await first.close();
 
       const second = new McpDaemonClient((await discoverDaemon(configFor(runtimeDir))).client);

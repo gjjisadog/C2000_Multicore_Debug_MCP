@@ -18,7 +18,10 @@ An IPC acceptance attempt is one server-owned workflow or durable job with:
   and `cpu2CoreId`;
 - one immutable CPU1/CPU2 image pair and matching `.map` files;
 - one declared reset, `loadSequence`, and `runSequence.runMode`; and
-- bounded readiness polling plus preserved first-failure evidence.
+- bounded readiness polling plus preserved first-failure evidence; and
+- a current board target identity marked `KNOWN`, with per-core SHA-256 values
+  matching the pair used by the workflow. A new lease or worker restart makes
+  this identity `UNKNOWN` until the pair is loaded again under that lease.
 
 For F28P65x, use `coreId: 0` / `C28xx_CPU1` and `coreId: 2` /
 `C28xx_CPU2`. A `corePattern` is an exact CCS selector, not a regular
@@ -35,7 +38,9 @@ artifact preflight, readiness evidence, and diagnosis are recorded together.
 1. Before target access, inspect `c2000_getEnvironment`,
    `c2000_getServerHealth`, `c2000_getDaemonHealth`, and `c2000_listBoards` as
    applicable. A missing or unready board/worker is an infrastructure result,
-   not an IPC result.
+   not an IPC result. Treat an `UNKNOWN` target identity as a blocked attempt;
+   do not reuse a previous Scope/session. Load the exact pair through the
+   current lease first.
 2. Validate the image pair and maps in the configured read roots. Confirm
    device/build compatibility, freshness or declared hashes, and that every
    requested IPC symbol exists in the real map/symbol table. A missing symbol,
@@ -96,8 +101,12 @@ must not be substituted for one another.
   physical cold start.
 - For an image already resident in Flash, use `c2000_loadSymbols` for matching
   `.out` symbols. Do not repeatedly call program-load as a symbol-only action,
-  and do not repeat CPU2 Flash programming without the explicit destructive
-  reload authorization required by the server.
+  but only after the target-identity guard confirms that the current resident
+  image matches the requested `.out`. `symbols-only` does not independently
+  prove Flash contents. If identity is unknown or mismatched, stop and perform
+  a controlled exact-pair load or a separately valid resident-image check. Do
+  not repeat CPU2 Flash programming without the explicit destructive reload
+  authorization required by the server.
 
 ### CPU2-pre-running mode
 
@@ -170,6 +179,10 @@ method/sequence failure and repeat with a clean contract.
 - Do not keep an old session alive while alternating CPU1 reload, CPU2 Resume,
   reconnect, and expression reads. That is one contaminated debug sequence,
   not independent startup attempts.
+- Do not let two sessions share one DK9/XDS probe, and do not recover a board
+  while another lease is active. A session close, worker restart, or external
+  debugger access ends the current attempt; start a fresh lease/session and
+  re-establish the image identity before observing again.
 - Do not poll at a rate that perturbs CCS target timing. Prefer the workflow's
   bounded polling and retain its first-failure read set.
 
@@ -180,6 +193,7 @@ For every conclusion, retain:
 - `sessionId`, board/probe/worker and lease identity when applicable;
 - CPU1/CPU2 core IDs and names;
 - `.out`/`.map` paths plus freshness/hash identity;
+- target identity generation plus the per-core resident `.out` hashes;
 - reset type, load mode, run mode, settle/poll settings;
 - requested ready expressions and map-preflight result;
 - first failing workflow stage, per-core state/PC, stage/error/retry fields;

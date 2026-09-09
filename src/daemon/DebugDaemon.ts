@@ -476,7 +476,14 @@ export class DebugDaemon {
       events,
     });
     this.workerSupervisor = workerSupervisor;
-    const toolRouter = new DaemonToolRouter(runtime.toolInvoker, this.registry, workerSupervisor, this.sessions, analytics);
+    const toolRouter = new DaemonToolRouter(
+      runtime.toolInvoker,
+      this.registry,
+      workerSupervisor,
+      this.sessions,
+      analytics,
+      this.config.ccs.workspacePath
+    );
     const variableStreams = new VariableStreamService({
       rootDirectory: path.join(path.dirname(databasePath), "artifacts"),
       config: this.config,
@@ -741,15 +748,33 @@ export class DebugDaemon {
     const board = this.registry?.get(input.boardId);
     const supervisor = this.workerSupervisor;
     if (!board || !supervisor) throw new Error("Board recovery is not ready");
+    const activeLease = this.registry?.leases.active(input.boardId);
+    const recoveryBlocked = activeLease
+      ? {
+          code: "ActiveBoardLease",
+          leaseId: activeLease.leaseId,
+          ownerJobId: activeLease.ownerJobId,
+          workerInstanceId: activeLease.workerInstanceId,
+          remediation: "Close or fence the owning session/job first; do not restart a worker behind a live board owner."
+        }
+      : undefined;
     if (input.dryRun) {
       return {
         success: true,
         dryRun: true,
         boardId: board.boardId,
         probeSerial: board.probeSerial,
-        action: "RESTART_DAEMON_OWNED_WORKER_ONLY",
-        externalProcessTermination: false
+        action: recoveryBlocked ? "BLOCKED_ACTIVE_BOARD_LEASE" : "RESTART_DAEMON_OWNED_WORKER_ONLY",
+        externalProcessTermination: false,
+        ...(recoveryBlocked ? { blocked: recoveryBlocked } : {})
       };
+    }
+    if (recoveryBlocked) {
+      throw new DebugMcpError("ProbeRecoveryBlocked", "Board recovery is blocked while another owner holds the board lease", {
+        boardId: board.boardId,
+        probeSerial: board.probeSerial,
+        blockedBy: recoveryBlocked
+      });
     }
     await supervisor.restartBoard(board.boardId, "operator-requested-recovery", { requestedBy: "c2000_recoverBoard" });
     return {

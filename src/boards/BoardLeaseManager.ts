@@ -16,7 +16,8 @@ export class BoardLeaseManager {
   constructor(
     private readonly store: SqliteStore,
     private readonly boards: BoardRepository,
-    private readonly leases: LeaseRepository
+    private readonly leases: LeaseRepository,
+    private readonly onTargetIdentityUnknown?: (boardId: string, reason: string) => void
   ) {}
 
   acquire(options: { boardId: string; ownerJobId?: string; workerInstanceId: string; ttlMs: number }): LeasedBoard {
@@ -220,6 +221,7 @@ export class BoardLeaseManager {
     };
     this.leases.insert(lease, hashToken(leaseToken));
     this.boards.setLease(prepared.board.boardId, lease.leaseId);
+    this.onTargetIdentityUnknown?.(prepared.board.boardId, "new-board-lease");
     return { lease, leaseToken, context: toContext(lease, leaseToken) };
   }
 }

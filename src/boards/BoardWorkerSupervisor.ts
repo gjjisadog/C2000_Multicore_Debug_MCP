@@ -89,6 +89,12 @@ export class BoardWorkerSupervisor {
     if (this.requiresCcxmlProbeValidation) {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
     }
+    // A daemon restart can publish a new worker without going through
+    // restartBoard().  Invalidate any persisted resident-image belief before
+    // that worker can service a new target command.
+    if (this.options.registry.targetIdentity(boardId).status !== "UNKNOWN") {
+      this.options.registry.markTargetIdentityUnknown(boardId, "worker-start");
+    }
     this.options.registry.transition(boardId, "STARTING");
     const workerGeneration = this.options.workers.nextGeneration(boardId);
     const client = this.factory({
@@ -199,6 +205,10 @@ export class BoardWorkerSupervisor {
         managed.client.workerInstanceId,
         `worker-restart:${reason}`
       );
+      // A worker restart also invalidates the debugger's view of the resident
+      // image. The target may have been touched while the old DSS session was
+      // dying, so a later observer must not reuse old symbols silently.
+      this.options.registry.markTargetIdentityUnknown(boardId, `worker-restart:${reason}`);
       await managed.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
       this.options.workers.markStopped(managed.client.workerInstanceId, `worker-restart:${reason}`);
     }

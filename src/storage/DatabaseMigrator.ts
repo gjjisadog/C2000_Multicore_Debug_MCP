@@ -864,6 +864,30 @@ const migrations: Migration[] = [
           ON test_runs(execution_owner_id);
       `);
     }
+  },
+  {
+    version: 18,
+    apply(store) {
+      // A board lease proves ownership of the probe, not the identity of the
+      // firmware currently resident on the target.  Keep that evidence
+      // durable so a new session cannot silently reuse old symbols after a
+      // lease/worker handoff.
+      // Some additive migration fixtures intentionally contain only the
+      // tables relevant to their test.  Keep this migration additive for
+      // those databases too; a later board repository open will only occur
+      // against a database that has the boards table.
+      const boardTable = store.get<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'boards'"
+      );
+      if (!boardTable) return;
+      const columns = new Set(store.all<{ name: string }>("PRAGMA table_info(boards)").map(column => column.name));
+      if (!columns.has("target_generation")) {
+        store.exec("ALTER TABLE boards ADD COLUMN target_generation INTEGER NOT NULL DEFAULT 0");
+      }
+      if (!columns.has("target_identity_json")) {
+        store.exec("ALTER TABLE boards ADD COLUMN target_identity_json TEXT");
+      }
+    }
   }
 ];
 
