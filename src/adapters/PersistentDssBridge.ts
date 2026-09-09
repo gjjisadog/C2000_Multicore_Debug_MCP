@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { dssResetHelperSource } from "./DssResetSource.js";
 import { PersistentCoreChannel } from "./PersistentCoreChannel.js";
 
 const execFileAsync = promisify(execFile);
@@ -50,6 +51,7 @@ const processCleanupBridges = new Set<PersistentDssBridge>();
 let processCleanupHooksInstalled = false;
 
 export class PersistentDssBridge implements CcsScriptingBridge {
+  readonly supportsFirmwareHandoff = true;
   private readonly launcher: DssServerLauncher;
   private readonly sessions = new Map<string, PersistentBridgeSession>();
 
@@ -438,6 +440,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       return { ...base, name: "loadSymbols", program: command.programUri };
     case "prepareFlashLoad":
       return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
+    case "prepareFirmwareHandoff":
+      return { ...base, name: "prepareFirmwareHandoff" };
     case "writeMemory":
       return { ...base, name: "writeData", page: command.page, address: command.address, value: command.value, typeSize: command.typeSize };
     case "readMemory":
@@ -761,14 +765,18 @@ function handleCommand(command) {
     session.target.halt();
     return { status: "OK", value: withCoreIdentity(command, { state: "Halted" }) };
   } else if (command.name === "reset") {
-    applyTargetReset(session, command.resetType);
-    return { status: "OK", value: withCoreIdentity(command, { state: "Halted", resetType: command.resetType || "default" }) };
+    return { status: "OK", value: withCoreIdentity(command, applyTargetReset(session, command.resetType)) };
   } else if (command.name === "load") {
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
   } else if (command.name === "loadSymbols") {
     session.symbol.load(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true, targetMemoryWritten: false }) };
+  } else if (command.name === "prepareFirmwareHandoff") {
+    // This changes debugger callbacks, not target memory. It must happen before
+    // disconnect, so CPU2 reconnect cannot execute OnTargetConnect RAM init/reset.
+    session.expression.evaluate("GEL_UnloadAllGels()");
+    return { status: "OK", value: withCoreIdentity(command, { gelInitializationDisabled: true }) };
   } else if (command.name === "prepareFlashLoad") {
     var cpu1Session = sessionsByCoreId["0"];
     if (!cpu1Session) {
@@ -830,26 +838,7 @@ function handleCommand(command) {
   return { status: "FAIL", message: "Unsupported command: " + command.name };
 }
 
-function applyTargetReset(session, resetType) {
-  var type = resetType || "default";
-  if (type === "system") {
-    try {
-      session.target.systemReset();
-      return;
-    } catch (systemResetError) {
-      try {
-        session.expression.evaluate("GEL_SystemReset()");
-        return;
-      } catch (gelSystemResetError) {}
-    }
-  } else if (type === "restart") {
-    try {
-      session.target.restart();
-      return;
-    } catch (restartError) {}
-  }
-  session.target.reset();
-}
+${dssResetHelperSource}
 
 function resolveMemoryPage(page) {
   if (page === "PROGRAM") {

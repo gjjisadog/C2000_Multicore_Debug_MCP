@@ -19,6 +19,23 @@ function createManager() {
 }
 
 describe("DebugSessionManager", () => {
+  test("system reset invalidates cached peer PC without reading a disconnected CPU2", async () => {
+    const manager = createManager();
+    const created = await manager.createDebugSession({ sessionName: "reset-pc", coreMap });
+    try {
+      await manager.connectCores(created.sessionId, [0, 2]);
+      const before = await manager.getMulticoreSnapshot(created.sessionId, [2]);
+      expect(before.cores[0].pc).toBeDefined();
+      await manager.disconnectTarget(created.sessionId, 2);
+      await manager.resetCore(created.sessionId, 0, "system");
+      const after = await manager.getMulticoreSnapshot(created.sessionId, [2]);
+      expect(after.cores[0]).toMatchObject({ coreId: 2, connected: false });
+      expect(after.cores[0].pc).toBeUndefined();
+    } finally {
+      await manager.closeDebugSession(created.sessionId);
+    }
+  });
+
   test("creates a logical debug session and lists CPU1/CPU2 without relying on UI focus", async () => {
     const manager = createManager();
 

@@ -55,6 +55,11 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   readonly events: string[] = [];
   readonly expressionBatches: Array<{ coreId: CoreId; expressions: string[] }> = [];
 
+  override async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId): Promise<void> {
+    this.events.push(`prepare-firmware-handoff:${coreId}`);
+    await super.prepareFirmwareHandoff(session, coreId);
+  }
+
   override async connect(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`connect:${coreId}`);
     await super.connect(session, coreId);
@@ -1214,7 +1219,9 @@ describe("tool handlers", () => {
       "load:2:cpu2.out",
       "halt:0",
       "halt:2",
+      "prepare-firmware-handoff:2",
       "disconnect:2",
+      "reset:0:restart",
       "run:0",
       "connect:2"
     ]);
@@ -1957,11 +1964,9 @@ describe("tool handlers", () => {
       "load:2:cpu2.out",
       "halt:0",
       "halt:2",
-      "reset:0:system",
-      "reset:2:system",
-      "halt:0",
-      "halt:2",
+      "prepare-firmware-handoff:2",
       "disconnect:2",
+      "reset:0:system",
       "run:0",
       "connect:2"
     ]);

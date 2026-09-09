@@ -2,6 +2,18 @@ export type CoreId = number;
 
 export type ResetType = "cpu" | "system" | "restart" | "default";
 
+/** Observed debugger reset operation; not proof of a physical cold boot. */
+export interface ResetEvidence {
+  requestedResetType: ResetType;
+  effectiveResetType: ResetType;
+  resetName: string;
+  resetIndex?: number;
+  mechanism: string;
+  completion: "halt-observed";
+}
+
+export type ResetTargetState = TargetRunState & { reset?: ResetEvidence };
+
 export type TargetStateName = "Disconnected" | "Connected" | "Running" | "Halted" | "Unknown";
 
 export interface CoreConfig {

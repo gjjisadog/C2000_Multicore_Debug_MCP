@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { resolveCcsInstallPath } from "../ccs/paths.js";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
+import { dssResetHelperSource } from "./DssResetSource.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,7 @@ export type CcsScriptingOperation =
   | "loadProgram"
   | "loadSymbols"
   | "prepareFlashLoad"
+  | "prepareFirmwareHandoff"
   | "writeMemory"
   | "readMemory"
   | "getState"
@@ -56,6 +58,7 @@ export interface CcsBridgeCreateSessionOptions {
 }
 
 export interface CcsScriptingBridge {
+  readonly supportsFirmwareHandoff?: boolean;
   createSession?(options: CcsBridgeCreateSessionOptions): Promise<void>;
   disposeSession?(adapterSessionId: string): Promise<void>;
   execute(command: CcsScriptingCommand): Promise<Record<string, unknown>>;
@@ -342,8 +345,7 @@ try {
     debugSession.target.halt();
     result = { state: "Halted" };
   } else if (command.operation === "reset") {
-    applyTargetReset(debugSession, command.resetType);
-    result = { state: "Halted", resetType: command.resetType || "default" };
+    result = applyTargetReset(debugSession, command.resetType);
   } else if (command.operation === "loadProgram") {
     debugSession.memory.loadProgram(command.programUri);
     result = { symbolsLoaded: true };
@@ -397,26 +399,7 @@ try {
   } catch (ignoreServer) {}
 }
 
-function applyTargetReset(session, resetType) {
-  var type = resetType || "default";
-  if (type === "system") {
-    try {
-      session.target.systemReset();
-      return;
-    } catch (systemResetError) {
-      try {
-        session.expression.evaluate("GEL_SystemReset()");
-        return;
-      } catch (gelSystemResetError) {}
-    }
-  } else if (type === "restart") {
-    try {
-      session.target.restart();
-      return;
-    } catch (restartError) {}
-  }
-  session.target.reset();
-}
+${dssResetHelperSource}
 
 function resolveMemoryPage(page) {
   if (page === "PROGRAM") {

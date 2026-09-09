@@ -22,6 +22,7 @@ import type {
   RamOwnershipPolicy,
   RamOwnershipPreparation,
   ResetType,
+  ResetTargetState,
   ResolveResult,
   SessionTopology,
   TargetRunState,
@@ -407,17 +408,34 @@ export class DebugSessionManager {
     return this.getTargetStateUnlocked(sessionId, coreId);
   }
 
-  async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetRunState> {
+  async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<ResetTargetState> {
     return this.exclusive(sessionId, async () => this.resetCoreUnlocked(sessionId, coreId, resetType));
   }
 
-  private async resetCoreUnlocked(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<TargetRunState> {
+  private async resetCoreUnlocked(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<ResetTargetState> {
     const { session, core } = this.requireCore(sessionId, coreId);
-    await this.adapter.reset(session.adapterSession, coreId, resetType);
-    core.state = "Halted";
-    core.pc = "0x00000000";
-    this.logger.info("core reset", { sessionId, coreId, coreName: core.coreName, resetType });
-    return this.getTargetStateUnlocked(sessionId, coreId);
+    // Even a failed asynchronous reset may have changed the target PC.
+    if (resetType === "system" || resetType === "default") {
+      // System/default reset can affect peers, including disconnected CPU2.
+      for (const affectedCore of session.cores.values()) affectedCore.pc = undefined;
+    } else {
+      core.pc = undefined;
+    }
+    const reset = await this.adapter.reset(session.adapterSession, coreId, resetType);
+    const state = await this.getTargetStateUnlocked(sessionId, coreId);
+    this.logger.info("core reset", { sessionId, coreId, coreName: core.coreName, resetType, reset });
+    return { ...state, ...(reset ? { reset } : {}) };
+  }
+
+  async prepareFirmwareHandoff(sessionId: string, coreId: CoreId) {
+    return this.exclusive(sessionId, async () => {
+      const { session, core } = this.requireCore(sessionId, coreId);
+      if (!this.adapter.prepareFirmwareHandoff) {
+        throw new DebugMcpError("AdapterNotAvailable", "Adapter cannot suppress connect-time initialization", { coreId });
+      }
+      await this.adapter.prepareFirmwareHandoff(session.adapterSession, coreId);
+      return { sessionId, coreId, coreName: core.coreName, gelInitializationDisabled: true };
+    });
   }
 
   async getTargetState(sessionId: string, coreId: CoreId): Promise<TargetRunState> {

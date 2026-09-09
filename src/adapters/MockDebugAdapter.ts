@@ -101,6 +101,10 @@ export class MockDebugAdapter implements DebugAdapter {
     state.state = "Disconnected";
   }
 
+  async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId): Promise<void> {
+    this.requireConnected(session, coreId);
+  }
+
   async run(session: AdapterSession, coreId: CoreId): Promise<void> {
     const state = this.requireConnected(session, coreId);
     state.state = "Running";

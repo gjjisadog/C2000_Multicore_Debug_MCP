@@ -1,5 +1,5 @@
 import type { DebugAdapter, AdapterCreateSessionOptions, AdapterSession } from "./types.js";
-import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetType, TargetRunState } from "../debug/types.js";
+import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetEvidence, ResetType, TargetRunState } from "../debug/types.js";
 import type { CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
 import { formatExpressionAssignmentValue } from "./CcsScriptingBridge.js";
 import { PersistentDssBridge } from "./PersistentDssBridge.js";
@@ -116,8 +116,26 @@ export class CcsScriptingAdapter implements DebugAdapter {
     await this.execute(session, coreId, { operation: "halt" });
   }
 
-  async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<void> {
-    await this.execute(session, coreId, { operation: "reset", resetType });
+  async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetEvidence> {
+    const result = await this.execute(session, coreId, { operation: "reset", resetType });
+    if (result.requestedResetType !== resetType || result.effectiveResetType !== resetType ||
+        result.completion !== "halt-observed" || typeof result.resetName !== "string" ||
+        typeof result.mechanism !== "string") {
+      throw new DebugMcpError("DssCommandFailed", "CCS reset lacks matching completion evidence", {
+        coreId, resetType, result
+      });
+    }
+    return result as unknown as ResetEvidence;
+  }
+
+  async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId): Promise<void> {
+    if (!this.bridge.supportsFirmwareHandoff) {
+      throw new DebugMcpError("AdapterNotAvailable", "Firmware handoff requires persistent DSS", { coreId });
+    }
+    const result = await this.execute(session, coreId, { operation: "prepareFirmwareHandoff" });
+    if (result.gelInitializationDisabled !== true) {
+      throw new DebugMcpError("DssCommandFailed", "CPU2 handoff lacks GEL suppression evidence", { coreId, result });
+    }
   }
 
   async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
