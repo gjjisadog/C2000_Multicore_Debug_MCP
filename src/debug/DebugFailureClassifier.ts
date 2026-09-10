@@ -37,6 +37,9 @@ export interface DebugFailureFeedback {
   failureSignature:
     | "PROBE_TRANSIENT_UNAVAILABLE"
     | "PRELOADED_LOAD_SEMANTICS"
+    | "FLASH_PROGRAMMER_STATE"
+    | "FLASH_BOUNDARY_INVALID"
+    | "FLASH_LOAD_SESSION_QUARANTINED"
     | "HOST_ARTIFACT_INVALID"
     | "STARTUP_CONTRACT_INVALID"
     | "SAFETY_FENCE"
@@ -65,6 +68,15 @@ export function classifyDebugFailure(input: {
   }
   if (hasCode("StartupContractInvalid")) {
     return failureFeedback("STARTUP_CONTRACT_INVALID", "read-only-diagnosis", "The requested CPU1/CPU2 load and run sequence is contradictory; select one explicit startup contract before touching the target.");
+  }
+  if (hasCode("FlashLoadSessionQuarantined")) {
+    return failureFeedback("FLASH_LOAD_SESSION_QUARANTINED", "read-only-diagnosis", "The debug session was quarantined after a CPU2 Flash load failure; close it and start a fresh session instead of retrying in a potentially poisoned DSS state.");
+  }
+  if (/bank_mapping_boundary_mismatch|flash boundary validation failed/i.test(text)) {
+    return failureFeedback("FLASH_BOUNDARY_INVALID", "read-only-diagnosis", "The target-reported F28P65x Flash bank boundary disagreed with the CPU2 linker-map request; no CPU2 erase/load should proceed in this session.");
+  }
+  if (/registers are locked|operation cancelled \(3\)|flash programmer/i.test(text)) {
+    return failureFeedback("FLASH_PROGRAMMER_STATE", "read-only-diagnosis", "TI's Flash programmer rejected the CPU2 erase transaction; preserve the boundary snapshot and start a fresh session rather than treating the message as proof of permanent DCSM protection.");
   }
   if (hasCode("ProgramLoadFailed") && /main|preload|halt|timeout|stop/i.test(text)) {
     return failureFeedback("PRELOADED_LOAD_SEMANTICS", "read-only-diagnosis", "The adapter could not complete a halted preload of a synchronization-sensitive image; inspect the load/run contract rather than changing PC or firmware watch fields.");

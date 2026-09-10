@@ -61,6 +61,13 @@ describe("C2000 outcome analytics", () => {
     })).toEqual(expect.objectContaining({ failureClass: "environment" }));
   });
 
+  test("does not classify a TI Flash programmer state as permanent Flash protection", () => {
+    expect(classifyOutcomeFailure({
+      code: "ProgramLoadFailed",
+      message: "Flash Programmer: Error erasing Bank 3 Flash registers are locked; Operation Cancelled (3)."
+    })).toEqual(expect.objectContaining({ failureClass: "program-load" }));
+  });
+
   test("redacts raw inputs, paths, values, prompts, and arbitrary metadata", () => {
     const repository = new InMemoryOutcomeEventStore();
     const service = createService({ repository });

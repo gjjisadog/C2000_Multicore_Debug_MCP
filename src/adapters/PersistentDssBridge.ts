@@ -10,6 +10,14 @@ import { dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssSc
 import { DebugMcpError } from "../utils/errors.js";
 import { dssResetHelperSource } from "./DssResetSource.js";
 import { PersistentCoreChannel } from "./PersistentCoreChannel.js";
+import {
+  F28P65X_CPU1_FLASH_BANK_SELECTOR,
+  F28P65X_CPU2_FLASH_BANK_SELECTOR,
+  F28P65X_DEVCFG_BANKMUXSEL_ADDRESS,
+  F28P65X_DEVCFGLOCK2_ADDRESS,
+  F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK,
+  F28P65X_FLASH_BANK_COUNT
+} from "../hardware/mapOwnership.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -778,6 +786,98 @@ function withCoreIdentity(command, value) {
   return result;
 }
 
+var F28P65X_FLASH_BANK_COUNT = ${F28P65X_FLASH_BANK_COUNT};
+var F28P65X_CPU1_FLASH_BANK_SELECTOR = ${F28P65X_CPU1_FLASH_BANK_SELECTOR};
+var F28P65X_CPU2_FLASH_BANK_SELECTOR = ${F28P65X_CPU2_FLASH_BANK_SELECTOR};
+var F28P65X_DEVCFG_BANKMUXSEL_ADDRESS = ${F28P65X_DEVCFG_BANKMUXSEL_ADDRESS};
+var F28P65X_DEVCFGLOCK2_ADDRESS = ${F28P65X_DEVCFGLOCK2_ADDRESS};
+var F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK = ${F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK};
+
+function isDssBadAccessSentinel(value) {
+  var unsigned = value >>> 0;
+  return unsigned === 0x0BAD0BAD || unsigned === 0x0BAD;
+}
+
+function findFlashRegister(snapshot, name) {
+  if (!snapshot || !snapshot.registers) return undefined;
+  for (var index = 0; index < snapshot.registers.length; index++) {
+    var register = snapshot.registers[index];
+    if (register.name === name && register.coreId === 0 && register.success === true) {
+      return register.value >>> 0;
+    }
+  }
+  return undefined;
+}
+
+function decodeBankMuxSel(value) {
+  var actual = value >>> 0;
+  var owners = [];
+  for (var bank = 0; bank < F28P65X_FLASH_BANK_COUNT; bank++) {
+    var selector = (actual >>> (bank * 2)) & 0x3;
+    var owner = selector === F28P65X_CPU1_FLASH_BANK_SELECTOR ? "CPU1"
+      : selector === F28P65X_CPU2_FLASH_BANK_SELECTOR ? "CPU2" : "unknown";
+    owners.push({ bank: bank, selector: selector, owner: owner });
+  }
+  return owners;
+}
+
+function expectedBankMuxSel(flashBanks) {
+  var expected = 0;
+  var seen = {};
+  for (var index = 0; index < flashBanks.length; index++) {
+    var bank = Number(flashBanks[index]);
+    if (bank >= 0 && bank < F28P65X_FLASH_BANK_COUNT && Math.floor(bank) === bank && !seen[String(bank)]) {
+      expected = expected | (F28P65X_CPU2_FLASH_BANK_SELECTOR << (bank * 2));
+      seen[String(bank)] = true;
+    }
+  }
+  return expected >>> 0;
+}
+
+function validateFlashBoundary(snapshot, flashBanks) {
+  var expected = expectedBankMuxSel(flashBanks);
+  var actual = findFlashRegister(snapshot, "BANKMUXSEL");
+  var lock = findFlashRegister(snapshot, "DEVCFGLOCK2");
+  var result = {
+    status: "unavailable",
+    expectedBankMuxSel: expected,
+    expectedCpu2Banks: flashBanks.slice(0, F28P65X_FLASH_BANK_COUNT),
+    reason: "BANKMUXSEL or DEVCFGLOCK2 was not readable after ConfigureBanks."
+  };
+  if (actual === undefined || lock === undefined) return result;
+  var bankFieldMask = (1 << (F28P65X_FLASH_BANK_COUNT * 2)) - 1;
+  var bankMuxLocked = (lock & F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK) !== 0;
+  var bankMuxMatches = (actual & bankFieldMask) === expected;
+  result.actualBankMuxSel = actual;
+  result.devcfgLock2 = lock;
+  result.bankMuxLocked = bankMuxLocked;
+  result.actualBankOwners = decodeBankMuxSel(actual);
+  if (bankMuxLocked) {
+    result.status = "mismatch";
+    result.reason = "DEVCFGLOCK2.BANKMUXSEL is set after ConfigureBanks.";
+  } else if (!bankMuxMatches) {
+    result.status = "mismatch";
+    result.reason = "BANKMUXSEL does not match the CPU2 linker-map banks.";
+  } else {
+    result.status = "verified";
+    delete result.reason;
+  }
+  return result;
+}
+
+function classifyFlashLoadFailure(message, evidence) {
+  if (evidence && evidence.boundaryValidation && evidence.boundaryValidation.status === "mismatch") {
+    return "bank_mapping_boundary_mismatch";
+  }
+  if (/registers are locked|operation cancelled \(3\)|flash programmer/i.test(String(message))) {
+    return "flash_programmer_state";
+  }
+  if (/dcsm|flprot|protected|security/i.test(String(message))) {
+    return "target_flash_protection";
+  }
+  return "flash_program_load";
+}
+
 function describeCommandException(ex) {
   var causes = [];
   var current = ex;
@@ -818,8 +918,8 @@ function captureFlashLoadState(command, evidence, phase) {
       readableCores[String(coreId)] = core.connected;
     } catch (stateError) { core.error = String(stateError).slice(0, 256); }
   }
-  var registers = [{ name: "BANKMUXSEL", address: 0x0005D060 },
-    { name: "DEVCFGLOCK2", address: 0x0005D002 },
+  var registers = [{ name: "BANKMUXSEL", address: F28P65X_DEVCFG_BANKMUXSEL_ADDRESS },
+    { name: "DEVCFGLOCK2", address: F28P65X_DEVCFGLOCK2_ADDRESS },
     { name: "CLKSEM", address: 0x0005D200 },
     { name: "CLKCFGLOCK1", address: 0x0005D202 },
     { name: "CLKSRCCTL1", address: 0x0005D208 },
@@ -856,7 +956,7 @@ function captureFlashLoadState(command, evidence, phase) {
       if (!isFinite(value) || Math.floor(value) !== value || value < -2147483648 || value > 4294967295) {
         throw "Invalid register read result";
       }
-      if ((value >>> 0) === 0x0BAD0BAD || (value >>> 0) === 0x0BAD) {
+      if (isDssBadAccessSentinel(value)) {
         item.rawValue = value >>> 0;
         throw "Suspect DSS bad-access sentinel; not usable as register evidence";
       }
@@ -866,21 +966,37 @@ function captureFlashLoadState(command, evidence, phase) {
   }
   snapshot.finishedAtMs = new Date().getTime();
   logDiagnostic("flash-load:snapshot", { coreId: command.coreId, snapshot: snapshot });
+  return snapshot;
 }
 
 function runFlashLoadWithEvidence(command, evidence, phase, operation) {
   // A diagnostic exception must never prevent the requested operation or mask its error.
   function capture(suffix) {
-    try { captureFlashLoadState(command, evidence, phase + suffix); }
+    try { return captureFlashLoadState(command, evidence, phase + suffix); }
     catch (captureError) {
       evidence.captureError = String(captureError).slice(0, 256);
+      return undefined;
     }
   }
   capture(":before");
   var result;
-  try { result = operation(capture); }
+  try {
+    result = operation(capture);
+    var afterSnapshot = capture(":after");
+    if (result && result.validateFlashBoundary === true) {
+      var boundaryValidation = validateFlashBoundary(afterSnapshot, command.flashBanks);
+      evidence.boundaryValidation = boundaryValidation;
+      delete result.validateFlashBoundary;
+      // A readable, contradictory boundary is unsafe. An unavailable
+      // diagnostic remains evidence-incomplete but must not mask the TI call.
+      if (boundaryValidation.status === "mismatch") {
+        throw "F28P65x Flash boundary validation failed: " + JSON.stringify(boundaryValidation);
+      }
+    }
+  }
   catch (loadError) {
     // Freeze the original cause before any post-failure read can fail too.
+    evidence.failureClass = classifyFlashLoadFailure(String(loadError), evidence);
     var failure = { status: "FAIL", message: String(loadError).slice(0, 2048),
       details: describeCommandException(loadError), flashLoadEvidence: evidence };
     logDiagnostic("command:failure", { coreId: command.coreId, commandName: command.name,
@@ -888,7 +1004,6 @@ function runFlashLoadWithEvidence(command, evidence, phase, operation) {
     capture(":failure");
     return failure;
   }
-  capture(":after");
   result.flashLoadEvidence = evidence;
   return { status: "OK", value: withCoreIdentity(command, result) };
 }
@@ -939,21 +1054,26 @@ function handleCommand(command) {
     // This existing operation is F28P65x-specific. Do not probe other loads/devices.
     delete pendingFlashLoadEvidence[String(command.coreId)];
     var evidence = { device: "F28P65x", coreId: command.coreId,
-      requestedFlashBanks: command.flashBanks.slice(0, 5), readOnly: true, atomic: false, snapshots: [] };
+      requestedFlashBanks: command.flashBanks.slice(0, 5),
+      expectedBankMuxSel: expectedBankMuxSel(command.flashBanks),
+      readOnly: true, atomic: false, snapshots: [] };
     var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function(capture) {
-      var selectedBanks = {};
+      var cpu2BankMap = {};
       for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
-        selectedBanks[String(command.flashBanks[selectedIndex])] = true;
+        cpu2BankMap[String(command.flashBanks[selectedIndex])] = true;
       }
       for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
-        cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, selectedBanks[String(bankIndex)] ? "1" : "0");
-        session.flash.options.setBoolean("FlashC28Bank" + bankIndex, selectedBanks[String(bankIndex)] === true);
+        var mappedToCpu2 = cpu2BankMap[String(bankIndex)] === true;
+        cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, mappedToCpu2 ? "1" : "0");
+        // Ownership and erase selection are separate concepts even when the
+        // linker map currently contains the same bank set for both.
+        session.flash.options.setBoolean("FlashC28Bank" + bankIndex, mappedToCpu2);
       }
       session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
       cpu1Session.flash.performOperation("ConfigureClock");
       capture(":clock-ready");
       cpu1Session.flash.performOperation("ConfigureBanks");
-      return { flashBanks: command.flashBanks, configured: true };
+      return { flashBanks: command.flashBanks, configured: true, validateFlashBoundary: true };
     });
     if (preparation.status === "OK") pendingFlashLoadEvidence[String(command.coreId)] = evidence;
     return preparation;

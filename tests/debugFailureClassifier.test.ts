@@ -68,6 +68,28 @@ describe("classifyDebugFailure", () => {
     }));
   });
 
+  test("separates TI Flash programmer state from permanent target protection", () => {
+    expect(classifyDebugFailure({
+      code: "ProgramLoadFailed",
+      message: "Flash Programmer: Error erasing Bank 3 Flash registers are locked; Operation Cancelled (3)."
+    })).toEqual(expect.objectContaining({
+      failureSignature: "FLASH_PROGRAMMER_STATE",
+      nextAction: "read-only-diagnosis",
+      automaticRetry: "never"
+    }));
+  });
+
+  test("requires a fresh session after a quarantined CPU2 Flash load", () => {
+    expect(classifyDebugFailure({
+      code: "FlashLoadSessionQuarantined",
+      message: "no further CPU2 program load was attempted"
+    })).toEqual(expect.objectContaining({
+      failureSignature: "FLASH_LOAD_SESSION_QUARANTINED",
+      nextAction: "read-only-diagnosis",
+      automaticRetry: "never"
+    }));
+  });
+
   test("classifies host path and startup-contract failures without target retry", () => {
     expect(classifyDebugFailure({ code: "PathOutsideAllowedReadRoots", message: "artifact path rejected" })).toEqual(expect.objectContaining({
       failureSignature: "HOST_ARTIFACT_INVALID",
