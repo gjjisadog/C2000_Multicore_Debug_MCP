@@ -195,6 +195,115 @@ describe("Round7 controlled improvement review pipeline", () => {
       expect(JSON.stringify((error as DebugMcpError).details)).not.toContain("ROUND7_TEST_MISSING_TOKEN_VALUE");
     }
   });
+
+  test("GitHub provider follows bounded Link pagination for checks, reviews, and feedback", async () => {
+    const repository = "gjjisadog/C2000_Multicore_Debug_MCP";
+    const candidateSha = "a".repeat(40);
+    const requests: string[] = [];
+    const fakeFetch: typeof fetch = async input => {
+      const url = new URL(String(input));
+      requests.push(url.toString());
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const next = page === 1 ? new URL(url) : undefined;
+      next?.searchParams.set("page", "2");
+      const nextUrl = next?.toString();
+      if (url.pathname.endsWith(`/commits/${candidateSha}/check-runs`)) {
+        return jsonResponse({ check_runs: [{ name: `check-${page}`, status: "completed", conclusion: "success" }] }, nextUrl);
+      }
+      if (url.pathname.endsWith("/reviews")) {
+        return jsonResponse([{
+          id: page,
+          user: { login: `reviewer-${page}`, type: "User" },
+          state: "COMMENTED",
+          submitted_at: "2026-09-03T00:00:00.000Z",
+          body: `review ${page}`
+        }], nextUrl);
+      }
+      if (url.pathname.endsWith("/pulls/8/comments")) {
+        return jsonResponse([{
+          id: 100 + page,
+          pull_request_review_id: page,
+          in_reply_to_id: page,
+          user: { login: `commenter-${page}`, type: "User" },
+          created_at: "2026-09-03T00:00:00.000Z",
+          updated_at: "2026-09-03T00:00:00.000Z",
+          path: "src/example.ts",
+          line: page,
+          commit_id: candidateSha,
+          body: `code comment ${page}`
+        }], nextUrl);
+      }
+      return jsonResponse([{
+        id: 200 + page,
+        user: { login: `issue-commenter-${page}`, type: "User" },
+        created_at: "2026-09-03T00:00:00.000Z",
+        body: `issue comment ${page}`
+      }], nextUrl);
+    };
+    const provider = new GitHubReviewProvider({
+      repository,
+      apiBaseUrl: "https://api.github.com",
+      githubTokenEnv: "ROUND7_TEST_TOKEN",
+      token: "test-token",
+      maxPages: 2,
+      fetch: fakeFetch
+    });
+
+    const checks = await provider.listChecks(candidateSha);
+    const reviews = await provider.listReviews(8);
+    const feedback = await provider.listReviewFeedback(8);
+
+    expect(checks.map(check => check.name)).toEqual(["check-1", "check-2"]);
+    expect(reviews.map(review => review.id)).toEqual([1, 2]);
+    expect(feedback).toHaveLength(6);
+    expect(feedback.filter(item => item.source === "review")).toHaveLength(2);
+    expect(feedback.filter(item => item.source === "review-comment")).toHaveLength(2);
+    expect(feedback.filter(item => item.source === "issue-comment")).toHaveLength(2);
+    expect(requests.some(request => request.includes("page=2"))).toBe(true);
+  });
+
+  test("GitHub provider fails closed when pagination exceeds its configured bound", async () => {
+    let calls = 0;
+    const fakeFetch: typeof fetch = async input => {
+      calls += 1;
+      const next = new URL(String(input));
+      next.searchParams.set("page", "2");
+      return jsonResponse([], next.toString());
+    };
+    const provider = new GitHubReviewProvider({
+      repository: "gjjisadog/C2000_Multicore_Debug_MCP",
+      apiBaseUrl: "https://api.github.com",
+      githubTokenEnv: "ROUND7_TEST_TOKEN",
+      token: "test-token",
+      maxPages: 1,
+      fetch: fakeFetch
+    });
+
+    await expect(provider.listReviews(8)).rejects.toMatchObject({
+      code: "GitHubPaginationLimit",
+      details: expect.objectContaining({ pagesFetched: 1, maxPages: 1 })
+    });
+    expect(calls).toBe(1);
+  });
+
+  test("GitHub provider rejects a cross-host pagination link", async () => {
+    const fakeFetch: typeof fetch = async input => {
+      const url = new URL(String(input));
+      return jsonResponse([], `https://untrusted.example${url.pathname}?page=2`);
+    };
+    const provider = new GitHubReviewProvider({
+      repository: "gjjisadog/C2000_Multicore_Debug_MCP",
+      apiBaseUrl: "https://api.github.com",
+      githubTokenEnv: "ROUND7_TEST_TOKEN",
+      token: "test-token",
+      fetch: fakeFetch
+    });
+
+    await expect(provider.listReviews(8)).rejects.toMatchObject({
+      code: "GitHubApiUnavailable",
+      message: "GitHub pagination link points outside the configured API host"
+    });
+  });
 });
 
 interface CandidateFixture {
@@ -315,6 +424,13 @@ function providerRecord(fixture: CandidateFixture, number: number, body: string,
 
 function result(stdout = "", stderr = ""): ProcessRunResult {
   return { command: "git", args: [], exitCode: 0, signal: null, timedOut: false, stdout, stderr, outputTruncated: false, durationMs: 1 };
+}
+
+function jsonResponse(value: unknown, nextUrl?: string): Response {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: nextUrl ? { Link: `<${nextUrl}>; rel="next"` } : {}
+  });
 }
 
 async function git(cwd: string, args: string[]): Promise<ProcessRunResult> {

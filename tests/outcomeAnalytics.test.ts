@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { InMemoryOutcomeEventStore, OutcomeEventRepository, type OutcomeEventStore } from "../src/analytics/OutcomeEventRepository.js";
 import { OutcomeAnalyticsService } from "../src/analytics/OutcomeAnalyticsService.js";
+import { classifyOutcomeFailure } from "../src/analytics/OutcomeFailureClassifier.js";
 import type { OutcomeEvent } from "../src/analytics/OutcomeSchemas.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { createC2000ToolInvoker } from "../src/mcp/tools.js";
@@ -49,6 +50,17 @@ function event(overrides: Partial<OutcomeEvent> = {}): OutcomeEvent {
 }
 
 describe("C2000 outcome analytics", () => {
+  test("classifies bounded review-provider limits as environment-owned evidence", () => {
+    expect(classifyOutcomeFailure({
+      code: "GitHubPaginationLimit",
+      message: "GitHub review evidence exceeds the configured pagination bound"
+    })).toEqual(expect.objectContaining({ failureClass: "environment" }));
+    expect(classifyOutcomeFailure({
+      code: "ReviewFeedbackLimitExceeded",
+      message: "The pull request has more review feedback than the bounded synchronizer can process safely"
+    })).toEqual(expect.objectContaining({ failureClass: "environment" }));
+  });
+
   test("redacts raw inputs, paths, values, prompts, and arbitrary metadata", () => {
     const repository = new InMemoryOutcomeEventStore();
     const service = createService({ repository });

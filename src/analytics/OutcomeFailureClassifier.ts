@@ -19,6 +19,9 @@ export function classifyOutcomeFailure(input: {
   const feedback = classifyDebugFailure(input);
   const stage = boundedStage(input.details?.stage);
 
+  // Review-provider pagination and evidence-volume bounds are host/provider
+  // conditions. Keep them out of MCP-deficiency learning and target recovery.
+  if (/githubpaginationlimit|reviewfeedbacklimitexceeded/.test(text)) return { failureClass: "environment", ...(stage ? { stage } : {}) };
   if (/capability|required|expired|safetyguard|safety-fence/.test(text)) return { failureClass: "capability", ...(stage ? { stage } : {}) };
   if (/expressionwaittimeout|ipc_ready_timeout|ipc readiness timed out/i.test(text) || feedback.failureSignature === "IPC_HANDSHAKE_TIMEOUT") return { failureClass: "ipc-timeout", ...(stage ? { stage } : {}) };
   if (/path|filesystem|file.?not.?found|artifact|ccxml|map/.test(text) && !/programload|program-load/.test(text)) return { failureClass: "filesystem", ...(stage ? { stage } : {}) };
