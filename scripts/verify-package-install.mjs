@@ -29,15 +29,21 @@ try {
     throw new Error(`Python SDK offline import verification failed: ${python.stderr || python.stdout || python.error?.message || `exit ${python.status}`}`);
   }
   const durableRoot = path.join(temporary, "durable-install");
-  const setup = spawnSync(process.execPath, [
-    path.join(packageRoot, "dist", "src", "installer", "index.js"),
+  const setupCommand = process.platform === "win32"
+    ? path.join(temporary, "node_modules", ".bin", "c2000-multicore-setup.cmd")
+    : path.join(temporary, "node_modules", ".bin", "c2000-multicore-setup");
+  const setup = spawnSync(setupCommand, [
     "install",
     "--install-root", durableRoot,
     "--workspace", temporary,
     "--no-register",
     "--no-skill",
     "--json"
-  ], { cwd: temporary, encoding: "utf8" });
+  ], {
+    cwd: temporary,
+    encoding: "utf8",
+    shell: process.platform === "win32"
+  });
   if (setup.error || setup.status !== 0) {
     throw new Error(`one-command setup verification failed: ${setup.stderr || setup.stdout || setup.error?.message || `exit ${setup.status}`}`);
   }

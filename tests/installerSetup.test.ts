@@ -1,12 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   buildCodexMcpAddArgs,
   createInstalledConfig,
+  findPackageRoot,
   parseSetupArgs,
+  resolveInstalledPackageRoot,
   runSetup,
   validateNodeVersion,
   validateRuntimeManifest
@@ -157,6 +159,54 @@ describe("one-command installer", () => {
     expect(source).not.toContain("[switch]$ForceDependencyInstall");
     expect(source).toContain('$argument -eq "--force-dependency-install"');
     expect(source).toContain("$InstallerArguments += $argument");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "locates the packaged runtime when npm launches the installer through a .bin symlink",
+    async () => {
+      const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-installer-link-test-"));
+      try {
+        const packageRoot = path.join(temporary, "node_modules", "c2000-multicore-mcp");
+        const installer = path.join(packageRoot, "dist", "src", "installer", "index.js");
+        const binDirectory = path.join(temporary, "node_modules", ".bin");
+        await mkdir(path.dirname(installer), { recursive: true });
+        await mkdir(binDirectory, { recursive: true });
+        await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+          name: "c2000-multicore-mcp"
+        }));
+        await writeFile(path.join(packageRoot, "dist", "src", "runtime-manifest.json"), "{}");
+        await writeFile(installer, "");
+        const linkedEntrypoint = path.join(binDirectory, "c2000-multicore-setup");
+        await symlink(path.relative(binDirectory, installer), linkedEntrypoint);
+
+        await expect(findPackageRoot(linkedEntrypoint)).resolves.toBe(await realpath(packageRoot));
+      } finally {
+        await rm(temporary, { recursive: true, force: true });
+      }
+    }
+  );
+
+  test("resolves an npm-hoisted dependency root", async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-installer-hoist-test-"));
+    try {
+      const packageRoot = path.join(temporary, "node_modules", "c2000-multicore-mcp");
+      const dependencyRoot = path.join(temporary, "node_modules", "test-hoisted-dependency");
+      await mkdir(packageRoot, { recursive: true });
+      await mkdir(dependencyRoot, { recursive: true });
+      await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({
+        name: "c2000-multicore-mcp"
+      }));
+      await writeFile(path.join(dependencyRoot, "package.json"), JSON.stringify({
+        name: "test-hoisted-dependency",
+        main: "index.js"
+      }));
+      await writeFile(path.join(dependencyRoot, "index.js"), "module.exports = {};\n");
+
+      expect(resolveInstalledPackageRoot(packageRoot, "test-hoisted-dependency"))
+        .toBe(await realpath(dependencyRoot));
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   });
 
   test("falls back to an idempotent managed Codex config block when the CLI is unavailable", async () => {

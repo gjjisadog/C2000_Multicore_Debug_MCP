@@ -395,6 +395,10 @@ macOS continues to use the existing authenticated release bootstrap:
 gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
 ```
 
+The macOS bootstrap accepts Node.js 20.19+, 22.12+, or 24.x and can reuse a
+compatible Homebrew `node@20`, `node@22`, or `node@24` installation when the
+system-default Node.js release is unsupported.
+
 The release tag and assets must exist before these download commands can be
 used. Windows end users do not need the GitHub CLI when they already have the
 offline ZIP.

@@ -101,6 +101,14 @@
   `c2000_runReloadAndDiagnose` without writing PC.
 - Batch `c2000_waitForExpressionSet` reads per core and report poll iterations,
   expression batch calls, expression count, and measured poll duration.
+- Resolve the real installer entrypoint before locating the packaged runtime,
+  so `npm exec` works through its generated `.bin` symlink.
+- Support npm-hoisted `better-sqlite3` layouts when adapting a Node 22 release
+  bundle to another supported Node ABI.
+- Let the macOS bootstrap automatically reuse a compatible Homebrew Node.js
+  installation when the system-default Node release is unsupported.
+- Exercise the packaged installer through its public `.bin` command during
+  release verification.
 
 ## 0.6.1
 
