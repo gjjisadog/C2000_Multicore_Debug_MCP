@@ -801,11 +801,11 @@ function describeCommandException(ex) {
 }
 
 function captureFlashLoadState(command, evidence, phase) {
-  // F28P65x fixed, non-clearing DEVCFG registers, read through CPU1 only.
+  // F28P65x fixed DATA registers; no clear-on-read, OTP/password or FSM probes.
   // Fixed probe count, no retries, and the existing DSS/command deadlines apply.
   var snapshot = { phase: phase, startedAtMs: new Date().getTime(), cores: [], registers: [] };
   evidence.snapshots.push(snapshot);
-  var ownerConnected = false;
+  var readableCores = {};
   for (var index = 0; index < 2; index++) {
     var coreId = index === 0 ? 0 : 2;
     var core = { coreId: coreId, coreName: coreNamesByCoreId[String(coreId)], success: false };
@@ -815,23 +815,50 @@ function captureFlashLoadState(command, evidence, phase) {
       core.connected = Boolean(target.isConnected());
       core.state = core.connected ? (target.isHalted() ? "Halted" : "Running") : "Disconnected";
       core.success = true;
-      if (coreId === 0) ownerConnected = core.connected;
+      readableCores[String(coreId)] = core.connected;
     } catch (stateError) { core.error = String(stateError).slice(0, 256); }
   }
   var registers = [{ name: "BANKMUXSEL", address: 0x0005D060 },
-    { name: "DEVCFGLOCK2", address: 0x0005D002 }];
+    { name: "DEVCFGLOCK2", address: 0x0005D002 },
+    { name: "CLKSEM", address: 0x0005D200 },
+    { name: "CLKCFGLOCK1", address: 0x0005D202 },
+    { name: "CLKSRCCTL1", address: 0x0005D208 },
+    { name: "SYSPLLCTL1", address: 0x0005D20E },
+    { name: "SYSPLLMULT", address: 0x0005D214 },
+    { name: "SYSPLLSTS", address: 0x0005D216 },
+    { name: "SYSCLKDIVSEL", address: 0x0005D222 },
+    { name: "MCDCR", address: 0x0005D22E },
+    { name: "SYNCBUSY", address: 0x0005D242 }];
+  // Clock/mapping reads use CPU1; Flash protection/access has an explicit view
+  // from each connected core. The same address is not proof of the same access.
+  for (var viewIndex = 0; viewIndex < 2; viewIndex++) {
+    var viewCoreId = viewIndex === 0 ? 0 : 2;
+    registers.push({ name: "FLASHCTLSEM", address: 0x0005CE24, coreId: viewCoreId },
+      { name: "FLSEM", address: 0x0005F0C0, coreId: viewCoreId },
+      { name: "Z1_CR", address: 0x0005F018, coreId: viewCoreId },
+      { name: "Z2_CR", address: 0x0005F098, coreId: viewCoreId },
+      { name: "FRDCNTL", address: 0x0005F800, coreId: viewCoreId },
+      { name: "FLPROT", address: 0x0005F804, coreId: viewCoreId });
+  }
   for (var registerIndex = 0; registerIndex < registers.length; registerIndex++) {
     var item = registers[registerIndex];
-    item.coreId = 0;
+    if (item.coreId === undefined) item.coreId = 0;
     item.page = "DATA";
     item.typeSize = 32;
     item.success = false;
     snapshot.registers.push(item);
-    if (!ownerConnected) { item.error = "CPU1 connection/state unavailable"; continue; }
+    if (!readableCores[String(item.coreId)]) {
+      item.error = "Core connection/state unavailable"; continue;
+    }
     try {
-      var value = Number(sessionsByCoreId["0"].memory.readData(Memory.Page.DATA, item.address, 32));
+      var value = Number(sessionsByCoreId[String(item.coreId)].memory.readData(
+        Memory.Page.DATA, item.address, 32));
       if (!isFinite(value) || Math.floor(value) !== value || value < -2147483648 || value > 4294967295) {
         throw "Invalid register read result";
+      }
+      if ((value >>> 0) === 0x0BAD0BAD || (value >>> 0) === 0x0BAD) {
+        item.rawValue = value >>> 0;
+        throw "Suspect DSS bad-access sentinel; not usable as register evidence";
       }
       item.value = value >>> 0;
       item.success = true;
@@ -851,7 +878,7 @@ function runFlashLoadWithEvidence(command, evidence, phase, operation) {
   }
   capture(":before");
   var result;
-  try { result = operation(); }
+  try { result = operation(capture); }
   catch (loadError) {
     // Freeze the original cause before any post-failure read can fail too.
     var failure = { status: "FAIL", message: String(loadError).slice(0, 2048),
@@ -913,7 +940,7 @@ function handleCommand(command) {
     delete pendingFlashLoadEvidence[String(command.coreId)];
     var evidence = { device: "F28P65x", coreId: command.coreId,
       requestedFlashBanks: command.flashBanks.slice(0, 5), readOnly: true, atomic: false, snapshots: [] };
-    var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function() {
+    var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function(capture) {
       var selectedBanks = {};
       for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
         selectedBanks[String(command.flashBanks[selectedIndex])] = true;
@@ -924,6 +951,7 @@ function handleCommand(command) {
       }
       session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
       cpu1Session.flash.performOperation("ConfigureClock");
+      capture(":clock-ready");
       cpu1Session.flash.performOperation("ConfigureBanks");
       return { flashBanks: command.flashBanks, configured: true };
     });

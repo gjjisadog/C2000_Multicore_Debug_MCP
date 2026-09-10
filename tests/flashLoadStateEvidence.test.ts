@@ -6,8 +6,9 @@ import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridg
 function harness() {
   const source = persistentServerScriptSource("C:/ti/json2.js");
   const calls: unknown[][] = [];
-  const state = { bank: 0, lock: 0, connected: [true, true], failReads: false,
-    failStates: false, failLoad: false, failPrepare: false };
+  const state = { bank: 0, lock: 0, clock: 0, connected: [true, true], failReads: false,
+    failStates: false, failLoad: false, failPrepare: false, failBanks: false,
+    registerValues: {} as Record<string, number> };
   const sessions = Object.fromEntries([0, 2].map((id, index) => [id, {
     target: {
       isConnected() {
@@ -21,7 +22,10 @@ function harness() {
       readData(page: number, address: number, bits: number) {
         calls.push(["read", id, page, address, bits]);
         if (state.failReads) throw Error("r".repeat(500));
-        return address === 0x5d060 ? state.bank : state.lock;
+        const override = state.registerValues[id + ":" + address];
+        if (override !== undefined) return override;
+        return address === 0x5d060 ? state.bank : address === 0x5d002 ? state.lock :
+          address === 0x5d20e ? state.clock : 0;
       },
       loadProgram(program: string) {
         calls.push(["load", id, program]);
@@ -37,7 +41,11 @@ function harness() {
       performOperation(name: string) {
         calls.push(["perform", id, name]);
         if (state.failPrepare) throw Error("original preparation failed");
-        if (name === "ConfigureBanks") state.bank = 0x3c0;
+        if (name === "ConfigureClock") state.clock = 3;
+        if (name === "ConfigureBanks") {
+          if (state.failBanks) throw Error("original bank preparation failed");
+          state.bank = 0x3c0;
+        }
       }
     }
   }]));
@@ -60,9 +68,11 @@ describe("F28P65x Flash load state evidence", () => {
       flashLoadEvidence: { readOnly: true, atomic: false, requestedFlashBanks: [3, 4] } } });
     const snapshots = result.value.flashLoadEvidence.snapshots;
     expect(snapshots.map((s: any) => s.phase)).toEqual([
-      "prepare:before", "prepare:after", "load:before", "load:after"]);
-    expect(snapshots.map((s: any) => s.registers[0].value)).toEqual([0, 0x3c0, 0x3c0, 0x3c0]);
-    expect(snapshots.map((s: any) => s.registers[1].value)).toEqual([0, 0, 0, 4]);
+      "prepare:before", "prepare:clock-ready", "prepare:after", "load:before", "load:after"]);
+    expect(snapshots.map((s: any) => s.registers[0].value)).toEqual([0, 0, 0x3c0, 0x3c0, 0x3c0]);
+    expect(snapshots.map((s: any) => s.registers[1].value)).toEqual([0, 0, 0, 0, 4]);
+    expect(snapshots.map((s: any) => s.registers.find((r: any) =>
+      r.name === "SYSPLLCTL1").value)).toEqual([0, 3, 3, 3, 3]);
     for (const snapshot of snapshots) {
       expect(snapshot.finishedAtMs).toBeGreaterThanOrEqual(snapshot.startedAtMs);
       expect(snapshot.cores).toEqual([
@@ -71,9 +81,12 @@ describe("F28P65x Flash load state evidence", () => {
       ]);
     }
     const reads = h.calls.filter(c => c[0] === "read");
-    expect(reads).toHaveLength(8);
-    expect(reads.every(c => c[1] === 0 && c[2] === 1 &&
-      [0x5d060, 0x5d002].includes(c[3] as number) && c[4] === 32)).toBe(true);
+    const cpu1Addresses = [0x5d060, 0x5d002, 0x5d200, 0x5d202, 0x5d208, 0x5d20e,
+      0x5d214, 0x5d216, 0x5d222, 0x5d22e, 0x5d242];
+    const flashAddresses = [0x5ce24, 0x5f0c0, 0x5f018, 0x5f098, 0x5f800, 0x5f804];
+    const oneSnapshot = [...cpu1Addresses.map(address => ["read", 0, 1, address, 32]),
+      ...[0, 2].flatMap(core => flashAddresses.map(address => ["read", core, 1, address, 32]))];
+    expect(reads).toEqual(Array.from({ length: 5 }, () => oneSnapshot).flat());
     expect(h.calls.filter(c => c[0] === "perform")).toEqual([
       ["perform", 0, "ConfigureClock"], ["perform", 0, "ConfigureBanks"]]);
     const options = h.calls.filter(c => c[0] === "option");
@@ -95,8 +108,8 @@ describe("F28P65x Flash load state evidence", () => {
     expect(result.message).toContain("original Bank 3 erase failed");
     expect(result.details.causes[0].message).toContain("original Bank 3 erase failed");
     expect(result.flashLoadEvidence.snapshots.map((s: any) => s.phase)).toEqual([
-      "prepare:before", "prepare:after", "load:before", "load:failure"]);
-    expect(result.flashLoadEvidence.snapshots[3].registers[0]).toMatchObject({
+      "prepare:before", "prepare:clock-ready", "prepare:after", "load:before", "load:failure"]);
+    expect(result.flashLoadEvidence.snapshots[4].registers[0]).toMatchObject({
       success: false, error: "Error: " + "r".repeat(249) });
     expect(h.calls.filter(c => c[0] === "load")).toHaveLength(1);
     expect(h.context.pendingFlashLoadEvidence).toEqual({});
@@ -144,10 +157,10 @@ describe("F28P65x Flash load state evidence", () => {
     expect(h.source.slice(start, end)).not.toContain("Evidence");
   });
 
-  test("fresh preparations replace prior evidence and one load consumes at most four snapshots", () => {
+  test("fresh preparations replace prior evidence and one load consumes at most five snapshots", () => {
     const h = harness();
     for (let i = 0; i < 10; i++) h.command("prepareFlashLoad");
-    expect(h.command("load").value.flashLoadEvidence.snapshots).toHaveLength(4);
+    expect(h.command("load").value.flashLoadEvidence.snapshots).toHaveLength(5);
     h.calls.length = 0;
     expect(h.command("load").value).not.toHaveProperty("flashLoadEvidence");
     expect(h.calls).toEqual([["load", 2, "cpu2.out"]]);
@@ -159,6 +172,49 @@ describe("F28P65x Flash load state evidence", () => {
     const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
     expect(snapshot.registers[0]).toMatchObject({ success: false });
     expect(snapshot.registers[0]).not.toHaveProperty("value");
+  });
+
+  test.each([0x0bad, 0x0bad0bad])("rejects suspect DSS placeholder %i only in its core view", value => {
+    const h = harness();
+    h.state.registerValues["2:" + 0x5f804] = value;
+    const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
+    expect(snapshot.registers.find((r: any) => r.name === "FLPROT" && r.coreId === 2))
+      .toMatchObject({ success: false, rawValue: value,
+        error: "Suspect DSS bad-access sentinel; not usable as register evidence" });
+    expect(snapshot.registers.filter((r: any) => r.success)).toHaveLength(22);
+    expect(h.command("load").status).toBe("OK");
+  });
+
+  test.each([0, 2])("never reads through disconnected core %i, preserves other view", core => {
+    const h = harness();
+    h.state.connected[core === 0 ? 0 : 1] = false;
+    const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
+    expect(h.calls.filter(c => c[0] === "read" && c[1] === core)).toHaveLength(0);
+    expect(snapshot.registers.filter((r: any) => r.coreId === core)
+      .every((r: any) => !r.success && r.error)).toBe(true);
+    expect(snapshot.registers.filter((r: any) => r.coreId !== core)
+      .every((r: any) => r.success)).toBe(true);
+  });
+
+  test("a bank configuration failure retains the completed clock boundary", () => {
+    const h = harness();
+    h.state.failBanks = true;
+    const result = h.command("prepareFlashLoad");
+    expect(result.status).toBe("FAIL");
+    expect(result.message).toContain("original bank preparation failed");
+    expect(result.flashLoadEvidence.snapshots.map((s: any) => s.phase)).toEqual([
+      "prepare:before", "prepare:clock-ready", "prepare:failure"]);
+    expect(h.context.pendingFlashLoadEvidence).toEqual({});
+  });
+
+  test("mid-preparation diagnostic exceptions cannot skip bank configuration or load", () => {
+    const h = harness();
+    h.context.logDiagnostic = () => { throw Error("diagnostic output failed"); };
+    expect(h.command("prepareFlashLoad").status).toBe("OK");
+    expect(h.command("load").status).toBe("OK");
+    expect(h.calls.filter(c => c[0] === "perform")).toEqual([
+      ["perform", 0, "ConfigureClock"], ["perform", 0, "ConfigureBanks"]]);
+    expect(h.calls.filter(c => c[0] === "load")).toHaveLength(1);
   });
 
   test("the snapshot helper contains no reset, write, PC read, symbol evaluation or timeout change", () => {
