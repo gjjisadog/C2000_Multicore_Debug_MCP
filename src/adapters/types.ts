@@ -43,7 +43,9 @@ export interface DebugAdapter {
   reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetEvidence | void>;
   /** Remove connect-time GEL callbacks before firmware-owned CPU2 release. */
   prepareFirmwareHandoff?(session: AdapterSession, coreId: CoreId): Promise<void>;
-  loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void>;
+  loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<{
+    flashLoadEvidence?: Record<string, unknown>;
+  } | void>;
   loadSymbols?(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void>;
   prepareFlashLoad?(session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void>;
   writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void>;

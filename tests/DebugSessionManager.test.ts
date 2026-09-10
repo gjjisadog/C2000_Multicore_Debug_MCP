@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
-import type { AdapterSession } from "../src/adapters/types.js";
+import type { AdapterSession, DebugAdapter } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId } from "../src/debug/types.js";
@@ -21,13 +21,41 @@ function createManager() {
 }
 
 describe("DebugSessionManager", () => {
+  test("successful load snapshots survive the registry, result and log after session close", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-load-state-"));
+    const program = path.join(tempDir, "cpu2.out");
+    const logFile = path.join(tempDir, "load.jsonl");
+    await writeFile(program, "mock-only");
+    const evidence = { readOnly: true, atomic: false, snapshots: [{ phase: "load:after" }] };
+    const adapter: DebugAdapter = new MockDebugAdapter();
+    const original = adapter.loadProgram.bind(adapter);
+    adapter.loadProgram = async (...args) => {
+      await original(...args);
+      return { flashLoadEvidence: evidence };
+    };
+    const registry = new LoadedProgramRegistry();
+    const manager = new DebugSessionManager(adapter, registry, new Logger("info", logFile));
+    const session = await manager.createDebugSession({ sessionName: "flash-state", coreMap });
+    let result;
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      result = await manager.loadProgramWithMap(session.sessionId, 2, program, undefined, "skip");
+      expect(registry.get(session.sessionId, 2)).toMatchObject({ flashLoadEvidence: evidence });
+    } finally { await manager.closeDebugSession(session.sessionId); }
+    expect(result).toMatchObject({ flashLoadEvidence: evidence });
+    const lines = (await readFile(logFile, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(lines.find(line => line.message === "program loaded").data).toMatchObject({
+      sessionId: session.sessionId, coreId: 2, flashLoadEvidence: evidence });
+  });
+
   test("batch load persists the nested DSS evidence in its log after session close", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-loader-evidence-"));
     const program = path.join(tempDir, "cpu2.out");
     const logFile = path.join(tempDir, "loader.jsonl");
     await writeFile(program, "mock-image-not-hardware");
     const evidence = { command: "loadProgram", coreId: 2,
-      response: { details: { causes: [{ message: "Flash bank protected" }] } },
+      response: { details: { causes: [{ message: "Flash bank protected" }] },
+        flashLoadEvidence: { snapshots: [{ phase: "load:failure", registers: [{ value: 0xc0 }] }] } },
       diagnostics: { stdoutTail: "Flash loader stdout", stderrTail: "Flash loader stderr" } };
     class FailingLoadAdapter extends MockDebugAdapter {
       loads = 0;

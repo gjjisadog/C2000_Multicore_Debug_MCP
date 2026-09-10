@@ -138,8 +138,14 @@ export class CcsScriptingAdapter implements DebugAdapter {
     }
   }
 
-  async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
-    await this.execute(session, coreId, { operation: "loadProgram", programUri });
+  async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<{
+    flashLoadEvidence?: Record<string, unknown>;
+  } | void> {
+    const result = await this.execute(session, coreId, { operation: "loadProgram", programUri });
+    if (typeof result.flashLoadEvidence === "object" && result.flashLoadEvidence !== null &&
+        !Array.isArray(result.flashLoadEvidence)) {
+      return { flashLoadEvidence: result.flashLoadEvidence as Record<string, unknown> };
+    }
   }
 
   async prepareFlashLoad(session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void> {

@@ -56,6 +56,21 @@ class RecordingBridge implements CcsScriptingBridge {
 }
 
 describe("CcsScriptingAdapter", () => {
+  test("returns optional load snapshots without adding commands or changing symbol-only loads", async () => {
+    const bridge = new RecordingBridge();
+    const evidence = { readOnly: true, atomic: false, snapshots: [{ phase: "load:after" }] };
+    bridge.execute = async command => {
+      bridge.commands.push(command);
+      return { coreId: command.coreId, coreName: command.coreName, flashLoadEvidence: evidence };
+    };
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-state", ccxmlPath, coreMap });
+    await expect(adapter.loadProgram(session, 2, "/tmp/cpu2.out")).resolves.toEqual({
+      flashLoadEvidence: evidence });
+    await expect(adapter.loadSymbols(session, 2, "/tmp/cpu2.out")).resolves.toBeUndefined();
+    expect(bridge.commands.map(c => c.operation)).toEqual(["loadProgram", "loadSymbols"]);
+  });
+
   test("returns matching reset evidence and rejects absent or mismatched evidence", async () => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);

@@ -723,6 +723,8 @@ var threads = [];
 var sessions = [];
 var sessionsByCoreId = {};
 var coreNamesByCoreId = {};
+// A preparation arms exactly one CPU2 Flash load; no firmware symbols or PC reads.
+var pendingFlashLoadEvidence = {};
 var sockets = [];
 var cleanupDone = false;
 
@@ -798,6 +800,72 @@ function describeCommandException(ex) {
   return { causes: causes };
 }
 
+function captureFlashLoadState(command, evidence, phase) {
+  // F28P65x fixed, non-clearing DEVCFG registers, read through CPU1 only.
+  // Fixed probe count, no retries, and the existing DSS/command deadlines apply.
+  var snapshot = { phase: phase, startedAtMs: new Date().getTime(), cores: [], registers: [] };
+  evidence.snapshots.push(snapshot);
+  var ownerConnected = false;
+  for (var index = 0; index < 2; index++) {
+    var coreId = index === 0 ? 0 : 2;
+    var core = { coreId: coreId, coreName: coreNamesByCoreId[String(coreId)], success: false };
+    snapshot.cores.push(core);
+    try {
+      var target = sessionsByCoreId[String(coreId)].target;
+      core.connected = Boolean(target.isConnected());
+      core.state = core.connected ? (target.isHalted() ? "Halted" : "Running") : "Disconnected";
+      core.success = true;
+      if (coreId === 0) ownerConnected = core.connected;
+    } catch (stateError) { core.error = String(stateError).slice(0, 256); }
+  }
+  var registers = [{ name: "BANKMUXSEL", address: 0x0005D060 },
+    { name: "DEVCFGLOCK2", address: 0x0005D002 }];
+  for (var registerIndex = 0; registerIndex < registers.length; registerIndex++) {
+    var item = registers[registerIndex];
+    item.coreId = 0;
+    item.page = "DATA";
+    item.typeSize = 32;
+    item.success = false;
+    snapshot.registers.push(item);
+    if (!ownerConnected) { item.error = "CPU1 connection/state unavailable"; continue; }
+    try {
+      var value = Number(sessionsByCoreId["0"].memory.readData(Memory.Page.DATA, item.address, 32));
+      if (!isFinite(value) || Math.floor(value) !== value || value < -2147483648 || value > 4294967295) {
+        throw "Invalid register read result";
+      }
+      item.value = value >>> 0;
+      item.success = true;
+    } catch (readError) { item.error = String(readError).slice(0, 256); }
+  }
+  snapshot.finishedAtMs = new Date().getTime();
+  logDiagnostic("flash-load:snapshot", { coreId: command.coreId, snapshot: snapshot });
+}
+
+function runFlashLoadWithEvidence(command, evidence, phase, operation) {
+  // A diagnostic exception must never prevent the requested operation or mask its error.
+  function capture(suffix) {
+    try { captureFlashLoadState(command, evidence, phase + suffix); }
+    catch (captureError) {
+      evidence.captureError = String(captureError).slice(0, 256);
+    }
+  }
+  capture(":before");
+  var result;
+  try { result = operation(); }
+  catch (loadError) {
+    // Freeze the original cause before any post-failure read can fail too.
+    var failure = { status: "FAIL", message: String(loadError).slice(0, 2048),
+      details: describeCommandException(loadError), flashLoadEvidence: evidence };
+    logDiagnostic("command:failure", { coreId: command.coreId, commandName: command.name,
+      message: failure.message });
+    capture(":failure");
+    return failure;
+  }
+  capture(":after");
+  result.flashLoadEvidence = evidence;
+  return { status: "OK", value: withCoreIdentity(command, result) };
+}
+
 function handleCommand(command) {
   if (command.name === "shutdown") {
     return { status: "OK", value: { shutdown: true } };
@@ -818,6 +886,14 @@ function handleCommand(command) {
   } else if (command.name === "reset") {
     return { status: "OK", value: withCoreIdentity(command, applyTargetReset(session, command.resetType)) };
   } else if (command.name === "load") {
+    var loadEvidence = pendingFlashLoadEvidence[String(command.coreId)];
+    delete pendingFlashLoadEvidence[String(command.coreId)];
+    if (loadEvidence) {
+      return runFlashLoadWithEvidence(command, loadEvidence, "load", function() {
+        session.memory.loadProgram(command.program);
+        return { symbolsLoaded: true };
+      });
+    }
     session.memory.loadProgram(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
   } else if (command.name === "loadSymbols") {
@@ -833,18 +909,26 @@ function handleCommand(command) {
     if (!cpu1Session) {
       throw "CPU1 DebugSession is required to configure F28P65x Flash banks";
     }
-    var selectedBanks = {};
-    for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
-      selectedBanks[String(command.flashBanks[selectedIndex])] = true;
-    }
-    for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
-      cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, selectedBanks[String(bankIndex)] ? "1" : "0");
-      session.flash.options.setBoolean("FlashC28Bank" + bankIndex, selectedBanks[String(bankIndex)] === true);
-    }
-    session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
-    cpu1Session.flash.performOperation("ConfigureClock");
-    cpu1Session.flash.performOperation("ConfigureBanks");
-    return { status: "OK", value: withCoreIdentity(command, { flashBanks: command.flashBanks, configured: true }) };
+    // This existing operation is F28P65x-specific. Do not probe other loads/devices.
+    delete pendingFlashLoadEvidence[String(command.coreId)];
+    var evidence = { device: "F28P65x", coreId: command.coreId,
+      requestedFlashBanks: command.flashBanks.slice(0, 5), readOnly: true, atomic: false, snapshots: [] };
+    var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function() {
+      var selectedBanks = {};
+      for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
+        selectedBanks[String(command.flashBanks[selectedIndex])] = true;
+      }
+      for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
+        cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, selectedBanks[String(bankIndex)] ? "1" : "0");
+        session.flash.options.setBoolean("FlashC28Bank" + bankIndex, selectedBanks[String(bankIndex)] === true);
+      }
+      session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
+      cpu1Session.flash.performOperation("ConfigureClock");
+      cpu1Session.flash.performOperation("ConfigureBanks");
+      return { flashBanks: command.flashBanks, configured: true };
+    });
+    if (preparation.status === "OK") pendingFlashLoadEvidence[String(command.coreId)] = evidence;
+    return preparation;
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize }) };

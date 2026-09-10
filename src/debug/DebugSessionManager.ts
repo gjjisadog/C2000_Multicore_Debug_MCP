@@ -553,10 +553,12 @@ export class DebugSessionManager {
       allowDestructiveFlashReload
     );
     let ownershipNote: string | undefined;
+    let flashLoadEvidence: Record<string, unknown> | undefined;
     try {
       await this.refreshSessionForProgramLoad(sessionId, session, coreId);
       ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions);
-      await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
+      const loaded = await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
+      flashLoadEvidence = loaded?.flashLoadEvidence;
     } catch (error) {
       if (error instanceof DebugMcpError && (
         error.code === "OwnerCoreNotConnected" ||
@@ -588,10 +590,12 @@ export class DebugSessionManager {
       fileSize: metadata.fileSize,
       sha256: metadata.sha256,
       symbolsLoaded: true,
+      ...(flashLoadEvidence ? { flashLoadEvidence } : {}),
       warning: warnings.join(" ")
     };
     this.loadedPrograms.set(info);
-    this.logger.info("program loaded", { sessionId, coreId, programUri: normalizedUri, sha256: info.sha256 });
+    this.logger.info("program loaded", { sessionId, coreId, programUri: normalizedUri, sha256: info.sha256,
+      ...(flashLoadEvidence ? { flashLoadEvidence } : {}) });
     return info;
   }
 

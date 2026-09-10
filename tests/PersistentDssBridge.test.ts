@@ -70,6 +70,7 @@ describe("PersistentDssBridge", () => {
     const server = await startJsonLineServer(command => command.name === "shutdown"
       ? { status: "OK", value: { shutdown: true } }
       : { status: "FAIL", message: "Load failed " + TEST_AUTH_TOKEN,
+          flashLoadEvidence: { snapshots: [{ phase: "load:failure", readError: TEST_AUTH_TOKEN }] },
           details: { causes: [{ message: "Flash bank protected " + TEST_AUTH_TOKEN }] } }, received);
     let disposed = false;
     const output = { stdoutTail: "x".repeat(13000),
@@ -94,7 +95,8 @@ describe("PersistentDssBridge", () => {
     expect(failure?.details).toMatchObject({ command: "loadProgram", coreId: 2,
       diagnostics: { stdoutTail: "x".repeat(12000), stdoutTailTruncated: true,
         stderrTail: "Flash failure [REDACTED]" },
-      response: { details: { causes: [{ message: "Flash bank protected [REDACTED]" }] } } });
+      response: { details: { causes: [{ message: "Flash bank protected [REDACTED]" }] },
+        flashLoadEvidence: { snapshots: [{ phase: "load:failure", readError: "[REDACTED]" }] } } });
     expect(failure?.details.diagnostics).not.toHaveProperty("authToken");
     expect(received.get(server.port)).toEqual([
       expect.objectContaining({ name: "load", coreId: 2 }),

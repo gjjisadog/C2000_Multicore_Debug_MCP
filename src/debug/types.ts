@@ -112,6 +112,8 @@ export interface LoadedProgramInfo {
   symbolsLoaded: boolean;
   warning: string;
   ramOwnership?: RamOwnershipPreparation;
+  /** Read-only, non-atomic F28P65x preparation/load snapshots, when available. */
+  flashLoadEvidence?: Record<string, unknown>;
 }
 
 export interface EvaluateResult {
