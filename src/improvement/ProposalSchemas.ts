@@ -68,7 +68,7 @@ export const PROPOSAL_FINAL_OUTCOMES = [
   "rolled-back",
   "superseded"
 ] as const;
-export const PROPOSAL_SOURCES = ["outcome-analytics", "post-merge-regression", "manual"] as const;
+export const PROPOSAL_SOURCES = ["outcome-analytics", "post-merge-regression", "policy-recommendation", "manual"] as const;
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 const boundedName = z.string().regex(/^[A-Za-z0-9._:/-]{1,192}$/);
@@ -194,6 +194,10 @@ export const improvementProposalSchema = z.object({
   generatedBy: z.enum(["static-rule", "analytics-pattern", "static-and-analytics"]),
   sourceWindow: z.enum(ANALYTICS_WINDOWS),
   source: z.enum(PROPOSAL_SOURCES).default("outcome-analytics"),
+  /** Policy identity is optional for legacy rows and enables regime-aware meta analytics. */
+  policyRegime: boundedText(128).optional(),
+  engineeringPolicyHash: z.string().regex(/^[0-9a-f]{16,64}$/i).optional(),
+  sourceRecommendationId: boundedName.optional(),
   baselineSha: z.string().regex(/^[0-9a-f]{7,64}$/i).optional(),
   /** Empty only for legacy rows; approval/validation derives and locks it. */
   primaryMetrics: z.array(proposalMetricDefinitionSchema).max(32).default([]),

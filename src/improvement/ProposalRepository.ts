@@ -40,6 +40,9 @@ interface ImprovementProposalRow {
   generated_by: string;
   source_window: string;
   proposal_source: string | null;
+  policy_regime: string | null;
+  engineering_policy_hash: string | null;
+  source_recommendation_id: string | null;
   baseline_sha: string | null;
   primary_metrics_json: string | null;
   primary_metrics_locked: number | null;
@@ -123,10 +126,11 @@ export class ProposalRepository implements ImprovementProposalStore {
         proposal_id, fingerprint, status, category, target, title, summary,
         evidence_json, proposed_change_json, expected_benefit_json, risks_json,
         validation_json, validation_result_json, confidence, priority, generated_by, source_window,
-        proposal_source, baseline_sha, primary_metrics_json, primary_metrics_locked,
+        proposal_source, policy_regime, engineering_policy_hash, source_recommendation_id,
+        baseline_sha, primary_metrics_json, primary_metrics_locked,
         primary_metrics_locked_at, primary_metrics_source, final_outcome,
         created_at, updated_at, last_observed_at, review_reason, reviewed_at, reviewed_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(proposal_id) DO UPDATE SET
         fingerprint = excluded.fingerprint,
         status = excluded.status,
@@ -145,6 +149,9 @@ export class ProposalRepository implements ImprovementProposalStore {
         generated_by = excluded.generated_by,
         source_window = excluded.source_window,
         proposal_source = excluded.proposal_source,
+        policy_regime = excluded.policy_regime,
+        engineering_policy_hash = excluded.engineering_policy_hash,
+        source_recommendation_id = excluded.source_recommendation_id,
         baseline_sha = excluded.baseline_sha,
         primary_metrics_json = excluded.primary_metrics_json,
         primary_metrics_locked = excluded.primary_metrics_locked,
@@ -175,6 +182,9 @@ export class ProposalRepository implements ImprovementProposalStore {
       parsed.generatedBy,
       parsed.sourceWindow,
       parsed.source,
+      parsed.policyRegime ?? null,
+      parsed.engineeringPolicyHash ?? null,
+      parsed.sourceRecommendationId ?? null,
       parsed.baselineSha ?? null,
       JSON.stringify(parsed.primaryMetrics),
       parsed.primaryMetricsLocked ? 1 : 0,
@@ -242,6 +252,9 @@ function decodeProposal(row: ImprovementProposalRow): ImprovementProposal | unde
       generatedBy: row.generated_by,
       sourceWindow: row.source_window,
       source: row.proposal_source ?? "outcome-analytics",
+      ...(row.policy_regime ? { policyRegime: row.policy_regime } : {}),
+      ...(row.engineering_policy_hash ? { engineeringPolicyHash: row.engineering_policy_hash } : {}),
+      ...(row.source_recommendation_id ? { sourceRecommendationId: row.source_recommendation_id } : {}),
       ...(row.baseline_sha ? { baselineSha: row.baseline_sha } : {}),
       primaryMetrics: row.primary_metrics_json ? JSON.parse(row.primary_metrics_json) : [],
       primaryMetricsLocked: row.primary_metrics_locked === 1,

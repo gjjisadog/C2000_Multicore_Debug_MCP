@@ -59,7 +59,12 @@ describe("MCP tool surface profiles", () => {
       "c2000_getPostMergeEvaluation",
       "c2000_refreshPostMergeEvaluation",
       "c2000_getRollbackRecommendation",
-      "c2000_reviewRollbackRecommendation"
+      "c2000_reviewRollbackRecommendation",
+      "c2000_getImprovementSystemScorecard",
+      "c2000_generateEngineeringPolicyRecommendations",
+      "c2000_listEngineeringPolicyRecommendations",
+      "c2000_getEngineeringPolicyRecommendation",
+      "c2000_reviewEngineeringPolicyRecommendation"
     ];
     const agent = names("safe", "agent");
     const advanced = names("safe", "advanced");
@@ -71,6 +76,25 @@ describe("MCP tool surface profiles", () => {
       expect(advanced, name).toContain(name);
       expect(compatibility, name).toContain(name);
     }
+  });
+
+  test("Round10 meta governance tools are advanced-only and never self-authorize", () => {
+    const agent = names("safe", "agent");
+    const advanced = names("safe", "advanced");
+    for (const name of [
+      "c2000_getImprovementSystemScorecard",
+      "c2000_generateEngineeringPolicyRecommendations",
+      "c2000_listEngineeringPolicyRecommendations",
+      "c2000_getEngineeringPolicyRecommendation",
+      "c2000_reviewEngineeringPolicyRecommendation"
+    ]) {
+      const definition = c2000ToolDefinitions.find(tool => tool.name === name);
+      expect(definition, name).toEqual(expect.objectContaining({ family: "improvement", exposure: "advanced" }));
+      expect(agent, name).not.toContain(name);
+      expect(advanced, name).toContain(name);
+    }
+    expect(c2000ToolDefinitions.find(tool => tool.name === "c2000_reviewEngineeringPolicyRecommendation")?.description)
+      .toContain("never directly edits policy");
   });
 
   test("agent exposes only task-level runtime, job, workflows, focused reads, and evidence", () => {
@@ -263,8 +287,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 89,
-      advancedOnlyCount: 87,
+      hiddenBySurfaceCount: 94,
+      advancedOnlyCount: 92,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -279,7 +303,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(87);
+    expect(guide.advancedOnly).toBe(92);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -302,14 +326,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 28,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 89,
-      advancedOnlyCount: 87,
+      hiddenBySurfaceCount: 94,
+      advancedOnlyCount: 92,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 28,
         hiddenBySafety: 8,
-        hiddenBySurface: 89,
-        advancedOnly: 87,
+        hiddenBySurface: 94,
+        advancedOnly: 92,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -387,8 +411,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(117);
-    expect(fullCompatibility.count).toBe(125);
+    expect(safeCompatibility.count).toBe(122);
+    expect(fullCompatibility.count).toBe(130);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

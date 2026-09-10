@@ -310,7 +310,7 @@ describe("C2000 outcome analytics", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-outcome-analytics-"));
     roots.push(directory);
     const store = await SqliteStore.open(path.join(directory, "analytics.sqlite"));
-    expect(store.schemaVersion).toBe(18);
+    expect(store.schemaVersion).toBe(19);
     const repository = new OutcomeEventRepository(store);
     repository.append(event({ eventId: crypto.randomUUID(), kind: "tool_invocation", name: "c2000_getServerHealth" }));
     store.run(`

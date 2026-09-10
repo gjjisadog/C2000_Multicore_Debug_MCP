@@ -41,6 +41,16 @@ import {
   InMemoryRollbackRecommendationStore
 } from "./improvement/evaluation/EvaluationRepositories.js";
 import { PostMergeEvaluationService } from "./improvement/evaluation/PostMergeEvaluationService.js";
+import { InMemoryImprovementImplementationRunStore } from "./improvement/implementation/ImplementationRunRepository.js";
+import { InMemoryImprovementPullRequestStore, InMemoryImprovementReviewEvidenceStore } from "./improvement/review/ReviewRepositories.js";
+import {
+  CrossImprovementAnalyticsService
+} from "./improvement/meta/CrossImprovementAnalyticsService.js";
+import {
+  InMemoryCrossImprovementSnapshotStore,
+  InMemoryEngineeringPolicyRecommendationStore,
+  InMemoryEngineeringPolicySnapshotStore
+} from "./improvement/meta/MetaRepositories.js";
 
 export type { AdapterResolution, ResolvedAdapterMode } from "./adapters/adapterResolution.js";
 export { resolveAdapterMode, resolveAdapterModeSync } from "./adapters/adapterResolution.js";
@@ -110,11 +120,17 @@ function buildRuntime(
     || !toolHandlerDeps.refreshPostMergeEvaluation
     || !toolHandlerDeps.getRollbackRecommendation
     || !toolHandlerDeps.reviewRollbackRecommendation;
-  const localOutcomeEvents = needsLocalAnalytics || needsLocalProposals || needsLocalEvaluations ? new InMemoryOutcomeEventStore() : undefined;
-  const localProposalStore = needsLocalProposals || needsLocalEvaluations ? new InMemoryImprovementProposalStore() : undefined;
+  const needsLocalMeta = !toolHandlerDeps.getImprovementSystemScorecard
+    || !toolHandlerDeps.generateEngineeringPolicyRecommendations
+    || !toolHandlerDeps.listEngineeringPolicyRecommendations
+    || !toolHandlerDeps.getEngineeringPolicyRecommendation
+    || !toolHandlerDeps.reviewEngineeringPolicyRecommendation;
+  const localOutcomeEvents = needsLocalAnalytics || needsLocalProposals || needsLocalEvaluations || needsLocalMeta ? new InMemoryOutcomeEventStore() : undefined;
+  const localProposalStore = needsLocalProposals || needsLocalEvaluations || needsLocalMeta ? new InMemoryImprovementProposalStore() : undefined;
   let localAnalytics: OutcomeAnalyticsService | undefined;
   let localImprovementProposals: ImprovementProposalService | undefined;
   let localPostMergeEvaluation: PostMergeEvaluationService | undefined;
+  let localMetaAnalytics: CrossImprovementAnalyticsService | undefined;
   const capabilitySessions = new CapabilitySessionManager({
     logger,
     onAudit: event => (toolHandlerDeps.capabilityAudit ?? localAnalytics)?.recordCapabilityAudit(event)
@@ -129,7 +145,7 @@ function buildRuntime(
       logger
     });
   }
-  if (needsLocalProposals || needsLocalEvaluations) {
+  if (needsLocalProposals || needsLocalEvaluations || needsLocalMeta) {
     localImprovementProposals = new ImprovementProposalService({
       events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
       proposals: localProposalStore!,
@@ -144,6 +160,21 @@ function buildRuntime(
       rollbackRecommendations: new InMemoryRollbackRecommendationStore(),
       events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
       proposals: localProposalStore!,
+      proposalService: localImprovementProposals,
+      logger
+    });
+  }
+  if (needsLocalMeta) {
+    localMetaAnalytics = new CrossImprovementAnalyticsService({
+      proposals: localProposalStore!,
+      implementationRuns: new InMemoryImprovementImplementationRunStore(),
+      pullRequests: new InMemoryImprovementPullRequestStore(),
+      reviewEvidence: new InMemoryImprovementReviewEvidenceStore(),
+      evaluations: new InMemoryPostMergeEvaluationStore(),
+      events: localOutcomeEvents ?? new InMemoryOutcomeEventStore(),
+      recommendations: new InMemoryEngineeringPolicyRecommendationStore(),
+      snapshots: new InMemoryCrossImprovementSnapshotStore(),
+      policySnapshots: new InMemoryEngineeringPolicySnapshotStore(),
       proposalService: localImprovementProposals,
       logger
     });
@@ -248,6 +279,11 @@ function buildRuntime(
         ? localPostMergeEvaluation!.getRollbackRecommendation(input.recommendationId)
         : localPostMergeEvaluation!.getRollbackRecommendationForEvaluation(input.evaluationId!)),
       reviewRollbackRecommendation: toolHandlerDeps.reviewRollbackRecommendation ?? (input => localPostMergeEvaluation!.reviewRollbackRecommendation(input)),
+      getImprovementSystemScorecard: toolHandlerDeps.getImprovementSystemScorecard ?? (input => localMetaAnalytics!.scorecard(input)),
+      generateEngineeringPolicyRecommendations: toolHandlerDeps.generateEngineeringPolicyRecommendations ?? (input => localMetaAnalytics!.generate(input)),
+      listEngineeringPolicyRecommendations: toolHandlerDeps.listEngineeringPolicyRecommendations ?? (input => localMetaAnalytics!.list(input)),
+      getEngineeringPolicyRecommendation: toolHandlerDeps.getEngineeringPolicyRecommendation ?? (input => localMetaAnalytics!.get(input.recommendationId)),
+      reviewEngineeringPolicyRecommendation: toolHandlerDeps.reviewEngineeringPolicyRecommendation ?? (input => localMetaAnalytics!.review(input)),
       getActiveCriticalImprovementRegression,
       effectiveAdapterType: adapterResolution.mode,
       filesystem,

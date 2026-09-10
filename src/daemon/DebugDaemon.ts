@@ -73,6 +73,8 @@ import {
   RollbackRecommendationRepository
 } from "../improvement/evaluation/EvaluationRepositories.js";
 import { PostMergeEvaluationService } from "../improvement/evaluation/PostMergeEvaluationService.js";
+import { CrossImprovementAnalyticsService } from "../improvement/meta/CrossImprovementAnalyticsService.js";
+import { EngineeringPolicyRecommendationRepository, EngineeringPolicySnapshotRepository, CrossImprovementSnapshotRepository } from "../improvement/meta/MetaRepositories.js";
 import { Logger } from "../utils/logger.js";
 
 /** Owns all durable debug state. A proxy may disconnect without affecting it. */
@@ -163,6 +165,22 @@ export class DebugDaemon {
       logger: new Logger(this.config.logging.level, this.config.logging.logFile)
     });
     this.postMergeEvaluation = postMergeEvaluation;
+    const engineeringPolicyRecommendations = new EngineeringPolicyRecommendationRepository(store);
+    const engineeringPolicySnapshots = new EngineeringPolicySnapshotRepository(store);
+    const crossImprovementSnapshots = new CrossImprovementSnapshotRepository(store);
+    const crossImprovementAnalytics = new CrossImprovementAnalyticsService({
+      proposals: proposalRecords,
+      implementationRuns: improvementRuns,
+      pullRequests: improvementPullRequests,
+      reviewEvidence: improvementReviewEvidence,
+      evaluations: postMergeEvaluations,
+      events: outcomeEvents,
+      recommendations: engineeringPolicyRecommendations,
+      snapshots: crossImprovementSnapshots,
+      policySnapshots: engineeringPolicySnapshots,
+      proposalService: improvementProposals,
+      logger: new Logger(this.config.logging.level, this.config.logging.logFile)
+    });
     const candidateReview = new CandidateReviewService({
       runs: improvementRuns,
       proposals: proposalRecords,
@@ -386,6 +404,11 @@ export class DebugDaemon {
         ? postMergeEvaluation.getRollbackRecommendation(input.recommendationId)
         : postMergeEvaluation.getRollbackRecommendationForEvaluation(input.evaluationId!),
       reviewRollbackRecommendation: input => postMergeEvaluation.reviewRollbackRecommendation(input),
+      getImprovementSystemScorecard: input => crossImprovementAnalytics.scorecard(input),
+      generateEngineeringPolicyRecommendations: input => crossImprovementAnalytics.generate(input),
+      listEngineeringPolicyRecommendations: input => crossImprovementAnalytics.list(input),
+      getEngineeringPolicyRecommendation: input => crossImprovementAnalytics.get(input.recommendationId),
+      reviewEngineeringPolicyRecommendation: input => crossImprovementAnalytics.review(input),
       getActiveCriticalImprovementRegression: () => postMergeEvaluation.hasActiveCriticalRegression(),
       listBoards: input => ({ boards: this.registry?.list(input) ?? [] }),
       registerBoard: input => this.registerBoard(input),
