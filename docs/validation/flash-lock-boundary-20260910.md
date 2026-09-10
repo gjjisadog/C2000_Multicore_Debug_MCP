@@ -124,3 +124,37 @@ both Flash controller/semaphore views and protection before inferring a cause.
 If the same error remains with valid consistent boundaries, the unresolved
 interval is inside TI's load/erase operation, not proven by post-return values.
 Keep that distinction explicit and do not clear protection based on inference.
+
+## Candidate installation and activation boundary
+
+Diagnostic source commit: `05a163e4846c25cc22988ad831e05ecd239e81f6`.
+Built from a clean detached checkout at
+`C:/c2000-flash-lock-boundary-20260910`; manifest `sourceDirty=false`,
+build timestamp `2026-09-10T11:00:45.808Z`.
+
+The normal installer initially reused a same-version older runtime. Its
+reported revision exposed the mismatch; it was not accepted as the candidate.
+A subsequent `--force --no-skill` installation selected a new immutable slot:
+`0.7.0-win32-x64-build1b474e9ecaf3`. Its manifest matches 05a163e, the installed
+doctor passed, and Codex registration/current.json point to that slot. Prior
+runtime slots remain intact. No bundled skills were installed or replaced.
+The existing MCP configuration was explicitly reused, with identical before/
+after SHA-256 `a836ec44be186d631563404aa51e38007e9e818d456fe6c8a157b3db712b2c60`.
+Registration and current-pointer backups are retained under the clean checkout's
+ignored `artifacts/install-05a163e/backup/` directory; do not publish config backups.
+
+Live health at 11:02:31 UTC still reports frontend AND daemon revision 68ff74ff,
+daemon PID 30196 / instance `af10b692-1aed-40d8-96af-5eb2697086e7`.
+Installation does not hot-replace those running processes. The health response
+has zero queued/running jobs and no active board holder. The board list now
+reports generation 31, reason `worker-start`, target identity UNKNOWN, with no
+per-core program records. This is not evidence of a new target load or of
+unchanged resident firmware. Candidate loader-only execution was NOT submitted.
+
+Next gate: reload the MCP connection and verify BOTH frontend and daemon source
+revision, plus the owned worker runtime, before any target command. A reconnect
+alone must not be assumed to upgrade an already persistent daemon. Use the
+supported lifecycle path if a stale daemon remains; do not bypass ownership
+guards or kill external debugger processes. The prepared bounded plan is at
+`C:/c2000-flash-state-evidence-20260910/artifacts/flash-boundary-validation/next-target-plan.json`.
+Current verdict remains **HOST PASS; TARGET NOT RUN; ROOT CAUSE UNPROVEN**.
