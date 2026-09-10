@@ -67,6 +67,14 @@ interface LogicalDebugSession {
       timer?: ReturnType<typeof setTimeout>;
     };
   };
+  flashLoadQuarantine?: {
+    coreId: CoreId;
+    programUri: string;
+    failedAt: string;
+    failureClass: string;
+    errorCode: string;
+    message: string;
+  };
   probeLease?: DebugProbeLease;
 }
 
@@ -542,6 +550,7 @@ export class DebugSessionManager {
     const normalizedUri = this.normalizeArtifactUri(programUri);
     const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
     const { session, core } = this.requireCore(sessionId, coreId);
+    this.assertFlashLoadSessionAvailable(sessionId, coreId);
     try {
       await access(normalizedUri);
     } catch {
@@ -560,6 +569,7 @@ export class DebugSessionManager {
       const loaded = await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
       flashLoadEvidence = loaded?.flashLoadEvidence;
     } catch (error) {
+      this.quarantineFailedFlashSession(session, coreId, normalizedUri, error);
       if (error instanceof DebugMcpError && (
         error.code === "OwnerCoreNotConnected" ||
         error.code === "CoreNotConnected" ||
@@ -874,6 +884,46 @@ export class DebugSessionManager {
     );
   }
 
+  private assertFlashLoadSessionAvailable(sessionId: string, coreId: CoreId): void {
+    if (coreId !== F28P65X_CPU2_CORE_ID) return;
+    const session = this.requireSession(sessionId);
+    const quarantine = session.flashLoadQuarantine;
+    if (!quarantine) return;
+    throw new DebugMcpError(
+      "FlashLoadSessionQuarantined",
+      "The debug session is quarantined after a CPU2 F28P65x Flash load failure; no further CPU2 program load was attempted",
+      {
+        sessionId,
+        targetMemoryWritten: false,
+        quarantine,
+        nextAction: "Close this debug session, create a fresh session, and capture the first failure evidence before any intentional destructive reload."
+      }
+    );
+  }
+
+  private quarantineFailedFlashSession(
+    session: LogicalDebugSession,
+    coreId: CoreId,
+    programUri: string,
+    error: unknown
+  ): void {
+    if (coreId !== F28P65X_CPU2_CORE_ID || !containsF28P65xFlashEvidence(error)) return;
+    const structured = toStructuredError(error);
+    const evidence = findF28P65xFlashEvidence(error);
+    session.flashLoadQuarantine = {
+      coreId,
+      programUri,
+      failedAt: new Date().toISOString(),
+      failureClass: typeof evidence?.failureClass === "string" ? evidence.failureClass : "flash_load_failure",
+      errorCode: structured.code,
+      message: structured.message.slice(0, 512)
+    };
+    this.logger.warn("debug session quarantined after CPU2 Flash load failure", {
+      sessionId: session.sessionId,
+      ...session.flashLoadQuarantine
+    });
+  }
+
   async readMemory(sessionId: string, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
     return this.exclusive(sessionId, async () => {
       const { session } = this.requireCore(sessionId, coreId);
@@ -1037,6 +1087,9 @@ export class DebugSessionManager {
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {
     return this.exclusive(sessionId, async () => {
+      if (programs.some(program => program.coreId === F28P65X_CPU2_CORE_ID && program.loadPolicy !== "verify-mcp-registry" && program.loadPolicy !== "verify-only")) {
+        this.assertFlashLoadSessionAvailable(sessionId, F28P65X_CPU2_CORE_ID);
+      }
       const unsafeFlashReloads = await this.findUnsafeFlashReloads(sessionId, programs);
       if (unsafeFlashReloads.length > 0) {
         throw new DebugMcpError(
@@ -1793,6 +1846,34 @@ export class DebugSessionManager {
     }
     return { session, core };
   }
+}
+
+function findF28P65xFlashEvidence(value: unknown, depth = 0): Record<string, unknown> | undefined {
+  if (depth > 8 || value === null || value === undefined) return undefined;
+  const root = depth === 0 && value instanceof Error ? toStructuredError(value) : value;
+  if (!root || typeof root !== "object") return undefined;
+  if (Array.isArray(root)) {
+    for (const item of root) {
+      const found = findF28P65xFlashEvidence(item, depth + 1);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  const record = root as Record<string, unknown>;
+  const candidate = record.flashLoadEvidence;
+  if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+    const evidence = candidate as Record<string, unknown>;
+    if (evidence.device === "F28P65x") return evidence;
+  }
+  for (const child of Object.values(record)) {
+    const found = findF28P65xFlashEvidence(child, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function containsF28P65xFlashEvidence(value: unknown): boolean {
+  return findF28P65xFlashEvidence(value) !== undefined;
 }
 
 function validateCoreMap(coreMap: CoreConfig[]): CoreConfig[] {

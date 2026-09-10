@@ -2,7 +2,15 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import { analyzeRamOwnership, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap } from "../src/hardware/mapOwnership.js";
+import {
+  analyzeRamOwnership,
+  decodeF28P65xBankMuxSel,
+  expectedF28P65xBankMuxSel,
+  mergeOwnershipActions,
+  ownershipActionsForMap,
+  parseLinkerMap,
+  validateF28P65xFlashBoundary
+} from "../src/hardware/mapOwnership.js";
 
 const cpu2MapText = `
 MEMORY CONFIGURATION
@@ -26,6 +34,30 @@ section   page    origin      length       input sections
 `;
 
 describe("map RAM ownership analysis", () => {
+  test("decodes F28P65x BankMux and treats only DEVCFGLOCK2 bit 2 as the lock", () => {
+    expect(expectedF28P65xBankMuxSel([3])).toBe(0xC0);
+    expect(decodeF28P65xBankMuxSel(0xC0)).toEqual([
+      { bank: 0, selector: 0, owner: "CPU1" },
+      { bank: 1, selector: 0, owner: "CPU1" },
+      { bank: 2, selector: 0, owner: "CPU1" },
+      { bank: 3, selector: 3, owner: "CPU2" },
+      { bank: 4, selector: 0, owner: "CPU1" }
+    ]);
+    expect(validateF28P65xFlashBoundary(0xC0, 1, [3])).toMatchObject({
+      status: "verified",
+      expectedBankMuxSel: 0xC0,
+      bankMuxLocked: false
+    });
+    expect(validateF28P65xFlashBoundary(0xC0, 4, [3])).toMatchObject({
+      status: "mismatch",
+      bankMuxLocked: true
+    });
+    expect(validateF28P65xFlashBoundary(Number.NaN, 0, [3])).toMatchObject({
+      status: "unavailable",
+      expectedBankMuxSel: 0xC0
+    });
+  });
+
   test("parses used RAMGS regions and section addresses from a C2000 linker map", () => {
     const parsed = parseLinkerMap(cpu2MapText, { coreId: 2, mapPath: "/tmp/cpu2.map" });
 

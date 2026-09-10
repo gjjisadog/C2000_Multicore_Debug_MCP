@@ -8,6 +8,8 @@ function harness() {
   const calls: unknown[][] = [];
   const state = { bank: 0, lock: 0, clock: 0, connected: [true, true], failReads: false,
     failStates: false, failLoad: false, failPrepare: false, failBanks: false,
+    configuredBank: 0x3c0, configuredLock: 0,
+    loadError: "original Bank 3 erase failed",
     registerValues: {} as Record<string, number> };
   const sessions = Object.fromEntries([0, 2].map((id, index) => [id, {
     target: {
@@ -30,7 +32,7 @@ function harness() {
       loadProgram(program: string) {
         calls.push(["load", id, program]);
         state.lock = 4;
-        if (state.failLoad) throw Error("original Bank 3 erase failed");
+        if (state.failLoad) throw Error(state.loadError);
       }
     },
     flash: {
@@ -44,7 +46,8 @@ function harness() {
         if (name === "ConfigureClock") state.clock = 3;
         if (name === "ConfigureBanks") {
           if (state.failBanks) throw Error("original bank preparation failed");
-          state.bank = 0x3c0;
+          state.bank = state.configuredBank;
+          state.lock = state.configuredLock;
         }
       }
     }
@@ -54,8 +57,8 @@ function harness() {
     Memory: { Page: { DATA: 1 } }, logDiagnostic() {} };
   const handle = runInNewContext(source.slice(source.indexOf("function getSessionForCommand("),
     source.indexOf("function startCoreThread(")) + "\nhandleCommand;", context);
-  const command = (name: string, coreId = 2) => handle({ name, coreId,
-    coreName: coreId === 2 ? "C28xx_CPU2" : "C28xx_CPU1", program: "cpu2.out", flashBanks: [3, 4] });
+  const command = (name: string, coreId = 2, flashBanks = [3, 4]) => handle({ name, coreId,
+    coreName: coreId === 2 ? "C28xx_CPU2" : "C28xx_CPU1", program: "cpu2.out", flashBanks });
   return { command, calls, state, context, source };
 }
 
@@ -66,6 +69,9 @@ describe("F28P65x Flash load state evidence", () => {
     const result = h.command("load");
     expect(result).toMatchObject({ status: "OK", value: { coreId: 2, coreName: "C28xx_CPU2",
       flashLoadEvidence: { readOnly: true, atomic: false, requestedFlashBanks: [3, 4] } } });
+    expect(result.value.flashLoadEvidence.boundaryValidation).toMatchObject({
+      status: "verified", expectedBankMuxSel: 0x3c0, actualBankMuxSel: 0x3c0, bankMuxLocked: false
+    });
     const snapshots = result.value.flashLoadEvidence.snapshots;
     expect(snapshots.map((s: any) => s.phase)).toEqual([
       "prepare:before", "prepare:clock-ready", "prepare:after", "load:before", "load:after"]);
@@ -113,6 +119,51 @@ describe("F28P65x Flash load state evidence", () => {
       success: false, error: "Error: " + "r".repeat(249) });
     expect(h.calls.filter(c => c[0] === "load")).toHaveLength(1);
     expect(h.context.pendingFlashLoadEvidence).toEqual({});
+  });
+
+  test("accepts the DK9 CPU2 Bank3-only mapping and keeps Bank4 on CPU1", () => {
+    const h = harness();
+    h.state.configuredBank = 0xC0;
+    const result = h.command("prepareFlashLoad", 2, [3]);
+    expect(result).toMatchObject({ status: "OK", value: { flashLoadEvidence: {
+      expectedBankMuxSel: 0xC0,
+      boundaryValidation: { status: "verified", actualBankMuxSel: 0xC0 }
+    } } });
+    expect(h.calls.filter(c => c[0] === "option")).toEqual([
+      ["option", 0, "FlashMapC28Bank0", "0"],
+      ["option", 2, "FlashC28Bank0", false],
+      ["option", 0, "FlashMapC28Bank1", "0"],
+      ["option", 2, "FlashC28Bank1", false],
+      ["option", 0, "FlashMapC28Bank2", "0"],
+      ["option", 2, "FlashC28Bank2", false],
+      ["option", 0, "FlashMapC28Bank3", "1"],
+      ["option", 2, "FlashC28Bank3", true],
+      ["option", 0, "FlashMapC28Bank4", "0"],
+      ["option", 2, "FlashC28Bank4", false],
+      ["option", 2, "FlashEraseSelection", "Selected Banks Only"]
+    ]);
+  });
+
+  test("classifies the TI locked-register erase message without calling it permanent protection", () => {
+    const h = harness();
+    h.command("prepareFlashLoad");
+    h.state.failLoad = true;
+    h.state.loadError = "Flash Programmer: Error erasing Bank 3 Flash registers are locked and hence are not configurable to issue the erase command. Operation Cancelled (3).";
+    const result = h.command("load");
+    expect(result).toMatchObject({ status: "FAIL", flashLoadEvidence: { failureClass: "flash_programmer_state" } });
+  });
+
+  test.each([
+    ["bank mapping", 0, 0],
+    ["BANKMUXSEL lock", 0x3c0, 4]
+  ])("blocks a readable unsafe %s boundary before arming CPU2 load", (_label, configuredBank, configuredLock) => {
+    const h = harness();
+    h.state.configuredBank = configuredBank;
+    h.state.configuredLock = configuredLock;
+    const result = h.command("prepareFlashLoad");
+    expect(result).toMatchObject({ status: "FAIL", flashLoadEvidence: { boundaryValidation: { status: "mismatch" } } });
+    expect(h.context.pendingFlashLoadEvidence).toEqual({});
+    expect(h.calls.filter(c => c[0] === "load")).toHaveLength(0);
   });
 
   test("records a preparation failure but does not arm stale evidence for another load", () => {

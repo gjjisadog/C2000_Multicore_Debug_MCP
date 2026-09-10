@@ -4,6 +4,85 @@ export const F28P65X_CPU1_CORE_ID = 0;
 export const F28P65X_CPU2_CORE_ID = 2;
 export const F28P65X_MEMCFG_GSXMSEL_ADDRESS = 0x0005F444;
 export const F28P65X_DEVCFG_BANKMUXSEL_ADDRESS = 0x0005D060;
+export const F28P65X_DEVCFGLOCK2_ADDRESS = 0x0005D002;
+export const F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK = 0x4;
+export const F28P65X_FLASH_BANK_COUNT = 5;
+export const F28P65X_CPU1_FLASH_BANK_SELECTOR = 0;
+export const F28P65X_CPU2_FLASH_BANK_SELECTOR = 3;
+
+export interface F28P65xFlashBoundaryValidation {
+  status: "verified" | "mismatch" | "unavailable";
+  expectedBankMuxSel: number;
+  actualBankMuxSel?: number;
+  devcfgLock2?: number;
+  bankMuxLocked?: boolean;
+  actualBankOwners?: Array<{ bank: number; selector: number; owner: "CPU1" | "CPU2" | "unknown" }>;
+  expectedCpu2Banks: number[];
+  reason?: string;
+}
+
+export function normalizeF28P65xFlashBanks(banks: readonly number[]): number[] {
+  const normalized = [...new Set(banks)].sort((left, right) => left - right);
+  const invalid = normalized.filter(bank => !Number.isInteger(bank) || bank < 0 || bank >= F28P65X_FLASH_BANK_COUNT);
+  if (invalid.length > 0) {
+    throw new Error(`Unsupported F28P65x flash bank index: ${invalid.join(", ")}`);
+  }
+  return normalized;
+}
+
+export function expectedF28P65xBankMuxSel(cpu2Banks: readonly number[]): number {
+  return normalizeF28P65xFlashBanks(cpu2Banks)
+    .reduce((combined, bank) => combined | (F28P65X_CPU2_FLASH_BANK_SELECTOR << (bank * 2)), 0);
+}
+
+export function decodeF28P65xBankMuxSel(value: number): Array<{ bank: number; selector: number; owner: "CPU1" | "CPU2" | "unknown" }> {
+  const actual = value >>> 0;
+  return Array.from({ length: F28P65X_FLASH_BANK_COUNT }, (_, bank) => {
+    const selector = (actual >>> (bank * 2)) & 0x3;
+    const owner = selector === F28P65X_CPU1_FLASH_BANK_SELECTOR
+      ? "CPU1"
+      : selector === F28P65X_CPU2_FLASH_BANK_SELECTOR ? "CPU2" : "unknown";
+    return { bank, selector, owner };
+  });
+}
+
+export function validateF28P65xFlashBoundary(
+  actualBankMuxSel: number | undefined,
+  devcfgLock2: number | undefined,
+  cpu2Banks: readonly number[]
+): F28P65xFlashBoundaryValidation {
+  const expectedCpu2Banks = normalizeF28P65xFlashBanks(cpu2Banks);
+  const expectedBankMuxSel = expectedF28P65xBankMuxSel(expectedCpu2Banks);
+  const isReadableRegisterValue = (value: number | undefined): value is number =>
+    value !== undefined
+    && Number.isInteger(value)
+    && value >= -2147483648
+    && value <= 0xffffffff;
+  if (!isReadableRegisterValue(actualBankMuxSel) || !isReadableRegisterValue(devcfgLock2)) {
+    return {
+      status: "unavailable",
+      expectedBankMuxSel,
+      expectedCpu2Banks,
+      reason: "BANKMUXSEL or DEVCFGLOCK2 was not readable after ConfigureBanks."
+    };
+  }
+  const actual = actualBankMuxSel >>> 0;
+  const lock = devcfgLock2 >>> 0;
+  const bankFieldMask = (1 << (F28P65X_FLASH_BANK_COUNT * 2)) - 1;
+  const bankMuxLocked = (lock & F28P65X_DEVCFGLOCK2_BANKMUXSEL_MASK) !== 0;
+  const bankMuxMatches = (actual & bankFieldMask) === expectedBankMuxSel;
+  return {
+    status: !bankMuxLocked && bankMuxMatches ? "verified" : "mismatch",
+    expectedBankMuxSel,
+    actualBankMuxSel: actual,
+    devcfgLock2: lock,
+    bankMuxLocked,
+    actualBankOwners: decodeF28P65xBankMuxSel(actual),
+    expectedCpu2Banks,
+    ...(!bankMuxMatches ? { reason: "BANKMUXSEL does not match the CPU2 linker-map banks." }
+      : bankMuxLocked ? { reason: "DEVCFGLOCK2.BANKMUXSEL is set after ConfigureBanks." } : {})
+  };
+}
 
 export interface MapOwnershipInput {
   maps: Array<{
@@ -144,12 +223,8 @@ export function flashOwnershipActionsForMap(map: ParsedLinkerMap): FlashOwnershi
   if (map.coreId !== F28P65X_CPU2_CORE_ID || map.usedFlashBanks.length === 0) {
     return [];
   }
-  const banks = [...new Set(map.usedFlashBanks.map(region => region.bankIndex))].sort((left, right) => left - right);
-  const invalidBanks = banks.filter(bank => bank < 0 || bank > 4);
-  if (invalidBanks.length > 0) {
-    throw new Error(`Unsupported F28P65x flash bank index: ${invalidBanks.join(", ")}`);
-  }
-  const value = banks.reduce((combined, bank) => combined | (0x3 << (bank * 2)), 0);
+  const banks = normalizeF28P65xFlashBanks(map.usedFlashBanks.map(region => region.bankIndex));
+  const value = expectedF28P65xBankMuxSel(banks);
   return [{
     ownerCoreId: F28P65X_CPU1_CORE_ID,
     targetCoreId: map.coreId,

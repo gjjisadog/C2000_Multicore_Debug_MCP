@@ -682,6 +682,56 @@ MEMORY CONFIGURATION
     expect(adapter.loadCount).toBe(2);
   });
 
+  test("quarantines a session after a CPU2 Flash programmer failure and blocks same-session retry", async () => {
+    class FailingFlashAdapter extends MockDebugAdapter {
+      loadCount = 0;
+
+      async prepareFlashLoad(): Promise<void> {}
+
+      override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
+        this.loadCount++;
+        if (coreId === 2) {
+          throw new DebugMcpError("DssCommandFailed", "TI Flash Programmer: Bank 3 registers are locked", {
+            response: {
+              flashLoadEvidence: {
+                device: "F28P65x",
+                coreId: 2,
+                failureClass: "flash_programmer_state",
+                snapshots: [{ phase: "load:failure" }]
+              }
+            }
+          });
+        }
+        await super.loadProgram(session, coreId, programUri);
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-flash-session-quarantine-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX"
+    ].join("\n"));
+    const adapter = new FailingFlashAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "flash-session-quarantine", coreMap });
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
+        code: "ProgramLoadFailed"
+      });
+      await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map, "require-map", undefined, true)).rejects.toMatchObject({
+        code: "FlashLoadSessionQuarantined",
+        details: { targetMemoryWritten: false, quarantine: { failureClass: "flash_programmer_state" } }
+      });
+      expect(adapter.loadCount).toBe(1);
+    } finally {
+      await manager.closeDebugSession(session.sessionId);
+    }
+  });
+
   test("rebuilds the adapter session so CPU1 can load again after CPU2 Flash preparation poisons the prior session", async () => {
     class PoisoningFlashAdapter extends MockDebugAdapter {
       private readonly flashState = new Map<string, { poisoned: boolean }>();

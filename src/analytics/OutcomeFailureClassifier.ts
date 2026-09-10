@@ -32,6 +32,9 @@ export function classifyOutcomeFailure(input: {
   if (/dlog/.test(text)) return { failureClass: "dlog", ...(stage ? { stage } : {}) };
   if (/erad/.test(text)) return { failureClass: "erad", ...(stage ? { stage } : {}) };
   if (/\bram\b|ownership/.test(text)) return { failureClass: "ram-ownership", ...(stage ? { stage } : {}) };
+  if (["FLASH_PROGRAMMER_STATE", "FLASH_BOUNDARY_INVALID", "FLASH_LOAD_SESSION_QUARANTINED"].includes(feedback.failureSignature)) {
+    return { failureClass: "program-load", ...(stage ? { stage } : {}) };
+  }
   if (/flash|destructiveflash|resident/.test(text)) return { failureClass: "flash-protection", ...(stage ? { stage } : {}) };
   if (/program|symbol|load/.test(text) || feedback.failureSignature === "HOST_ARTIFACT_INVALID" || feedback.failureSignature === "PRELOADED_LOAD_SEMANTICS") return { failureClass: "program-load", ...(stage ? { stage } : {}) };
   if (/boot|handoff|startupcontract/.test(text) || feedback.failureSignature === "STARTUP_CONTRACT_INVALID") return { failureClass: "boot-handoff", ...(stage ? { stage } : {}) };
