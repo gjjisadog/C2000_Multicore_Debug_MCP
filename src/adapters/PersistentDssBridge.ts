@@ -71,7 +71,14 @@ export class PersistentDssBridge implements CcsScriptingBridge {
       if (!port) return [];
       return [[core.coreId, new PersistentCoreChannel({
         host: handle.host, port, coreId: core.coreId, coreName: core.coreName,
-        context: () => ({ adapterSessionId: options.adapterSessionId, diagnostics: handle.diagnostics?.() })
+        context: () => {
+          // A diagnostic callback must not break socket error/close handling.
+          try {
+            return { adapterSessionId: options.adapterSessionId, diagnostics: handle.diagnostics?.() };
+          } catch {
+            return { adapterSessionId: options.adapterSessionId, diagnostics: { captureFailed: true } };
+          }
+        }
       })] as const];
     }));
     this.sessions.set(options.adapterSessionId, { handle, channels });
@@ -115,10 +122,32 @@ export class PersistentDssBridge implements CcsScriptingBridge {
     const dssCommand = toDssCommand(command);
     const response = await channel.execute({ ...dssCommand, authToken: session.handle.authToken }, command.timeoutMs ?? this.options.timeoutMs ?? 15000);
     if (response.status === "FAIL") {
-      throw new DebugMcpError("DssCommandFailed", String(response.message ?? "DSS command failed"), {
+      // Freeze bounded output before session cleanup disposes the DSS process.
+      // Whitelist tails only; never serialize the handle or its authentication.
+      const redact = (value: string) => session.handle.authToken
+        ? value.split(session.handle.authToken).join("[REDACTED]") : value;
+      let diagnostics: Record<string, unknown> = {};
+      try {
+        const captured = session.handle.diagnostics?.() ?? {};
+        for (const key of ["stdoutTail", "stderrTail"] as const) {
+          if (typeof captured[key] === "string") {
+            const text = redact(captured[key]);
+            diagnostics[key] = text.slice(-12000);
+            if (text.length > 12000) diagnostics[`${key}Truncated`] = true;
+          }
+        }
+      } catch {
+        diagnostics = { captureFailed: true };
+      }
+      const safeResponse = JSON.parse(JSON.stringify(response, (_key, value) =>
+        typeof value === "string" ? redact(value) : value)) as Record<string, unknown>;
+      throw new DebugMcpError("DssCommandFailed", String(safeResponse.message ?? "DSS command failed"), {
         command: command.operation,
         coreId: command.coreId,
-        response
+        coreName: command.coreName,
+        adapterSessionId: command.adapterSessionId,
+        response: safeResponse,
+        diagnostics
       });
     }
     const result = typeof response.value === "object" && response.value !== null
@@ -747,6 +776,28 @@ function withCoreIdentity(command, value) {
   return result;
 }
 
+function describeCommandException(ex) {
+  var causes = [];
+  var current = ex;
+  try { if (ex.javaException) current = ex.javaException; } catch (ignoreJava) {}
+  for (var depth = 0; current && depth < 4; depth++) {
+    var item = { message: String(current).slice(0, 2048), stack: [] };
+    try {
+      var frames = current.getStackTrace();
+      for (var frame = 0; frame < frames.length && frame < 8; frame++) {
+        item.stack.push(String(frames[frame]).slice(0, 256));
+      }
+    } catch (ignoreFrames) {}
+    causes.push(item);
+    try {
+      var next = current.getCause();
+      if (next === current) break;
+      current = next;
+    } catch (ignoreCause) { break; }
+  }
+  return { causes: causes };
+}
+
 function handleCommand(command) {
   if (command.name === "shutdown") {
     return { status: "OK", value: { shutdown: true } };
@@ -949,9 +1000,10 @@ function startCoreThread(port, boundCoreId) {
               boundCoreId: boundCoreId,
               boundCoreName: boundCoreName,
               commandName: command && command.name,
-              message: String(ex)
+              message: String(ex).slice(0, 2048)
             });
-            writeResponse(output, { status: "FAIL", message: String(ex) });
+            writeResponse(output, { status: "FAIL", message: String(ex).slice(0, 2048),
+              details: describeCommandException(ex) });
           }
           line = input.readLine();
         }

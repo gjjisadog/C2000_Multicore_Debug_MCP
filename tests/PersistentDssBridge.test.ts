@@ -1,4 +1,5 @@
 import net from "node:net";
+import { runInNewContext } from "node:vm";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,6 +38,108 @@ describe("XDS launch retry policy", () => {
 });
 
 describe("PersistentDssBridge", () => {
+  test("serializes bounded Java causes and frames from the generated DSS helper", () => {
+    const source = persistentServerScriptSource("C:/ti/json2.js");
+    const start = source.indexOf("function describeCommandException(");
+    expect(start).toBeGreaterThan(0);
+    const helper = source.slice(start, source.indexOf("function handleCommand("));
+    const describe = (exception: unknown) => runInNewContext(
+      helper + "describeCommandException(exception)", { exception });
+    const cause = { toString: () => "Flash bank protected", getStackTrace: () => ["loader:42"],
+      getCause: () => null };
+    const result = describe({ javaException: { toString: () => "x".repeat(3000),
+      getStackTrace: () => Array(20).fill("x".repeat(300)), getCause: () => cause } });
+    expect(result.causes).toHaveLength(2);
+    expect(result.causes[0].message).toHaveLength(2048);
+    expect(result.causes[0].stack).toHaveLength(8);
+    expect(result.causes[0].stack[0]).toHaveLength(256);
+    expect(result.causes[1].message).toBe("Flash bank protected");
+    const cycle = { toString: () => "cycle", getCause: (): unknown => cycle };
+    expect(describe(cycle).causes).toHaveLength(1);
+    const indirect = { toString: () => "cycle2", getCause: () => cycle };
+    cycle.getCause = () => indirect;
+    expect(describe(cycle).causes).toHaveLength(4);
+    expect(describe("plain failure").causes[0].message).toBe("plain failure");
+    expect(describe({ toString: () => "original", getCause: () => { throw Error("unavailable"); }
+    }).causes[0].message).toBe("original");
+    expect(source).toContain("details: describeCommandException(ex)");
+  });
+
+  test("preserves bounded redacted load failure evidence after disposal without retry", async () => {
+    const received = new Map<number, unknown[]>();
+    const server = await startJsonLineServer(command => command.name === "shutdown"
+      ? { status: "OK", value: { shutdown: true } }
+      : { status: "FAIL", message: "Load failed " + TEST_AUTH_TOKEN,
+          details: { causes: [{ message: "Flash bank protected " + TEST_AUTH_TOKEN }] } }, received);
+    let disposed = false;
+    const output = { stdoutTail: "x".repeat(13000),
+      stderrTail: "Flash failure " + TEST_AUTH_TOKEN, authToken: TEST_AUTH_TOKEN };
+    const bridge = new PersistentDssBridge({ launcher: { async launch() {
+      return { host: "127.0.0.1", portsByCoreId: new Map([[2, server.port]]),
+        authToken: TEST_AUTH_TOKEN, diagnostics: () => output,
+        dispose: async () => { disposed = true; output.stderrTail = "disposed"; } };
+    } } });
+    await bridge.createSession({ adapterSessionId: "failure-evidence", sessionName: "failure",
+      ccxmlPath: "/tmp/target.ccxml", coreMap });
+    let failure: DebugMcpError | undefined;
+    try {
+      await bridge.execute({ adapterSessionId: "failure-evidence", operation: "loadProgram",
+        coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
+        ccxmlPath: "/tmp/target.ccxml", programUri: "/tmp/cpu2.out" });
+    } catch (error) { failure = error as DebugMcpError; }
+    await bridge.disposeSession("failure-evidence");
+    expect(disposed).toBe(true);
+    expect(failure?.code).toBe("DssCommandFailed");
+    expect(JSON.stringify(failure)).not.toContain(TEST_AUTH_TOKEN);
+    expect(failure?.details).toMatchObject({ command: "loadProgram", coreId: 2,
+      diagnostics: { stdoutTail: "x".repeat(12000), stdoutTailTruncated: true,
+        stderrTail: "Flash failure [REDACTED]" },
+      response: { details: { causes: [{ message: "Flash bank protected [REDACTED]" }] } } });
+    expect(failure?.details.diagnostics).not.toHaveProperty("authToken");
+    expect(received.get(server.port)).toEqual([
+      expect.objectContaining({ name: "load", coreId: 2 }),
+      expect.objectContaining({ name: "shutdown" })
+    ]);
+  });
+
+  test.each([false, true])("diagnostics unavailable/throwing (%s) cannot hide load failure", async throws => {
+    const server = await startJsonLineServer(command => command.name === "shutdown"
+      ? { status: "OK", value: {} } : { status: "FAIL", message: "original load failure" }, new Map());
+    const bridge = new PersistentDssBridge({ launcher: { async launch() {
+      return { host: "127.0.0.1", portsByCoreId: new Map([[2, server.port]]),
+        authToken: TEST_AUTH_TOKEN, dispose: async () => {},
+        ...(throws ? { diagnostics: () => { throw Error("diagnostics failed"); } } : {}) };
+    } } });
+    await bridge.createSession({ adapterSessionId: "missing-evidence", sessionName: "failure",
+      ccxmlPath: "/tmp/target.ccxml", coreMap });
+    try {
+      await expect(bridge.execute({ adapterSessionId: "missing-evidence", operation: "loadProgram",
+        coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2",
+        programUri: "/tmp/cpu2.out" })).rejects.toMatchObject({ code: "DssCommandFailed",
+          message: "original load failure", details: {
+            diagnostics: throws ? { captureFailed: true } : {}
+          } });
+    } finally { await bridge.disposeSession("missing-evidence"); }
+  });
+
+  test("successful commands do not collect failure diagnostics", async () => {
+    let captures = 0;
+    const server = await startJsonLineServer(command => ({ status: "OK", value: {
+      coreId: command.coreId, coreName: command.coreName, state: "Running" } }), new Map());
+    const bridge = new PersistentDssBridge({ launcher: { async launch() {
+      return { host: "127.0.0.1", portsByCoreId: new Map([[2, server.port]]),
+        authToken: TEST_AUTH_TOKEN, dispose: async () => {},
+        diagnostics: () => { captures++; return {}; } };
+    } } });
+    await bridge.createSession({ adapterSessionId: "success-evidence", sessionName: "success",
+      ccxmlPath: "/tmp/target.ccxml", coreMap });
+    try {
+      await bridge.execute({ adapterSessionId: "success-evidence", operation: "run",
+        coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" });
+      expect(captures).toBe(0);
+    } finally { await bridge.disposeSession("success-evidence"); }
+  });
+
   afterEach(async () => {
     for (const socket of acceptedSockets.splice(0)) socket.destroy();
     await Promise.all(startedServers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));

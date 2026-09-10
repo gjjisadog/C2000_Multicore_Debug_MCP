@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
@@ -8,6 +8,8 @@ import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId } from "../src/debug/types.js";
 import { SessionQueue } from "../src/utils/sessionQueue.js";
+import { DebugMcpError } from "../src/utils/errors.js";
+import { Logger } from "../src/utils/logger.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -19,6 +21,41 @@ function createManager() {
 }
 
 describe("DebugSessionManager", () => {
+  test("batch load persists the nested DSS evidence in its log after session close", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-loader-evidence-"));
+    const program = path.join(tempDir, "cpu2.out");
+    const logFile = path.join(tempDir, "loader.jsonl");
+    await writeFile(program, "mock-image-not-hardware");
+    const evidence = { command: "loadProgram", coreId: 2,
+      response: { details: { causes: [{ message: "Flash bank protected" }] } },
+      diagnostics: { stdoutTail: "Flash loader stdout", stderrTail: "Flash loader stderr" } };
+    class FailingLoadAdapter extends MockDebugAdapter {
+      loads = 0;
+      override async loadProgram(): Promise<void> {
+        this.loads++;
+        throw new DebugMcpError("DssCommandFailed", "Load failed", evidence);
+      }
+    }
+    const adapter = new FailingLoadAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry(),
+      new Logger("error", logFile));
+    const session = await manager.createDebugSession({ sessionName: "loader-evidence", coreMap });
+    let result;
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      result = await manager.loadPrograms(session.sessionId, [
+        { coreId: 2, programUri: program, ramOwnershipPolicy: "skip" }
+      ]);
+    } finally { await manager.closeDebugSession(session.sessionId); }
+    const expected = { code: "ProgramLoadFailed", details: {
+      coreId: 2, cause: { code: "DssCommandFailed", details: evidence }
+    } };
+    expect(result.results[0]).toMatchObject({ success: false, error: expected });
+    const lines = (await readFile(logFile, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    expect(lines.find(line => line.message === "program load failed").data).toMatchObject(expected);
+    expect(adapter.loads).toBe(1);
+  });
+
   test("system reset invalidates cached peer PC without reading a disconnected CPU2", async () => {
     const manager = createManager();
     const created = await manager.createDebugSession({ sessionName: "reset-pc", coreMap });

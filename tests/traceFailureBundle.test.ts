@@ -185,6 +185,31 @@ describe("automatic failure context bundle", () => {
     fixture.store.close();
   });
 
+  it("exports nested loader output after cleanup without claiming missing target evidence", async () => {
+    const fixture = await createFixture(false);
+    const error = { code: "ProgramLoadFailed", message: "CPU2 load failed", details: {
+      coreId: 2, cause: { code: "DssCommandFailed", message: "Load failed", details: {
+        command: "loadProgram", coreId: 2,
+        response: { details: { causes: [{ message: "Flash bank protected", stack: ["loader:42"] }] } },
+        diagnostics: { stdoutTail: "Flash loader stdout", stderrTail: "Flash loader stderr" }
+      } }
+    } };
+    try {
+      fixture.store.run("UPDATE test_runs SET error_json = ? WHERE job_id = ?",
+        [JSON.stringify(error), fixture.jobId]);
+      const result = await fixture.bundles.collect({ jobId: fixture.jobId });
+      expect(result.targetAccessAttempted).toBe(false);
+      expect(result.completeness).toBe("INCOMPLETE");
+      const saved = JSON.parse(await readFile(
+        path.join(fixture.directory, "failure-bundle", "failure.json"), "utf8"));
+      expect(saved.error).toEqual(error);
+      expect(result.items).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "failure", status: "COLLECTED" }),
+        expect.objectContaining({ name: "target-state", status: "MISSING" })
+      ]));
+    } finally { fixture.store.close(); }
+  });
+
   it("uses persisted live pre-cleanup launch evidence after the session is closed", async () => {
     const fixture = await createFixture(false);
     const step = fixture.runs.steps(fixture.jobId)[0]!;
