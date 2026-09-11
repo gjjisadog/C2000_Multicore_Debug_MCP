@@ -77,6 +77,23 @@ describe("map RAM ownership analysis", () => {
     ]));
   });
 
+  test("preserves TI name-only codestart rows for application-entry checks", () => {
+    const parsed = parseLinkerMap(`
+MEMORY CONFIGURATION
+  FLASH_BANK0           00080000   00001000  00000102  00000efe  RWIX
+
+SECTION ALLOCATION MAP
+codestart
+                  0    00080000    00000002
+.text             0    00080002    00000100
+`, { coreId: 0, mapPath: "/tmp/cpu1.map" });
+
+    expect(parsed.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "codestart", origin: 0x80000, length: 2, memoryRegion: "FLASH_BANK0" }),
+      expect.objectContaining({ name: ".text", origin: 0x80002, length: 0x100 })
+    ]));
+  });
+
   test("emits CPU1 MEMCFG writes required before loading CPU2 programs that use GS RAM", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-map-ownership-"));
     const cpu2Map = path.join(tempDir, "cpu2.map");
