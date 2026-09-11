@@ -1,6 +1,19 @@
 import { describe, expect, test } from "vitest";
 import { classifyDebugFailure, classifyIpcAcceptance } from "../src/debug/DebugFailureClassifier.js";
 
+describe("classifyDebugFailure", () => {
+  test("classifies application-entry failure without recommending an automatic retry", () => {
+    expect(classifyDebugFailure({
+      code: "ApplicationEntryNotReached",
+      details: { diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED", cpu2ReconnectSkipped: true }
+    })).toEqual(expect.objectContaining({
+      failureSignature: "APPLICATION_ENTRY_NOT_REACHED",
+      nextAction: "read-only-diagnosis",
+      automaticRetry: "never"
+    }));
+  });
+});
+
 describe("classifyIpcAcceptance", () => {
   test("prioritizes host artifact repair over a misleading IPC timeout", () => {
     const result = classifyIpcAcceptance({

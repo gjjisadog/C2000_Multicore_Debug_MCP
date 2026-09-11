@@ -516,6 +516,7 @@ describe("MCP tool registration contract", () => {
         "launch.connected.results[].coreId",
         "snapshot.cores[].coreId",
         "ipcReady.conditions[].coreId",
+        "applicationEntry.coreId",
         "diagnosis.cpu1.coreId",
         "diagnosis.cpu2.coreId",
         "diagnosis.snapshot.cores[].coreId",
@@ -524,6 +525,7 @@ describe("MCP tool registration contract", () => {
       ["c2000_runIpcAcceptance", [
         "snapshot.cores[].coreId",
         "ipcReady.conditions[].coreId",
+        "applicationEntry.coreId",
         "diagnosis.cpu1.coreId",
         "diagnosis.cpu2.coreId",
         "diagnosis.snapshot.cores[].coreId",
@@ -540,6 +542,7 @@ describe("MCP tool registration contract", () => {
       ["c2000_runReloadAndDiagnose", [
         "snapshot.cores[].coreId",
         "wait.conditions[].coreId",
+        "applicationEntry.coreId",
         "diagnosis.cpu1.coreId",
         "diagnosis.cpu2.coreId",
         "diagnosis.snapshot.cores[].coreId",

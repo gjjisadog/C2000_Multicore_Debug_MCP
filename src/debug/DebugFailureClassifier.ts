@@ -12,6 +12,7 @@ export interface IpcOptimizationInput {
   };
   elfFreshness?: { allFresh?: boolean };
   runtimeRamOwnership?: { requested?: boolean; matched?: boolean; supported?: boolean };
+  applicationEntry?: { configured?: boolean; reached?: boolean; timedOut?: boolean };
   runPlan?: { mode?: string; coreOrder?: number[] };
 }
 
@@ -24,7 +25,8 @@ export interface IpcOptimizationFeedback {
     | "RAM_OWNERSHIP_UNVERIFIED"
     | "IPC_EXPRESSION_UNREADABLE"
     | "IPC_READY_TIMEOUT"
-    | "IPC_CONDITION_MISMATCH";
+    | "IPC_CONDITION_MISMATCH"
+    | "APPLICATION_ENTRY_NOT_REACHED";
   evidencePriority: string[];
   nextAction: "accept" | "host-artifact-repair" | "read-only-diagnosis" | "manual-firmware-review";
   automaticRetry: "never";
@@ -44,6 +46,7 @@ export interface DebugFailureFeedback {
     | "STARTUP_CONTRACT_INVALID"
     | "SAFETY_FENCE"
     | "IPC_HANDSHAKE_TIMEOUT"
+    | "APPLICATION_ENTRY_NOT_REACHED"
     | "TARGET_OPERATION_FAILED";
   nextAction: "readiness-recheck" | "host-artifact-repair" | "read-only-diagnosis" | "manual-intervention";
   automaticRetry: "never";
@@ -83,6 +86,10 @@ export function classifyDebugFailure(input: {
   }
   if (hasCode("SafetyGuardViolation")) {
     return failureFeedback("SAFETY_FENCE", "manual-intervention", "A safety guard or fenced halt failed; preserve the board quarantine and require an explicit safety review before another target action.");
+  }
+  if (hasCode("ApplicationEntryNotReached", "ApplicationEntryNotConfigured", "Cpu1OnlyResetRequired")
+    || /APPLICATION_ENTRY_NOT_REACHED/i.test(text)) {
+    return failureFeedback("APPLICATION_ENTRY_NOT_REACHED", "read-only-diagnosis", "CPU1 did not reach the declared application code before the bounded entry check; CPU2 was intentionally left disconnected and IPC readiness was not polled.");
   }
   if (hasCode("ExpressionWaitTimeout") || /IPC_READY_TIMEOUT|IPC readiness timed out/i.test(text)) {
     return failureFeedback("IPC_HANDSHAKE_TIMEOUT", "read-only-diagnosis", "The IPC handshake did not reach its declared conditions; inspect first-failure evidence and final PC before any retry.");
@@ -131,6 +138,9 @@ export function classifyIpcAcceptance(input: IpcOptimizationInput): IpcOptimizat
 
   if (input.runPlan?.coreOrder?.length === 0) {
     return feedback("RUN_PLAN_EMPTY", "manual-firmware-review", "The resolved run plan starts no core; verify runMode or legacy run flags before touching the target.", ["runPlan", "loadSequence"] , failedConditions);
+  }
+  if (input.applicationEntry?.reached === false) {
+    return feedback("APPLICATION_ENTRY_NOT_REACHED", "read-only-diagnosis", "CPU1 did not reach the declared application code; inspect bounded PC samples and startup-state evidence before interpreting IPC readiness.", ["applicationEntry", "startupEvidence", "runPlan"], failedConditions);
   }
   if (input.elfFreshness?.allFresh === false) {
     return feedback("ELF_STALE", "host-artifact-repair", "The loaded program metadata does not match the host artifact; rebuild or reload the exact .out before interpreting IPC state.", ["elfFreshness", "artifactPair", "programSha256"], failedConditions);

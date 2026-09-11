@@ -331,12 +331,30 @@ function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMa
   const sections: LinkerMapSection[] = [];
   const lines = text.split(/\r?\n/);
   let inSectionMap = false;
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
     if (line.includes("SECTION ALLOCATION MAP")) {
       inSectionMap = true;
       continue;
     }
     if (!inSectionMap) {
+      continue;
+    }
+    // TI map files may emit codestart as a name-only row followed by its
+    // allocation row. Preserve it so startup workflows can verify the actual
+    // CPU1 application entry rather than falling back to an arbitrary section.
+    if (/^\s*codestart\s*$/i.test(line)) {
+      const allocation = lines[index + 1]?.match(/^\s*\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/);
+      if (allocation) {
+        const origin = Number.parseInt(allocation[2]!, 16);
+        sections.push({
+          name: "codestart",
+          page: Number.parseInt(allocation[1]!, 10),
+          origin,
+          length: Number.parseInt(allocation[3]!, 16),
+          memoryRegion: regionForAddress(origin, regions)?.name
+        });
+      }
       continue;
     }
     const match = /^([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/.exec(line);

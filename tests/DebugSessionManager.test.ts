@@ -101,6 +101,30 @@ describe("DebugSessionManager", () => {
     }
   });
 
+  test("disconnectTarget does not perform a post-disconnect DSS state read", async () => {
+    class DisconnectReadbackFailAdapter extends MockDebugAdapter {
+      override async getState(session: AdapterSession, coreId: CoreId) {
+        const state = await super.getState(session, coreId);
+        if (coreId === 2 && !state.connected) {
+          throw new DebugMcpError("DssCommandFailed", "simulated DSS -1137 after CPU2 disconnect");
+        }
+        return state;
+      }
+    }
+    const manager = new DebugSessionManager(new DisconnectReadbackFailAdapter(), new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ sessionName: "disconnect-no-readback", coreMap });
+    try {
+      await manager.connectTarget(created.sessionId, 2);
+      await expect(manager.disconnectTarget(created.sessionId, 2)).resolves.toMatchObject({
+        coreId: 2,
+        connected: false,
+        state: "Disconnected"
+      });
+    } finally {
+      await manager.closeDebugSession(created.sessionId);
+    }
+  });
+
   test("creates a logical debug session and lists CPU1/CPU2 without relying on UI focus", async () => {
     const manager = createManager();
 

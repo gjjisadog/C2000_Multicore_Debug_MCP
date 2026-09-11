@@ -386,7 +386,15 @@ export class DebugSessionManager {
       core.active = false;
       core.state = "Disconnected";
       this.logger.info("core disconnected", { sessionId, coreId, coreName: core.coreName });
-      return this.getTargetStateUnlocked(sessionId, coreId);
+      // A firmware-owned CPU2 handoff can leave the core in reset/wait-boot;
+      // querying DSS again after disconnect is unnecessary and may surface
+      // DSS -1137. The local transition is authoritative until reconnect.
+      return {
+        coreId: core.coreId,
+        coreName: core.coreName,
+        connected: false,
+        state: "Disconnected" as const
+      };
     });
   }
 

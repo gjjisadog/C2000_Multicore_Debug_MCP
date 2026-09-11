@@ -17,9 +17,10 @@ import type {
 } from "../mcp/toolSchemas.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { buildBootHandoffVerdict } from "../debug/bootHandoffVerdict.js";
-import { defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
+import { DEFAULT_CPU1_BOOT_EXPRESSIONS, defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
 import { classifyDebugFailure, classifyIpcAcceptance } from "../debug/DebugFailureClassifier.js";
 import { describeWorkflowStartupContract, workflowStartupContractIssues } from "../debug/startupContract.js";
+import { createApplicationEntryPlan, waitForApplicationEntry, type ApplicationEntryCheck } from "../debug/applicationEntry.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
@@ -47,6 +48,21 @@ export class DebugWorkflowService {
     let sessionId: string | undefined;
     const workflowStartedAt = performance.now();
     const cleanup: ToolResult = { sessionClosed: false, probeLeaseReleased: false, cleanupErrors: [], cleanupDurationMs: 0 };
+    let cleanupAttempted = false;
+    const cleanupSession = async () => {
+      if (!sessionId || cleanupAttempted) return;
+      cleanupAttempted = true;
+      const cleanupStartedAt = performance.now();
+      try {
+        await this.manager.closeDebugSession(sessionId);
+        cleanup.sessionClosed = true;
+        cleanup.probeLeaseReleased = true;
+      } catch (cleanupError) {
+        cleanup.cleanupErrors.push(toStructuredError(cleanupError));
+      } finally {
+        cleanup.cleanupDurationMs = performance.now() - cleanupStartedAt;
+      }
+    };
 
     try {
       const created = await this.manager.createDebugSession({
@@ -99,35 +115,28 @@ export class DebugWorkflowService {
       };
     } catch (error) {
       const launch: ToolResult = { sessionName, coreIds };
-      if (sessionId && input.sessionMode === "interactive") {
+      if (sessionId) {
         launch.sessionId = sessionId;
-        try {
-          await this.manager.closeDebugSession(sessionId);
-          launch.cleanedUp = true;
-        } catch (cleanupError) {
+        const shouldCleanup = input.sessionMode === "ephemeral" || input.cleanupOnFailure;
+        if (shouldCleanup) {
+          await cleanupSession();
+          launch.cleanedUp = cleanup.sessionClosed && cleanup.probeLeaseReleased && cleanup.cleanupErrors.length === 0;
+          if (cleanup.cleanupErrors.length > 0) {
+            launch.cleanupError = cleanup.cleanupErrors[0];
+          }
+        } else {
           launch.cleanedUp = false;
-          launch.cleanupError = toStructuredError(cleanupError);
+          launch.preservedForRecovery = true;
         }
       }
       const cause = toStructuredError(error);
       throw new DebugMcpError(
         "PostLaunchCheckFailed",
         "Launch and IPC acceptance workflow failed",
-        { launch, cause, optimization: classifyDebugFailure(cause) }
+        { launch, cause, cleanup, optimization: classifyDebugFailure(cause) }
       );
     } finally {
-      if (sessionId && input.sessionMode === "ephemeral") {
-        const cleanupStartedAt = performance.now();
-        try {
-          await this.manager.closeDebugSession(sessionId);
-          cleanup.sessionClosed = true;
-          cleanup.probeLeaseReleased = true;
-        } catch (cleanupError) {
-          cleanup.cleanupErrors.push(toStructuredError(cleanupError));
-        } finally {
-          cleanup.cleanupDurationMs = performance.now() - cleanupStartedAt;
-        }
-      }
+      if (sessionId && input.sessionMode === "ephemeral") await cleanupSession();
     }
   }
 
@@ -194,6 +203,25 @@ export class DebugWorkflowService {
     // partially reset or partially loaded multicore session behind.
     const ramOwnership = await this.analyzeRamOwnership({ maps });
     performedSteps.push("artifactPreflight", "analyzeRamOwnership");
+    const applicationEntryPlan = runPlan.releaseCpu2BeforeCpu1
+      ? createApplicationEntryPlan({
+        coreId: input.cpu1CoreId,
+        explicitAddress: input.cpu1EntryAddress,
+        map: ramOwnership.maps.find(map => map.coreId === input.cpu1CoreId)
+      })
+      : undefined;
+    if (applicationEntryPlan && !applicationEntryPlan.configured) {
+      throw new DebugMcpError("ApplicationEntryNotConfigured", "Firmware-owned CPU2 boot requires a CPU1 application entry that can be verified from the linker map or an explicit cpu1EntryAddress", {
+        sessionId: input.sessionId,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu1MapPath: input.cpu1MapPath,
+        applicationEntry: applicationEntryPlan,
+        diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED"
+      });
+    }
+    if (runPlan.releaseCpu2BeforeCpu1) {
+      assertCpu1OnlyResetType(input.postLoadResetType ?? "restart", input.sessionId, input.cpu1CoreId);
+    }
     if (input.preStartupSafetyGuard) {
       assertPreStartupSafetyGuardScope(input.preStartupSafetyGuard, coreIds);
     }
@@ -304,6 +332,7 @@ export class DebugWorkflowService {
     setStage("run-sequence");
     let cpu2Release: ToolResult | undefined;
     let postLoadReset: ToolResult | undefined;
+    let applicationEntry: ApplicationEntryCheck | undefined;
     if (runPlan.releaseCpu2BeforeCpu1) {
       setStage("cpu2-connect-initialization-disable");
       const preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu2CoreId);
@@ -317,18 +346,53 @@ export class DebugWorkflowService {
       performedSteps.push("disconnectCpu2BeforeCpu1");
       // The CPU2 Flash plugin may leave CPU1 at a loader PC in shared RAM.
       // Never resume that PC. Only CPU1 is restarted; it owns CPU2 boot.
-      if (input.programPreparation !== "symbols-only" || input.postLoadResetType) {
-        setStage("post-load-cpu1-reset");
-        postLoadReset = await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
-          input.postLoadResetType ?? "restart");
-        performedSteps.push("resetCpu1AfterLoad");
-      }
+      setStage("post-load-cpu1-reset");
+      postLoadReset = await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
+        input.postLoadResetType ?? "restart");
+      performedSteps.push("resetCpu1AfterLoad");
     }
     setStage("run-sequence");
-    for (const coreId of runPlan.coreOrder) {
-      await this.manager.runCore(input.sessionId, coreId);
-      performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
+    if (runPlan.releaseCpu2BeforeCpu1) {
+      await this.manager.runCore(input.sessionId, input.cpu1CoreId);
+      performedSteps.push("runCpu1");
+      applicationEntry = await waitForApplicationEntry(this.manager, {
+        sessionId: input.sessionId,
+        plan: applicationEntryPlan!,
+        timeoutMs: input.applicationEntryTimeoutMs,
+        intervalMs: Math.min(input.intervalMs, input.applicationEntryTimeoutMs)
+      });
+      performedSteps.push("verifyCpu1ApplicationEntry");
+      if (!applicationEntry.reached) {
+        setStage("application-entry-diagnosis");
+        const startupEvidence = await collectCpu1OnlyStartupEvidence(this.manager, {
+          sessionId: input.sessionId,
+          cpu1CoreId: input.cpu1CoreId,
+          cpu2CoreId: input.cpu2CoreId,
+          applicationEntry,
+          postLoadReset,
+          bootModeExpression: input.bootModeExpression,
+          cpu1ResetStateExpression: input.cpu1ResetStateExpression,
+          bootSyncExpressions: input.bootSyncExpressions,
+          ipcReadyExpressions: input.ipcReadyExpressions
+        });
+        throw new DebugMcpError("ApplicationEntryNotReached", "CPU1 did not enter the declared application code before the bounded entry check expired; CPU2 was not reconnected and IPC readiness was skipped", {
+          sessionId: input.sessionId,
+          cpu1CoreId: input.cpu1CoreId,
+          cpu2CoreId: input.cpu2CoreId,
+          diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED",
+          applicationEntry,
+          startupEvidence,
+          ipcReadySkipped: true,
+          performedSteps
+        });
+      }
       await sleep(input.runSequence.settleMs);
+    } else {
+      for (const coreId of runPlan.coreOrder) {
+        await this.manager.runCore(input.sessionId, coreId);
+        performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
+        await sleep(input.runSequence.settleMs);
+      }
     }
     if (runPlan.releaseCpu2BeforeCpu1) {
       setStage("cpu2-reconnect");
@@ -366,12 +430,13 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       ipcReady,
+      applicationEntry,
       extraExpressions: conditions,
       ipcAcceptance: true,
       cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
       cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
     });
-    const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan });
+    const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan, applicationEntry });
     performedSteps.push("diagnoseBootHandoff");
     const result: ToolResult = {
       workflow: "c2000_runIpcAcceptance",
@@ -409,6 +474,7 @@ export class DebugWorkflowService {
       } : {}),
       postLoadHalt,
       ...(postLoadReset ? { postLoadReset } : {}),
+      ...(applicationEntry ? { applicationEntry } : {}),
       snapshot,
       artifactPreflight,
       ramOwnership,
@@ -478,6 +544,8 @@ export class DebugWorkflowService {
       runCpu1: input.runCpu1,
       runCpu2: input.runCpu2,
       postLoadBoot: input.postLoadBoot ?? null,
+      cpu1EntryAddress: input.cpu1EntryAddress ?? null,
+      applicationEntryTimeoutMs: input.applicationEntryTimeoutMs,
       timeoutMs: input.timeoutMs,
       intervalMs: input.intervalMs
     };
@@ -500,6 +568,26 @@ export class DebugWorkflowService {
       const maps = this.normalizeMaps(mapsFromPaths(input));
       const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
       if (ramOwnership) performedSteps.push("analyzeRamOwnership");
+      const firmwareOwned = input.postLoadBoot?.releaseCpu2BeforeCpu1 === true;
+      const applicationEntryPlan = firmwareOwned
+        ? createApplicationEntryPlan({
+          coreId: input.cpu1CoreId,
+          explicitAddress: input.cpu1EntryAddress,
+          map: ramOwnership?.maps.find(map => map.coreId === input.cpu1CoreId)
+        })
+        : undefined;
+      if (applicationEntryPlan && !applicationEntryPlan.configured) {
+        throw new DebugMcpError("ApplicationEntryNotConfigured", "Firmware-owned CPU2 boot requires a CPU1 application entry that can be verified from the linker map or an explicit cpu1EntryAddress", {
+          sessionId: input.sessionId,
+          cpu1CoreId: input.cpu1CoreId,
+          cpu1MapPath: input.cpu1MapPath,
+          applicationEntry: applicationEntryPlan,
+          diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED"
+        });
+      }
+      if (firmwareOwned) {
+        assertCpu1OnlyResetType(input.postLoadBoot!.resetType as ResetType, input.sessionId, input.cpu1CoreId);
+      }
       targetAccessAttempted = true;
       const halt = await this.manager.haltCores(input.sessionId, coreIds);
       performedSteps.push("haltCores");
@@ -539,6 +627,7 @@ export class DebugWorkflowService {
       let postLoadReset: ToolResult | undefined;
       let postLoadResetHalt: ToolResult | undefined;
       let cpu2Release: ToolResult | undefined;
+      let applicationEntry: ApplicationEntryCheck | undefined;
       const postLoadBoot = input.postLoadBoot;
       if (postLoadBoot && !postLoadBoot.releaseCpu2BeforeCpu1) {
         workflowStage = "post-load-reset";
@@ -583,6 +672,40 @@ export class DebugWorkflowService {
         workflowStage = "run-sequence";
         await this.manager.runCore(input.sessionId, input.cpu1CoreId);
         performedSteps.push("runCpu1");
+        if (postLoadBoot?.releaseCpu2BeforeCpu1) {
+          workflowStage = "cpu1-application-entry";
+          applicationEntry = await waitForApplicationEntry(this.manager, {
+            sessionId: input.sessionId,
+            plan: applicationEntryPlan!,
+            timeoutMs: input.applicationEntryTimeoutMs,
+            intervalMs: Math.min(input.intervalMs, input.applicationEntryTimeoutMs)
+          });
+          performedSteps.push("verifyCpu1ApplicationEntry");
+          if (!applicationEntry.reached) {
+            workflowStage = "application-entry-diagnosis";
+            const startupEvidence = await collectCpu1OnlyStartupEvidence(this.manager, {
+              sessionId: input.sessionId,
+              cpu1CoreId: input.cpu1CoreId,
+              cpu2CoreId: input.cpu2CoreId,
+              applicationEntry,
+              postLoadReset,
+              bootModeExpression: input.bootModeExpression,
+              cpu1ResetStateExpression: input.cpu1ResetStateExpression,
+              bootSyncExpressions: input.bootSyncExpressions,
+              ipcReadyExpressions: input.waitExpressions
+            });
+            throw new DebugMcpError("ApplicationEntryNotReached", "CPU1 did not enter the declared application code before the bounded entry check expired; CPU2 was not reconnected", {
+              sessionId: input.sessionId,
+              cpu1CoreId: input.cpu1CoreId,
+              cpu2CoreId: input.cpu2CoreId,
+              diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED",
+              applicationEntry,
+              startupEvidence,
+              ipcReadySkipped: true,
+              performedSteps
+            });
+          }
+        }
       }
       if (postLoadBoot && runCpu1 && (runCpu2 || postLoadBoot.releaseCpu2BeforeCpu1) && postLoadBoot.cpu1SettleMs > 0) {
         await sleep(postLoadBoot.cpu1SettleMs);
@@ -623,7 +746,8 @@ export class DebugWorkflowService {
         ramOwnership,
         elfFreshness,
         runtimeRamOwnership,
-        ipcReady: wait
+        ipcReady: wait,
+        applicationEntry
       });
       performedSteps.push("diagnoseBootHandoff");
       const result: ToolResult = {
@@ -671,6 +795,7 @@ export class DebugWorkflowService {
         elfFreshness,
         runtimeRamOwnership,
         ...(wait ? { wait } : {}),
+        ...(applicationEntry ? { applicationEntry } : {}),
         diagnosis
       };
       if (input.collectDebugBundle) {
@@ -788,6 +913,7 @@ export class DebugWorkflowService {
     elfFreshness?: ToolResult;
     runtimeRamOwnership?: ToolResult;
     ipcReady?: ToolResult;
+    applicationEntry?: ApplicationEntryCheck;
     extraExpressions?: ExpressionCondition[];
     ipcAcceptance?: boolean;
     evidence?: DebugEvidence;
@@ -842,13 +968,16 @@ export class DebugWorkflowService {
         ? bootVerdict.reasons
         : [...bootVerdict.reasons, "Runtime RAM ownership verification was requested but did not match."]
     };
+    const applicationEntryNotReached = options.applicationEntry?.reached === false;
     const ipcTimedOut = options.ipcReady?.timedOut === true;
-    const diagnosisCode = ipcTimedOut
+    const diagnosisCode = applicationEntryNotReached
+      ? "APPLICATION_ENTRY_NOT_REACHED"
+      : ipcTimedOut
       ? "IPC_READY_TIMEOUT"
       : verdict.ready
         ? (options.ipcAcceptance ? "IPC_ACCEPTANCE_READY" : "BOOT_HANDOFF_READY")
         : (options.ipcAcceptance ? "IPC_ACCEPTANCE_NOT_READY" : "BOOT_HANDOFF_NOT_READY");
-    const severity = diagnosisCode === "IPC_READY_TIMEOUT"
+    const severity = diagnosisCode === "APPLICATION_ENTRY_NOT_REACHED" || diagnosisCode === "IPC_READY_TIMEOUT"
       ? "error"
       : diagnosisCode === "BOOT_HANDOFF_NOT_READY" || diagnosisCode === "IPC_ACCEPTANCE_NOT_READY"
         ? "warning"
@@ -882,6 +1011,7 @@ export class DebugWorkflowService {
         verdict
       },
       ...boot,
+      ...(options.applicationEntry ? { applicationEntry: options.applicationEntry } : {}),
       verdict,
       ...(options.ramOwnership ? { ramOwnership: options.ramOwnership } : {}),
       ...(options.elfFreshness ? { elfFreshness: options.elfFreshness } : {}),
@@ -1393,6 +1523,114 @@ function assertBatchSucceeded(label: string, result: ToolResult): void {
   }
 }
 
+function assertCpu1OnlyResetType(resetType: ResetType, sessionId: string, cpu1CoreId: CoreId): void {
+  if (resetType === "system" || resetType === "default") {
+    throw new DebugMcpError("Cpu1OnlyResetRequired", "Firmware-owned CPU2 boot requires a CPU1-only cpu or restart reset after CPU2 disconnect", {
+      sessionId,
+      cpu1CoreId,
+      requestedResetType: resetType,
+      allowedResetTypes: ["cpu", "restart"],
+      diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED"
+    });
+  }
+}
+
+async function collectCpu1OnlyStartupEvidence(
+  manager: Pick<DebugSessionManager, "haltCore" | "getMulticoreSnapshot" | "evaluateMany">,
+  options: {
+    sessionId: string;
+    cpu1CoreId: CoreId;
+    cpu2CoreId: CoreId;
+    applicationEntry: ApplicationEntryCheck;
+    postLoadReset?: ToolResult;
+    bootModeExpression?: string;
+    cpu1ResetStateExpression?: string;
+    bootSyncExpressions?: string[];
+    ipcReadyExpressions?: ExpressionCondition[];
+  }
+): Promise<ToolResult> {
+  let halt: ToolResult;
+  try {
+    halt = await manager.haltCore(options.sessionId, options.cpu1CoreId);
+  } catch (error) {
+    halt = { success: false, error: toStructuredError(error) };
+  }
+
+  let snapshot: ToolResult;
+  try {
+    snapshot = await manager.getMulticoreSnapshot(options.sessionId, [options.cpu1CoreId]);
+  } catch (error) {
+    snapshot = { success: false, error: toStructuredError(error) };
+  }
+
+  const requestedBootSyncExpressions = options.bootSyncExpressions?.length
+    ? options.bootSyncExpressions
+    : (options.ipcReadyExpressions ?? [])
+      .filter(condition => condition.coreId === options.cpu1CoreId)
+      .map(condition => condition.expression);
+  const bootSyncExpressions = requestedBootSyncExpressions.length > 0
+    ? requestedBootSyncExpressions
+    : [...DEFAULT_CPU1_BOOT_EXPRESSIONS];
+  const expressions = [...new Set([
+    ...(options.bootModeExpression ? [options.bootModeExpression] : []),
+    ...(options.cpu1ResetStateExpression ? [options.cpu1ResetStateExpression] : []),
+    ...bootSyncExpressions
+  ])];
+  let results: EvaluateResult[] = [];
+  let evaluationError: ToolResult | undefined;
+  try {
+    results = await manager.evaluateMany(options.sessionId, options.cpu1CoreId, expressions);
+  } catch (error) {
+    evaluationError = toStructuredError(error);
+  }
+  const resultFor = (expression: string | undefined): ToolResult | undefined => {
+    if (!expression) return undefined;
+    const result = results.find(item => item.expression === expression);
+    return {
+      expression,
+      ...(result ? { result } : {}),
+      ...(evaluationError ? { evaluationError } : {})
+    };
+  };
+  const bootSyncResults = bootSyncExpressions.map(expression => ({
+    expression,
+    result: results.find(result => result.expression === expression)
+  }));
+  const cpu1Snapshot = Array.isArray(snapshot.cores)
+    ? snapshot.cores.find((core: ToolResult) => core.coreId === options.cpu1CoreId)
+    : undefined;
+  return {
+    capturedAt: new Date().toISOString(),
+    targetAccessPolicy: "cpu1-only-after-cpu2-disconnect",
+    applicationEntry: options.applicationEntry,
+    cpu1: {
+      coreId: options.cpu1CoreId,
+      halt,
+      snapshot: cpu1Snapshot,
+      reset: options.postLoadReset,
+      bootMode: resultFor(options.bootModeExpression) ?? { status: "not-configured" },
+      resetState: resultFor(options.cpu1ResetStateExpression) ?? {
+        status: "target-state",
+        state: cpu1Snapshot?.state,
+        connected: cpu1Snapshot?.connected
+      },
+      bootSync: {
+        status: evaluationError ? "evaluation-failed" : "recorded",
+        expressions: bootSyncResults,
+        ...(evaluationError ? { evaluationError } : {})
+      }
+    },
+    cpu2: {
+      coreId: options.cpu2CoreId,
+      connected: false,
+      state: "Disconnected",
+      targetOperationsSuppressed: true,
+      reason: "CPU2 remained disconnected because CPU1 application entry was not confirmed."
+    },
+    ipcReadySkipped: true
+  };
+}
+
 function assertPreStartupSafetyGuardScope(
   guard: { conditions: Array<{ coreId: number }>; haltCoreIds: number[] },
   coreIds: readonly number[]
@@ -1569,6 +1807,7 @@ function summaryMarkdown(result: ToolResult): string {
     `- verdictReady: ${String(evidence.verdictReady)}`,
     `- runtimeRamOwnershipMatched: ${String(evidence.runtimeRamOwnership?.matched ?? "n/a")}`,
     `- failureSignature: ${String(evidence.optimization?.failureSignature ?? "n/a")}`,
+    `- applicationEntryReached: ${String(evidence.applicationEntry?.reached ?? "n/a")}`,
     "",
     "## IPC conditions",
     "",
@@ -1617,6 +1856,8 @@ function compactEvidence(result: ToolResult) {
     artifactPreflight: result.artifactPreflight,
     runtimeRamOwnership: result.runtimeRamOwnership ?? diagnosis.runtimeRamOwnership,
     optimization: result.optimization,
+    applicationEntry: result.applicationEntry ?? diagnosis.applicationEntry,
+    startupEvidence: result.startupEvidence,
     programs,
     pc,
     runPlan: result.runPlan,

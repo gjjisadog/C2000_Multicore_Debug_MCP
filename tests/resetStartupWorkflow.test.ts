@@ -16,6 +16,7 @@ class StartupAdapter extends MockDebugAdapter {
   events: string[] = [];
   fail?: "prepare" | "post-load-reset";
   private handedOff = false;
+  private readonly runningCores = new Set<CoreId>();
 
   override async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId) {
     this.events.push(`prepare:${coreId}`);
@@ -41,6 +42,10 @@ class StartupAdapter extends MockDebugAdapter {
   override async run(session: AdapterSession, coreId: CoreId) {
     this.events.push(`run:${coreId}`);
     await super.run(session, coreId);
+    this.runningCores.add(coreId);
+  }
+  override async readPc(session: AdapterSession, coreId: CoreId): Promise<string> {
+    return this.runningCores.has(coreId) ? "0x00008010" : super.readPc(session, coreId);
   }
   override async loadProgram(session: AdapterSession, coreId: CoreId, uri: string) {
     this.events.push(`load:${coreId}`);
@@ -60,7 +65,7 @@ async function fixture() {
   };
   for (const file of Object.values(paths)) {
     await writeFile(file, file.endsWith(".map")
-      ? "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n"
+      ? "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\nSECTION ALLOCATION MAP\n.text      0    00008000    00000100\n"
       : "host-only dummy image");
   }
   const adapter = new StartupAdapter({ expressionValues: { "ipc.ready": { value: "1" } } });
@@ -80,7 +85,7 @@ async function fixture() {
 }
 
 describe("post-load reset and firmware-owned handoff", () => {
-  test.each([undefined, "system", "restart"] as const)("IPC loads use CPU1-only post-load reset (%s)", async type => {
+  test.each([undefined, "restart"] as const)("IPC loads use CPU1-only post-load reset (%s)", async type => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance({ ...input, postLoadResetType: type });
     expect(result.success).toBe(true);
@@ -92,14 +97,24 @@ describe("post-load reset and firmware-owned handoff", () => {
     expect(result.effectsApplied).toContain("debugger-gel-unload");
   });
 
-  test("symbols-only does not acquire an implicit extra reset", async () => {
+  test("symbols-only uses the CPU1-only reset before application-entry confirmation", async () => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance({ ...input, programPreparation: "symbols-only" });
     expect(result.success).toBe(true);
     expect(adapter.events).toEqual([
-      "reset:0:cpu", "reset:2:cpu", "prepare:2", "disconnect:2", "run:0", "connect:2"
+      "reset:0:cpu", "reset:2:cpu", "prepare:2", "disconnect:2", "reset:0:restart", "run:0", "connect:2"
     ]);
-    expect(result.postLoadReset).toBeUndefined();
+    expect(result.postLoadReset).toEqual(expect.objectContaining({ coreId: 0, state: "Halted" }));
+  });
+
+  test("rejects a system reset after CPU2 is disconnected", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({ ...input, postLoadResetType: "system" });
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "Cpu1OnlyResetRequired" })
+    }));
+    expect(adapter.events).toEqual([]);
   });
 
   test("postLoadResetType is rejected for debugger-owned startup before target mutation", async () => {
@@ -115,7 +130,7 @@ describe("post-load reset and firmware-owned handoff", () => {
     const { adapter, handlers, input } = await fixture();
     adapter.fail = "prepare";
     const result = mode === "ipc" ? handlers.runIpcAcceptance(input) : handlers.runReloadAndDiagnose({
-      ...input, postLoadBoot: { resetType: "system", releaseCpu2BeforeCpu1: true, runCpu1: true, runCpu2: false, cpu1SettleMs: 0 }
+      ...input, postLoadBoot: { resetType: "restart", releaseCpu2BeforeCpu1: true, runCpu1: true, runCpu2: false, cpu1SettleMs: 0 }
     });
     await expect(result).resolves.toMatchObject({
       success: false,
@@ -128,8 +143,8 @@ describe("post-load reset and firmware-owned handoff", () => {
   test.each(["ipc", "reload"])("%s post-load reset failure never runs or reconnects CPU2", async mode => {
     const { adapter, handlers, input } = await fixture();
     adapter.fail = "post-load-reset";
-    const result = mode === "ipc" ? handlers.runIpcAcceptance(input) : handlers.runReloadAndDiagnose({
-      ...input, postLoadBoot: { resetType: "system", releaseCpu2BeforeCpu1: true, runCpu1: true, runCpu2: false, cpu1SettleMs: 0 }
+    const result = mode === "ipc" ? handlers.runIpcAcceptance({ ...input, postLoadResetType: "restart" }) : handlers.runReloadAndDiagnose({
+      ...input, postLoadBoot: { resetType: "restart", releaseCpu2BeforeCpu1: true, runCpu1: true, runCpu2: false, cpu1SettleMs: 0 }
     });
     await expect(result).resolves.toMatchObject({
       success: false, error: { details: { workflowStage: "post-load-cpu1-reset" } }

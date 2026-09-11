@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
 import type { ResetType } from "../debug/types.js";
+import { createApplicationEntryPlan, waitForApplicationEntry } from "../debug/applicationEntry.js";
 import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js";
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
@@ -1357,6 +1358,19 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async reloadResetRunToMain(input: z.input<typeof reloadResetRunToMainSchema>) {
       try {
         const parsed = reloadResetRunToMainSchema.parse(input);
+        const mapAnalysis = parsed.mapUri
+          ? await analyzeRamOwnership({
+            maps: [{
+              coreId: parsed.coreId,
+              mapPath: manager.normalizeArtifactUri(parsed.mapUri)
+            }]
+          })
+          : undefined;
+        const applicationEntryPlan = createApplicationEntryPlan({
+          coreId: parsed.coreId,
+          explicitAddress: parsed.entryAddress,
+          map: mapAnalysis?.maps[0]
+        });
         const load = await manager.loadPrograms(parsed.sessionId, [{
           coreId: parsed.coreId,
           programUri: parsed.programUri,
@@ -1379,19 +1393,49 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           await sleep(parsed.settleMs);
         }
         const run = await manager.runCore(parsed.sessionId, parsed.coreId);
+        const applicationEntry = applicationEntryPlan.configured
+          ? await waitForApplicationEntry(manager, {
+            sessionId: parsed.sessionId,
+            plan: applicationEntryPlan,
+            timeoutMs: parsed.entryTimeoutMs,
+            intervalMs: Math.min(parsed.entryTimeoutMs, 100)
+          })
+          : undefined;
+        if (applicationEntry && !applicationEntry.reached) {
+          let halt: ToolResult;
+          try {
+            halt = await manager.haltCore(parsed.sessionId, parsed.coreId);
+          } catch (error) {
+            halt = { success: false, error: toStructuredError(error) };
+          }
+          throw new DebugMcpError("ApplicationEntryNotReached", "The core PC did not enter the declared application code range", {
+            sessionId: parsed.sessionId,
+            coreId: parsed.coreId,
+            diagnosisCode: "APPLICATION_ENTRY_NOT_REACHED",
+            applicationEntry,
+            halt
+          });
+        }
         const finalState = await manager.getTargetState(parsed.sessionId, parsed.coreId);
         return ok({
           sessionId: parsed.sessionId,
           coreId: finalState.coreId,
           coreName: finalState.coreName,
-          performedSteps: ["loadProgram", "resetCore", "runCore", "getTargetState"],
+          performedSteps: ["loadProgram", "resetCore", "runCore", ...(applicationEntry ? ["verifyApplicationEntry"] : []), "getTargetState"],
           loadedProgram,
           reset,
           run,
           finalState,
-          runToMainSupported: false,
-          runToMainAchieved: false,
-          unsupportedReason: "Current DebugAdapter has no breakpoint/runToSymbol API; this tool reloads, resets, runs, and returns explicit evidence instead of claiming a halted-at-main state."
+          ...(applicationEntry ? {
+            applicationEntry,
+            runToMainSupported: false,
+            runToMainAchieved: false,
+            unsupportedReason: "Application entry was confirmed by PC range, but the adapter still has no breakpoint/runToSymbol API and did not claim a halted-at-main state."
+          } : {
+            runToMainSupported: false,
+            runToMainAchieved: false,
+            unsupportedReason: "No application entry address or executable linker-map range was supplied; the current DebugAdapter has no breakpoint/runToSymbol API, so reload/reset/run evidence is returned without claiming entry confirmation."
+          })
         });
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId });
@@ -1414,7 +1458,16 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
         return ok(await workflows.launchAndRunIpcAcceptance(parsed));
       } catch (error) {
-        return fail(error);
+        const structured = toStructuredError(error);
+        const launch = structured.details?.launch;
+        const launchEvidence = launch && typeof launch === "object" && !Array.isArray(launch)
+          ? launch as Record<string, unknown>
+          : undefined;
+        return fail(error, {
+          ...(typeof launchEvidence?.sessionId === "string" ? { sessionId: launchEvidence.sessionId } : {}),
+          ...(typeof launchEvidence?.cleanedUp === "boolean" ? { cleanedUp: launchEvidence.cleanedUp } : {}),
+          ...(launchEvidence?.cleanupError ? { cleanupError: launchEvidence.cleanupError } : {})
+        });
       }
     },
 

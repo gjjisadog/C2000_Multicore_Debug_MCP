@@ -96,6 +96,19 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   }
 }
 
+class ApplicationEntryRecordingAdapter extends WorkflowRecordingAdapter {
+  private readonly runningCores = new Set<CoreId>();
+
+  override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
+    await super.run(session, coreId);
+    this.runningCores.add(coreId);
+  }
+
+  override async readPc(session: AdapterSession, coreId: CoreId): Promise<string> {
+    return this.runningCores.has(coreId) ? "0x00008010" : super.readPc(session, coreId);
+  }
+}
+
 class ExpressionBatchRecordingAdapter extends MockDebugAdapter {
   readonly batches: Array<{ coreId: CoreId; expressions: string[] }> = [];
 
@@ -1185,9 +1198,9 @@ describe("tool handlers", () => {
     const cpu2MapPath = path.join(tempDir, "cpu2.map");
     await writeFile(cpu1OutPath, "cpu1-image");
     await writeFile(cpu2OutPath, "cpu2-image");
-    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\nSECTION ALLOCATION MAP\n.text      0    00008000    00000100\n");
     await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
-    const adapter = new WorkflowRecordingAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } } });
+    const adapter = new ApplicationEntryRecordingAdapter({ expressionValues: { "ipc.responsePass": { value: "1" } } });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
     const created = await handlers.createDebugSession({ sessionName: "ipc-cpu2-release", coreMap });
@@ -1926,9 +1939,13 @@ describe("tool handlers", () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-post-load-release-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
     const cpu2OutPath = path.join(tempDir, "cpu2.out");
+    const cpu1MapPath = path.join(tempDir, "cpu1.map");
+    const cpu2MapPath = path.join(tempDir, "cpu2.map");
     await writeFile(cpu1OutPath, "cpu1-image");
     await writeFile(cpu2OutPath, "cpu2-image");
-    const adapter = new WorkflowRecordingAdapter({ expressionValues: hybrid30kReadyExpressionValues });
+    await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\nSECTION ALLOCATION MAP\n.text      0    00008000    00000100\n");
+    await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
+    const adapter = new ApplicationEntryRecordingAdapter({ expressionValues: hybrid30kReadyExpressionValues });
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
     const created = await handlers.createDebugSession({ sessionName: "post-load-release", coreMap });
@@ -1942,12 +1959,14 @@ describe("tool handlers", () => {
       cpu2CoreId: 2,
       cpu1OutPath,
       cpu2OutPath,
+      cpu1MapPath,
+      cpu2MapPath,
       ramOwnershipPolicy: "skip",
       resetType: "cpu",
       runCpu1: false,
       runCpu2: false,
       postLoadBoot: {
-        resetType: "system",
+        resetType: "restart",
         runCpu1: true,
         cpu1SettleMs: 0,
         runCpu2: false,
@@ -1966,7 +1985,7 @@ describe("tool handlers", () => {
       "halt:2",
       "prepare-firmware-handoff:2",
       "disconnect:2",
-      "reset:0:system",
+      "reset:0:restart",
       "run:0",
       "connect:2"
     ]);
