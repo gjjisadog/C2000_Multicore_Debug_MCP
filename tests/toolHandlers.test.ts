@@ -54,6 +54,8 @@ class CountingAdapter extends MockDebugAdapter {
 class WorkflowRecordingAdapter extends MockDebugAdapter {
   readonly events: string[] = [];
   readonly expressionBatches: Array<{ coreId: CoreId; expressions: string[] }> = [];
+  applicationEntryAddress?: string;
+  private applicationStarted = false;
 
   override async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`prepare-firmware-handoff:${coreId}`);
@@ -78,6 +80,7 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   override async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<void> {
     this.events.push(`reset:${coreId}:${resetType}`);
     await super.reset(session, coreId, resetType);
+    if (coreId === 0) this.applicationStarted = false;
   }
 
   override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
@@ -88,6 +91,12 @@ class WorkflowRecordingAdapter extends MockDebugAdapter {
   override async run(session: AdapterSession, coreId: CoreId): Promise<void> {
     this.events.push(`run:${coreId}`);
     await super.run(session, coreId);
+    if (coreId === 0 && this.applicationEntryAddress) this.applicationStarted = true;
+  }
+
+  override async readPc(session: AdapterSession, coreId: CoreId): Promise<string> {
+    if (coreId === 0 && this.applicationStarted && this.applicationEntryAddress) return this.applicationEntryAddress;
+    return super.readPc(session, coreId);
   }
 
   override async evaluateExpressions(session: AdapterSession, coreId: CoreId, expressions: string[]): Promise<EvaluateResult[]> {
@@ -678,6 +687,37 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("reloadResetRunToMain verifies a CPU1-only restart reaches the declared entry", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-entry-reload-"));
+    const programUri = path.join(tempDir, "cpu1.out");
+    await writeFile(programUri, "cpu1-image");
+    const adapter = new WorkflowRecordingAdapter();
+    adapter.applicationEntryAddress = "0x00080000";
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "entry-reload", coreMap });
+    await handlers.connectTarget({ sessionId: created.sessionId, coreId: 0 });
+    adapter.events.length = 0;
+
+    const result = await handlers.reloadResetRunToMain({
+      sessionId: created.sessionId,
+      coreId: 0,
+      programUri,
+      resetType: "restart",
+      entryAddress: "0x00080000",
+      entryTimeoutMs: 10
+    });
+
+    expect(adapter.events).toEqual(["load:0:cpu1.out", "reset:0:restart", "run:0"]);
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      runToMainSupported: true,
+      runToMainAchieved: true,
+      applicationEntry: expect.objectContaining({ reached: true, entryAddress: "0x00080000" })
+    }));
+    await manager.closeDebugSession(created.sessionId);
+  });
+
   test("runIpcAcceptance performs the full server-side workflow in one handler call", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
@@ -1217,6 +1257,7 @@ describe("tool handlers", () => {
       cpu1MapPath,
       cpu2MapPath,
       resetType: "cpu",
+      cpu1EntryAddress: "0x00080000",
       runSequence: { runMode: "cpu1_boots_cpu2", runCpu1First: true, runCpu2: false, settleMs: 0 },
       ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
       timeoutMs: 20,
@@ -1226,14 +1267,11 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([
       "halt:0",
       "halt:2",
-      "reset:0:cpu",
-      "reset:2:cpu",
       "load:0:cpu1.out",
       "load:2:cpu2.out",
-      "halt:0",
-      "halt:2",
       "prepare-firmware-handoff:2",
       "disconnect:2",
+      "halt:0",
       "reset:0:restart",
       "run:0",
       "connect:2"
@@ -1667,6 +1705,32 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([]);
   });
 
+  test("runIpcAcceptance rejects a legacy firmware-release flag with CPU1 pre-run", async () => {
+    const adapter = new WorkflowRecordingAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-legacy-release-contract", coreMap });
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "C:/f28p65x/cpu1.out",
+      cpu2OutPath: "C:/f28p65x/cpu2.out",
+      cpu1MapPath: "C:/f28p65x/cpu1.map",
+      cpu2MapPath: "C:/f28p65x/cpu2.map",
+      loadSequence: { mode: "cpu1-run-before-cpu2", cpu1SettleMs: 0 },
+      runSequence: { runCpu1First: true, runCpu2: false, releaseCpu2BeforeCpu1: true },
+      timeoutMs: 20
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      error: expect.objectContaining({ code: "StartupContractInvalid" })
+    }));
+    expect(adapter.events).toEqual([]);
+  });
+
   test("launchAndRunIpcAcceptance can run CPU1 initialization before loading a CPU2 RAM image", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");
@@ -1945,7 +2009,8 @@ describe("tool handlers", () => {
     await writeFile(cpu2OutPath, "cpu2-image");
     await writeFile(cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\nSECTION ALLOCATION MAP\n.text      0    00008000    00000100\n");
     await writeFile(cpu2MapPath, "MEMORY CONFIGURATION\n  RAMGS4  00018000 00002000 00000871 0000178f RWIX\n");
-    const adapter = new ApplicationEntryRecordingAdapter({ expressionValues: hybrid30kReadyExpressionValues });
+    const adapter = new WorkflowRecordingAdapter({ expressionValues: hybrid30kReadyExpressionValues });
+    adapter.applicationEntryAddress = "0x00080000";
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const handlers = createToolHandlers(manager);
     const created = await handlers.createDebugSession({ sessionName: "post-load-release", coreMap });
@@ -1963,6 +2028,7 @@ describe("tool handlers", () => {
       cpu2MapPath,
       ramOwnershipPolicy: "skip",
       resetType: "cpu",
+      cpu1EntryAddress: "0x00080000",
       runCpu1: false,
       runCpu2: false,
       postLoadBoot: {
@@ -1977,14 +2043,11 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([
       "halt:0",
       "halt:2",
-      "reset:0:cpu",
-      "reset:2:cpu",
       "load:0:cpu1.out",
       "load:2:cpu2.out",
-      "halt:0",
-      "halt:2",
       "prepare-firmware-handoff:2",
       "disconnect:2",
+      "halt:0",
       "reset:0:restart",
       "run:0",
       "connect:2"

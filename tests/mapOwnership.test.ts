@@ -94,6 +94,23 @@ codestart
     ]));
   });
 
+  test("retains the TI name-only codestart row for application-entry verification", () => {
+    const parsed = parseLinkerMap(`
+ MEMORY CONFIGURATION
+   FLASH_BANK0          00080000   00020000  00001000  0001f000  RWIX
+
+ SECTION ALLOCATION MAP
+  codestart
+                  * 0    00080000    00000002
+ .text            0    000823c8    00001000
+`, { coreId: 0, coreName: "C28xx_CPU1", mapPath: "/tmp/cpu1.map" });
+
+    expect(parsed.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "codestart", origin: 0x80000, length: 2, memoryRegion: "FLASH_BANK0" }),
+      expect.objectContaining({ name: ".text", origin: 0x823c8, length: 0x1000 })
+    ]));
+  });
+
   test("emits CPU1 MEMCFG writes required before loading CPU2 programs that use GS RAM", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-map-ownership-"));
     const cpu2Map = path.join(tempDir, "cpu2.map");

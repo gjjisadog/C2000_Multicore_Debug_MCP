@@ -7,6 +7,7 @@ export interface WorkflowStartupContractInput {
   runMode?: WorkflowRunMode;
   runCpu1First: boolean;
   runCpu2: boolean;
+  releaseCpu2BeforeCpu1?: boolean;
 }
 
 /**
@@ -20,11 +21,17 @@ export function workflowStartupContractIssues(input: WorkflowStartupContractInpu
   if (input.runMode === "cpu2_pre_running" && input.loadMode === "cpu1-run-before-cpu2") {
     issues.push("runMode cpu2_pre_running requires CPU2 to be loaded before it is started; loadSequence.mode cpu1-run-before-cpu2 runs CPU1 before CPU2 is loaded");
   }
-  if (input.runMode === "cpu1_boots_cpu2" && input.loadMode === "cpu1-run-before-cpu2") {
-    issues.push("runMode cpu1_boots_cpu2 requires the CPU2 image to be loaded before CPU1 is started; loadSequence.mode cpu1-run-before-cpu2 loads CPU2 after CPU1 has begun its release path");
+  if ((input.runMode === "cpu1_boots_cpu2" || input.releaseCpu2BeforeCpu1 === true) && input.loadMode === "cpu1-run-before-cpu2") {
+    issues.push("Firmware-owned CPU2 boot requires both images to be loaded before CPU1 is started; loadSequence.mode cpu1-run-before-cpu2 runs CPU1 before CPU2 is loaded");
   }
   if (input.runMode === "cpu1_boots_cpu2" && input.runCpu2) {
     issues.push("runMode cpu1_boots_cpu2 requires runCpu2=false because CPU1 firmware owns the CPU2 release");
+  }
+  if (input.releaseCpu2BeforeCpu1 === true && !input.runCpu1First) {
+    issues.push("releaseCpu2BeforeCpu1 requires runCpu1First=true");
+  }
+  if (input.releaseCpu2BeforeCpu1 === true && input.runCpu2) {
+    issues.push("releaseCpu2BeforeCpu1 requires runCpu2=false because CPU1 firmware owns the CPU2 release");
   }
   if (input.runMode === "cpu2_pre_running" && input.runCpu1First) {
     issues.push("runMode cpu2_pre_running requires runCpu1First=false");
@@ -36,7 +43,8 @@ export function workflowStartupContractIssues(input: WorkflowStartupContractInpu
 }
 
 export function describeWorkflowStartupContract(input: WorkflowStartupContractInput) {
-  const cpu2StartAuthority = input.runMode === "cpu1_boots_cpu2"
+  const firmwareOwned = input.runMode === "cpu1_boots_cpu2" || input.releaseCpu2BeforeCpu1 === true;
+  const cpu2StartAuthority = firmwareOwned
     ? "firmware-owned"
     : input.runMode === "debugger_runs_both"
       ? "debugger-owned"
@@ -47,11 +55,11 @@ export function describeWorkflowStartupContract(input: WorkflowStartupContractIn
     loadMode: input.loadMode,
     runMode: input.runMode ?? "legacy_flags",
     cpu2StartAuthority,
-    authorityEvidence: input.runMode ? "explicit-run-mode" : "legacy-flags-ambiguous",
+    authorityEvidence: input.runMode ? "explicit-run-mode" : firmwareOwned ? "explicit-release-flag" : "legacy-flags-ambiguous",
     runCpu1First: input.runCpu1First,
     runCpu2: input.runCpu2,
     issues: workflowStartupContractIssues(input),
-    warnings: input.runMode
+    warnings: input.runMode || firmwareOwned
       ? []
       : ["Legacy run flags do not establish whether CPU1 firmware releases CPU2; set runSequence.runMode explicitly before interpreting CPU2 startup evidence."]
   };

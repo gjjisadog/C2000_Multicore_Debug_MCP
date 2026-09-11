@@ -1428,13 +1428,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           finalState,
           ...(applicationEntry ? {
             applicationEntry,
-            runToMainSupported: false,
-            runToMainAchieved: false,
-            unsupportedReason: "Application entry was confirmed by PC range, but the adapter still has no breakpoint/runToSymbol API and did not claim a halted-at-main state."
+            runToMainSupported: true,
+            runToMainAchieved: applicationEntry.reached
           } : {
             runToMainSupported: false,
             runToMainAchieved: false,
-            unsupportedReason: "No application entry address or executable linker-map range was supplied; the current DebugAdapter has no breakpoint/runToSymbol API, so reload/reset/run evidence is returned without claiming entry confirmation."
+            unsupportedReason: "No application entry address or executable linker-map range was supplied; the current adapter still has no breakpoint/runToSymbol API, so reload/reset/run evidence is returned without claiming entry confirmation."
           })
         });
       } catch (error) {

@@ -1,5 +1,5 @@
 import type { C2000ToolInvoker } from "../mcp/tools.js";
-import { DebugMcpError } from "../utils/errors.js";
+import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { BoardRegistry } from "../boards/BoardRegistry.js";
 import { BoardWorkerSupervisor } from "../boards/BoardWorkerSupervisor.js";
 import { SessionRepository } from "../storage/repositories/SessionRepository.js";
@@ -172,10 +172,41 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           throw error;
         }
         this.recordTargetMutation(boardId, toolName, input, result);
-        if (result.cleanedUp === true && typeof result.sessionId === "string") {
+        if (result.success === false && result.cleanedUp !== true && failedLaunchCleanupEnabled(toolName, input)) {
+          const failedSessionId = launchSessionIdFromResult(result);
+          if (failedSessionId) {
+            const priorCleanup = logicalCleanupEvidence(result, failedSessionId);
+            const cleanup = priorCleanup
+              ? {
+                cleanedUp: false,
+                cleanupFinalized: true,
+                cleanup: {
+                  mode: "worker-failure-finalization",
+                  closeConfirmed: false,
+                  sessionClosed: true,
+                  logicalSessionRemoved: true,
+                  probeLeaseReleased: priorCleanup.probeLeaseReleased,
+                  adapterDisposed: priorCleanup.adapterDisposed
+                }
+              }
+              : await this.cleanupFailedLaunchSession(
+                boardId,
+                failedSessionId,
+                input,
+                interactive
+              );
+            result = {
+              ...result,
+              sessionId: failedSessionId,
+              ...cleanup
+            };
+          }
+        }
+        if ((result.cleanedUp === true || result.cleanupFinalized === true) && typeof result.sessionId === "string") {
           // A workflow may return the failed session identity as evidence after
-          // successfully disposing it in the worker. Never resurrect that
-          // closed session as OPEN in durable daemon state.
+          // logically disposing it in the worker. Never resurrect that closed
+          // session as OPEN in durable daemon state, even when adapter cleanup
+          // reported a secondary failure.
           this.sessions.close(result.sessionId);
           if (interactive) this.releaseLease(interactive);
           return result;
@@ -255,6 +286,113 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       createdAt: new Date().toISOString()
     });
     return true;
+  }
+
+  /**
+   * A worker can return a structured failure after creating its logical
+   * session.  Finalize that session on the same fenced worker before the
+   * launch path decides whether to persist it; otherwise an interactive lease
+   * can survive a failed one-shot and block recovery.
+   */
+  private async cleanupFailedLaunchSession(
+    boardId: string,
+    sessionId: string,
+    originalInput: unknown,
+    interactive?: LeasedBoard
+  ): Promise<Record<string, unknown>> {
+    const startedAt = Date.now();
+    const leaseInput = readLease(originalInput)
+      ? { sessionId, __leaseContext: readLease(originalInput) }
+      : interactive
+        ? { sessionId, __leaseContext: interactive.context }
+        : { sessionId };
+    try {
+      const closeResult = await this.workers.invokeBoard(
+        boardId,
+        "c2000_closeDebugSession",
+        leaseInput,
+        this.workers.commandTimeoutMs("c2000_closeDebugSession", leaseInput)
+      );
+      if (isConfirmedSessionClose(closeResult, sessionId)) {
+        this.sessions.close(sessionId);
+        if (interactive) this.releaseLease(interactive);
+        return {
+          cleanedUp: true,
+          cleanup: {
+            mode: "router-failure-finalization",
+            closeConfirmed: true,
+            sessionClosed: true,
+            probeLeaseReleased: Boolean(interactive),
+            closeResult,
+            durationMs: Date.now() - startedAt
+          }
+        };
+      }
+      const partialCleanup = logicalCleanupEvidence(closeResult, sessionId);
+      if (partialCleanup) {
+        this.sessions.close(sessionId);
+        if (interactive) this.releaseLease(interactive);
+        return {
+          cleanedUp: false,
+          cleanupFinalized: true,
+          cleanup: {
+            mode: "router-failure-finalization",
+            closeConfirmed: false,
+            sessionClosed: true,
+            logicalSessionRemoved: true,
+            probeLeaseReleased: partialCleanup.probeLeaseReleased,
+            adapterDisposed: partialCleanup.adapterDisposed,
+            closeResult,
+            durationMs: Date.now() - startedAt
+          },
+          cleanupError: record(closeResult.error)
+        };
+      }
+      return {
+        cleanedUp: false,
+        cleanupError: {
+          code: "SessionCloseUnconfirmed",
+          message: "Failed launch returned a session, but the worker did not confirm its closure",
+          details: { sessionId, closeResult, durationMs: Date.now() - startedAt }
+        }
+      };
+    } catch (error) {
+      const structured = toStructuredError(error);
+      const partialCleanup = logicalCleanupEvidence({
+        success: false,
+        sessionId,
+        error: structured
+      }, sessionId);
+      if (partialCleanup) {
+        this.sessions.close(sessionId);
+        if (interactive) this.releaseLease(interactive);
+        return {
+          cleanedUp: false,
+          cleanupFinalized: true,
+          cleanup: {
+            mode: "router-failure-finalization",
+            closeConfirmed: false,
+            sessionClosed: true,
+            logicalSessionRemoved: true,
+            probeLeaseReleased: partialCleanup.probeLeaseReleased,
+            adapterDisposed: partialCleanup.adapterDisposed,
+            durationMs: Date.now() - startedAt
+          },
+          cleanupError: structured
+        };
+      }
+      return {
+        cleanedUp: false,
+        cleanupError: {
+          ...structured,
+          details: {
+            ...(structured.details ?? {}),
+            sessionId,
+            durationMs: Date.now() - startedAt
+          }
+        }
+      };
+    }
   }
 
   /**
@@ -496,6 +634,58 @@ function leaseTtlMs(commandTimeoutMs: number): number {
 
 function isConfirmedSessionClose(result: Record<string, unknown>, expectedSessionId: string): boolean {
   return result.success === true && result.closed === true && result.sessionId === expectedSessionId;
+}
+
+function logicalCleanupEvidence(result: Record<string, unknown>, expectedSessionId: string): {
+  probeLeaseReleased: boolean;
+  adapterDisposed: boolean;
+} | undefined {
+  const error = record(result.error);
+  const details = record(error.details);
+  const topLevelCleanupError = record(result.cleanupError);
+  const topLevelCleanupDetails = record(topLevelCleanupError.details);
+  const launch = record(details.launch);
+  const launchCleanupError = record(launch.cleanupError);
+  const launchCleanupDetails = record(launchCleanupError.details);
+  const candidates = [
+    { value: result, details },
+    { value: topLevelCleanupError, details: topLevelCleanupDetails },
+    { value: launch, details: launchCleanupDetails },
+    { value: launchCleanupError, details: launchCleanupDetails }
+  ];
+  for (const candidate of candidates) {
+    const cleanup = record(candidate.value.cleanup ?? candidate.details.cleanup);
+    const sessionId = typeof candidate.value.sessionId === "string"
+      ? candidate.value.sessionId
+      : typeof candidate.details.sessionId === "string" ? candidate.details.sessionId : undefined;
+    if (sessionId !== expectedSessionId || cleanup.logicalSessionRemoved !== true || cleanup.probeLeaseReleased !== true) {
+      continue;
+    }
+    return {
+      probeLeaseReleased: true,
+      adapterDisposed: cleanup.adapterDisposed === true
+    };
+  }
+  return undefined;
+}
+
+function failedLaunchCleanupEnabled(toolName: string, input: unknown): boolean {
+  if (toolName !== "c2000_launchAndRunIpcAcceptance" && !toolName.startsWith("c2000_launchMulticoreDebug")) {
+    return false;
+  }
+  const values = record(input);
+  // An ephemeral launch has no durable recovery handle, so it is always
+  // finalized on failure.  Only an explicitly interactive caller may opt out
+  // to retain a session for deliberate manual recovery.
+  return values.sessionMode !== "interactive" || values.cleanupOnFailure !== false;
+}
+
+function launchSessionIdFromResult(result: Record<string, unknown>): string | undefined {
+  if (typeof result.sessionId === "string") return result.sessionId;
+  const error = record(result.error);
+  const details = record(error.details);
+  const launch = record(details.launch);
+  return typeof launch.sessionId === "string" ? launch.sessionId : undefined;
 }
 
 function record(value: unknown): Record<string, unknown> {

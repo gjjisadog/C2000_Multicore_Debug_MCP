@@ -39,7 +39,7 @@ const addressValueSchema = z.union([
   z.number().int().nonnegative()
 ]);
 const applicationEntryTimeoutSchema = z.number().int().positive().max(10_000).default(2_000)
-  .describe("Bounded application-entry confirmation window; IPC readiness is not polled until this check succeeds");
+  .describe("Bounded CPU1-only entry confirmation window; IPC readiness is not polled until this check succeeds");
 const ipcLoadSequenceSchema = z.object({
   mode: z.enum(["cpu1-then-cpu2", "cpu1-run-before-cpu2"]).default("cpu1-then-cpu2"),
   cpu1SettleMs: z.number().int().nonnegative().default(250)
@@ -646,11 +646,11 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
   mapUri: z.string().min(1).optional(),
   entryAddress: addressValueSchema.optional()
-    .describe("Optional application entry address; when supplied with an executable range, the workflow verifies that the core PC enters application code."),
+    .describe("Optional application entry address. When supplied, the workflow verifies that the core PC enters the declared application code range."),
   entryTimeoutMs: applicationEntryTimeoutSchema,
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
-  resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
+  resetType: z.enum(["cpu", "system", "restart", "default"]).default("restart"),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
@@ -703,14 +703,14 @@ const runIpcAcceptanceObjectSchema = z.object({
   resetType: resetTypeSchema.default("default"),
   postLoadResetType: resetTypeSchema.optional().describe("CPU1-only reset after CPU2 disconnect for firmware-owned boot. Defaults to restart after program load; unavailable explicit reset types fail closed."),
   cpu1EntryAddress: addressValueSchema.optional()
-    .describe("CPU1 application entry address; if omitted, codestart or executable sections are taken from cpu1MapPath"),
+    .describe("CPU1 application entry address; if omitted, codestart/executable sections are taken from cpu1MapPath"),
   applicationEntryTimeoutMs: applicationEntryTimeoutSchema,
   bootModeExpression: z.string().min(1).optional()
-    .describe("Optional CPU1 expression captured if application entry is not reached"),
+    .describe("Optional CPU1 expression captured after entry confirmation; no symbol is guessed when omitted"),
   cpu1ResetStateExpression: z.string().min(1).optional()
-    .describe("Optional CPU1 reset-state expression captured if application entry is not reached"),
+    .describe("Optional CPU1 reset-state expression captured after an entry confirmation failure"),
   bootSyncExpressions: z.array(z.string().min(1)).min(1).optional()
-    .describe("Optional CPU1 boot-sync expressions captured if application entry is not reached"),
+    .describe("Optional CPU1 boot-sync expressions captured on entry failure; defaults to CPU1 IPC conditions or the standard CPU1 boot watch set"),
   programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
   ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
@@ -736,7 +736,7 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   boardId: z.string().min(1).optional(),
   sessionMode: z.enum(["ephemeral", "interactive"]).default("ephemeral"),
   cleanupOnFailure: z.boolean().default(true)
-    .describe("Close and release a newly-created debug session when launch fails; set false only for deliberate interactive recovery"),
+    .describe("Close and release the newly-created debug session when the launch workflow fails; set false only when deliberate interactive recovery is required"),
   idleTimeoutMs: z.number().int().positive().optional(),
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
@@ -783,7 +783,7 @@ export const runReloadAndDiagnoseSchema = z.object({
     .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   cpu1EntryAddress: addressValueSchema.optional()
-    .describe("CPU1 application entry address; if omitted, codestart or executable sections are taken from cpu1MapPath"),
+    .describe("CPU1 application entry address; if omitted, codestart/executable sections are taken from cpu1MapPath"),
   applicationEntryTimeoutMs: applicationEntryTimeoutSchema,
   bootModeExpression: z.string().min(1).optional(),
   cpu1ResetStateExpression: z.string().min(1).optional(),
@@ -798,7 +798,7 @@ export const runReloadAndDiagnoseSchema = z.object({
     runCpu2: z.boolean().default(false),
     /** Disconnect CPU2 while CPU1 performs the firmware-owned boot handoff. */
     releaseCpu2BeforeCpu1: z.boolean().optional()
-  }).optional().describe("After programming and halting, use a CPU1-only restart-to-entry flow when releaseCpu2BeforeCpu1 is enabled; CPU2 stays disconnected until entry evidence is observed."),
+  }).optional().describe("After programming and halting, use a CPU1-only restart-to-entry flow when releaseCpu2BeforeCpu1 is enabled; CPU2 is disconnected until CPU1 entry evidence is observed."),
   waitExpressions: z.array(expressionConditionSchema).min(1).optional(),
   timeoutMs: z.number().int().positive().optional(),
   intervalMs: z.number().int().positive().default(100),

@@ -130,7 +130,7 @@ describe("daemon tool router interactive session lifecycle", () => {
     fixture.store.close();
   });
 
-  test("persists a failed interactive acceptance session so close releases its lease", async () => {
+  test("automatically finalizes a failed interactive acceptance session and releases its lease", async () => {
     const fixture = await makeFixture();
     const router = new DaemonToolRouter(
       fixture.local,
@@ -147,26 +147,13 @@ describe("daemon tool router interactive session lifecycle", () => {
       cpu2CoreId: 2,
     });
 
-    expect(launched).toEqual(
-      expect.objectContaining({ success: false, sessionId: "dbg-failed" })
-    );
-    expect(fixture.sessions.get("dbg-failed")).toEqual(
-      expect.objectContaining({ status: "OPEN", boardId: "board-a" })
-    );
-    expect(fixture.registry.leases.active("board-a")).toBeDefined();
-
-    await expect(
-      router.invokeTool("c2000_closeDebugSession", {
-        sessionId: "dbg-failed",
-      })
-    ).resolves.toEqual(
-      expect.objectContaining({
-        success: true,
-        sessionId: "dbg-failed",
-        closed: true,
-      })
-    );
-    expect(fixture.sessions.get("dbg-failed")?.status).toBe("CLOSED");
+    expect(launched).toEqual(expect.objectContaining({
+      success: false,
+      sessionId: "dbg-failed",
+      cleanedUp: true,
+      cleanup: expect.objectContaining({ closeConfirmed: true, sessionClosed: true })
+    }));
+    expect(fixture.sessions.get("dbg-failed")).toBeUndefined();
     expect(fixture.registry.leases.active("board-a")).toBeUndefined();
     expect(fixture.registry.get("board-a").currentLeaseId).toBeUndefined();
     fixture.store.close();
@@ -205,6 +192,7 @@ describe("daemon tool router interactive session lifecycle", () => {
     await router.invokeTool("c2000_launchAndRunIpcAcceptance", {
       boardId: "board-a",
       sessionMode: "interactive",
+      cleanupOnFailure: false,
       sessionName: "recoverable-close",
       cpu1CoreId: 0,
       cpu2CoreId: 2

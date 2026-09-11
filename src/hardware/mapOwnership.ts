@@ -329,6 +329,20 @@ function parseMemoryRegions(text: string): LinkerMapMemoryRegion[] {
 
 function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMapSection[] {
   const sections: LinkerMapSection[] = [];
+  // TI's map writer emits `codestart` as a name-only row followed by its
+  // allocation row.  Keep that row: on F28P65x it is commonly the CPU1
+  // application entry (for example 0x00080000), while `.text` starts a few
+  // words later.
+  for (const match of text.matchAll(/^\s*(codestart)\s*\r?\n\s*\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/gim)) {
+    const origin = Number.parseInt(match[3]!, 16);
+    sections.push({
+      name: match[1]!,
+      page: Number.parseInt(match[2]!, 10),
+      origin,
+      length: Number.parseInt(match[4]!, 16),
+      memoryRegion: regionForAddress(origin, regions)?.name
+    });
+  }
   const lines = text.split(/\r?\n/);
   let inSectionMap = false;
   for (let index = 0; index < lines.length; index += 1) {
@@ -340,24 +354,7 @@ function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMa
     if (!inSectionMap) {
       continue;
     }
-    // TI map files may emit codestart as a name-only row followed by its
-    // allocation row. Preserve it so startup workflows can verify the actual
-    // CPU1 application entry rather than falling back to an arbitrary section.
-    if (/^\s*codestart\s*$/i.test(line)) {
-      const allocation = lines[index + 1]?.match(/^\s*\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/);
-      if (allocation) {
-        const origin = Number.parseInt(allocation[2]!, 16);
-        sections.push({
-          name: "codestart",
-          page: Number.parseInt(allocation[1]!, 10),
-          origin,
-          length: Number.parseInt(allocation[3]!, 16),
-          memoryRegion: regionForAddress(origin, regions)?.name
-        });
-      }
-      continue;
-    }
-    const match = /^([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/.exec(line);
+    const match = /^\s*([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/.exec(line);
     if (!match) {
       continue;
     }

@@ -199,6 +199,11 @@ export class StepRegistry {
               settleMs: step.runSequence?.settleMs ?? 0
             }
             : step.runSequence,
+          cpu1EntryAddress: step.cpu1EntryAddress,
+          applicationEntryTimeoutMs: step.applicationEntryTimeoutMs,
+          bootModeExpression: step.bootModeExpression,
+          cpu1ResetStateExpression: step.cpu1ResetStateExpression,
+          bootSyncExpressions: step.bootSyncExpressions,
           timeoutMs: step.timeoutMs ?? 10000,
           intervalMs: step.intervalMs ?? 100,
           verifyRuntimeRamOwnership: Boolean(step.verifyRuntimeRamOwnership),

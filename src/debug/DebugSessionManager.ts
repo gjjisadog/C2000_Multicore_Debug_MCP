@@ -246,25 +246,62 @@ export class DebugSessionManager {
       const session = this.requireSession(sessionId);
       session.activity.closing = true;
       this.cancelIdleAutoClose(session);
+      let adapterDisposeError: unknown;
+      let probeLeaseReleaseError: unknown;
       try {
         await this.adapter.disposeSession?.(session.adapterSession);
-      } finally {
-        await session.probeLease?.release();
-        this.sessions.delete(sessionId);
-        this.loadedPrograms.deleteSession(sessionId);
-        this.queue.clearWhenIdle(sessionId);
-        this.logger.info("debug session closed", { sessionId });
+      } catch (error) {
+        adapterDisposeError = error;
       }
+      try {
+        await session.probeLease?.release();
+      } catch (error) {
+        probeLeaseReleaseError = error;
+      }
+      // Logical cleanup is unconditional.  A failed adapter dispose must not
+      // leave the in-process session map, loaded-image registry, or queue tail
+      // holding the next recovery attempt hostage.
+      this.sessions.delete(sessionId);
+      this.loadedPrograms.deleteSession(sessionId);
+      this.queue.clearWhenIdle(sessionId);
+      this.logger.info("debug session closed", {
+        sessionId,
+        adapterDisposed: !adapterDisposeError,
+        probeLeaseReleased: !probeLeaseReleaseError
+      });
       const finishedAtMs = Date.now();
+      const cleanup = {
+        startedAt: new Date(startedAtMs).toISOString(),
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        durationMs: finishedAtMs - startedAtMs,
+        adapterDisposed: !adapterDisposeError,
+        probeLeaseReleased: !probeLeaseReleaseError,
+        logicalSessionRemoved: true as const
+      };
+      if (adapterDisposeError || probeLeaseReleaseError) {
+        const failures = [
+          ...(adapterDisposeError ? [{ component: "adapter", error: toStructuredError(adapterDisposeError) }] : []),
+          ...(probeLeaseReleaseError ? [{ component: "probe-lease", error: toStructuredError(probeLeaseReleaseError) }] : [])
+        ];
+        const failureMessage = failures.length === 1
+          ? failures[0]!.error.message
+          : failures.map(item => `${item.component}: ${item.error.message}`).join("; ");
+        throw new DebugMcpError(
+          "WorkflowCleanupFailed",
+          failureMessage,
+          {
+            sessionId,
+            cleanup,
+            logicalSessionRemoved: true,
+            probeLeaseReleased: cleanup.probeLeaseReleased,
+            failures
+          }
+        );
+      }
       return {
         sessionId,
         closed: true as const,
-        cleanup: {
-          startedAt: new Date(startedAtMs).toISOString(),
-          finishedAt: new Date(finishedAtMs).toISOString(),
-          durationMs: finishedAtMs - startedAtMs,
-          adapterDisposed: true
-        }
+        cleanup
       };
     });
   }

@@ -167,6 +167,7 @@ const runSequenceStepSchema = z.object({
 })).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence);
 const loadPolicySchema = z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]);
 const programPreparationSchema = z.enum(["load", "symbols-only"]).default("load");
+const addressValueSchema = z.union([z.string().min(1), z.number().int().nonnegative()]);
 const baseStep = { on: onSchema.optional() };
 
 /**
@@ -246,6 +247,11 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     loadSequence: loadSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
     runSequence: runSequenceStepSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
     runMode: runModeStepSchema.optional(),
+    cpu1EntryAddress: addressValueSchema.optional(),
+    applicationEntryTimeoutMs: z.number().int().positive().max(10_000).default(2_000),
+    bootModeExpression: z.string().min(1).optional(),
+    cpu1ResetStateExpression: z.string().min(1).optional(),
+    bootSyncExpressions: z.array(z.string().min(1)).min(1).max(DURABLE_PLAN_LIMITS.maxReads).optional(),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
@@ -356,14 +362,15 @@ export const testPlanSchema = z.object({
       }
       continue;
     }
-    if (step.type === "runIpcAcceptance" && step.runMode && step.loadSequence) {
-      const runCpu1First = step.runMode !== "cpu2_pre_running";
-      const runCpu2 = step.runMode !== "cpu1_boots_cpu2";
+    if (step.type === "runIpcAcceptance" && step.loadSequence && (step.runMode || step.runSequence?.releaseCpu2BeforeCpu1)) {
+      const runCpu1First = step.runMode ? step.runMode !== "cpu2_pre_running" : step.runSequence?.runCpu1First ?? true;
+      const runCpu2 = step.runMode ? step.runMode !== "cpu1_boots_cpu2" : step.runSequence?.runCpu2 ?? false;
       for (const issue of workflowStartupContractIssues({
         loadMode: step.loadSequence.mode,
         runMode: step.runMode,
         runCpu1First,
-        runCpu2
+        runCpu2,
+        releaseCpu2BeforeCpu1: step.runSequence?.releaseCpu2BeforeCpu1
       })) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence", "mode"], message: issue });
       }

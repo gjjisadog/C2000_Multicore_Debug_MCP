@@ -28,4 +28,17 @@ describe("workflow startup contract evidence", () => {
       warnings: [expect.stringContaining("do not establish")]
     }));
   });
+
+  test("rejects CPU1 pre-run when the legacy release flag selects firmware-owned boot", () => {
+    expect(describeWorkflowStartupContract({
+      loadMode: "cpu1-run-before-cpu2",
+      runCpu1First: true,
+      runCpu2: false,
+      releaseCpu2BeforeCpu1: true
+    })).toEqual(expect.objectContaining({
+      cpu2StartAuthority: "firmware-owned",
+      authorityEvidence: "explicit-release-flag",
+      issues: [expect.stringContaining("both images to be loaded before CPU1")]
+    }));
+  });
 });
