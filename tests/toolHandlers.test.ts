@@ -2257,7 +2257,7 @@ describe("tool handlers", () => {
     }));
   });
 
-  test("getAcceptanceReadiness reports ready when host files, XDS110, and ownership checks pass", async () => {
+  test.each([false, true])("getAcceptanceReadiness reports ready with editor open=%s", async editorOpen => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-ready-"));
     const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
     const cpu1Program = path.join(tempDir, "cpu1.out");
@@ -2272,8 +2272,8 @@ describe("tool handlers", () => {
           ok: true,
           devices: [{ serialNumber: "CL650001", mode: "Runtime", configuration: "Standard", version: "3.0.0.43", name: "XDS110" }]
         },
-        debugProcesses: [],
-        debugProcessDetails: []
+        debugProcesses: editorOpen ? ["123 /ti/ccstudio"] : [],
+        debugProcessDetails: editorOpen ? [{ pid: 123, kind: "ccstudio", command: "/ti/ccstudio", rawLine: "123 /ti/ccstudio" }] : []
       }),
       discoverAcceptancePrograms: async () => ({
         searchRoots: [tempDir],

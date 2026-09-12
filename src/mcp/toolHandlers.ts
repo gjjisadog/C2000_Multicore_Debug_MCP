@@ -9,7 +9,7 @@ import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js"
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
-import { formatDebugProcessOwners, runHardwarePreflight } from "../hardware/preflight.js";
+import { formatDebugProcessOwners, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
@@ -872,7 +872,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const cpu2Program = discoveredProgramForCore(2, programDiscovery);
         const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, "F28P65x");
         const debugProcessOwners = formatDebugProcessOwners(preflight);
-        const hasDebugProcessOwners = preflight.debugProcessDetails.length > 0 || preflight.debugProcesses.length > 0;
+        const hasDebugProcessOwners = hasBlockingDebugProcesses(preflight);
         readinessStage = "daemon-health";
         const daemonHealth: ToolResult | undefined = daemonRoutingConfigured
           ? await Promise.resolve(getDaemonHealth()) as ToolResult
@@ -2443,9 +2443,8 @@ function preflightReady(preflight: ToolResult, allowExistingDebugProcesses: bool
   const xdsReady = preflight.xdsdfu?.ok === true
     && Array.isArray(preflight.xdsdfu.devices)
     && preflight.xdsdfu.devices.length > 0;
-  const hasOwners = (preflight.debugProcessDetails?.length ?? 0) > 0
-    || (preflight.debugProcesses?.length ?? 0) > 0;
-  return xdsReady && (!hasOwners || allowExistingDebugProcesses);
+  const hasOwners = hasBlockingDebugProcesses(preflight);
+  return preflight.processInspection?.ok !== false && xdsReady && (!hasOwners || allowExistingDebugProcesses);
 }
 
 function acceptanceWarnings(checks: ToolResult): string[] {

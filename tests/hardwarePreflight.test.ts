@@ -1,5 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { defaultCcsInstallPath, recoverDebugProbe, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+import { defaultCcsInstallPath, hasBlockingDebugProcesses, recoverDebugProbe, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+
+test.each([
+  ["123 /ti/ccstudio", false],
+  ['123 "D:\\ti\\ccstudio.exe"', false],
+  ["123 /ti/ccstudio\n124 /ti/DebugServer", true],
+  ["124 /ti/DSLite", true],
+  ["124 java c2000-persistent-server.js", true],
+  ["unknown process evidence", true]
+])("ownership gate classifies %s", (lines, blocked) => {
+  expect(hasBlockingDebugProcesses({ debugProcesses: lines.split("\n") })).toBe(blocked);
+});
 
 const xdsdfuOutput = `
 USB Device Firmware Upgrade Utility

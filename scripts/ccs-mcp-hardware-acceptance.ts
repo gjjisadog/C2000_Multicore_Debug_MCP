@@ -7,7 +7,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import { assertAcceptanceEvidence, assertUiIndependenceEvidence, buildUiIndependenceEvidence } from "../src/debug/boundary.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
 import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
-import { formatDebugProcessOwners } from "../src/hardware/preflight.js";
+import { hasBlockingDebugProcesses, formatDebugProcessOwners } from "../src/hardware/preflight.js";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";
 
@@ -104,7 +104,7 @@ try {
   assertSuccess("c2000_getHardwarePreflight", preflight);
   const debugProcesses = Array.isArray(preflight.debugProcesses) ? preflight.debugProcesses : [];
   const debugProcessDetails = Array.isArray(preflight.debugProcessDetails) ? preflight.debugProcessDetails : [];
-  if (!allowExistingDebugProcesses && debugProcesses.length > 0) {
+  if (!allowExistingDebugProcesses && hasBlockingDebugProcesses({ debugProcesses, debugProcessDetails })) {
     throw new Error(`Existing debug-related process(es) may own the XDS probe: ${formatDebugProcessOwners({ debugProcesses, debugProcessDetails } as any)}. Close CCS debug sessions or set C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1 to override: ${JSON.stringify(preflight, null, 2)}`);
   }
 
