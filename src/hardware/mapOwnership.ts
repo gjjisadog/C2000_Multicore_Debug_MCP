@@ -107,6 +107,9 @@ export interface LinkerMapSection {
   origin: number;
   length: number;
   memoryRegion?: string;
+  /** Runtime address for TI copy-to-RAM sections (the load address remains `origin`). */
+  runAddress?: number;
+  runMemoryRegion?: string;
 }
 
 export interface UsedGsRamRegion extends LinkerMapMemoryRegion {
@@ -329,22 +332,13 @@ function parseMemoryRegions(text: string): LinkerMapMemoryRegion[] {
 
 function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMapSection[] {
   const sections: LinkerMapSection[] = [];
-  // TI's map writer emits `codestart` as a name-only row followed by its
-  // allocation row.  Keep that row: on F28P65x it is commonly the CPU1
-  // application entry (for example 0x00080000), while `.text` starts a few
-  // words later.
-  for (const match of text.matchAll(/^\s*(codestart)\s*\r?\n\s*\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/gim)) {
-    const origin = Number.parseInt(match[3]!, 16);
-    sections.push({
-      name: match[1]!,
-      page: Number.parseInt(match[2]!, 10),
-      origin,
-      length: Number.parseInt(match[4]!, 16),
-      memoryRegion: regionForAddress(origin, regions)?.name
-    });
-  }
+  // TI's map writer emits some sections, including `codestart` and
+  // `.TI.ramfunc`, as a name-only row followed by an allocation row. Keep the
+  // section name and its optional RUN ADDR so consumers can distinguish the
+  // load address in Flash from the address where the code actually executes.
   const lines = text.split(/\r?\n/);
   let inSectionMap = false;
+  let pendingSectionName: string | undefined;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
     if (line.includes("SECTION ALLOCATION MAP")) {
@@ -354,18 +348,50 @@ function parseSections(text: string, regions: LinkerMapMemoryRegion[]): LinkerMa
     if (!inSectionMap) {
       continue;
     }
-    const match = /^\s*([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})/.exec(line);
-    if (!match) {
+    const match = /^\s*([.$A-Za-z_][.$A-Za-z0-9_:]*)\s+\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})(?:\s+RUN\s+ADDR\s*=\s*([0-9a-fA-F]{8}))?/i.exec(line);
+    const allocationMatch = /^\s*\*?\s*(\d+)\s+([0-9a-fA-F]{8})\s+([0-9a-fA-F]{8})(?:\s+RUN\s+ADDR\s*=\s*([0-9a-fA-F]{8}))?/i.exec(line);
+    if (match) {
+      const origin = Number.parseInt(match[3], 16);
+      const runAddress = match[5] === undefined ? undefined : Number.parseInt(match[5], 16);
+      sections.push({
+        name: match[1],
+        page: Number.parseInt(match[2], 10),
+        origin,
+        length: Number.parseInt(match[4], 16),
+        memoryRegion: regionForAddress(origin, regions)?.name,
+        ...(runAddress === undefined ? {} : {
+          runAddress,
+          runMemoryRegion: regionForAddress(runAddress, regions)?.name
+        })
+      });
+      pendingSectionName = undefined;
       continue;
     }
-    const origin = Number.parseInt(match[3], 16);
-    sections.push({
-      name: match[1],
-      page: Number.parseInt(match[2], 10),
-      origin,
-      length: Number.parseInt(match[4], 16),
-      memoryRegion: regionForAddress(origin, regions)?.name
-    });
+    if (pendingSectionName !== undefined && allocationMatch) {
+      const origin = Number.parseInt(allocationMatch[2], 16);
+      const runAddress = allocationMatch[4] === undefined ? undefined : Number.parseInt(allocationMatch[4], 16);
+      sections.push({
+        name: pendingSectionName,
+        page: Number.parseInt(allocationMatch[1], 10),
+        origin,
+        length: Number.parseInt(allocationMatch[3], 16),
+        memoryRegion: regionForAddress(origin, regions)?.name,
+        ...(runAddress === undefined ? {} : {
+          runAddress,
+          runMemoryRegion: regionForAddress(runAddress, regions)?.name
+        })
+      });
+      pendingSectionName = undefined;
+      continue;
+    }
+    const nameOnlyMatch = /^\s*([.$A-Za-z_][.$A-Za-z0-9_:]*)\s*$/i.exec(line);
+    if (nameOnlyMatch) {
+      pendingSectionName = nameOnlyMatch[1];
+      continue;
+    }
+    if (line.trim().length > 0) {
+      pendingSectionName = undefined;
+    }
   }
   return sections;
 }

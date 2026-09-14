@@ -235,13 +235,25 @@ function executableRanges(map: ParsedLinkerMap | undefined): ApplicationCodeRang
       return /(?:^|\.)(?:text|cinit|pinit|reset|codestart|TI\.ramfunc|ramfunc|init_array)(?:$|[.:])/i.test(section.name)
         || memory?.attr?.includes("X") === true;
     })
-    .map(section => ({
-      name: section.name,
-      origin: section.origin,
-      length: section.length,
-      endExclusive: section.origin + section.length,
-      ...(section.memoryRegion ? { memoryRegion: section.memoryRegion } : {})
-    }))
+    .flatMap(section => {
+      const ranges: ApplicationCodeRange[] = [{
+        name: section.name,
+        origin: section.origin,
+        length: section.length,
+        endExclusive: section.origin + section.length,
+        ...(section.memoryRegion ? { memoryRegion: section.memoryRegion } : {})
+      }];
+      if (section.runAddress !== undefined && section.runAddress !== section.origin) {
+        ranges.push({
+          name: `${section.name} (run)`,
+          origin: section.runAddress,
+          length: section.length,
+          endExclusive: section.runAddress + section.length,
+          ...(section.runMemoryRegion ? { memoryRegion: section.runMemoryRegion } : {})
+        });
+      }
+      return ranges;
+    })
     .sort((left, right) => left.origin - right.origin);
 }
 

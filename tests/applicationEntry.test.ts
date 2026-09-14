@@ -25,6 +25,26 @@ const cpu1Map = {
   usedFlashBanks: []
 };
 
+const cpu1MapWithRamfunc = {
+  ...cpu1Map,
+  memoryRegions: [
+    ...cpu1Map.memoryRegions,
+    { name: "RAMD0", origin: 0x0000c000, length: 0x1000, used: 0x4ff, unused: 0xb01, attr: "RWIX" }
+  ],
+  sections: [
+    ...cpu1Map.sections,
+    {
+      name: ".TI.ramfunc",
+      page: 0,
+      origin: 0x00080008,
+      length: 0x4ff,
+      memoryRegion: "FLASH_BANK0",
+      runAddress: 0x0000c000,
+      runMemoryRegion: "RAMD0"
+    }
+  ]
+};
+
 describe("application-entry verification", () => {
   test("uses the linker-map codestart/text range and preserves C28x address formatting", () => {
     const plan = createApplicationEntryPlan({ coreId: 0, map: cpu1Map });
@@ -83,6 +103,36 @@ describe("application-entry verification", () => {
     expect(result).toEqual(expect.objectContaining({ reached: true, timedOut: false, method: "pc-in-application-code" }));
     expect(result.samples.length).toBeGreaterThanOrEqual(2);
     expect(requestedCoreIds.every(coreIds => coreIds.length === 1 && coreIds[0] === 0)).toBe(true);
+  });
+
+  test("accepts a PC in the RUN ADDR range of a copy-to-RAM section", async () => {
+    const plan = createApplicationEntryPlan({ coreId: 0, map: cpu1MapWithRamfunc });
+
+    expect(plan.codeRanges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: ".TI.ramfunc (run)", origin: 0xc000, length: 0x4ff, memoryRegion: "RAMD0" })
+    ]));
+
+    const result = await waitForApplicationEntry({
+      async getMulticoreSnapshot() {
+        return {
+          cores: [{
+            coreId: 0,
+            coreName: "C28xx_CPU1",
+            name: "C28xx_CPU1",
+            connected: true,
+            state: "Running",
+            pc: "0x0000C4FB"
+          }]
+        };
+      }
+    }, {
+      sessionId: "dbg-entry-ramfunc-test",
+      plan,
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toEqual(expect.objectContaining({ reached: true, timedOut: false }));
   });
 
   test("returns bounded evidence when application entry is not configured", async () => {
