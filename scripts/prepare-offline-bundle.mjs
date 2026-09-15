@@ -53,7 +53,6 @@ try {
 
   await rm(outputDirectory, { recursive: true, force: true });
   await mkdir(outputDirectory, { recursive: true });
-  await copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot, runtimeDirectory);
 
   const mcpManifestPath = path.join(runtimeDirectory, "runtime-manifest.json");
   const mcpManifest = JSON.parse(await readFile(mcpManifestPath, "utf8"));
@@ -93,6 +92,7 @@ try {
     executableSha256: nodeHash
   };
   await writeFile(mcpManifestPath, `${JSON.stringify(mcpManifest, null, 2)}\n`);
+  await copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot, runtimeDirectory);
 
   const offlineManifest = {
     schemaVersion: 1,

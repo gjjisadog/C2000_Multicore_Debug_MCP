@@ -36,6 +36,15 @@ describe("installer bootstrap scripts", () => {
     expect(source).not.toContain("gh ");
   });
 
+  test("offline bundle writes the private-runtime manifest before copying MCP files", async () => {
+    const source = await readFile("scripts/prepare-offline-bundle.mjs", "utf8");
+    expect(source.indexOf("await writeFile(mcpManifestPath")).toBeGreaterThanOrEqual(0);
+    expect(source.indexOf("await copyBundleFiles(")).toBeGreaterThanOrEqual(0);
+    expect(source.indexOf("await writeFile(mcpManifestPath")).toBeLessThan(
+      source.indexOf("await copyBundleFiles(")
+    );
+  });
+
   test("source installation builds outside the repository dist directory", async () => {
     const source = await readFile("scripts/install-source.ps1", "utf8");
     expect(source).toContain("C2000_BUILD_RUNTIME_OUTDIR");
