@@ -431,7 +431,9 @@ export class DebugWorkflowService {
     }
     setStage("ipc-readiness-wait");
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
-    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule);
+    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs,
+      input.intervalMs, input.pollingStrategy, input.pollingSchedule,
+      input.bootSyncExpressions?.length ? { coreId: input.cpu1CoreId, expressions: input.bootSyncExpressions } : undefined);
     performedSteps.push("waitForIpcReady");
     // Freeze the first read set before any follow-up target access. Diagnostic
     // errors must still stop the workflow, but must not erase startup evidence.
@@ -455,6 +457,14 @@ export class DebugWorkflowService {
         setStage("ipc-timeout-diagnostics");
         await this.haltAndResolvePc(input.sessionId, coreIds, timeoutRecovery);
         performedSteps.push("haltAndResolvePcOnTimeout");
+      }
+      if (ipcReady.diagnosticReads?.complete === false) {
+        if (!timeoutRecovery) {
+          firstFailureEvidence.diagnosticHalt = await this.manager.haltCores(input.sessionId, coreIds);
+        }
+        throw new DebugMcpError("ExpressionCaptureFailed", "Requested CPU1 boot observations could not all be read", {
+          diagnosticReads: ipcReady.diagnosticReads
+        });
       }
       setStage("runtime-ram-ownership");
       const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
@@ -1151,7 +1161,8 @@ export class DebugWorkflowService {
     timeoutMs: number,
     intervalMs: number,
     strategy: "fixed" | "adaptive" = "adaptive",
-    schedule?: Array<{ untilMs?: number; intervalMs: number }>
+    schedule?: Array<{ untilMs?: number; intervalMs: number }>,
+    observations?: { coreId: CoreId; expressions: string[] }
   ) {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
@@ -1161,6 +1172,15 @@ export class DebugWorkflowService {
     let expressionBatchCalls = 0;
     let expressionCount = 0;
     const grouped = groupConditionsByCore(conditions);
+    let diagnosticReads: { capturedAt: string; coreId: CoreId; complete: boolean; results: EvaluateResult[] } | undefined;
+    if (observations) {
+      let group = grouped.find(item => item.coreId === observations.coreId);
+      if (!group) {
+        group = { coreId: observations.coreId, conditions: [], expressions: [] };
+        grouped.push(group);
+      }
+      group.expressions = [...new Set([...group.expressions, ...observations.expressions])];
+    }
     const uniqueExpressionsPerPoll = grouped.reduce((count, group) => count + group.expressions.length, 0);
     while (performance.now() <= deadline) {
       pollIterations++;
@@ -1173,11 +1193,21 @@ export class DebugWorkflowService {
       lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
         conditionResult(condition, results.find(result => result.expression === condition.expression))
       ));
+      if (observations) {
+        const results = batches.find(batch => batch.group.coreId === observations.coreId)!.results;
+        const observed = results.filter(result => observations.expressions.includes(result.expression));
+        diagnosticReads = {
+          capturedAt: new Date().toISOString(), coreId: observations.coreId, results: observed,
+          complete: observations.expressions.every(expression =>
+            observed.some(result => result.expression === expression && result.success))
+        };
+      }
       if (lastConditions.every(condition => condition.matched)) {
         const pollDurationMs = performance.now() - startedAt;
         return {
           sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations,
           expressionBatchCalls, expressionCount, pollDurationMs, matchedAtMs: pollDurationMs,
+          ...(diagnosticReads ? { diagnosticReads } : {}),
           ...(firstFailure ? { firstFailure } : {})
         };
       }
@@ -1192,6 +1222,7 @@ export class DebugWorkflowService {
           pollIteration: pollIterations,
           elapsedMs: performance.now() - startedAt,
           conditions: lastConditions.filter(condition => condition.matched !== true),
+          ...(diagnosticReads ? { diagnosticReads } : {}),
           snapshot
         };
       }
@@ -1203,6 +1234,7 @@ export class DebugWorkflowService {
     return {
       sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations,
       expressionBatchCalls, expressionCount, pollDurationMs: performance.now() - startedAt,
+      ...(diagnosticReads ? { diagnosticReads } : {}),
       ...(firstFailure ? { firstFailure } : {})
     };
   }
@@ -1344,6 +1376,7 @@ async function assertIpcArtifactSet(input: {
   cpu1MapSha256?: string;
   cpu2MapSha256?: string;
   ipcReadyExpressions?: ExpressionCondition[];
+  bootSyncExpressions?: string[];
 }, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
   const normalizedInput = {
     ...input,
@@ -1397,7 +1430,11 @@ async function assertIpcArtifactSet(input: {
     cpu2CoreId: input.cpu2CoreId,
     cpu1MapPath: normalizedInput.cpu1MapPath,
     cpu2MapPath: normalizedInput.cpu2MapPath,
-    expressions: input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)
+    expressions: [
+      ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
+      // Symbol validation only: these observations never become readiness gates.
+      ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 }))
+    ]
   });
   issues.push(...artifactSemantics.issues);
   const cpu1Out = describeProgramArtifact(normalizedInput.cpu1OutPath);
