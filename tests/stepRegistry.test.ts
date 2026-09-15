@@ -37,6 +37,47 @@ class RecordingToolInvoker implements C2000ToolInvoker {
 }
 
 describe("StepRegistry", () => {
+  test("forwards an explicit CPU1 post-load reset through the fenced durable IPC step", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const plan = testPlanSchema.parse({
+      planVersion: 1, name: "owner-post-load-reset", boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }, {
+        type: "runIpcAcceptance", runMode: "cpu1_boots_cpu2",
+        loadSequence: { mode: "cpu1-then-cpu2" }, postLoadResetType: "cpu"
+      }]
+    });
+    const leaseContext = {
+      leaseId: "lease-a", leaseToken: "secret", fencingToken: 7, leaseGeneration: 3,
+      ownerJobId: "job-a", boardId: "board-a", probeSerial: "XDS-A", workerInstanceId: "worker-a"
+    };
+    await registry.execute({
+      jobId: "job-a", boardId: "board-a", sessionId: "dbg-current", leaseContext,
+      plan, step: plan.steps[1]!
+    });
+    expect(invoker.calls).toHaveLength(1);
+    expect(invoker.calls[0]).toMatchObject({
+      toolName: "c2000_runIpcAcceptance",
+      input: { sessionId: "dbg-current", cpu1CoreId: 0, cpu2CoreId: 2,
+        postLoadResetType: "cpu", __leaseContext: leaseContext }
+    });
+  });
+
+  test("rejects durable post-load reset outside the CPU1-owned reset scope", () => {
+    const plan = (runMode: string, postLoadResetType: string) => ({
+      planVersion: 1, name: "reset-scope", boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }, {
+        type: "runIpcAcceptance", runMode, postLoadResetType,
+        loadSequence: { mode: "cpu1-then-cpu2" }
+      }]
+    });
+    expect(testPlanSchema.safeParse(plan("cpu1_boots_cpu2", "system")).success).toBe(false);
+    expect(testPlanSchema.safeParse(plan("cpu1_boots_cpu2", "default")).success).toBe(false);
+    expect(testPlanSchema.safeParse(plan("debugger_runs_both", "cpu")).success).toBe(false);
+    expect(testPlanSchema.safeParse(plan("cpu2_pre_running", "restart")).success).toBe(false);
+    expect(testPlanSchema.safeParse(plan("cpu1_boots_cpu2", "restart")).success).toBe(true);
+  });
+
   test("durable step schema fails closed on unknown fields and missing or unsupported core identity", () => {
     const base = { planVersion: 1, name: "strict", boardIds: ["board-a"], steps: [] as unknown[] };
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "assignExpressions", assignments: [{ expression: "g_x", value: 1 }] }] }).success).toBe(false);

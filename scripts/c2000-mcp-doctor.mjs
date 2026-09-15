@@ -53,32 +53,37 @@ if (isolated) {
 // MCP host's workspace and prevents doctor from attaching to a user daemon.
 executionDirectory = await mkdtemp(path.join(os.tmpdir(), "c2000-mcp-doctor-cwd-"));
 daemonRuntimeDirectory = path.join(executionDirectory, "daemon-runtime");
-if (verifyWorker) {
-  doctorConfigPath = path.join(executionDirectory, "doctor-worker-config.json");
-  await writeFile(doctorConfigPath, `${JSON.stringify({
-    adapter: "mock",
-    ccs: { scriptingMode: "mock" },
-    target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] },
-    boards: [{
-      boardId: "doctor-board",
-      probeSerial: "DOCTOR-MOCK-PROBE",
-      device: "F28P65x",
-      ccxmlPath: path.join(executionDirectory, "doctor-mock.ccxml"),
-      tags: ["doctor"]
-    }]
-  }, null, 2)}\n`);
-}
+// Isolating only the daemon endpoint still permits a caller's absolute SQLite
+// path to be reused. Always supply private config/storage, even without workers.
+doctorConfigPath = path.join(executionDirectory, "doctor-config.json");
+await writeFile(doctorConfigPath, `${JSON.stringify({
+  adapter: "mock",
+  ccs: { scriptingMode: "mock" },
+  daemon: { runtimeDir: daemonRuntimeDirectory },
+  storage: { sqlitePath: path.join(executionDirectory, "doctor.sqlite") },
+  target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] },
+  boards: verifyWorker ? [{
+    boardId: "doctor-board",
+    probeSerial: "DOCTOR-MOCK-PROBE",
+    device: "F28P65x",
+    ccxmlPath: path.join(executionDirectory, "doctor-mock.ccxml"),
+    tags: ["doctor"]
+  }] : []
+}, null, 2)}\n`);
+const doctorEnv = Object.fromEntries(Object.entries(process.env)
+  .filter(([name]) => !/^C2000_/i.test(name)));
 
 child = spawn(process.execPath, [entrypoint], {
   cwd: executionDirectory,
   env: {
-    ...process.env,
-    C2000_MCP_ADAPTER: process.env.C2000_MCP_ADAPTER ?? "mock",
-    C2000_MCP_TOOL_PROFILE: process.env.C2000_MCP_TOOL_PROFILE ?? "readonly",
-    C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
+    ...doctorEnv,
+    C2000_MCP_ADAPTER: "mock",
+    C2000_MCP_TOOL_PROFILE: "readonly",
+    C2000_MCP_LOG_LEVEL: "error",
     C2000_MCP_DAEMON_RUNTIME_DIR: daemonRuntimeDirectory,
-    ...(doctorConfigPath ? { C2000_MCP_CONFIG: doctorConfigPath } : {})
+    C2000_MCP_CONFIG: doctorConfigPath
   },
+  windowsHide: true,
   stdio: ["pipe", "pipe", "pipe"]
 });
 

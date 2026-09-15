@@ -1042,8 +1042,8 @@ function handleCommand(command) {
     session.symbol.load(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true, targetMemoryWritten: false }) };
   } else if (command.name === "prepareFirmwareHandoff") {
-    // This changes debugger callbacks, not target memory. It must happen before
-    // disconnect, so CPU2 reconnect cannot execute OnTargetConnect RAM init/reset.
+    // Debugger callbacks only: prevent CPU2 connect-time RAM init/reset and
+    // CPU1 OnReset ROM breakpoints/CPU2 release during firmware-owned boot.
     session.expression.evaluate("GEL_UnloadAllGels()");
     return { status: "OK", value: withCoreIdentity(command, { gelInitializationDisabled: true }) };
   } else if (command.name === "prepareFlashLoad") {

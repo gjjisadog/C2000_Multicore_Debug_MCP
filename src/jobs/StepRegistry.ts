@@ -176,6 +176,7 @@ export class StepRegistry {
           startupPreset: step.startupPreset,
           resetType: step.resetType,
           programPreparation: step.programPreparation,
+          postLoadResetType: step.postLoadResetType,
           ...(step.programPreparation === "symbols-only" && plan.safetyGuards ? {
             preStartupSafetyGuard: {
               conditions: plan.safetyGuards.conditions,

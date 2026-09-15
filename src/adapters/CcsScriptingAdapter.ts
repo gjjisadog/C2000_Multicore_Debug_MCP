@@ -134,7 +134,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
     }
     const result = await this.execute(session, coreId, { operation: "prepareFirmwareHandoff" });
     if (result.gelInitializationDisabled !== true) {
-      throw new DebugMcpError("DssCommandFailed", "CPU2 handoff lacks GEL suppression evidence", { coreId, result });
+      throw new DebugMcpError("DssCommandFailed", "Firmware handoff lacks GEL suppression evidence", { coreId, result });
     }
   }
 
@@ -189,7 +189,20 @@ export class CcsScriptingAdapter implements DebugAdapter {
 
   async readPc(session: AdapterSession, coreId: CoreId): Promise<string> {
     const result = await this.execute(session, coreId, { operation: "readPc" });
-    return typeof result.pc === "string" ? result.pc : typeof result.value === "string" ? result.value : "0x0";
+    const raw = result.pc ?? result.value;
+    const text = typeof raw === "string" ? raw.trim() : undefined;
+    // DSS String(expression.evaluate("PC")) is decimal, unlike bare linker-map
+    // addresses. Tag it at the adapter boundary so downstream parsers never
+    // infer hexadecimal from digit count. Preserve already explicit hex PCs.
+    const explicitHex = text !== undefined && /^0x[0-9a-f]+$/i.test(text);
+    const value = typeof raw === "number" ? raw
+      : text !== undefined && (explicitHex || /^\d+$/.test(text)) ? Number(text) : NaN;
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new DebugMcpError("AddressResolveFailed", "DSS returned an invalid PC value", {
+        coreId, operation: "readPc", rawPc: raw
+      });
+    }
+    return explicitHex ? text! : `0x${value.toString(16).padStart(8, "0")}`;
   }
 
   async evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult> {

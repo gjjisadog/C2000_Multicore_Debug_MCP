@@ -371,9 +371,20 @@ export class DebugWorkflowService {
       // Never resume that PC. Only CPU1 is restarted; it owns CPU2 boot. This
       // is intentionally also done for symbols-only/resident-Flash runs so
       // the entry check proves the actual CPU1 startup path.
+      let preparation: ToolResult | undefined;
+      if (input.postLoadResetType === "cpu") {
+        // TI CPU1 OnReset runs to a ROM breakpoint and may release CPU2 to
+        // Wait Boot. Suppress those callbacks before the CPU1-only reset.
+        setStage("cpu1-reset-initialization-disable");
+        preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu1CoreId);
+        performedSteps.push("disableCpu1ResetInitialization");
+      }
       setStage("post-load-cpu1-reset");
-      postLoadReset = await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
-        input.postLoadResetType ?? "restart");
+      postLoadReset = {
+        ...(await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
+          input.postLoadResetType ?? "restart")),
+        ...(preparation ? { preparation } : {})
+      };
       performedSteps.push("resetCpu1AfterLoad");
     }
     let applicationEntry: ApplicationEntryCheck | undefined;
@@ -431,110 +442,145 @@ export class DebugWorkflowService {
     }
     setStage("ipc-readiness-wait");
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
-    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs, input.intervalMs, input.pollingStrategy, input.pollingSchedule);
+    const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs,
+      input.intervalMs, input.pollingStrategy, input.pollingSchedule,
+      input.bootSyncExpressions?.length ? { coreId: input.cpu1CoreId, expressions: input.bootSyncExpressions } : undefined);
     performedSteps.push("waitForIpcReady");
-    const timeoutRecovery = ipcReady.timedOut
-      ? await this.haltAndResolvePc(input.sessionId, coreIds)
-      : undefined;
-    if (timeoutRecovery) {
-      performedSteps.push("haltAndResolvePcOnTimeout");
-    }
-    setStage("runtime-ram-ownership");
-    const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
-      input.sessionId,
-      input.verifyRuntimeRamOwnership,
-      ramOwnership.ownershipActions
-    );
-    performedSteps.push("verifyRuntimeRamOwnership");
-    setStage("diagnosis");
-    const diagnosis = await this.buildBootHandoffDiagnosis({
-      sessionId: input.sessionId,
-      device: input.device,
-      cpu1CoreId: input.cpu1CoreId,
-      cpu2CoreId: input.cpu2CoreId,
-      ramOwnership,
-      elfFreshness,
-      runtimeRamOwnership,
-      ipcReady,
-      applicationEntry,
-      extraExpressions: conditions,
-      ipcAcceptance: true,
-      cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
-      cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
-    });
-    const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan, applicationEntry });
-    performedSteps.push("diagnoseBootHandoff");
-    const result: ToolResult = {
-      workflow: "c2000_runIpcAcceptance",
-      orchestration: "server-internal",
-      mcpToolCalls: [],
-      approvalClass: "workflow-confirmation",
-      effectsApplied: [
-        "target-halt",
-        ...(!isSkippedResetBatch(reset) ? ["target-reset"] : []),
-        ...(input.programPreparation === "symbols-only" ? ["symbol-load"] : ["program-load", "ram-ownership-change"]),
-        "target-run", "target-read",
-        ...(cpu2Release ? ["debugger-gel-unload", "target-disconnect", "target-connect"] : [])
-      ],
-      sessionId: input.sessionId,
-      device: input.device,
-      cpu1CoreId: input.cpu1CoreId,
-      cpu2CoreId: input.cpu2CoreId,
-      success: ipcReady.matched === true
-        && load.results.every((item: ToolResult) => item.success === true)
-        && elfFreshness.allFresh === true
-        && runtimeRamOwnershipAccepted(runtimeRamOwnership),
-      performedSteps,
-      initialHalt,
-      reset,
-      load,
-      programPreparation: input.programPreparation,
-      ...(input.programPreparation === "symbols-only" ? {
-        targetFlashVerified: false,
-        programPreparationEvidence: {
-          mode: "symbols-only",
-          symbolsLoaded: true,
-          targetMemoryWritten: false,
-          targetFlashVerified: false,
-          note: SYMBOLS_ONLY_FLASH_NOTE
-        }
-      } : {}),
-      postLoadHalt,
-      ...(postLoadReset ? { postLoadReset } : {}),
-      ...(applicationEntry ? { applicationEntry } : {}),
-      snapshot,
-      artifactPreflight,
-      ramOwnership,
-      elfFreshness,
-      runtimeRamOwnership,
-      runPlan,
+    // Freeze the first read set before any follow-up target access. Diagnostic
+    // errors must still stop the workflow, but must not erase startup evidence.
+    const firstFailureEvidence: ToolResult = {
+      sessionId: input.sessionId, cpu1CoreId: input.cpu1CoreId, cpu2CoreId: input.cpu2CoreId,
+      capturedAt: new Date().toISOString(), success: false, diagnosticCompleteness: "incomplete",
+      firstFailureStage: ipcReady.timedOut ? "ipc-readiness-wait" : "post-readiness-diagnostics",
+      firstFailureCode: ipcReady.timedOut ? "IPC_READY_TIMEOUT" : "POST_READINESS_DIAGNOSTIC_FAILED",
+      ipcReady, ...(applicationEntry ? { applicationEntry } : {}),
+      artifactPreflight, elfFreshness, ramOwnership, runPlan, snapshot,
+      snapshotPhase: "post-load-before-startup", initialHalt, reset, load, postLoadHalt,
+      ...(postLoadReset ? { postLoadReset } : {}), loadSequence: input.loadSequence,
+      safetyGuardChecks: [...safetyGuardChecks],
       ...(cpu2Release ? { cpu2Release } : {}),
-      loadSequence: input.loadSequence,
-      startupContract: describeWorkflowStartupContract({
-        loadMode: input.loadSequence.mode,
-        runMode: input.runSequence.runMode,
-        runCpu1First: input.runSequence.runCpu1First,
-        runCpu2: input.runSequence.runCpu2,
-        releaseCpu2BeforeCpu1: input.runSequence.releaseCpu2BeforeCpu1
-      }),
-      ipcReady,
-      optimization,
-      ...(safetyGuardChecks.length > 0 ? { safetyGuardChecks } : {}),
-      ...(timeoutRecovery ? { timeoutRecovery } : {}),
-      diagnosis,
-      performance: {
-        totalMs: performance.now() - workflowStartedAt,
-        ipcPollMs: ipcReady.pollDurationMs,
-        ipcPollIterations: ipcReady.pollIterations,
-        expressionBatchCount: ipcReady.expressionBatchCalls,
-        expressionCount: ipcReady.expressionCount,
-        diagnosisExpressionReadsReused: diagnosis.performance?.expressionReadsReused === true
-      }
+      performedSteps: [...performedSteps]
     };
-    if (input.collectDebugBundle) {
-      result.debugBundle = await this.writeDebugBundle(bundleOutputDir!, result);
+    const timeoutRecovery: ToolResult | undefined = ipcReady.timedOut ? { pc: [] } : undefined;
+    if (timeoutRecovery) firstFailureEvidence.timeoutRecovery = timeoutRecovery;
+    try {
+      if (timeoutRecovery) {
+        setStage("ipc-timeout-diagnostics");
+        await this.haltAndResolvePc(input.sessionId, coreIds, timeoutRecovery);
+        performedSteps.push("haltAndResolvePcOnTimeout");
+      }
+      if (ipcReady.diagnosticReads?.complete === false) {
+        if (!timeoutRecovery) {
+          firstFailureEvidence.diagnosticHalt = await this.manager.haltCores(input.sessionId, coreIds);
+        }
+        throw new DebugMcpError("ExpressionCaptureFailed", "Requested CPU1 boot observations could not all be read", {
+          diagnosticReads: ipcReady.diagnosticReads
+        });
+      }
+      setStage("runtime-ram-ownership");
+      const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+        input.sessionId,
+        input.verifyRuntimeRamOwnership,
+        ramOwnership.ownershipActions
+      );
+      firstFailureEvidence.runtimeRamOwnership = runtimeRamOwnership;
+      performedSteps.push("verifyRuntimeRamOwnership");
+      setStage("diagnosis");
+      const diagnosis = await this.buildBootHandoffDiagnosis({
+        sessionId: input.sessionId,
+        device: input.device,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu2CoreId: input.cpu2CoreId,
+        ramOwnership,
+        elfFreshness,
+        runtimeRamOwnership,
+        ipcReady,
+        applicationEntry,
+        extraExpressions: conditions,
+        ipcAcceptance: true,
+        cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
+        cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
+      });
+      const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan, applicationEntry });
+      performedSteps.push("diagnoseBootHandoff");
+      const result: ToolResult = {
+        workflow: "c2000_runIpcAcceptance",
+        orchestration: "server-internal",
+        mcpToolCalls: [],
+        approvalClass: "workflow-confirmation",
+        effectsApplied: [
+          "target-halt",
+          ...(!isSkippedResetBatch(reset) ? ["target-reset"] : []),
+          ...(input.programPreparation === "symbols-only" ? ["symbol-load"] : ["program-load", "ram-ownership-change"]),
+          "target-run", "target-read",
+          ...(cpu2Release ? ["debugger-gel-unload", "target-disconnect", "target-connect"] : [])
+        ],
+        sessionId: input.sessionId,
+        device: input.device,
+        cpu1CoreId: input.cpu1CoreId,
+        cpu2CoreId: input.cpu2CoreId,
+        success: ipcReady.matched === true
+          && load.results.every((item: ToolResult) => item.success === true)
+          && elfFreshness.allFresh === true
+          && runtimeRamOwnershipAccepted(runtimeRamOwnership),
+        performedSteps,
+        initialHalt,
+        reset,
+        load,
+        programPreparation: input.programPreparation,
+        ...(input.programPreparation === "symbols-only" ? {
+          targetFlashVerified: false,
+          programPreparationEvidence: {
+            mode: "symbols-only",
+            symbolsLoaded: true,
+            targetMemoryWritten: false,
+            targetFlashVerified: false,
+            note: SYMBOLS_ONLY_FLASH_NOTE
+          }
+        } : {}),
+        postLoadHalt,
+        ...(postLoadReset ? { postLoadReset } : {}),
+        ...(applicationEntry ? { applicationEntry } : {}),
+        snapshot,
+        artifactPreflight,
+        ramOwnership,
+        elfFreshness,
+        runtimeRamOwnership,
+        runPlan,
+        ...(cpu2Release ? { cpu2Release } : {}),
+        loadSequence: input.loadSequence,
+        startupContract: describeWorkflowStartupContract({
+          loadMode: input.loadSequence.mode,
+          runMode: input.runSequence.runMode,
+          runCpu1First: input.runSequence.runCpu1First,
+          runCpu2: input.runSequence.runCpu2,
+          releaseCpu2BeforeCpu1: input.runSequence.releaseCpu2BeforeCpu1
+        }),
+        ipcReady,
+        optimization,
+        ...(safetyGuardChecks.length > 0 ? { safetyGuardChecks } : {}),
+        ...(timeoutRecovery ? { timeoutRecovery } : {}),
+        diagnosis,
+        performance: {
+          totalMs: performance.now() - workflowStartedAt,
+          ipcPollMs: ipcReady.pollDurationMs,
+          ipcPollIterations: ipcReady.pollIterations,
+          expressionBatchCount: ipcReady.expressionBatchCalls,
+          expressionCount: ipcReady.expressionCount,
+          diagnosisExpressionReadsReused: diagnosis.performance?.expressionReadsReused === true
+        }
+      };
+      if (input.collectDebugBundle) {
+        result.debugBundle = await this.writeDebugBundle(bundleOutputDir!, result);
+      }
+      return result;
+    } catch (error) {
+      const cause = toStructuredError(error);
+      const details = { ...cause.details, firstFailureEvidence, diagnosticError: cause };
+      // Preserve fencing/safety error codes and perform no further target reads.
+      throw new DebugMcpError(error instanceof DebugMcpError ? error.code : "PostLaunchCheckFailed",
+        cause.message, details);
     }
-    return result;
   }
 
   async runBootHandoffDiagnosis(input: z.infer<typeof runBootHandoffDiagnosisSchema>): Promise<ToolResult> {
@@ -704,10 +750,19 @@ export class DebugWorkflowService {
       if (postLoadBoot?.releaseCpu2BeforeCpu1) {
         // Firmware owns CPU2 boot. A system reset may hold CPU2 in reset, so do
         // not reset/halt/read that core again until CPU1 has released it.
+        let preparation: ToolResult | undefined;
+        if (postLoadBoot.resetType === "cpu") {
+          workflowStage = "cpu1-reset-initialization-disable";
+          preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu1CoreId);
+          performedSteps.push("disableCpu1ResetInitialization");
+        }
         workflowStage = "post-load-cpu1-reset";
-        postLoadReset = await this.manager.resetCores(
-          input.sessionId, [input.cpu1CoreId], postLoadBoot.resetType as ResetType
-        );
+        postLoadReset = {
+          ...(await this.manager.resetCores(
+            input.sessionId, [input.cpu1CoreId], postLoadBoot.resetType as ResetType
+          )),
+          ...(preparation ? { preparation } : {})
+        };
         performedSteps.push("resetCpu1AfterLoad");
         assertBatchSucceeded("resetCpu1AfterLoad", postLoadReset);
       }
@@ -1126,7 +1181,8 @@ export class DebugWorkflowService {
     timeoutMs: number,
     intervalMs: number,
     strategy: "fixed" | "adaptive" = "adaptive",
-    schedule?: Array<{ untilMs?: number; intervalMs: number }>
+    schedule?: Array<{ untilMs?: number; intervalMs: number }>,
+    observations?: { coreId: CoreId; expressions: string[] }
   ) {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
@@ -1136,6 +1192,15 @@ export class DebugWorkflowService {
     let expressionBatchCalls = 0;
     let expressionCount = 0;
     const grouped = groupConditionsByCore(conditions);
+    let diagnosticReads: { capturedAt: string; coreId: CoreId; complete: boolean; results: EvaluateResult[] } | undefined;
+    if (observations) {
+      let group = grouped.find(item => item.coreId === observations.coreId);
+      if (!group) {
+        group = { coreId: observations.coreId, conditions: [], expressions: [] };
+        grouped.push(group);
+      }
+      group.expressions = [...new Set([...group.expressions, ...observations.expressions])];
+    }
     const uniqueExpressionsPerPoll = grouped.reduce((count, group) => count + group.expressions.length, 0);
     while (performance.now() <= deadline) {
       pollIterations++;
@@ -1148,11 +1213,21 @@ export class DebugWorkflowService {
       lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
         conditionResult(condition, results.find(result => result.expression === condition.expression))
       ));
+      if (observations) {
+        const results = batches.find(batch => batch.group.coreId === observations.coreId)!.results;
+        const observed = results.filter(result => observations.expressions.includes(result.expression));
+        diagnosticReads = {
+          capturedAt: new Date().toISOString(), coreId: observations.coreId, results: observed,
+          complete: observations.expressions.every(expression =>
+            observed.some(result => result.expression === expression && result.success))
+        };
+      }
       if (lastConditions.every(condition => condition.matched)) {
         const pollDurationMs = performance.now() - startedAt;
         return {
           sessionId, matched: true, timedOut: false, conditions: lastConditions, pollIterations,
           expressionBatchCalls, expressionCount, pollDurationMs, matchedAtMs: pollDurationMs,
+          ...(diagnosticReads ? { diagnosticReads } : {}),
           ...(firstFailure ? { firstFailure } : {})
         };
       }
@@ -1167,6 +1242,7 @@ export class DebugWorkflowService {
           pollIteration: pollIterations,
           elapsedMs: performance.now() - startedAt,
           conditions: lastConditions.filter(condition => condition.matched !== true),
+          ...(diagnosticReads ? { diagnosticReads } : {}),
           snapshot
         };
       }
@@ -1178,14 +1254,22 @@ export class DebugWorkflowService {
     return {
       sessionId, matched: false, timedOut: true, conditions: lastConditions, pollIterations,
       expressionBatchCalls, expressionCount, pollDurationMs: performance.now() - startedAt,
+      ...(diagnosticReads ? { diagnosticReads } : {}),
       ...(firstFailure ? { firstFailure } : {})
     };
   }
 
-  private async haltAndResolvePc(sessionId: string, coreIds: CoreId[]) {
-    const halt = await this.manager.haltCores(sessionId, coreIds);
-    const pc = await Promise.all(coreIds.map(async coreId => ({ coreId, ...(await this.manager.resolvePc(sessionId, coreId)) })));
-    return { halt, pc };
+  private async haltAndResolvePc(sessionId: string, coreIds: CoreId[], evidence: ToolResult) {
+    evidence.halt = await this.manager.haltCores(sessionId, coreIds);
+    assertBatchSucceeded("ipc-timeout-halt", evidence.halt);
+    for (const coreId of coreIds) {
+      try {
+        evidence.pc.push({ coreId, ...(await this.manager.resolvePc(sessionId, coreId)) });
+      } catch (error) {
+        evidence.pc.push({ coreId, error: toStructuredError(error) });
+        throw error;
+      }
+    }
   }
 
   private async checkElfFreshness(
@@ -1312,6 +1396,7 @@ async function assertIpcArtifactSet(input: {
   cpu1MapSha256?: string;
   cpu2MapSha256?: string;
   ipcReadyExpressions?: ExpressionCondition[];
+  bootSyncExpressions?: string[];
 }, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
   const normalizedInput = {
     ...input,
@@ -1365,7 +1450,11 @@ async function assertIpcArtifactSet(input: {
     cpu2CoreId: input.cpu2CoreId,
     cpu1MapPath: normalizedInput.cpu1MapPath,
     cpu2MapPath: normalizedInput.cpu2MapPath,
-    expressions: input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)
+    expressions: [
+      ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
+      // Symbol validation only: these observations never become readiness gates.
+      ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 }))
+    ]
   });
   issues.push(...artifactSemantics.issues);
   const cpu1Out = describeProgramArtifact(normalizedInput.cpu1OutPath);
