@@ -84,6 +84,12 @@ const onSchema = z.enum(["always", "failure", "success"]);
 const coreIdSchema = z.number().int().refine(value => value === 0 || value === 2, "F28P65x durable steps require coreId 0 (CPU1) or 2 (CPU2)");
 const expressionValueSchema = z.union([z.string().max(DURABLE_PLAN_LIMITS.maxExpressionLength), z.number(), z.boolean()]);
 const expressionSchema = z.string().min(1).max(DURABLE_PLAN_LIMITS.maxExpressionLength);
+// Deliberately bounded read syntax for repeated boot observations: no calls,
+// assignments, increment/decrement, or computed addresses.
+export const bootObservationExpressionSchema = expressionSchema.refine(expression =>
+  /^\s*[A-Za-z_]\w*(?:(?:\.|->)[A-Za-z_]\w*|\[(?:0[xX][\da-fA-F]+|\d+)\])*\s*$/.test(expression)
+  || /^\s*\*\s*\(\s*(?:uint(?:8|16|32)_t|unsigned\s+(?:int|long))\s*\*\s*\)\s*(?:0[xX][\da-fA-F]+|\d+)\s*$/.test(expression),
+"Boot observations must be symbol/member reads or typed constant-address memory reads");
 const labelSchema = z.string().min(1).max(DURABLE_PLAN_LIMITS.maxLabelLength);
 const expressionAssignmentStepSchema = z.object({
   coreId: coreIdSchema,
@@ -241,6 +247,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     intervalMs: z.number().int().positive().max(DURABLE_PLAN_LIMITS.maxIntervalMs).default(100),
     startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
+    postLoadResetType: z.enum(["cpu", "restart"]).optional(),
     programPreparation: programPreparationSchema,
     loadPolicy: loadPolicySchema.default("always"),
     allowDestructiveFlashReload: allowDestructiveFlashReloadSchema,
@@ -251,7 +258,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     applicationEntryTimeoutMs: z.number().int().positive().max(10_000).default(2_000),
     bootModeExpression: z.string().min(1).optional(),
     cpu1ResetStateExpression: z.string().min(1).optional(),
-    bootSyncExpressions: z.array(z.string().min(1)).min(1).max(DURABLE_PLAN_LIMITS.maxReads).optional(),
+    bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(DURABLE_PLAN_LIMITS.maxReads).optional(),
     ipcReadyExpressions: z.array(expressionConditionStepSchema).min(1).max(DURABLE_PLAN_LIMITS.maxConditions).optional(),
     verifyRuntimeRamOwnership: z.boolean().optional()
   }).strict(),
@@ -361,6 +368,12 @@ export const testPlanSchema = z.object({
         }
       }
       continue;
+    }
+    if (step.type === "runIpcAcceptance" && step.postLoadResetType
+      && step.runMode !== "cpu1_boots_cpu2"
+      && (step.runMode !== undefined || !step.runSequence?.releaseCpu2BeforeCpu1)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "postLoadResetType"],
+        message: "postLoadResetType requires firmware-owned CPU2 boot" });
     }
     if (step.type === "runIpcAcceptance" && step.loadSequence && (step.runMode || step.runSequence?.releaseCpu2BeforeCpu1)) {
       const runCpu1First = step.runMode ? step.runMode !== "cpu2_pre_running" : step.runSequence?.runCpu1First ?? true;
@@ -535,7 +548,7 @@ function evidenceValueCount(step: TestPlanStep, guardIntervalMs?: number): numbe
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "reconnectAfterTargetReset": return ((reconnectPollCount(step, guardIntervalMs) + 1) * (step.resetEvidence?.length ?? 0))
       + step.resetCauseReads.reduce((total, read) => total + read.expressions.length, 0);
-    case "runIpcAcceptance": return step.ipcReadyExpressions?.length ?? 0;
+    case "runIpcAcceptance": return (step.ipcReadyExpressions?.length ?? 0) + (step.bootSyncExpressions?.length ?? 0);
     default: return 0;
   }
 }

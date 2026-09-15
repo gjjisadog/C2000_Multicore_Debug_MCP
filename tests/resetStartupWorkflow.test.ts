@@ -14,14 +14,18 @@ const coreMap = [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "
 
 class StartupAdapter extends MockDebugAdapter {
   events: string[] = [];
-  fail?: "prepare" | "post-load-reset";
+  haltedCores: CoreId[] = [];
+  fail?: "prepare" | "cpu1-prepare" | "post-load-reset";
   stayInBootRom = false;
+  failCpu2Pc = false;
   private handedOff = false;
   private applicationStarted = false;
 
   override async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId) {
     this.events.push(`prepare:${coreId}`);
-    if (this.fail === "prepare") throw new DebugMcpError("DssCommandFailed", "GEL unload failed");
+    if (this.fail === "prepare" || (coreId === 0 && this.fail === "cpu1-prepare")) {
+      throw new DebugMcpError("DssCommandFailed", "GEL unload failed");
+    }
     await super.prepareFirmwareHandoff(session, coreId);
     this.handedOff = true;
   }
@@ -46,8 +50,15 @@ class StartupAdapter extends MockDebugAdapter {
     await super.run(session, coreId);
     if (coreId === 0 && !this.stayInBootRom) this.applicationStarted = true;
   }
+  override async halt(session: AdapterSession, coreId: CoreId) {
+    this.haltedCores.push(coreId);
+    await super.halt(session, coreId);
+  }
   override async readPc(session: AdapterSession, coreId: CoreId) {
     if (coreId === 0) return this.applicationStarted ? "0x00080000" : "0x003FB445";
+    if (this.failCpu2Pc && this.applicationStarted) {
+      throw new DebugMcpError("DssCommandFailed", "CPU2 held in reset");
+    }
     return super.readPc(session, coreId);
   }
   override async loadProgram(session: AdapterSession, coreId: CoreId, uri: string) {
@@ -94,16 +105,111 @@ async function fixture() {
 }
 
 describe("post-load reset and firmware-owned handoff", () => {
+  test("incomplete observations fail closed even when every IPC ready condition matches", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({ ...input, bootSyncExpressions: ["boot.missing"] });
+    expect(result.success).toBe(false);
+    expect(result.error.code).toBe("ExpressionCaptureFailed");
+    expect(result.error.details.firstFailureEvidence.ipcReady.matched).toBe(true);
+    expect(result.error.details.firstFailureEvidence.ipcReady.diagnosticReads.complete).toBe(false);
+    expect(adapter.haltedCores.slice(-2)).toEqual([0, 2]);
+  });
+
+  test.each(["boot.sync = 1", "boot.sync++", "clearTrip()", "*(unsigned int *)(ptr++)"])(
+    "rejects non-read-only boot observation %s before target access", async expression => {
+      const { adapter, handlers, input } = await fixture();
+      const result = await handlers.runIpcAcceptance({ ...input, bootSyncExpressions: [expression] });
+      expect(result.success).toBe(false);
+      expect(adapter.events).toEqual([]);
+    }
+  );
+
+  test("missing boot observation map symbol fails before load or startup", async () => {
+    const { adapter, handlers, input } = await fixture();
+    await writeFile(input.cpu1MapPath, "GLOBAL SYMBOLS: SORTED BY Symbol Address\n00008000 ipc\n");
+    const result = await handlers.runIpcAcceptance({ ...input, bootSyncExpressions: ["missingWatch.firstError"] });
+    expect(result.success).toBe(false);
+    expect(result.error.code).toBe("ArtifactPairInvalid");
+    expect(result.error.details.issues.join(" ")).toContain("missingWatch");
+    expect(adapter.events).toEqual([]);
+    expect(adapter.haltedCores).toEqual([]);
+  });
+  test("CPU1 boot observations do not become additional IPC ready conditions", async () => {
+    const { handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({
+      ...input, bootSyncExpressions: ["boot.sync", "cpu1.reset"]
+    });
+    expect(result.success).toBe(true);
+    expect(result.ipcReady.conditions).toHaveLength(1);
+    expect(result.ipcReady.diagnosticReads).toMatchObject({
+      coreId: 0, results: [
+        { expression: "boot.sync", success: true, value: "waiting" },
+        { expression: "cpu1.reset", success: true, value: "held" }
+      ]
+    });
+  });
+
+  test("retains CPU1 first-poll observations when CPU2 PC diagnostics fail", async () => {
+    const { adapter, handlers, input } = await fixture();
+    adapter.failCpu2Pc = true;
+    const result = await handlers.runIpcAcceptance({
+      ...input, bootSyncExpressions: ["boot.sync", "cpu1.reset"],
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 2 }]
+    });
+    expect(result.success).toBe(false);
+    const evidence = result.error.details.firstFailureEvidence;
+    expect(evidence.firstFailureCode).toBe("IPC_READY_TIMEOUT");
+    expect(evidence.ipcReady.firstFailure.diagnosticReads).toMatchObject({
+      coreId: 0, results: [
+        { expression: "boot.sync", success: true, value: "waiting" },
+        { expression: "cpu1.reset", success: true, value: "held" }
+      ]
+    });
+    expect(evidence.ipcReady.conditions).toHaveLength(1);
+  });
+
   test.each([undefined, "cpu", "restart"] as const)("IPC loads use CPU1-only post-load reset (%s)", async type => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance({ ...input, postLoadResetType: type });
     expect(result.success).toBe(true);
     expect(adapter.events).toEqual([
       "load:0", "load:2",
-      "prepare:2", "disconnect:2", `reset:0:${type ?? "restart"}`, "run:0", "connect:2"
+      "prepare:2", "disconnect:2", ...(type === "cpu" ? ["prepare:0"] : []),
+      `reset:0:${type ?? "restart"}`, "run:0", "connect:2"
     ]);
     expect(result.performedSteps).toContain("resetCpu1AfterLoad");
     expect(result.effectsApplied).toContain("debugger-gel-unload");
+  });
+
+  test.each(["ipc", "reload"])("%s owner CPU Reset suppresses CPU1 GEL before reset", async mode => {
+    const { adapter, handlers, input } = await fixture();
+    const result = mode === "ipc"
+      ? await handlers.runIpcAcceptance({ ...input, postLoadResetType: "cpu" })
+      : await handlers.runReloadAndDiagnose({ ...input,
+        postLoadBoot: { resetType: "cpu", releaseCpu2BeforeCpu1: true, runCpu1: true,
+          runCpu2: false, cpu1SettleMs: 0 }
+      });
+    expect(result.success).toBe(true);
+    expect(result.postLoadReset.preparation).toMatchObject({ coreId: 0, gelInitializationDisabled: true });
+    expect(result.performedSteps).toContain("disableCpu1ResetInitialization");
+    const handoff = adapter.events.slice(adapter.events.indexOf("disconnect:2") + 1);
+    expect(handoff).toEqual(["prepare:0", "reset:0:cpu", "run:0", "connect:2"]);
+  });
+
+  test.each(["ipc", "reload"])("%s CPU1 GEL suppression failure forbids owner reset/run", async mode => {
+    const { adapter, handlers, input } = await fixture();
+    adapter.fail = "cpu1-prepare";
+    const result = mode === "ipc"
+      ? await handlers.runIpcAcceptance({ ...input, postLoadResetType: "cpu" })
+      : await handlers.runReloadAndDiagnose({ ...input,
+        postLoadBoot: { resetType: "cpu", releaseCpu2BeforeCpu1: true, runCpu1: true,
+          runCpu2: false, cpu1SettleMs: 0 }
+      });
+    expect(result).toMatchObject({ success: false,
+      error: { code: "DssCommandFailed", details: { workflowStage: "cpu1-reset-initialization-disable" } }
+    });
+    const handoff = adapter.events.slice(adapter.events.indexOf("disconnect:2") + 1);
+    expect(handoff).toEqual(["prepare:0"]);
   });
 
   test("symbols-only uses the CPU1-only reset before application-entry confirmation", async () => {

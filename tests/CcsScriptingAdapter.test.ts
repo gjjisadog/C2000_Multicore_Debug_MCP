@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { CcsScriptingAdapter } from "../src/adapters/CcsScriptingAdapter.js";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "../src/adapters/CcsScriptingBridge.js";
+import { createApplicationEntryPlan, waitForApplicationEntry } from "../src/debug/applicationEntry.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -56,6 +57,39 @@ class RecordingBridge implements CcsScriptingBridge {
 }
 
 describe("CcsScriptingAdapter", () => {
+  test.each(["pc", "value"] as const)("normalizes decimal DSS %s before application-entry comparison", async field => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "decimal-pc", ccxmlPath, coreMap });
+    for (const [raw, address] of [["524288", 0x80000], ["552561", 0x86e71],
+      ["945691", 0xe6e1b], ["65624", 0x10058], [945691, 0xe6e1b]] as const) {
+      bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName, [field]: raw });
+      const pc = await adapter.readPc(session, 0);
+      expect(pc).toBe(`0x${address.toString(16).padStart(8, "0")}`);
+      const entry = await waitForApplicationEntry({
+        async getMulticoreSnapshot() {
+          return { cores: [{ coreId: 0, coreName: "C28xx_CPU1", name: "C28xx_CPU1",
+            connected: true, state: "Halted", pc }] };
+        }
+      }, {
+        sessionId: "decimal-pc", plan: createApplicationEntryPlan({ coreId: 0, explicitAddress: address }),
+        timeoutMs: 20, intervalMs: 1
+      });
+      expect(entry.reached).toBe(true);
+      expect(entry.samples[0].pcValue).toBe(address);
+    }
+  });
+
+  test.each([undefined, "", "not-a-pc", "0x", "-1", "1.5", "9007199254740992"])(
+    "rejects unavailable or invalid PC %s instead of fabricating zero", async pc => {
+      const bridge = new RecordingBridge();
+      bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName, pc });
+      const adapter = new CcsScriptingAdapter({}, bridge);
+      const session = await adapter.createSession({ sessionName: "invalid-pc", ccxmlPath, coreMap });
+      await expect(adapter.readPc(session, 2)).rejects.toMatchObject({ code: "AddressResolveFailed" });
+    }
+  );
+
   test("returns optional load snapshots without adding commands or changing symbol-only loads", async () => {
     const bridge = new RecordingBridge();
     const evidence = { readOnly: true, atomic: false, snapshots: [{ phase: "load:after" }] };
@@ -87,16 +121,16 @@ describe("CcsScriptingAdapter", () => {
     }
   });
 
-  test("handoff is core-explicit and requires persistent GEL suppression evidence", async () => {
+  test.each([0, 2])("handoff on core %s requires persistent GEL suppression evidence", async coreId => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);
     const session = await adapter.createSession({ sessionName: "handoff-proof", ccxmlPath, coreMap });
-    await adapter.prepareFirmwareHandoff(session, 2);
-    expect(bridge.commands).toEqual([expect.objectContaining({ operation: "prepareFirmwareHandoff", coreId: 2 })]);
+    await adapter.prepareFirmwareHandoff(session, coreId);
+    expect(bridge.commands).toEqual([expect.objectContaining({ operation: "prepareFirmwareHandoff", coreId })]);
     bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName });
-    await expect(adapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "DssCommandFailed" });
+    await expect(adapter.prepareFirmwareHandoff(session, coreId)).rejects.toMatchObject({ code: "DssCommandFailed" });
     const statelessAdapter = new CcsScriptingAdapter({}, { execute: bridge.execute });
-    await expect(statelessAdapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
+    await expect(statelessAdapter.prepareFirmwareHandoff(session, coreId)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
   });
 
   test("registers a logical CCS session with the bridge before core commands are executed", async () => {

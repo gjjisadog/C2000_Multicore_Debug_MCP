@@ -1,7 +1,44 @@
 import { describe, expect, test } from "vitest";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { runInNewContext } from "node:vm";
 
 describe("installer bootstrap scripts", () => {
+  test.each([false, true])("doctor isolates configuration, storage and environment (worker=%s)", async verifyWorker => {
+    const source = await readFile("scripts/c2000-mcp-doctor.mjs", "utf8");
+    const setup = source.slice(source.indexOf("executionDirectory = await mkdtemp("),
+      source.indexOf('let stdoutBuffer = "";'));
+    const files = new Map<string, string>();
+    let spawned: any;
+    await runInNewContext(`(async () => {
+      let executionDirectory, daemonRuntimeDirectory, doctorConfigPath, child;
+      ${setup}
+    })()`, {
+      path, os: { tmpdir: () => "/test-temp" }, verifyWorker, entrypoint: "doctor/index.js",
+      mkdtemp: async (prefix: string) => `${prefix}isolated`,
+      writeFile: async (file: string, data: string) => { files.set(file, data); },
+      spawn: (_exe: string, _args: string[], options: any) => { spawned = options; return {}; },
+      process: { execPath: "node", env: {
+        PATH: "preserve-host-path", C2000_MCP_CONFIG: "/production/config.json",
+        C2000_MCP_ADAPTER: "ccs", C2000_MCP_TOOL_PROFILE: "full",
+        C2000_MCP_LOG_FILE: "/production/target.log", C2000_MCP_IMPROVEMENT_ENABLED: "true",
+        C2000_MCP_PROBES_JSON: "production-probes"
+      } }
+    });
+    const config = JSON.parse(files.get(spawned.env.C2000_MCP_CONFIG) ?? "null");
+    expect(config).not.toBeNull();
+    expect(config.adapter).toBe("mock");
+    expect(config.storage.sqlitePath).toBe(path.join(spawned.cwd, "doctor.sqlite"));
+    expect(config.daemon.runtimeDir).toBe(path.join(spawned.cwd, "daemon-runtime"));
+    expect(config.boards.map((board: any) => board.boardId)).toEqual(verifyWorker ? ["doctor-board"] : []);
+    expect(spawned.env.C2000_MCP_ADAPTER).toBe("mock");
+    expect(spawned.env.C2000_MCP_TOOL_PROFILE).toBe("readonly");
+    expect(spawned.env.C2000_MCP_LOG_FILE).toBeUndefined();
+    expect(spawned.env.C2000_MCP_IMPROVEMENT_ENABLED).toBeUndefined();
+    expect(spawned.env.C2000_MCP_PROBES_JSON).toBeUndefined();
+    expect(spawned.env.PATH).toBe("preserve-host-path");
+  });
+
   test("Windows release bootstrap fails fast and verifies the private release asset", async () => {
     const source = await readFile("scripts/install-release.ps1", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");

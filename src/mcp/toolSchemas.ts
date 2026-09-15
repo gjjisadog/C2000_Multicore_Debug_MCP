@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
+import { bootObservationExpressionSchema, canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
 import { allowDestructiveFlashReloadSchema } from "../contracts/FlashReloadContract.js";
@@ -709,8 +709,8 @@ const runIpcAcceptanceObjectSchema = z.object({
     .describe("Optional CPU1 expression captured after entry confirmation; no symbol is guessed when omitted"),
   cpu1ResetStateExpression: z.string().min(1).optional()
     .describe("Optional CPU1 reset-state expression captured after an entry confirmation failure"),
-  bootSyncExpressions: z.array(z.string().min(1)).min(1).optional()
-    .describe("Optional CPU1 boot-sync expressions captured on entry failure; defaults to CPU1 IPC conditions or the standard CPU1 boot watch set"),
+  bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(64).optional()
+    .describe("Optional CPU1 read-only boot diagnostics captured on entry failure and alongside IPC polling; observations do not change readiness conditions"),
   programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
   ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")

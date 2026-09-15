@@ -111,6 +111,29 @@ codestart
     ]));
   });
 
+  test("parses RUN ADDR for name-only copy-to-RAM sections", () => {
+    const parsed = parseLinkerMap(`
+MEMORY CONFIGURATION
+  FLASH_BANK0           00080000   00020000  00000507  0001faf9  RWIX
+  RAMD0                 0000c000   00001000  000004ff  00000b01  RWIX
+
+SECTION ALLOCATION MAP
+.TI.ramfunc
+*          0    00080008    000004ff     RUN ADDR = 0000c000
+`, { coreId: 0, mapPath: "/tmp/cpu1.map" });
+
+    expect(parsed.sections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: ".TI.ramfunc",
+        origin: 0x80008,
+        length: 0x4ff,
+        memoryRegion: "FLASH_BANK0",
+        runAddress: 0xc000,
+        runMemoryRegion: "RAMD0"
+      })
+    ]));
+  });
+
   test("emits CPU1 MEMCFG writes required before loading CPU2 programs that use GS RAM", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-map-ownership-"));
     const cpu2Map = path.join(tempDir, "cpu2.map");

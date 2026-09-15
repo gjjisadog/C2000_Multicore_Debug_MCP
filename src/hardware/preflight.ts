@@ -196,6 +196,15 @@ export function findDebugProcesses(processList: string): string[] {
   return findDebugProcessDetails(processList).map(process => process.rawLine);
 }
 
+/** An open editor is not evidence of probe ownership. Preserve unknown raw entries. */
+export function hasBlockingDebugProcesses(preflight: {
+  debugProcessDetails?: DebugProcessInfo[];
+  debugProcesses?: string[];
+}): boolean {
+  return (preflight.debugProcessDetails ?? []).some(process => process.kind !== "ccstudio")
+    || (preflight.debugProcesses ?? []).some(line => parseDebugProcess(line)?.kind !== "ccstudio");
+}
+
 export function formatDebugProcessOwners(preflight: Pick<HardwarePreflightResult, "debugProcesses" | "debugProcessDetails">): string {
   const details = Array.isArray(preflight.debugProcessDetails) ? preflight.debugProcessDetails : [];
   if (details.length > 0) {

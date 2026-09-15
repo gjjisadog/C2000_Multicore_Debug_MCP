@@ -9,7 +9,7 @@ import { assertAcceptanceEvidence, assertUiIndependenceEvidence, buildUiIndepend
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
 import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
 import { discoverAcceptancePrograms } from "../src/hardware/programDiscovery.js";
-import { formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/preflight.js";
+import { hasBlockingDebugProcesses, formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/preflight.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { getToolContracts } from "../src/mcp/tools.js";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
@@ -47,7 +47,7 @@ await assertFile(cpu2Program);
 const preflight = await runHardwarePreflight({ ccsInstallPath });
 const debugProcesses = Array.isArray(preflight.debugProcesses) ? preflight.debugProcesses : [];
 const debugProcessDetails = Array.isArray(preflight.debugProcessDetails) ? preflight.debugProcessDetails : [];
-if (!allowExistingDebugProcesses && debugProcesses.length > 0) {
+if (!allowExistingDebugProcesses && hasBlockingDebugProcesses({ debugProcesses, debugProcessDetails })) {
   throw new Error(`Existing debug-related process(es) may own the XDS probe: ${formatDebugProcessOwners({ debugProcesses, debugProcessDetails })}. Close CCS debug sessions or set C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1 to override: ${JSON.stringify(preflight, null, 2)}`);
 }
 

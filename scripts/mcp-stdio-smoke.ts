@@ -237,13 +237,13 @@ async function main() {
     assert.equal(launchIpcAcceptanceWorkflowContract.inputScope, "launch");
     assert.equal(launchIpcAcceptanceWorkflowContract.targetEffect, "launch-workflow");
     assert.deepEqual(launchIpcAcceptanceWorkflowContract.coreIdentityFields, ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
-    assert.deepEqual(launchIpcAcceptanceWorkflowContract.responseCoreIdentityFields, ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]);
+    assert.deepEqual(launchIpcAcceptanceWorkflowContract.responseCoreIdentityFields, ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]);
     const ipcAcceptanceWorkflowContract = (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_runIpcAcceptance");
     assert(ipcAcceptanceWorkflowContract, "c2000_runIpcAcceptance contract must be exposed");
     assert.equal(ipcAcceptanceWorkflowContract.inputScope, "launch");
     assert.equal(ipcAcceptanceWorkflowContract.targetEffect, "launch-workflow");
     assert.deepEqual(ipcAcceptanceWorkflowContract.coreIdentityFields, ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
-    assert.deepEqual(ipcAcceptanceWorkflowContract.responseCoreIdentityFields, ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]);
+    assert.deepEqual(ipcAcceptanceWorkflowContract.responseCoreIdentityFields, ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]);
     const bootWorkflowContract = (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_runBootHandoffDiagnosis");
     assert(bootWorkflowContract, "c2000_runBootHandoffDiagnosis contract must be exposed");
     assert.equal(bootWorkflowContract.inputScope, "launch");

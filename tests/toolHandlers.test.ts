@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import type { AdapterSession } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
@@ -9,6 +9,7 @@ import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId, EvaluateResult, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { sha256File } from "../src/utils/fileHash.js";
+import { DebugMcpError } from "../src/utils/errors.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -885,6 +886,56 @@ describe("tool handlers", () => {
     expect(result.performedSteps.indexOf("waitForIpcReady")).toBeLessThan(result.performedSteps.indexOf("verifyRuntimeRamOwnership"));
     expect(result.performedSteps.indexOf("verifyRuntimeRamOwnership")).toBeLessThan(result.performedSteps.indexOf("diagnoseBootHandoff"));
   });
+
+  test.each(["pc", "diagnosis", "fenced"] as const)(
+    "preserves first IPC timeout evidence and stops on subsequent %s failure", async failureAt => {
+      const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-first-failure-"));
+      const files = await createIpcWorkflowArtifacts(tempDir);
+      const adapter = new WorkflowRecordingAdapter({
+        expressionValues: { "ipc.responsePass": { value: "0" } }
+      });
+      adapter.applicationEntryAddress = "0x00080000";
+      const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+      const handlers = createToolHandlers(manager);
+      const created = await handlers.createDebugSession({ sessionName: "first-failure", coreMap });
+      await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+      const diagnosticError = new DebugMcpError(
+        failureAt === "fenced" ? "LeaseFencingRejected" : "DssCommandFailed", "CPU2 held in reset"
+      );
+      const resolvedCores: number[] = [];
+      vi.spyOn(manager, "resolvePc").mockImplementation(async (_sessionId, coreId) => {
+        resolvedCores.push(coreId);
+        if (failureAt !== "diagnosis" && coreId === (failureAt === "fenced" ? 0 : 2)) throw diagnosticError;
+        return { success: true, address: "0x00086e71", pc: "0x00086e71", source: "pc" };
+      });
+      const diagnosis = vi.spyOn(manager, "diagnoseCpu2Boot").mockRejectedValue(diagnosticError);
+      const failure = await handlers.runIpcAcceptance({
+        sessionId: created.sessionId, device: "F28P65x", cpu1CoreId: 0, cpu2CoreId: 2, ...files,
+        resetType: "cpu", cpu1EntryAddress: "0x80000",
+        runSequence: { runMode: "cpu1_boots_cpu2", runCpu1First: true, runCpu2: false },
+        ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+        applicationEntryTimeoutMs: 20, timeoutMs: 5, intervalMs: 1, verifyRuntimeRamOwnership: false
+      }).catch(error => error);
+
+      expect(failure.success).toBe(false);
+      expect(failure.error.code).toBe(diagnosticError.code);
+      const evidence = failure.error.details.firstFailureEvidence;
+      expect(evidence).toMatchObject({
+        sessionId: created.sessionId, success: false, diagnosticCompleteness: "incomplete",
+        firstFailureStage: "ipc-readiness-wait", firstFailureCode: "IPC_READY_TIMEOUT",
+        applicationEntry: { reached: true }, ipcReady: { matched: false, timedOut: true },
+        artifactPreflight: expect.any(Object), elfFreshness: { allFresh: true },
+        timeoutRecovery: { halt: expect.any(Object) }
+      });
+      expect(JSON.parse(JSON.stringify(failure.error.details)).firstFailureEvidence).toEqual(evidence);
+      expect(resolvedCores).toEqual(failureAt === "fenced" ? [0] : [0, 2]);
+      if (failureAt !== "fenced") expect(evidence.timeoutRecovery.pc[0]).toMatchObject({ coreId: 0, pc: "0x00086e71" });
+      if (failureAt !== "diagnosis") {
+        expect(evidence.timeoutRecovery.pc.at(-1)).toMatchObject({ error: { code: diagnosticError.code } });
+        expect(diagnosis).not.toHaveBeenCalled();
+      }
+    }
+  );
 
   test("runIpcAcceptance keeps IPC timeout as the first failure when runtime ownership also mismatches", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-timeout-ownership-"));
@@ -2257,7 +2308,7 @@ describe("tool handlers", () => {
     }));
   });
 
-  test("getAcceptanceReadiness reports ready when host files, XDS110, and ownership checks pass", async () => {
+  test.each([false, true])("getAcceptanceReadiness reports ready with editor open=%s", async editorOpen => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-ready-"));
     const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
     const cpu1Program = path.join(tempDir, "cpu1.out");
@@ -2272,8 +2323,8 @@ describe("tool handlers", () => {
           ok: true,
           devices: [{ serialNumber: "CL650001", mode: "Runtime", configuration: "Standard", version: "3.0.0.43", name: "XDS110" }]
         },
-        debugProcesses: [],
-        debugProcessDetails: []
+        debugProcesses: editorOpen ? ["123 /ti/ccstudio"] : [],
+        debugProcessDetails: editorOpen ? [{ pid: 123, kind: "ccstudio", command: "/ti/ccstudio", rawLine: "123 /ti/ccstudio" }] : []
       }),
       discoverAcceptancePrograms: async () => ({
         searchRoots: [tempDir],
