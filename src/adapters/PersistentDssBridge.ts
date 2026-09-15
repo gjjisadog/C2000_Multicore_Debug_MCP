@@ -1058,6 +1058,31 @@ function handleCommand(command) {
       expectedBankMuxSel: expectedBankMuxSel(command.flashBanks),
       readOnly: true, atomic: false, snapshots: [] };
     var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function(capture) {
+      // A core-explicit DebugSession does not prove the Flash plugin's separate
+      // Core Select option. Bind and verify it before any clock/bank operation.
+      evidence.loaderCoreSelection = [];
+      var loaderCores = [0, 2];
+      for (var loaderIndex = 0; loaderIndex < loaderCores.length; loaderIndex++) {
+        var loaderCoreId = loaderCores[loaderIndex];
+        var loaderOptions = sessionsByCoreId[String(loaderCoreId)].flash.options;
+        var selection = { coreId: loaderCoreId, coreName: coreNamesByCoreId[String(loaderCoreId)],
+          option: "FlashCoreSelection", expected: loaderCoreId === 0 ? "CPU1" : "CPU2",
+          verified: false };
+        evidence.loaderCoreSelection.push(selection);
+        try {
+          selection.before = String(loaderOptions.getString(selection.option));
+          selection.changed = selection.before !== selection.expected;
+          if (selection.changed) loaderOptions.setString(selection.option, selection.expected);
+          selection.after = String(loaderOptions.getString(selection.option));
+          if (selection.after !== selection.expected) {
+            throw "Flash plugin Core Select readback mismatch for core " + loaderCoreId;
+          }
+          selection.verified = true;
+        } catch (selectionError) {
+          selection.error = String(selectionError).slice(0, 256);
+          throw selectionError;
+        }
+      }
       var cpu2BankMap = {};
       for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
         cpu2BankMap[String(command.flashBanks[selectedIndex])] = true;
