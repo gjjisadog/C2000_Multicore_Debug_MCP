@@ -15,7 +15,7 @@ const coreMap = [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "
 class StartupAdapter extends MockDebugAdapter {
   events: string[] = [];
   haltedCores: CoreId[] = [];
-  fail?: "prepare" | "post-load-reset";
+  fail?: "prepare" | "cpu1-prepare" | "post-load-reset";
   stayInBootRom = false;
   failCpu2Pc = false;
   private handedOff = false;
@@ -23,7 +23,9 @@ class StartupAdapter extends MockDebugAdapter {
 
   override async prepareFirmwareHandoff(session: AdapterSession, coreId: CoreId) {
     this.events.push(`prepare:${coreId}`);
-    if (this.fail === "prepare") throw new DebugMcpError("DssCommandFailed", "GEL unload failed");
+    if (this.fail === "prepare" || (coreId === 0 && this.fail === "cpu1-prepare")) {
+      throw new DebugMcpError("DssCommandFailed", "GEL unload failed");
+    }
     await super.prepareFirmwareHandoff(session, coreId);
     this.handedOff = true;
   }
@@ -172,10 +174,42 @@ describe("post-load reset and firmware-owned handoff", () => {
     expect(result.success).toBe(true);
     expect(adapter.events).toEqual([
       "load:0", "load:2",
-      "prepare:2", "disconnect:2", `reset:0:${type ?? "restart"}`, "run:0", "connect:2"
+      "prepare:2", "disconnect:2", ...(type === "cpu" ? ["prepare:0"] : []),
+      `reset:0:${type ?? "restart"}`, "run:0", "connect:2"
     ]);
     expect(result.performedSteps).toContain("resetCpu1AfterLoad");
     expect(result.effectsApplied).toContain("debugger-gel-unload");
+  });
+
+  test.each(["ipc", "reload"])("%s owner CPU Reset suppresses CPU1 GEL before reset", async mode => {
+    const { adapter, handlers, input } = await fixture();
+    const result = mode === "ipc"
+      ? await handlers.runIpcAcceptance({ ...input, postLoadResetType: "cpu" })
+      : await handlers.runReloadAndDiagnose({ ...input,
+        postLoadBoot: { resetType: "cpu", releaseCpu2BeforeCpu1: true, runCpu1: true,
+          runCpu2: false, cpu1SettleMs: 0 }
+      });
+    expect(result.success).toBe(true);
+    expect(result.postLoadReset.preparation).toMatchObject({ coreId: 0, gelInitializationDisabled: true });
+    expect(result.performedSteps).toContain("disableCpu1ResetInitialization");
+    const handoff = adapter.events.slice(adapter.events.indexOf("disconnect:2") + 1);
+    expect(handoff).toEqual(["prepare:0", "reset:0:cpu", "run:0", "connect:2"]);
+  });
+
+  test.each(["ipc", "reload"])("%s CPU1 GEL suppression failure forbids owner reset/run", async mode => {
+    const { adapter, handlers, input } = await fixture();
+    adapter.fail = "cpu1-prepare";
+    const result = mode === "ipc"
+      ? await handlers.runIpcAcceptance({ ...input, postLoadResetType: "cpu" })
+      : await handlers.runReloadAndDiagnose({ ...input,
+        postLoadBoot: { resetType: "cpu", releaseCpu2BeforeCpu1: true, runCpu1: true,
+          runCpu2: false, cpu1SettleMs: 0 }
+      });
+    expect(result).toMatchObject({ success: false,
+      error: { code: "DssCommandFailed", details: { workflowStage: "cpu1-reset-initialization-disable" } }
+    });
+    const handoff = adapter.events.slice(adapter.events.indexOf("disconnect:2") + 1);
+    expect(handoff).toEqual(["prepare:0"]);
   });
 
   test("symbols-only uses the CPU1-only reset before application-entry confirmation", async () => {

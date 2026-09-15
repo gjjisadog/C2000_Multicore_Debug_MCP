@@ -371,9 +371,20 @@ export class DebugWorkflowService {
       // Never resume that PC. Only CPU1 is restarted; it owns CPU2 boot. This
       // is intentionally also done for symbols-only/resident-Flash runs so
       // the entry check proves the actual CPU1 startup path.
+      let preparation: ToolResult | undefined;
+      if (input.postLoadResetType === "cpu") {
+        // TI CPU1 OnReset runs to a ROM breakpoint and may release CPU2 to
+        // Wait Boot. Suppress those callbacks before the CPU1-only reset.
+        setStage("cpu1-reset-initialization-disable");
+        preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu1CoreId);
+        performedSteps.push("disableCpu1ResetInitialization");
+      }
       setStage("post-load-cpu1-reset");
-      postLoadReset = await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
-        input.postLoadResetType ?? "restart");
+      postLoadReset = {
+        ...(await this.manager.resetCore(input.sessionId, input.cpu1CoreId,
+          input.postLoadResetType ?? "restart")),
+        ...(preparation ? { preparation } : {})
+      };
       performedSteps.push("resetCpu1AfterLoad");
     }
     let applicationEntry: ApplicationEntryCheck | undefined;
@@ -739,10 +750,19 @@ export class DebugWorkflowService {
       if (postLoadBoot?.releaseCpu2BeforeCpu1) {
         // Firmware owns CPU2 boot. A system reset may hold CPU2 in reset, so do
         // not reset/halt/read that core again until CPU1 has released it.
+        let preparation: ToolResult | undefined;
+        if (postLoadBoot.resetType === "cpu") {
+          workflowStage = "cpu1-reset-initialization-disable";
+          preparation = await this.manager.prepareFirmwareHandoff(input.sessionId, input.cpu1CoreId);
+          performedSteps.push("disableCpu1ResetInitialization");
+        }
         workflowStage = "post-load-cpu1-reset";
-        postLoadReset = await this.manager.resetCores(
-          input.sessionId, [input.cpu1CoreId], postLoadBoot.resetType as ResetType
-        );
+        postLoadReset = {
+          ...(await this.manager.resetCores(
+            input.sessionId, [input.cpu1CoreId], postLoadBoot.resetType as ResetType
+          )),
+          ...(preparation ? { preparation } : {})
+        };
         performedSteps.push("resetCpu1AfterLoad");
         assertBatchSucceeded("resetCpu1AfterLoad", postLoadReset);
       }

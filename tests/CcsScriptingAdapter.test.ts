@@ -121,16 +121,16 @@ describe("CcsScriptingAdapter", () => {
     }
   });
 
-  test("handoff is core-explicit and requires persistent GEL suppression evidence", async () => {
+  test.each([0, 2])("handoff on core %s requires persistent GEL suppression evidence", async coreId => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);
     const session = await adapter.createSession({ sessionName: "handoff-proof", ccxmlPath, coreMap });
-    await adapter.prepareFirmwareHandoff(session, 2);
-    expect(bridge.commands).toEqual([expect.objectContaining({ operation: "prepareFirmwareHandoff", coreId: 2 })]);
+    await adapter.prepareFirmwareHandoff(session, coreId);
+    expect(bridge.commands).toEqual([expect.objectContaining({ operation: "prepareFirmwareHandoff", coreId })]);
     bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName });
-    await expect(adapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "DssCommandFailed" });
+    await expect(adapter.prepareFirmwareHandoff(session, coreId)).rejects.toMatchObject({ code: "DssCommandFailed" });
     const statelessAdapter = new CcsScriptingAdapter({}, { execute: bridge.execute });
-    await expect(statelessAdapter.prepareFirmwareHandoff(session, 2)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
+    await expect(statelessAdapter.prepareFirmwareHandoff(session, coreId)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
   });
 
   test("registers a logical CCS session with the bridge before core commands are executed", async () => {

@@ -134,7 +134,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
     }
     const result = await this.execute(session, coreId, { operation: "prepareFirmwareHandoff" });
     if (result.gelInitializationDisabled !== true) {
-      throw new DebugMcpError("DssCommandFailed", "CPU2 handoff lacks GEL suppression evidence", { coreId, result });
+      throw new DebugMcpError("DssCommandFailed", "Firmware handoff lacks GEL suppression evidence", { coreId, result });
     }
   }
 
