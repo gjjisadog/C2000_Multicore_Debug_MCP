@@ -34,6 +34,17 @@ function Assert-SafeRelativePath([string]$Path, [string]$Description) {
   return $normalized.TrimStart("./")
 }
 
+function Get-Sha256([string]$Path) {
+  $stream = [System.IO.File]::OpenRead($Path)
+  $hasher = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    return ([System.BitConverter]::ToString($hasher.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+  } finally {
+    $hasher.Dispose()
+    $stream.Dispose()
+  }
+}
+
 function Read-JsonFile([string]$Description, [string]$Path) {
   try {
     return Get-Content -Raw -LiteralPath $Path | ConvertFrom-Json
@@ -66,12 +77,12 @@ function Assert-ChecksumManifest([string]$BundleRoot, [object]$Checksums) {
     if ($null -ne $entry.size -and [int64]$entry.size -ne $item.Length) {
       throw "Size mismatch for $relative."
     }
-    $actual = (Get-FileHash -LiteralPath $filePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actual = Get-Sha256 $filePath
     if ($actual -ne "$($entry.sha256)".ToLowerInvariant()) {
       throw "SHA-256 mismatch for $relative."
     }
   }
-  foreach ($required in @("manifest.json", "install.ps1", "runtime/node.exe", "runtime/LICENSE", "mcp/dist/src/runtime-manifest.json", "mcp/dist/src/installer/index.js")) {
+  foreach ($required in @("manifest.json", "install.ps1", "install.cmd", "runtime/node.exe", "runtime/LICENSE", "mcp/dist/src/runtime-manifest.json", "mcp/dist/src/installer/index.js")) {
     if (-not $seen.ContainsKey($required)) { throw "SHA256SUMS.json does not cover required file: $required" }
   }
   $checksumPath = [System.IO.Path]::GetFullPath((Join-Path $BundleRoot "SHA256SUMS.json"))
@@ -117,7 +128,7 @@ if ("$($runtime.distribution.source)" -notmatch '^https://nodejs\.org/') { throw
 if ("$($runtime.executable)" -ne "runtime/node.exe") { throw "Offline bundle runtime executable metadata is invalid." }
 
 $nodePath = Resolve-RequiredFile "Bundled Node executable" (Join-Path $bundleRoot "runtime\node.exe")
-$nodeHash = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant()
+$nodeHash = Get-Sha256 $nodePath
 if ($nodeHash -ne "$($runtime.sha256)".ToLowerInvariant()) { throw "Bundled Node executable SHA-256 does not match manifest." }
 
 $nodeProbeText = & $nodePath -p "JSON.stringify({nodeVersion:process.version,nodeModulesAbi:process.versions.modules,platform:process.platform,arch:process.arch})"
@@ -148,7 +159,7 @@ foreach ($binding in @($mcpManifest.nativeBindings)) {
   $bindingPath = Join-Path $mcpRoot "dist\src\$($relativeBinding.Replace('/', '\'))"
   Assert-PathInside $bindingPath (Join-Path $mcpRoot "dist\src") "MCP native binding"
   if (-not (Test-Path -LiteralPath $bindingPath -PathType Leaf)) { throw "MCP native binding is missing: $relativeBinding" }
-  $actualBindingHash = (Get-FileHash -LiteralPath $bindingPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $actualBindingHash = Get-Sha256 $bindingPath
   if ($actualBindingHash -ne "$($binding.sha256)".ToLowerInvariant()) { throw "MCP native binding SHA-256 mismatch: $relativeBinding" }
 }
 

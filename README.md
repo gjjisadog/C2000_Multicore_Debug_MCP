@@ -352,10 +352,10 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 Download the single release asset
 `c2000-multicore-mcp-x.y.z-offline-win32-x64.zip`, extract it on the target
-machine, and run:
+machine, and double-click `install.cmd` (or run the launcher from PowerShell):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+.\install.cmd
 ```
 
 No Node.js, npm, npx, Git, GitHub CLI, Python, Visual Studio Build Tools, or
@@ -370,7 +370,7 @@ If Codex is not installed, keep the MCP runtime installation and skip
 registration:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --no-register
+.\install.cmd --no-register
 ```
 
 Without the Codex CLI, a normal install falls back to an idempotent managed

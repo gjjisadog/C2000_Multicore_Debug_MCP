@@ -99,6 +99,7 @@
     "scripts/install-release.ps1",
     "scripts/install-source.ps1",
     "scripts/install-offline.ps1",
+    "scripts/install-offline.cmd",
     "scripts/uninstall.ps1",
     "README-OFFLINE.md",
     "python/pyproject.toml",

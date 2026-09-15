@@ -11,7 +11,7 @@ const runtimeConfigPath = path.join(projectRoot, "config", "runtime-manifest.jso
 const runtimeConfig = JSON.parse(await readFile(runtimeConfigPath, "utf8"));
 const configuredRuntime = runtimeConfig.runtime;
 const packageMetadata = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
-const { outputDirectory, runtimeArchive, runtimeChecksumFile } = parseArguments(process.argv.slice(2));
+const { outputDirectory, runtimeArchive, runtimeChecksumFile, runtimeDirectory } = parseArguments(process.argv.slice(2));
 
 if (process.platform !== "win32" || process.arch !== "x64") {
   throw new Error("The Windows offline bundle must be built on win32-x64.");
@@ -53,9 +53,9 @@ try {
 
   await rm(outputDirectory, { recursive: true, force: true });
   await mkdir(outputDirectory, { recursive: true });
-  await copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot);
+  await copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot, runtimeDirectory);
 
-  const mcpManifestPath = path.join(outputDirectory, "mcp", "dist", "src", "runtime-manifest.json");
+  const mcpManifestPath = path.join(runtimeDirectory, "runtime-manifest.json");
   const mcpManifest = JSON.parse(await readFile(mcpManifestPath, "utf8"));
   if (mcpManifest.nodeVersion !== configuredRuntime.nodeVersion
     || String(mcpManifest.nodeModulesAbi) !== String(configuredRuntime.modulesAbi)
@@ -155,6 +155,9 @@ function parseArguments(args) {
   let outputDirectory = path.join(projectRoot, "offline-bundle-win32-x64");
   let runtimeArchive;
   let runtimeChecksumFile;
+  let runtimeDirectory = process.env.C2000_BUILD_RUNTIME_OUTDIR
+    ? path.resolve(process.env.C2000_BUILD_RUNTIME_OUTDIR)
+    : path.join(projectRoot, "dist", "src");
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === "--output") {
@@ -167,14 +170,18 @@ function parseArguments(args) {
     } else if (arg === "--runtime-checksum-file") {
       runtimeChecksumFile = args[++index];
       if (!runtimeChecksumFile) throw new Error("--runtime-checksum-file requires a file path");
+    } else if (arg === "--runtime-directory") {
+      const value = args[++index];
+      if (!value) throw new Error("--runtime-directory requires a directory path");
+      runtimeDirectory = path.resolve(value);
     } else if (arg === "--help" || arg === "-h") {
-      process.stdout.write("Usage: node scripts/prepare-offline-bundle.mjs [--output DIR] [--runtime-archive ZIP] [--runtime-checksum-file SHASUMS256.txt]\n");
+      process.stdout.write("Usage: node scripts/prepare-offline-bundle.mjs [--output DIR] [--runtime-directory DIR] [--runtime-archive ZIP] [--runtime-checksum-file SHASUMS256.txt]\n");
       process.exit(0);
     } else {
       throw new Error(`Unknown option: ${arg}`);
     }
   }
-  return { outputDirectory, runtimeArchive, runtimeChecksumFile };
+  return { outputDirectory, runtimeArchive, runtimeChecksumFile, runtimeDirectory };
 }
 
 async function downloadRuntimeArchive(destination) {
@@ -234,7 +241,7 @@ function probeNode(nodePath) {
   return JSON.parse(result.stdout.trim());
 }
 
-async function copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot) {
+async function copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot, runtimeDirectory) {
   await mkdir(path.join(outputDirectory, "runtime"), { recursive: true });
   await cp(nodePath, path.join(outputDirectory, "runtime", "node.exe"));
   await cp(licensePath, path.join(outputDirectory, "runtime", "LICENSE"));
@@ -242,12 +249,13 @@ async function copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot)
   if (await exists(nodeReadme)) await cp(nodeReadme, path.join(outputDirectory, "runtime", "README.md"));
 
   await cp(path.join(projectRoot, "scripts", "install-offline.ps1"), path.join(outputDirectory, "install.ps1"));
+  await cp(path.join(projectRoot, "scripts", "install-offline.cmd"), path.join(outputDirectory, "install.cmd"));
   await cp(path.join(projectRoot, "scripts", "uninstall.ps1"), path.join(outputDirectory, "uninstall.ps1"));
   await cp(path.join(projectRoot, "README-OFFLINE.md"), path.join(outputDirectory, "README-OFFLINE.md"));
 
   const mcpRoot = path.join(outputDirectory, "mcp");
   await mkdir(mcpRoot, { recursive: true });
-  await cp(path.join(projectRoot, "dist", "src"), path.join(mcpRoot, "dist", "src"), { recursive: true });
+  await cp(runtimeDirectory, path.join(mcpRoot, "dist", "src"), { recursive: true });
   await cp(path.join(projectRoot, "package.json"), path.join(mcpRoot, "package.json"));
   await cp(path.join(projectRoot, "README.md"), path.join(mcpRoot, "README.md"));
   await cp(path.join(projectRoot, "CHANGELOG.md"), path.join(mcpRoot, "CHANGELOG.md"));

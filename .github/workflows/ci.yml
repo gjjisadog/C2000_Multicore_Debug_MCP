@@ -140,7 +140,8 @@ jobs:
               }
             }
             $env:CODEX_HOME = $codexHome
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "install.ps1") `
+            $powershell = Join-Path $PSHOME "pwsh.exe"
+            & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "install.ps1") `
               --install-root $installRoot --workspace $env:RUNNER_TEMP
             if ($LASTEXITCODE -ne 0) { throw "Offline installer failed with exit code $LASTEXITCODE." }
             $privateNode = Join-Path $installRoot "runtime\node.exe"

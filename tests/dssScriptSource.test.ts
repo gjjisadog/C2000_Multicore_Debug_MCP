@@ -228,6 +228,19 @@ describe("DSS generated scripts", () => {
     expect(source).toContain("java.lang.System.exit(0)");
   });
 
+  test("persistent DSS applies each command timeout before executing long operations", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+
+    expect(source).toContain("function applyCommandScriptTimeout(command)");
+    expect(source).toContain("var timeoutMs = Number(command && command.timeoutMs);");
+    expect(source).toContain("script.setScriptTimeout(Math.floor(timeoutMs));");
+
+    const applyIndex = source.indexOf("applyCommandScriptTimeout(command);");
+    const handleIndex = source.indexOf("var response = handleCommand(command);");
+    expect(applyIndex).toBeGreaterThanOrEqual(0);
+    expect(handleIndex).toBeGreaterThan(applyIndex);
+  });
+
   test("persistent DSS server binds its configured host and authenticates every command", () => {
     const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
 

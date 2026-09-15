@@ -201,6 +201,52 @@ describe("PersistentDssBridge", () => {
     ]);
   });
 
+  test("forwards the operation timeout into the persistent DSS command", async () => {
+    const receivedByPort = new Map<number, unknown[]>();
+    const cpu2 = await startJsonLineServer(command => ({
+      status: "OK",
+      value: { coreId: command.coreId, coreName: command.coreName, command }
+    }), receivedByPort);
+    const launcher: DssServerLauncher = {
+      async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
+        return {
+          host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
+          portsByCoreId: new Map([[2, cpu2.port]]),
+          dispose: async () => {}
+        };
+      }
+    };
+    const bridge = new PersistentDssBridge({ launcher });
+    await bridge.createSession({
+      adapterSessionId: "ccs-session-load-timeout",
+      sessionName: "load-timeout",
+      ccxmlPath: "/tmp/target.ccxml",
+      coreMap: [coreMap[1]]
+    });
+
+    await bridge.execute({
+      adapterSessionId: "ccs-session-load-timeout",
+      operation: "loadProgram",
+      ccxmlPath: "/tmp/target.ccxml",
+      coreId: 2,
+      coreName: "C28xx_CPU2",
+      corePattern: "C28xx_CPU2",
+      programUri: "/tmp/cpu2.out",
+      timeoutMs: 300000
+    });
+
+    expect(receivedByPort.get(cpu2.port)).toEqual([
+      expect.objectContaining({
+        name: "load",
+        program: "/tmp/cpu2.out",
+        timeoutMs: 300000,
+        coreId: 2,
+        coreName: "C28xx_CPU2"
+      })
+    ]);
+  });
+
   test("routes expression assignment to the requested core socket", async () => {
     const receivedByPort = new Map<number, unknown[]>();
     const cpu1 = await startJsonLineServer(command => ({ status: "OK", value: { core: "cpu1", coreId: command.coreId, coreName: command.coreName, command } }), receivedByPort);

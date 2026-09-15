@@ -31,7 +31,13 @@ export class CcsScriptingAdapter implements DebugAdapter {
     private readonly bridge: CcsScriptingBridge = new PersistentDssBridge({
       ccsInstallPath: options.ccsInstallPath,
       workspacePath: options.workspacePath,
-      timeoutMs: options.dssTimeoutMs,
+      // Persistent DSS has its own Java-side script deadline.  When no
+      // explicit global deadline is configured, start it with the program-load
+      // budget; individual commands still carry their operation-specific
+      // timeout below.
+      timeoutMs: options.dssTimeoutMs
+        ?? options.timeouts?.programLoadMs
+        ?? DEFAULT_TIMEOUTS.programLoadMs,
       startupMs: options.timeouts?.startupMs,
       shutdownRequestMs: options.timeouts?.shutdownRequestMs,
       processExitMs: options.timeouts?.processExitMs

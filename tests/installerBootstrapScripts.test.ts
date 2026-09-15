@@ -15,7 +15,7 @@ describe("installer bootstrap scripts", () => {
 
   test("Windows offline bootstrap verifies and installs without npm or network access", async () => {
     const source = await readFile("scripts/install-offline.ps1", "utf8");
-    expect(source).toContain("Get-FileHash");
+    expect(source).toContain("System.Security.Cryptography.SHA256");
     expect(source).toContain("process.versions.modules");
     expect(source).toContain("runtime-manifest.json");
     expect(source).toContain("dist\\src");
@@ -25,6 +25,14 @@ describe("installer bootstrap scripts", () => {
     expect(source).toContain("$env:C2000_MCP_OFFLINE_BUNDLE_ROOT");
     expect(source).not.toContain("& npm");
     expect(source).not.toContain("npm.cmd");
+    expect(source).not.toContain("gh ");
+  });
+
+  test("Windows offline package ships a double-click launcher", async () => {
+    const source = await readFile("scripts/install-offline.cmd", "utf8");
+    expect(source).toContain("WindowsPowerShell\\v1.0\\powershell.exe");
+    expect(source).toContain("install.ps1");
+    expect(source).not.toContain("npm");
     expect(source).not.toContain("gh ");
   });
 

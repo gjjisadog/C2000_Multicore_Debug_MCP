@@ -459,7 +459,11 @@ function validateResponseCoreIdentity(command: CcsScriptingCommand, result: Reco
 }
 
 function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
-  const base = { coreId: command.coreId, coreName: command.coreName };
+  const base = {
+    coreId: command.coreId,
+    coreName: command.coreName,
+    ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs })
+  };
   switch (command.operation) {
     case "connect":
       return { ...base, name: "connect" };
@@ -739,6 +743,17 @@ var cleanupDone = false;
 function isAuthenticated(command) {
   return command != null && typeof command.authToken === "string" &&
     command.authToken === String(config.authToken);
+}
+
+function applyCommandScriptTimeout(command) {
+  var timeoutMs = Number(command && command.timeoutMs);
+  if (!isFinite(timeoutMs) || timeoutMs <= 0) {
+    timeoutMs = Number(config.timeoutMs);
+  }
+  if (!isFinite(timeoutMs) || timeoutMs <= 0) {
+    timeoutMs = 15000;
+  }
+  script.setScriptTimeout(Math.floor(timeoutMs));
 }
 
 function cleanupPersistentDebugServer() {
@@ -1205,6 +1220,9 @@ function startCoreThread(port, boundCoreId) {
               });
               line = input.readLine();
               continue;
+            }
+            if (command.name !== "shutdown") {
+              applyCommandScriptTimeout(command);
             }
             var response = handleCommand(command);
             response.requestId = command.requestId;

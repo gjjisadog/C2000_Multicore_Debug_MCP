@@ -12,12 +12,15 @@ run the MCP. Do not install another Node version and do not modify `PATH`.
 
 1. Copy `c2000-multicore-mcp-x.y.z-offline-win32-x64.zip` to the Windows x64
    machine and extract it to a directory you control.
-2. Open PowerShell in the extracted directory.
-3. Run:
+2. Double-click `install.cmd` for a one-click install. Or call the same
+   launcher from PowerShell:
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+   .\install.cmd
    ```
+
+   The underlying `install.ps1` entrypoint remains available for explicit
+   PowerShell automation.
 
 The installer verifies the bundle manifest and every SHA-256 entry, starts the
 private `runtime\node.exe`, checks its complete version and ABI, verifies and
@@ -28,7 +31,7 @@ MCP, and runs the doctor handshake. Installation is per-user by default at
 If Codex is not installed yet, install the MCP runtime without registration:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --no-register
+.\install.cmd --no-register
 ```
 
 When the Codex CLI is unavailable, the normal install also succeeds and writes
