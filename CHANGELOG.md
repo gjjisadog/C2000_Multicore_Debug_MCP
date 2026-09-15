@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-09-16
+
 - Add deterministic Build, TI C2000 Map, declared host/Mock Regression, and
   diff/contract Review verifiers with one versioned Verification Result
   contract, atomic evidence manifests, freshness checks, and a high-level
