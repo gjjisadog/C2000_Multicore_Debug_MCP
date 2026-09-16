@@ -783,6 +783,31 @@ the matching `.out` file. It calls the DSS symbol loader only and returns
 `targetMemoryWritten: false`; it does not erase or program Flash and does not
 insert a false entry into the MCP loaded-program registry.
 
+If the current daemon lease reports target identity `UNKNOWN`, use
+`c2000_verifyResidentImage` before loading symbols when the build provides a
+manifest in this form:
+
+```json
+{
+  "format": "c2000-resident-image-manifest",
+  "version": 1,
+  "programSha256": "<64-hex-character SHA-256 of the .out>",
+  "identity": {
+    "address": "0x1000",
+    "page": "DATA",
+    "typeSize": 32,
+    "expectedValue": "0xA5A5A5A5"
+  }
+}
+```
+
+The identity may use one exact map symbol instead of `address`; supply its
+`mapUri` in the check. The tool may connect a requested core, then performs
+only a raw-memory read. It never programs Flash, loads symbols, resets, runs,
+or writes target memory. A complete marker match plus daemon-side re-hashing
+changes the board identity to `KNOWN`; a mismatch remains a failed
+verification and does not authorize old symbols.
+
 The manager also fails closed on a repeated CPU2 Flash load in the same MCP
 session. `DestructiveFlashReloadBlocked` is raised before CCS can select or
 erase a bank, and batch loads are preflighted so CPU1 is not partially loaded.
@@ -979,7 +1004,9 @@ There are many tools by design (host gates, atomics, batches, workflows). Semant
 
 Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` and `configuration.surfaceProfile` report the effective frontend profiles, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
 
-Hybrid30K DK9 RAM acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
+Hybrid30K DK9 **RAM** acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. It is not a paired Flash programming preset: a CPU2 Flash image combined with CPU1-run-before-CPU2 is rejected before target access, so use `startupPreset: "f28p65x-paired-flash"` when both images are programmed into Flash.
+
+`startupPreset: "f28p65x-paired-flash"` is the official F28P65x dual-core Flash programming contract: `resetType=cpu`, CPU1-then-CPU2 load while both application cores stay halted, then debugger-runs-both with CPU1 first and `settleMs=500`. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
 
 Environment overrides:
 
@@ -1170,6 +1197,12 @@ RAM builds that initialize GS ownership or CPU2 release from CPU1 can set
 This explicitly loads and runs CPU1 before the CPU2 image is loaded. The
 default remains `"cpu1-then-cpu2"` and introduces no extra pre-load run.
 
+This historical mode is restricted to CPU2 **RAM** images. When the CPU2 linker
+map contains Flash banks the request is rejected before target access, because
+the CPU1 Flash Plugin must own the shared Flash clock and bank mapping while CPU1
+is halted. Use `startupPreset: "f28p65x-paired-flash"` for dual-core Flash
+programming; see [F28P65x Dual-Core Flash Programming Contract](#f28p65x-dual-core-flash-programming-contract).
+
 If CPU1 firmware owns the boot handoff after both images are loaded, set
 `runSequence.runMode` to `cpu1_boots_cpu2`. The server disconnects CPU2 while
 CPU1 runs, reconnects CPU2 before readiness polling/diagnosis, and records the
@@ -1279,6 +1312,44 @@ Example:
 ```
 
 For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `ownerCoreId: 0`, `targetCoreId: 2`, `address: 0x0005F444`, `value: 0x10`, and `page: "DATA"`. If the map shows multiple used GS blocks (for example RAMGS4 and RAMGS5), analysis still lists per-region actions; **before load**, `DebugSessionManager` merges same-register actions with bitwise OR into **one** write (for example `0x10 | 0x20 = 0x30`). `c2000_loadProgram` and `c2000_loadPrograms` use the same parser when `mapUri` is supplied, or when a sibling `.map` can be derived from the `.out`.
+
+## F28P65x Dual-Core Flash Programming Contract
+
+Programming both F28P65x Flash images is a separate stage from starting the applications. The contract is:
+
+> CPU1 and CPU2 applications remain halted until both Flash images have been programmed. The CPU1 on-chip Flash Plugin prepares the shared Flash clock and bank mapping while CPU1 holds the target; the CPU1 application is never started just to burn CPU2.
+
+The run stage (`runSequence`) and the boot/IPC stage that follows it begin only after the Flash programming boundary closes. The boundary is enforced by the server, not by convention:
+
+- `c2000_runIpcAcceptance` (and `c2000_launchAndRunIpcAcceptance`) opens a paired Flash programming boundary before the first Flash load and closes it after the last one. While it is open, `runCore`/`runCores` fail closed with `FlashProgrammingWindowActive` for every core, so no application core can be started in the middle of Flash programming.
+- `prepareFlashLoad` is routed through the **owner** core (CPU1) with an explicit `targetCoreId` (CPU2). ConfigureClock and ConfigureBanks execute in the owner's DSS context, and the owner is never started, halted, or otherwise modified implicitly.
+- CPU2 Flash preparation fails closed with `FlashOwnerCoreNotHalted` (`ownerCoreId`, `targetCoreId`, `ownerState`, `targetState`, `flashBanks`) when the owner is not connected **and halted**. A running CPU1 application owns the shared clock and bank mapping, so the server reports it instead of halting CPU1 behind the workflow's back.
+- `prepareFlashLoad` is budgeted by the Flash-operation timeout `flashPrepareMs` (default 120000 ms), not by the 5000 ms state-read timeout. ConfigureClock/ConfigureBanks are Flash operations; a DSS deadline during preparation surfaces as `FlashPreparationTimeout` with `stage=prepare-flash`, the owner/target core ids, the bank list, and the budget that expired.
+- A preparation arms exactly one target load. The next CPU2 load consumes it; a further CPU2 load requires a fresh preparation. A CPU2 Flash load failure (or a preparation timeout) quarantines the session with `FlashLoadSessionQuarantined`; the same session is never retried in place.
+
+Select the pair contract explicitly:
+
+```json
+{
+  "startupPreset": "f28p65x-paired-flash",
+  "sessionId": "dbg-...",
+  "cpu1CoreId": 0,
+  "cpu2CoreId": 2,
+  "cpu1OutPath": "/path/Hybrid30K_CPU1_DK9_LAUNCHXL.out",
+  "cpu2OutPath": "/path/Hybrid30K_CPU2_DK9_LAUNCHXL.out",
+  "cpu1MapPath": "/path/Hybrid30K_CPU1_DK9_LAUNCHXL.map",
+  "cpu2MapPath": "/path/Hybrid30K_CPU2_DK9_LAUNCHXL.map",
+  "ipcReadyExpressions": [{ "coreId": 0, "expression": "g_ulHybrid30kIpcPass", "expected": 1 }],
+  "timeoutMs": 10000,
+  "intervalMs": 100
+}
+```
+
+`f28p65x-paired-flash` resolves to `resetType=cpu`, `loadSequence.mode=cpu1-then-cpu2`, and `runSequence=debugger-runs-both` (CPU1 first, `settleMs=500`); explicit conflicting parameters are rejected before any target access.
+
+If the CPU2 linker map contains Flash banks, `loadSequence.mode = cpu1-run-before-cpu2` is rejected before the first target access with `StartupContractInvalid` / `diagnosisCode=PAIRED_FLASH_REQUIRES_HALTED_OWNER`. The historical `hybrid30k-dk9-owner-first` preset still exists and is still valid for CPU2 **RAM** images (owner-side initialization, old bring-up), but it is not a paired Flash programming preset: it starts CPU1 before the CPU2 image is loaded.
+
+The workflow reports the boundary it actually applied in `flashProgramming` (`performed`, `preset`, `contractSource`, `ownerCoreId`, `targetCoreId`, `flashBanks`, `ownerStateAfterCpu1Load`, `applicationCoresStartedDuringFlash`). See [docs/f28p65x-paired-flash-contract.md](docs/f28p65x-paired-flash-contract.md) for the invariants, error catalog, and the DK9 first-bring-up validation steps.
 
 ## CPU2 Boot Diagnosis
 

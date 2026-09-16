@@ -47,7 +47,15 @@ export interface DebugAdapter {
     flashLoadEvidence?: Record<string, unknown>;
   } | void>;
   loadSymbols?(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void>;
-  prepareFlashLoad?(session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void>;
+  /**
+   * F28P65x shared-Flash preparation. The owner core executes the Flash Plugin
+   * preparation; the target core is the one that will be programmed with the
+   * resulting bank mapping. Adapters must fail closed when the owner is not
+   * halted instead of halting it on the caller's behalf.
+   */
+  prepareFlashLoad?(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId, flashBanks: number[]): Promise<{
+    flashLoadEvidence?: Record<string, unknown>;
+  } | void>;
   writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void>;
   readMemory?(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number>;
   /** Read connection/run state only; use readPc for an explicit PC read. */

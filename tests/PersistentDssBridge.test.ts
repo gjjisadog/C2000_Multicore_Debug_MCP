@@ -201,6 +201,61 @@ describe("PersistentDssBridge", () => {
     ]);
   });
 
+  test("delivers Flash preparation on the owner socket with an explicit target core", async () => {
+    const receivedByPort = new Map<number, unknown[]>();
+    const cpu1 = await startJsonLineServer(command => ({
+      status: "OK",
+      value: { coreId: command.coreId, coreName: command.coreName, targetCoreId: command.targetCoreId, command }
+    }), receivedByPort);
+    const cpu2 = await startJsonLineServer(command => ({
+      status: "OK",
+      value: { coreId: command.coreId, coreName: command.coreName, targetCoreId: command.targetCoreId, command }
+    }), receivedByPort);
+    const launcher: DssServerLauncher = {
+      async launch(_options: CcsBridgeCreateSessionOptions): Promise<DssServerHandle> {
+        return {
+          host: "127.0.0.1",
+          authToken: TEST_AUTH_TOKEN,
+          portsByCoreId: new Map([[0, cpu1.port], [2, cpu2.port]]),
+          dispose: async () => {}
+        };
+      }
+    };
+    const bridge = new PersistentDssBridge({ launcher });
+    await bridge.createSession({
+      adapterSessionId: "ccs-session-flash",
+      sessionName: "flash-route-test",
+      ccxmlPath: "/tmp/target.ccxml",
+      coreMap
+    });
+
+    const result = await bridge.execute({
+      adapterSessionId: "ccs-session-flash",
+      operation: "prepareFlashLoad",
+      ccxmlPath: "/tmp/target.ccxml",
+      coreId: 0,
+      coreName: "C28xx_CPU1",
+      corePattern: "C28xx_CPU1",
+      targetCoreId: 2,
+      flashBanks: [3],
+      timeoutMs: 120000
+    });
+
+    expect(result).toMatchObject({ coreId: 0, coreName: "C28xx_CPU1", targetCoreId: 2 });
+    expect(receivedByPort.get(cpu2.port) ?? []).toHaveLength(0);
+    expect(receivedByPort.get(cpu1.port)).toEqual([
+      expect.objectContaining({
+        name: "prepareFlashLoad",
+        coreId: 0,
+        coreName: "C28xx_CPU1",
+        targetCoreId: 2,
+        flashBanks: [3],
+        timeoutMs: 120000,
+        authToken: TEST_AUTH_TOKEN
+      })
+    ]);
+  });
+
   test("forwards the operation timeout into the persistent DSS command", async () => {
     const receivedByPort = new Map<number, unknown[]>();
     const cpu2 = await startJsonLineServer(command => ({

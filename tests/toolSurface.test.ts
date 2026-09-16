@@ -18,7 +18,7 @@ import {
   registerC2000Tools
 } from "../src/mcp/tools.js";
 
-const MAX_AGENT_TOOL_COUNT = 28;
+const MAX_AGENT_TOOL_COUNT = 29;
 
 function names(profile: "readonly" | "safe" | "full", surface: "agent" | "advanced" | "compatibility") {
   return new Set(definitionsForExposure(profile, surface).map(tool => tool.name));
@@ -120,6 +120,7 @@ describe("MCP tool surface profiles", () => {
       "c2000_getEnvironment",
       "c2000_getHardwarePreflight",
       "c2000_getMulticoreSnapshot",
+      "c2000_verifyResidentImage",
       "c2000_evaluateMany",
       "c2000_collectFailureBundle",
       "c2000_exportTrace",
@@ -285,7 +286,7 @@ describe("MCP tool surface profiles", () => {
     expect(summary).toEqual(expect.objectContaining({
       profile: "safe",
       surface: "agent",
-      registeredToolCount: 28,
+      registeredToolCount: 29,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 94,
       advancedOnlyCount: 92,
@@ -324,13 +325,13 @@ describe("MCP tool surface profiles", () => {
       activeToolProfile: "safe",
       activeToolSurfaceProfile: "agent",
       surface: "agent",
-      registeredToolCount: 28,
+      registeredToolCount: 29,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 94,
       advancedOnlyCount: 92,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
-        registered: 28,
+        registered: 29,
         hiddenBySafety: 8,
         hiddenBySurface: 94,
         advancedOnly: 92,
@@ -411,8 +412,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(122);
-    expect(fullCompatibility.count).toBe(130);
+    expect(safeCompatibility.count).toBe(123);
+    expect(fullCompatibility.count).toBe(131);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

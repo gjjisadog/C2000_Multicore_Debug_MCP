@@ -9,10 +9,12 @@ import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js"
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
+import { resolveSymbolAddressFromMap } from "../hardware/mapSymbols.js";
 import { formatDebugProcessOwners, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { fileMetadata } from "../utils/fileHash.js";
 import { buildBootHandoffVerdict as buildBootHandoffVerdictCore } from "../debug/bootHandoffVerdict.js";
 import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
 import { sleep as sleepCore } from "../utils/async.js";
@@ -107,6 +109,8 @@ import {
   verifyMapSchema,
   verifyRegressionSchema,
   verifyReviewSchema,
+  residentImageManifestSchema,
+  verifyResidentImageSchema,
   runEngineeringVerificationSchema,
   getVerificationResultSchema,
   listCapabilitiesSchema,
@@ -1202,6 +1206,106 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         return ok(info as unknown as ToolResult);
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId });
+      }
+    },
+
+    /**
+     * Attach only when requested and verify a firmware-declared immutable
+     * identity marker through raw memory. This path never loads a program or
+     * symbols, resets, runs, or writes target memory.
+     */
+    async verifyResidentImage(input: z.infer<typeof verifyResidentImageSchema>) {
+      try {
+        const connectedCoreIds = new Set<number>();
+        const results: ToolResult[] = [];
+        const connectIfNeeded = input.connectIfNeeded !== false;
+        for (const request of input.checks) {
+          const programUri = manager.normalizeArtifactUri(request.programUri);
+          const manifestUri = manager.normalizeArtifactUri(request.manifestUri);
+          const manifestMetadata = await fileMetadata(manifestUri);
+          const manifest = residentImageManifestSchema.parse(JSON.parse(await readFile(manifestUri, "utf8")));
+          const programMetadata = await fileMetadata(programUri);
+          if (programMetadata.sha256.toLowerCase() !== manifest.programSha256.toLowerCase()) {
+            throw new DebugMcpError("ResidentImageManifestMismatch", "Resident-image manifest does not bind to the requested .out artifact", {
+              sessionId: input.sessionId,
+              coreId: request.coreId,
+              programUri,
+              manifestUri,
+              programSha256: programMetadata.sha256,
+              manifestProgramSha256: manifest.programSha256,
+              targetMemoryWritten: false,
+              nextAction: "Regenerate the manifest from the exact .out artifact and retry the read-only verification."
+            });
+          }
+
+          if (connectIfNeeded && !connectedCoreIds.has(request.coreId)) {
+            const state = await manager.getTargetState(input.sessionId, request.coreId);
+            if (!state.connected) await manager.connectTarget(input.sessionId, request.coreId);
+            connectedCoreIds.add(request.coreId);
+          }
+
+          const identity = manifest.identity;
+          const mapUri = request.mapUri === undefined ? undefined : manager.normalizeArtifactUri(request.mapUri);
+          const address = identity.address !== undefined
+            ? parseStrictAddress(identity.address)
+            : mapUri === undefined
+              ? (() => { throw new DebugMcpError("ResidentImageManifestInvalid", "A mapUri is required when the manifest identifies its marker by symbol", { manifestUri, coreId: request.coreId, targetMemoryWritten: false }); })()
+              : await resolveSymbolAddressFromMap(mapUri, identity.symbol!);
+          const expectedValue = normalizeIdentityValue(identity.expectedValue, identity.typeSize);
+          const actualValue = normalizeIdentityValue(
+            await manager.readMemory(input.sessionId, request.coreId, identity.page, address, identity.typeSize),
+            identity.typeSize
+          );
+          const coreName = await resolveCoreName(input.sessionId, request.coreId);
+          results.push({
+            coreId: request.coreId,
+            coreName,
+            programUri,
+            manifestUri,
+            manifestSha256: manifestMetadata.sha256,
+            programSha256: programMetadata.sha256,
+            marker: {
+              ...(identity.symbol !== undefined ? { symbol: identity.symbol } : {}),
+              address: formatHexAddress(address),
+              page: identity.page,
+              typeSize: identity.typeSize,
+              expectedValue,
+              actualValue,
+              matched: actualValue === expectedValue
+            }
+          });
+        }
+
+        const verified = results.every(result => result.marker.matched === true);
+        const evidence = {
+          sessionId: input.sessionId,
+          verified,
+          verificationMethod: "resident-image-manifest-raw-memory",
+          targetAccess: {
+            connection: connectIfNeeded ? "connect-if-needed" : "existing-session-only",
+            programming: false,
+            symbolLoad: false,
+            reset: false,
+            run: false,
+            targetMemoryWrite: false
+          },
+          checks: results
+        };
+        if (!verified) {
+          return {
+            ...evidence,
+            success: false,
+            timestamp: new Date().toISOString(),
+            error: {
+              code: "ResidentImageMismatch",
+              message: "One or more resident-image identity markers did not match the manifest",
+              details: { sessionId: input.sessionId, targetMemoryWritten: false }
+            }
+          };
+        }
+        return ok(evidence);
+      } catch (error) {
+        return fail(error, { sessionId: input.sessionId, targetMemoryWritten: false });
       }
     },
 
@@ -2478,6 +2582,31 @@ function hardwareAcceptanceCommand(options: {
 
 function shellValue(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function parseStrictAddress(value: string): number {
+  const trimmed = value.trim();
+  const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
+  const isDecimal = /^[0-9]+$/.test(trimmed);
+  if (!isHex && !isDecimal) throw new Error(`Invalid resident-image marker address: ${value}`);
+  const parsed = isHex ? Number.parseInt(trimmed.slice(2), 16) : Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`Invalid resident-image marker address: ${value}`);
+  return parsed;
+}
+
+function normalizeIdentityValue(value: string | number, typeSize: 8 | 16 | 32): number {
+  const parsed = typeof value === "number"
+    ? value
+    : /^0x/i.test(value) ? Number.parseInt(value.slice(2), 16) : Number.parseInt(value, 10);
+  const max = typeSize === 8 ? 0xff : typeSize === 16 ? 0xffff : 0xffffffff;
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > max) {
+    throw new Error(`Resident-image marker value is outside uint${typeSize}: ${String(value)}`);
+  }
+  return parsed;
+}
+
+function formatHexAddress(value: number): string {
+  return `0x${value.toString(16).toUpperCase()}`;
 }
 
 function normalizeExpressionAssignment<T extends {

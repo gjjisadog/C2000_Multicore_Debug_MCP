@@ -24,12 +24,27 @@ verification through `c2000-multicore-mcp`.
   target job engine or a general shell tool.
 - A board lease proves probe ownership, not the identity of the firmware
   resident on the target. A new lease or worker generation invalidates the
-  target identity; only a controlled MCP program load under the current lease
-  may establish it again. Record the per-core `.out` SHA-256 and target
-  generation with every resident-symbol or observation conclusion.
-- Treat `UNKNOWN` or hash-mismatched target identity as a hard stop. Do not
-  load old Scope symbols, reconnect an old observation session, or infer that
-  Flash is unchanged from a lease alone.
+  target identity; a controlled MCP program load or a manifest-bound resident
+  image verification under the current lease may establish it again. Record
+  the per-core `.out` SHA-256 and target generation with every resident-symbol
+  or observation conclusion.
+- Treat `UNKNOWN` or hash-mismatched target identity as a hard stop for
+  resident-image-dependent observation, acceptance, and firmware conclusions.
+  Do not load old Scope symbols, reconnect an old observation session, or infer
+  that Flash is unchanged from a lease alone.
+- `UNKNOWN` does not block one bounded, current-lease, read-only triage pass
+  that does not dereference firmware symbols. It may collect explicit per-core
+  connection/run state, PC, reset/boot state, and available image-identity
+  evidence. Label that evidence `blocked/not-run`; it cannot establish stack or
+  CPU-utilization metrics, IPC readiness, or a firmware verdict. A raw address
+  read is allowed only when its address and semantics come from a documented
+  image-independent contract, and remains untrusted until identity is known.
+- When a firmware build provides a `c2000-resident-image-manifest`, use
+  `c2000_verifyResidentImage` to attach disconnected cores if needed and read
+  the declared marker through raw memory. The manifest must bind to the exact
+  `.out` SHA-256; the daemon re-hashes both artifacts before changing the
+  board identity to `KNOWN`. A marker mismatch leaves identity `UNKNOWN` and
+  is evidence of a verification failure, not permission to use old symbols.
 
 ## Workflow priority
 
@@ -38,8 +53,13 @@ verification through `c2000-multicore-mcp`.
 2. For target work, use one server-side workflow or one durable job. Register a
    serial-bound board and wait for its worker before touching a target.
    Check `c2000_listBoards` before target access; if target identity is
-   `UNKNOWN`, load the exact CPU1/CPU2 pair through the current lease before
-   starting symbols, Scope, DLOG, ERAD, or Variable Stream observation.
+   `UNKNOWN`, a single bounded read-only triage snapshot is allowed under the
+   current lease. If a manifest-bound resident-image check is available, use
+   `c2000_verifyResidentImage` before loading symbols; it connects only when
+   requested and performs no program load, reset, run, or target write. Load
+   the exact CPU1/CPU2 pair, or complete the resident-image check, before
+   starting resident-symbol observation, Scope, DLOG, ERAD, Variable Stream,
+   or acceptance. Never use old symbols for triage conclusions.
    Never continue an old session after a lease release, worker restart, or
    external debugger access.
 3. Route normal tasks through the default `safe` + `agent` surface:
@@ -219,6 +239,12 @@ personal rankings or causal claims from cross-improvement correlations.
   fresh lease, fresh session, and fresh target-image identity.
 - Do not repeat CPU2 Flash programming without explicit destructive reload
   authorization; use symbol loading for resident Flash.
+- Flash programming completion is not a cold-start result. Before making a
+  Flash-boot or IPC conclusion, perform and record one product-level startup
+  boundary after programming: (a) power off and power on the board, (b) use
+  the product-level restart path, or (c) trigger the board's hardware reset
+  circuit (for example XRSn). A debugger-only reconnect, reset, or run is
+  controlled-debugger evidence and does not substitute for that boundary.
 - Do not assign PWM, contactor, power-stage, or HV control variables as part of
   generic verification. Target writes and fault injection remain in existing
   safe/full and durable-job boundaries.
@@ -234,8 +260,9 @@ personal rankings or causal claims from cross-improvement correlations.
 - Reload/reset/run/diagnose: `c2000_runReloadAndDiagnose`.
 - Evidence package: `c2000_runFullDebugBundle`.
 - Resident Flash symbols: use the workflow's resident-image path by default;
-  on `advanced`, use `c2000_loadSymbols`, never `c2000_loadProgram` as a
-  symbol-only substitute.
+  when identity is `UNKNOWN`, first use `c2000_verifyResidentImage` with a
+  manifest-bound marker; after it succeeds, on `advanced`, use
+  `c2000_loadSymbols`, never `c2000_loadProgram` as a symbol-only substitute.
 - Multi-board CAN: use `c2000_submitMultiBoardCanAcceptance`; specialized
   fault/soak campaigns are advanced. `mock` remains simulation-only and
   hardware mode is explicit.

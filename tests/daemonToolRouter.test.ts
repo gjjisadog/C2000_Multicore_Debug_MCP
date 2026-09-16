@@ -114,6 +114,63 @@ describe("daemon tool router interactive session lifecycle", () => {
     fixture.store.close();
   });
 
+  test("records a complete manifest-bound resident-image verification without treating it as a program load", async () => {
+    const fixture = await makeFixture();
+    const programPath = path.join(fixture.directory, "cpu1.out");
+    const manifestPath = path.join(fixture.directory, "cpu1.resident-image.json");
+    await writeFile(programPath, "cpu1-image-v1");
+    const programSha256 = await sha256File(programPath);
+    await writeFile(manifestPath, JSON.stringify({
+      format: "c2000-resident-image-manifest",
+      version: 1,
+      programSha256,
+      identity: { address: "0x1000", page: "DATA", typeSize: 32, expectedValue: 0xA5A5A5A5 }
+    }));
+    const manifestSha256 = await sha256File(manifestPath);
+    fixture.sessions.upsert({
+      sessionId: "dbg-verify",
+      boardId: "board-a",
+      workerInstanceId: "worker-1",
+      sessionName: "resident-image-verification",
+      coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }],
+      status: "OPEN",
+      createdAt: new Date().toISOString()
+    });
+    fixture.workers.invokeBoard = async () => ({
+      success: true,
+      sessionId: "dbg-verify",
+      verified: true,
+      verificationMethod: "resident-image-manifest-raw-memory",
+      targetAccess: {
+        programming: false,
+        symbolLoad: false,
+        reset: false,
+        run: false,
+        targetMemoryWrite: false
+      },
+      checks: [{
+        coreId: 0,
+        programUri: programPath,
+        manifestUri: manifestPath,
+        programSha256,
+        manifestSha256,
+        marker: { matched: true }
+      }]
+    });
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+
+    await expect(router.invokeTool("c2000_verifyResidentImage", {
+      sessionId: "dbg-verify",
+      checks: [{ coreId: 0, programUri: programPath, manifestUri: manifestPath }]
+    })).resolves.toEqual(expect.objectContaining({ success: true, verified: true }));
+    expect(fixture.registry.targetIdentity("board-a")).toEqual(expect.objectContaining({
+      status: "KNOWN",
+      reason: "resident-image-verification",
+      programs: { "0": expect.objectContaining({ coreId: 0, sha256: programSha256 }) }
+    }));
+    fixture.store.close();
+  });
+
   test("does not persist a launch session that the worker already cleaned up", async () => {
     const fixture = await makeFixture();
     const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);

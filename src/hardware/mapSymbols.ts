@@ -43,6 +43,24 @@ export function parseMapSymbols(text: string): MapSymbol[] {
   return [...byAddress.values()].sort((left, right) => left.address - right.address);
 }
 
+/**
+ * Resolve one exact symbol without loading debugger symbols into the target.
+ * A resident-image verifier uses this only to locate a firmware-declared
+ * identity marker; the value itself is still read through the raw-memory
+ * adapter path.
+ */
+export async function resolveSymbolAddressFromMap(mapPath: string, symbolName: string): Promise<number> {
+  const text = await readFile(mapPath, "utf8");
+  const matches = parseMapSymbols(text).filter(symbol => symbol.name === symbolName);
+  if (matches.length === 0) {
+    throw new Error(`Map symbol not found: ${symbolName}`);
+  }
+  if (matches.length > 1) {
+    throw new Error(`Map symbol is ambiguous: ${symbolName}`);
+  }
+  return matches[0]!.address;
+}
+
 function parseAddress(value: string): number | undefined {
   const trimmed = value.trim();
   const parsed = /^0x/i.test(trimmed) ? Number.parseInt(trimmed.slice(2), 16) : Number.parseInt(trimmed, 10);

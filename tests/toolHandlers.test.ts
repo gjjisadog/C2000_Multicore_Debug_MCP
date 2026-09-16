@@ -265,6 +265,47 @@ class OwnershipReadFailureAdapter extends WorkflowRecordingAdapter {
   }
 }
 
+class ResidentImageVerificationAdapter extends MockDebugAdapter {
+  readonly operations: string[] = [];
+
+  override async connect(session: AdapterSession, coreId: CoreId): Promise<void> {
+    this.operations.push(`connect:${coreId}`);
+    await super.connect(session, coreId);
+  }
+
+  override async readMemory(
+    session: AdapterSession,
+    coreId: CoreId,
+    page: string,
+    address: number,
+    typeSize: number
+  ): Promise<number> {
+    this.operations.push(`read:${coreId}:${page}:${address}:${typeSize}`);
+    await super.readMemory(session, coreId, page, address, typeSize);
+    return 0xA5A5A5A5;
+  }
+
+  override async loadProgram(): Promise<void> {
+    throw new Error("resident-image verification must not load a program");
+  }
+
+  override async loadSymbols(): Promise<void> {
+    throw new Error("resident-image verification must not load symbols");
+  }
+
+  override async reset(): Promise<void> {
+    throw new Error("resident-image verification must not reset a core");
+  }
+
+  override async run(): Promise<void> {
+    throw new Error("resident-image verification must not run a core");
+  }
+
+  override async writeMemory(): Promise<void> {
+    throw new Error("resident-image verification must not write target memory");
+  }
+}
+
 async function createIpcWorkflowArtifacts(tempDir: string) {
   const files = {
     cpu1OutPath: path.join(tempDir, "cpu1.out"),
@@ -329,6 +370,84 @@ describe("tool handlers", () => {
       ],
       toolSurface: expect.any(Object)
     }));
+  });
+
+  test("verifies a manifest-bound resident image without programming, reset, run, or target writes", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-resident-image-"));
+    const programUri = path.join(tempDir, "cpu1.out");
+    const manifestUri = path.join(tempDir, "cpu1.resident-image.json");
+    await writeFile(programUri, "cpu1-image-v1");
+    const programSha256 = await sha256File(programUri);
+    await writeFile(manifestUri, JSON.stringify({
+      format: "c2000-resident-image-manifest",
+      version: 1,
+      programSha256,
+      identity: {
+        address: "0x1000",
+        page: "DATA",
+        typeSize: 32,
+        expectedValue: "0xA5A5A5A5"
+      }
+    }));
+    const adapter = new ResidentImageVerificationAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] });
+    const handlers = createToolHandlers(manager);
+
+    const result = await handlers.verifyResidentImage({
+      sessionId: created.sessionId,
+      checks: [{ coreId: 0, programUri, manifestUri }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      verified: true,
+      verificationMethod: "resident-image-manifest-raw-memory",
+      targetAccess: expect.objectContaining({
+        connection: "connect-if-needed",
+        programming: false,
+        symbolLoad: false,
+        reset: false,
+        run: false,
+        targetMemoryWrite: false
+      }),
+      checks: [expect.objectContaining({
+        coreId: 0,
+        programSha256,
+        marker: expect.objectContaining({ matched: true, actualValue: 0xA5A5A5A5 })
+      })]
+    }));
+    expect(adapter.operations).toEqual(["connect:0", "read:0:DATA:4096:32"]);
+  });
+
+  test("keeps resident-image verification failed when the marker does not match", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-resident-image-mismatch-"));
+    const programUri = path.join(tempDir, "cpu1.out");
+    const manifestUri = path.join(tempDir, "cpu1.resident-image.json");
+    await writeFile(programUri, "cpu1-image-v1");
+    const programSha256 = await sha256File(programUri);
+    await writeFile(manifestUri, JSON.stringify({
+      format: "c2000-resident-image-manifest",
+      version: 1,
+      programSha256,
+      identity: { address: "0x1000", page: "DATA", typeSize: 32, expectedValue: 0x12345678 }
+    }));
+    const adapter = new ResidentImageVerificationAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] });
+    const handlers = createToolHandlers(manager);
+
+    const result = await handlers.verifyResidentImage({
+      sessionId: created.sessionId,
+      checks: [{ coreId: 0, programUri, manifestUri }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: false,
+      verified: false,
+      error: expect.objectContaining({ code: "ResidentImageMismatch" })
+    }));
+    expect(adapter.operations).toEqual(["connect:0", "read:0:DATA:4096:32"]);
   });
 
   test("getHardwarePreflight returns read-only XDS110 and debug process status", async () => {

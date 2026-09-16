@@ -75,6 +75,18 @@ interface LogicalDebugSession {
     errorCode: string;
     message: string;
   };
+  /**
+   * Open F28P65x Flash programming boundary. While it is open no application
+   * core may be started, because the CPU1 Flash Plugin owns the shared Flash
+   * clock and bank mapping and the target must stay halted until both images
+   * have been programmed.
+   */
+  flashProgrammingWindow?: {
+    ownerCoreId: CoreId;
+    targetCoreId: CoreId;
+    flashBanks: number[];
+    openedAt: string;
+  };
   probeLease?: DebugProbeLease;
 }
 
@@ -441,6 +453,7 @@ export class DebugSessionManager {
 
   private async runCoreUnlocked(sessionId: string, coreId: CoreId): Promise<TargetRunState> {
     const { session, core } = this.requireCore(sessionId, coreId);
+    this.assertFlashProgrammingBoundaryComplete(session, sessionId, coreId);
     await this.adapter.run(session.adapterSession, coreId);
     core.state = "Running";
     core.active = true;
@@ -459,6 +472,87 @@ export class DebugSessionManager {
     core.active = true;
     this.logger.info("core halted", { sessionId, coreId, coreName: core.coreName });
     return this.getTargetStateUnlocked(sessionId, coreId);
+  }
+
+  /**
+   * Open the F28P65x paired Flash programming boundary. Flash programming
+   * decides what is written before application execution begins, so starting
+   * any core while this boundary is open fails closed.
+   */
+  async beginPairedFlashProgramming(
+    sessionId: string,
+    options: { ownerCoreId: CoreId; targetCoreId: CoreId; flashBanks: number[] }
+  ): Promise<Record<string, unknown>> {
+    return this.exclusive(sessionId, async () => {
+      const { session } = this.requireCore(sessionId, options.ownerCoreId);
+      if (session.flashProgrammingWindow) {
+        throw new DebugMcpError(
+          "FlashProgrammingWindowActive",
+          "A paired Flash programming boundary is already open for this session",
+          { sessionId, openFlashProgrammingWindow: session.flashProgrammingWindow, requested: options }
+        );
+      }
+      session.flashProgrammingWindow = {
+        ownerCoreId: options.ownerCoreId,
+        targetCoreId: options.targetCoreId,
+        flashBanks: [...options.flashBanks],
+        openedAt: new Date().toISOString()
+      };
+      this.logger.info("paired flash programming boundary opened", {
+        sessionId,
+        ...session.flashProgrammingWindow
+      });
+      return { sessionId, stage: "paired-flash", state: "open", ...session.flashProgrammingWindow };
+    });
+  }
+
+  /** Close the paired Flash programming boundary and report what it contained. */
+  async endPairedFlashProgramming(
+    sessionId: string,
+    outcome: { success: boolean; reason?: string } = { success: true }
+  ): Promise<Record<string, unknown>> {
+    return this.exclusive(sessionId, async () => {
+      const session = this.requireSession(sessionId);
+      const window = session.flashProgrammingWindow;
+      delete session.flashProgrammingWindow;
+      this.logger.info("paired flash programming boundary closed", {
+        sessionId,
+        success: outcome.success,
+        ownerCoreId: window?.ownerCoreId,
+        targetCoreId: window?.targetCoreId,
+        flashBanks: window?.flashBanks
+      });
+      return {
+        sessionId,
+        stage: "paired-flash",
+        state: "closed",
+        success: outcome.success,
+        ...(outcome.reason ? { reason: outcome.reason } : {}),
+        ...(window ? { window } : {})
+      };
+    });
+  }
+
+  private assertFlashProgrammingBoundaryComplete(session: LogicalDebugSession, sessionId: string, coreId: CoreId): void {
+    const flashProgrammingWindow = session.flashProgrammingWindow;
+    if (!flashProgrammingWindow) {
+      return;
+    }
+    throw new DebugMcpError(
+      "FlashProgrammingWindowActive",
+      "No application core may be started while the paired Flash programming boundary is open",
+      {
+        sessionId,
+        coreId,
+        stage: "paired-flash",
+        ownerCoreId: flashProgrammingWindow.ownerCoreId,
+        targetCoreId: flashProgrammingWindow.targetCoreId,
+        flashBanks: flashProgrammingWindow.flashBanks,
+        openedAt: flashProgrammingWindow.openedAt,
+        targetMemoryWritten: false,
+        nextAction: "Program both Flash images before starting any core; the boundary closes automatically when the paired Flash stage ends."
+      }
+    );
   }
 
   async resetCore(sessionId: string, coreId: CoreId, resetType: ResetType = "default"): Promise<ResetTargetState> {
@@ -619,6 +713,8 @@ export class DebugSessionManager {
         error.code === "OwnerCoreNotConnected" ||
         error.code === "CoreNotConnected" ||
         error.code === "FlashLoadPreparationUnsupported" ||
+        error.code === "FlashOwnerCoreNotHalted" ||
+        error.code === "FlashPreparationTimeout" ||
         error.code === "ProgramLoadSessionRefreshFailed"
       )) {
         throw error;
@@ -773,12 +869,42 @@ export class DebugSessionManager {
           }
         );
       }
-      await this.adapter.prepareFlashLoad(session.adapterSession, coreId, flashBanks);
+      // F28P65x paired Flash contract: the CPU1 on-chip Flash Plugin prepares
+      // the shared Flash clock and bank mapping while CPU1 holds the target.
+      // A running CPU1 application owns that mapping, so this fails closed
+      // instead of halting the owner behind the workflow's back.
+      if (ownerState.state !== "Halted") {
+        throw new DebugMcpError(
+          "FlashOwnerCoreNotHalted",
+          "CPU2 Flash programming requires the CPU1 Flash Plugin owner to be halted; no Flash preparation or target write was attempted",
+          {
+            sessionId,
+            ownerCoreId: F28P65X_CPU1_CORE_ID,
+            targetCoreId: F28P65X_CPU2_CORE_ID,
+            ownerState,
+            targetState: await this.tryReadCoreState(session, F28P65X_CPU2_CORE_ID),
+            flashBanks,
+            programUri,
+            mapUri,
+            targetMemoryWritten: false,
+            nextAction: "Halt CPU1 before preparing CPU2 Flash (c2000_haltCores), or use the paired Flash startup preset f28p65x-paired-flash, which never starts an application core before both images are programmed."
+          }
+        );
+      }
+      const preparation = await this.adapter.prepareFlashLoad(
+        session.adapterSession,
+        F28P65X_CPU1_CORE_ID,
+        coreId,
+        flashBanks
+      );
       this.logger.info("cpu2 flash banks prepared", {
         sessionId,
+        coreStage: "prepare-flash",
         ownerCoreId: F28P65X_CPU1_CORE_ID,
         targetCoreId: coreId,
-        flashBanks
+        ownerState,
+        flashBanks,
+        ...(preparation?.flashLoadEvidence ? { flashLoadEvidence: preparation.flashLoadEvidence } : {})
       });
     }
     const writes: Array<{ address: number; requestedValue: number; writtenValue: number; rmw: boolean; memoryRegion: string }> = [];
@@ -829,6 +955,21 @@ export class DebugSessionManager {
       writes
     });
     return ownership.fallbackWarning;
+  }
+
+  /**
+   * Best-effort peer state for a failure report. A diagnostic read must never
+   * replace the failure that is being explained, so a failed read is reported
+   * as evidence-incomplete instead of throwing.
+   */
+  private async tryReadCoreState(session: LogicalDebugSession, coreId: CoreId): Promise<Record<string, unknown>> {
+    const core = session.cores.get(coreId);
+    try {
+      const state = await this.adapter.getState(session.adapterSession, coreId);
+      return { coreId, coreName: state.coreName, connected: state.connected, state: state.state };
+    } catch (error) {
+      return { coreId, coreName: core?.coreName, state: core?.state, error: toStructuredError(error) };
+    }
   }
 
   /**
@@ -952,14 +1093,16 @@ export class DebugSessionManager {
     programUri: string,
     error: unknown
   ): void {
-    if (coreId !== F28P65X_CPU2_CORE_ID || !containsF28P65xFlashEvidence(error)) return;
+    if (coreId !== F28P65X_CPU2_CORE_ID || !isF28P65xFlashProgrammingFailure(error)) return;
     const structured = toStructuredError(error);
     const evidence = findF28P65xFlashEvidence(error);
     session.flashLoadQuarantine = {
       coreId,
       programUri,
       failedAt: new Date().toISOString(),
-      failureClass: typeof evidence?.failureClass === "string" ? evidence.failureClass : "flash_load_failure",
+      failureClass: typeof evidence?.failureClass === "string"
+        ? evidence.failureClass
+        : structured.code === "FlashPreparationTimeout" ? "flash_operation_timeout" : "flash_load_failure",
       errorCode: structured.code,
       message: structured.message.slice(0, 512)
     };
@@ -1919,6 +2062,16 @@ function findF28P65xFlashEvidence(value: unknown, depth = 0): Record<string, unk
 
 function containsF28P65xFlashEvidence(value: unknown): boolean {
   return findF28P65xFlashEvidence(value) !== undefined;
+}
+
+/**
+ * A preparation deadline is a Flash programming failure even though the
+ * aborted preparation produced no DSS-side evidence: ConfigureClock or
+ * ConfigureBanks may have been interrupted mid-flight, leaving the Flash
+ * controller and bank mapping in an unknown state.
+ */
+function isF28P65xFlashProgrammingFailure(value: unknown): boolean {
+  return containsF28P65xFlashEvidence(value) || toStructuredError(value).code === "FlashPreparationTimeout";
 }
 
 function validateCoreMap(coreMap: CoreConfig[]): CoreConfig[] {

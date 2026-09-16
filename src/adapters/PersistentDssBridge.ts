@@ -480,7 +480,10 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
     case "loadSymbols":
       return { ...base, name: "loadSymbols", program: command.programUri };
     case "prepareFlashLoad":
-      return { ...base, name: "prepareFlashLoad", flashBanks: command.flashBanks };
+      // `base.coreId` is the executing owner core (the socket it is sent to);
+      // the target core travels as an explicit field so the server can never
+      // infer it from whichever channel happened to carry the command.
+      return { ...base, name: "prepareFlashLoad", targetCoreId: command.targetCoreId, flashBanks: command.flashBanks };
     case "prepareFirmwareHandoff":
       return { ...base, name: "prepareFirmwareHandoff" };
     case "writeMemory":
@@ -745,7 +748,14 @@ function isAuthenticated(command) {
     command.authToken === String(config.authToken);
 }
 
-function applyCommandScriptTimeout(command) {
+// One ScriptingEnvironment serves every core thread, so the DSS script
+// deadline is process-wide. A short state poll on one core must never shorten
+// a long Flash preparation another core is still running: the deadline applied
+// to the environment is the longest budget currently in flight.
+var inFlightScriptTimeouts = {};
+var commandTimeoutSlot = 0;
+
+function commandTimeoutMs(command) {
   var timeoutMs = Number(command && command.timeoutMs);
   if (!isFinite(timeoutMs) || timeoutMs <= 0) {
     timeoutMs = Number(config.timeoutMs);
@@ -753,7 +763,35 @@ function applyCommandScriptTimeout(command) {
   if (!isFinite(timeoutMs) || timeoutMs <= 0) {
     timeoutMs = 15000;
   }
-  script.setScriptTimeout(Math.floor(timeoutMs));
+  return Math.floor(timeoutMs);
+}
+
+function effectiveScriptTimeoutMs() {
+  var effective = 0;
+  for (var slot in inFlightScriptTimeouts) {
+    if (inFlightScriptTimeouts[slot] > effective) {
+      effective = inFlightScriptTimeouts[slot];
+    }
+  }
+  return effective > 0 ? effective : commandTimeoutMs({});
+}
+
+function applyCommandScriptTimeout(command) {
+  var timeoutMs = commandTimeoutMs(command);
+  commandTimeoutSlot = commandTimeoutSlot + 1;
+  command.__scriptTimeoutSlot = "slot-" + commandTimeoutSlot;
+  inFlightScriptTimeouts[command.__scriptTimeoutSlot] = timeoutMs;
+  script.setScriptTimeout(Math.floor(effectiveScriptTimeoutMs()));
+  return timeoutMs;
+}
+
+function releaseCommandScriptTimeout(command) {
+  if (!command || command.__scriptTimeoutSlot === undefined) {
+    return;
+  }
+  delete inFlightScriptTimeouts[command.__scriptTimeoutSlot];
+  delete command.__scriptTimeoutSlot;
+  script.setScriptTimeout(Math.floor(effectiveScriptTimeoutMs()));
 }
 
 function cleanupPersistentDebugServer() {
@@ -884,6 +922,11 @@ function classifyFlashLoadFailure(message, evidence) {
   if (evidence && evidence.boundaryValidation && evidence.boundaryValidation.status === "mismatch") {
     return "bank_mapping_boundary_mismatch";
   }
+  // A DSS deadline is not a Flash programming defect; keep it separately
+  // labelled so a long ConfigureClock is never reported as a bank failure.
+  if (/timeout|timed out|time-out/i.test(String(message))) {
+    return "flash_operation_timeout";
+  }
   if (/registers are locked|operation cancelled \(3\)|flash programmer/i.test(String(message))) {
     return "flash_programmer_state";
   }
@@ -980,7 +1023,8 @@ function captureFlashLoadState(command, evidence, phase) {
     } catch (readError) { item.error = String(readError).slice(0, 256); }
   }
   snapshot.finishedAtMs = new Date().getTime();
-  logDiagnostic("flash-load:snapshot", { coreId: command.coreId, snapshot: snapshot });
+  logDiagnostic("flash-load:snapshot", { coreId: command.coreId,
+    targetCoreId: command.targetCoreId, snapshot: snapshot });
   return snapshot;
 }
 
@@ -1023,6 +1067,40 @@ function runFlashLoadWithEvidence(command, evidence, phase, operation) {
   return { status: "OK", value: withCoreIdentity(command, result) };
 }
 
+function normalizeFlashBanks(flashBanks) {
+  var normalized = [];
+  if (!flashBanks) {
+    return normalized;
+  }
+  for (var index = 0; index < flashBanks.length && index < F28P65X_FLASH_BANK_COUNT; index++) {
+    var bank = Number(flashBanks[index]);
+    if (bank >= 0 && bank < F28P65X_FLASH_BANK_COUNT && Math.floor(bank) === bank &&
+        normalized.indexOf(bank) < 0) {
+      normalized.push(bank);
+    }
+  }
+  return normalized;
+}
+
+function readCoreRunState(coreId) {
+  var session = sessionsByCoreId[String(coreId)];
+  if (!session) {
+    return { coreId: coreId, connected: false, state: "Disconnected" };
+  }
+  try {
+    if (!session.target.isConnected()) {
+      return { coreId: coreId, connected: false, state: "Disconnected" };
+    }
+    return { coreId: coreId, connected: true,
+      state: session.target.isHalted() ? "Halted" : "Running" };
+  } catch (stateError) {
+    // An unreadable owner state is never proof of a halted owner, so it stays
+    // outside the run-state vocabulary and fails the halted precondition.
+    return { coreId: coreId, connected: false, state: "Unavailable",
+      error: String(stateError).slice(0, 256) };
+  }
+}
+
 function handleCommand(command) {
   if (command.name === "shutdown") {
     return { status: "OK", value: { shutdown: true } };
@@ -1062,35 +1140,60 @@ function handleCommand(command) {
     session.expression.evaluate("GEL_UnloadAllGels()");
     return { status: "OK", value: withCoreIdentity(command, { gelInitializationDisabled: true }) };
   } else if (command.name === "prepareFlashLoad") {
-    var cpu1Session = sessionsByCoreId["0"];
-    if (!cpu1Session) {
-      throw "CPU1 DebugSession is required to configure F28P65x Flash banks";
+    // F28P65x paired Flash contract. The owner core executes the shared Flash
+    // Plugin preparation in its own DSS context while it holds the target, and
+    // the target core is named explicitly rather than implied by the channel
+    // that happened to carry the command.
+    var ownerCoreId = Number(command.coreId);
+    var flashTargetCoreId = Number(command.targetCoreId);
+    if (!isFinite(flashTargetCoreId) || Math.floor(flashTargetCoreId) !== flashTargetCoreId ||
+        flashTargetCoreId === ownerCoreId) {
+      throw "prepareFlashLoad requires an explicit targetCoreId that differs from the executing owner core";
+    }
+    var flashBanks = normalizeFlashBanks(command.flashBanks);
+    var ownerSession = sessionsByCoreId[String(ownerCoreId)];
+    if (!ownerSession) {
+      throw "DebugSession for owner core " + ownerCoreId + " is required to configure F28P65x Flash banks";
+    }
+    var targetSession = sessionsByCoreId[String(flashTargetCoreId)];
+    if (!targetSession) {
+      throw "DebugSession for target core " + flashTargetCoreId + " is required to receive the F28P65x bank mapping";
+    }
+    // Fail closed instead of halting the owner here: an automatically halted
+    // owner would hide a workflow that started an application core before
+    // paired Flash programming finished.
+    var ownerRunState = readCoreRunState(ownerCoreId);
+    if (!ownerRunState.connected || ownerRunState.state !== "Halted") {
+      throw "F28P65x Flash preparation requires owner core " + ownerCoreId +
+        " to be connected and halted; observed " + JSON.stringify(ownerRunState);
     }
     // This existing operation is F28P65x-specific. Do not probe other loads/devices.
-    delete pendingFlashLoadEvidence[String(command.coreId)];
-    var evidence = { device: "F28P65x", coreId: command.coreId,
-      requestedFlashBanks: command.flashBanks.slice(0, 5),
-      expectedBankMuxSel: expectedBankMuxSel(command.flashBanks),
+    delete pendingFlashLoadEvidence[String(flashTargetCoreId)];
+    var evidence = { device: "F28P65x", coreId: flashTargetCoreId,
+      ownerCoreId: ownerCoreId, targetCoreId: flashTargetCoreId, ownerState: ownerRunState,
+      requestedFlashBanks: flashBanks.slice(0, F28P65X_FLASH_BANK_COUNT),
+      expectedBankMuxSel: expectedBankMuxSel(flashBanks),
       readOnly: true, atomic: false, snapshots: [] };
     var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function(capture) {
       var cpu2BankMap = {};
-      for (var selectedIndex = 0; selectedIndex < command.flashBanks.length; selectedIndex++) {
-        cpu2BankMap[String(command.flashBanks[selectedIndex])] = true;
+      for (var selectedIndex = 0; selectedIndex < flashBanks.length; selectedIndex++) {
+        cpu2BankMap[String(flashBanks[selectedIndex])] = true;
       }
-      for (var bankIndex = 0; bankIndex <= 4; bankIndex++) {
+      for (var bankIndex = 0; bankIndex < F28P65X_FLASH_BANK_COUNT; bankIndex++) {
         var mappedToCpu2 = cpu2BankMap[String(bankIndex)] === true;
-        cpu1Session.flash.options.setString("FlashMapC28Bank" + bankIndex, mappedToCpu2 ? "1" : "0");
+        ownerSession.flash.options.setString("FlashMapC28Bank" + bankIndex, mappedToCpu2 ? "1" : "0");
         // Ownership and erase selection are separate concepts even when the
         // linker map currently contains the same bank set for both.
-        session.flash.options.setBoolean("FlashC28Bank" + bankIndex, mappedToCpu2);
+        targetSession.flash.options.setBoolean("FlashC28Bank" + bankIndex, mappedToCpu2);
       }
-      session.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
-      cpu1Session.flash.performOperation("ConfigureClock");
+      targetSession.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
+      ownerSession.flash.performOperation("ConfigureClock");
       capture(":clock-ready");
-      cpu1Session.flash.performOperation("ConfigureBanks");
-      return { flashBanks: command.flashBanks, configured: true, validateFlashBoundary: true };
+      ownerSession.flash.performOperation("ConfigureBanks");
+      return { flashBanks: flashBanks, ownerCoreId: ownerCoreId, targetCoreId: flashTargetCoreId,
+        configured: true, validateFlashBoundary: true };
     });
-    if (preparation.status === "OK") pendingFlashLoadEvidence[String(command.coreId)] = evidence;
+    if (preparation.status === "OK") pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;
     return preparation;
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
@@ -1224,7 +1327,16 @@ function startCoreThread(port, boundCoreId) {
             if (command.name !== "shutdown") {
               applyCommandScriptTimeout(command);
             }
-            var response = handleCommand(command);
+            var response;
+            try {
+              response = handleCommand(command);
+            } finally {
+              // Always retire this command's budget so a finished long
+              // operation cannot keep the environment deadline inflated.
+              if (command.name !== "shutdown") {
+                releaseCommandScriptTimeout(command);
+              }
+            }
             response.requestId = command.requestId;
             if (response.value && command.name !== "shutdown") {
               response.coreId = response.value.coreId;

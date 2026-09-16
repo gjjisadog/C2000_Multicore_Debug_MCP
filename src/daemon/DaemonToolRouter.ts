@@ -142,6 +142,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           throw error;
         }
         this.recordTargetMutation(session.boardId, toolName, input, result);
+        await this.recordVerifiedResidentImage(session.boardId, toolName, input, result);
         if (toolName === "c2000_closeDebugSession" && isConfirmedSessionClose(result, sessionId)) {
           this.sessions.close(sessionId);
           this.releaseInteractiveLease(sessionId);
@@ -455,6 +456,58 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     if (collected.programs.length > 0) {
       this.registry.recordTargetPrograms(boardId, collected.programs, `target-operation:${toolName}`);
     }
+  }
+
+  /**
+   * Promote UNKNOWN only after the worker reports a complete, successful
+   * manifest verification and the daemon independently re-hashes every host
+   * artifact. This is evidence recording, not a target mutation.
+   */
+  private async recordVerifiedResidentImage(
+    boardId: string,
+    toolName: string,
+    input: unknown,
+    result: Record<string, unknown>
+  ): Promise<void> {
+    if (toolName !== "c2000_verifyResidentImage" || result.success !== true || result.verified !== true) return;
+    if (result.verificationMethod !== "resident-image-manifest-raw-memory") {
+      throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification did not report the required verification method", { boardId, targetMemoryWritten: false });
+    }
+    const access = record(result.targetAccess);
+    if (access.programming !== false || access.symbolLoad !== false || access.reset !== false || access.run !== false || access.targetMemoryWrite !== false) {
+      throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification reported an unsafe target access", { boardId, targetMemoryWritten: false });
+    }
+    const inputChecks = record(input).checks;
+    const requested = Array.isArray(inputChecks) ? inputChecks.map(record) : [];
+    const reported = Array.isArray(result.checks) ? result.checks.map(record) : [];
+    if (requested.length === 0 || requested.length !== reported.length) {
+      throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification did not return one result for each requested core", { boardId, requestedChecks: requested.length, reportedChecks: reported.length, targetMemoryWritten: false });
+    }
+
+    const programs: TargetProgramMutation[] = [];
+    for (const request of requested) {
+      const coreId = typeof request.coreId === "number" ? request.coreId : undefined;
+      const programUri = typeof request.programUri === "string" ? normalizeProgramUri(request.programUri, this.workspacePath) : undefined;
+      const manifestUri = typeof request.manifestUri === "string" ? normalizeProgramUri(request.manifestUri, this.workspacePath) : undefined;
+      const match = reported.find(candidate => candidate.coreId === coreId);
+      const marker = record(match?.marker);
+      if (coreId === undefined || !programUri || !manifestUri || !match || marker.matched !== true) {
+        throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification returned incomplete core evidence", { boardId, coreId, targetMemoryWritten: false });
+      }
+      const [programMetadata, manifestMetadata] = await Promise.all([fileMetadata(programUri), fileMetadata(manifestUri)]);
+      if (match.programUri !== programUri || match.manifestUri !== manifestUri ||
+          match.programSha256 !== programMetadata.sha256 || match.manifestSha256 !== manifestMetadata.sha256) {
+        throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification artifact metadata changed before daemon recording", {
+          boardId,
+          coreId,
+          programUri,
+          manifestUri,
+          targetMemoryWritten: false
+        });
+      }
+      programs.push({ coreId, programUri, sha256: programMetadata.sha256 });
+    }
+    this.registry.recordVerifiedResidentPrograms(boardId, programs);
   }
 
   private invalidateTargetIdentityAfterFailure(boardId: string, toolName: string, input: unknown): void {

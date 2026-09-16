@@ -615,13 +615,18 @@ MEMORY CONFIGURATION
 
   test("prepares CPU2 Flash banks from its linker map before loading the image", async () => {
     type AdapterEvent =
-      | { type: "prepareFlashLoad"; coreId: CoreId; flashBanks: number[] }
+      | { type: "prepareFlashLoad"; ownerCoreId: CoreId; targetCoreId: CoreId; flashBanks: number[] }
       | { type: "loadProgram"; coreId: CoreId; programUri: string };
     class RecordingFlashAdapter extends MockDebugAdapter {
       readonly events: AdapterEvent[] = [];
 
-      async prepareFlashLoad(_session: AdapterSession, coreId: CoreId, flashBanks: number[]): Promise<void> {
-        this.events.push({ type: "prepareFlashLoad", coreId, flashBanks });
+      async prepareFlashLoad(
+        _session: AdapterSession,
+        ownerCoreId: CoreId,
+        targetCoreId: CoreId,
+        flashBanks: number[]
+      ): Promise<void> {
+        this.events.push({ type: "prepareFlashLoad", ownerCoreId, targetCoreId, flashBanks });
       }
 
       override async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void> {
@@ -646,13 +651,92 @@ MEMORY CONFIGURATION
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const session = await manager.createDebugSession({ sessionName: "cpu2-flash-prepare", coreMap });
     await manager.connectCores(session.sessionId, [0, 2]);
+    // Paired Flash contract: a CPU2 Flash image requires the CPU1 Flash Plugin
+    // owner to be halted before its bank preparation runs.
+    await manager.haltCores(session.sessionId, [0, 2]);
 
     await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
 
     expect(adapter.events).toEqual([
-      { type: "prepareFlashLoad", coreId: 2, flashBanks: [3, 4] },
+      { type: "prepareFlashLoad", ownerCoreId: 0, targetCoreId: 2, flashBanks: [3, 4] },
       { type: "loadProgram", coreId: 2, programUri: cpu2Out }
     ]);
+  });
+
+  test("fails closed without touching the adapter when the Flash owner core is running", async () => {
+    class OwnerStateAdapter extends MockDebugAdapter {
+      prepareCount = 0;
+
+      async prepareFlashLoad(): Promise<void> {
+        this.prepareCount += 1;
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-flash-owner-running-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX"
+    ].join("\n"));
+    const adapter = new OwnerStateAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "flash-owner-running", coreMap });
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      await manager.haltCores(session.sessionId, [2]);
+      await manager.runCore(session.sessionId, 0);
+
+      await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
+        code: "FlashOwnerCoreNotHalted",
+        details: expect.objectContaining({
+          ownerCoreId: 0,
+          targetCoreId: 2,
+          flashBanks: [3],
+          targetMemoryWritten: false,
+          ownerState: expect.objectContaining({ connected: true, state: "Running" }),
+          targetState: expect.objectContaining({ state: "Halted" })
+        })
+      });
+      // The owner is never halted implicitly and the target is never touched.
+      expect(adapter.prepareCount).toBe(0);
+      expect(await manager.getTargetState(session.sessionId, 0)).toMatchObject({ state: "Running" });
+    } finally {
+      await manager.closeDebugSession(session.sessionId);
+    }
+  });
+
+  test("refuses to start any core while the paired Flash programming boundary is open", async () => {
+    const adapter = new MockDebugAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "paired-flash-boundary", coreMap });
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      await manager.haltCores(session.sessionId, [0, 2]);
+      const opened = await manager.beginPairedFlashProgramming(session.sessionId, {
+        ownerCoreId: 0,
+        targetCoreId: 2,
+        flashBanks: [3]
+      });
+      expect(opened).toMatchObject({ state: "open", stage: "paired-flash", ownerCoreId: 0, targetCoreId: 2 });
+
+      for (const coreId of [0, 2] as const) {
+        await expect(manager.runCore(session.sessionId, coreId)).rejects.toMatchObject({
+          code: "FlashProgrammingWindowActive",
+          details: expect.objectContaining({ stage: "paired-flash", ownerCoreId: 0, targetCoreId: 2, coreId })
+        });
+      }
+      await expect(manager.beginPairedFlashProgramming(session.sessionId, {
+        ownerCoreId: 0, targetCoreId: 2, flashBanks: [3]
+      })).rejects.toMatchObject({ code: "FlashProgrammingWindowActive" });
+
+      expect(await manager.endPairedFlashProgramming(session.sessionId, { success: true }))
+        .toMatchObject({ state: "closed", success: true });
+      await expect(manager.runCore(session.sessionId, 0)).resolves.toMatchObject({ state: "Running" });
+    } finally {
+      await manager.closeDebugSession(session.sessionId);
+    }
   });
 
   test("blocks a repeated CPU2 Flash load before erase and allows an explicit destructive reload", async () => {
@@ -684,6 +768,7 @@ MEMORY CONFIGURATION
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const session = await manager.createDebugSession({ sessionName: "cpu2-flash-reload-guard", coreMap });
     await manager.connectCores(session.sessionId, [0, 2]);
+    await manager.haltCores(session.sessionId, [0, 2]);
 
     await manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map);
     await expect(manager.loadPrograms(session.sessionId, [
@@ -743,6 +828,7 @@ MEMORY CONFIGURATION
     const session = await manager.createDebugSession({ sessionName: "flash-session-quarantine", coreMap });
     try {
       await manager.connectCores(session.sessionId, [0, 2]);
+      await manager.haltCores(session.sessionId, [0, 2]);
       await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
         code: "ProgramLoadFailed"
       });
@@ -751,6 +837,66 @@ MEMORY CONFIGURATION
         details: { targetMemoryWritten: false, quarantine: { failureClass: "flash_programmer_state" } }
       });
       expect(adapter.loadCount).toBe(1);
+    } finally {
+      await manager.closeDebugSession(session.sessionId);
+    }
+  });
+
+  test("quarantines the session when CPU2 Flash preparation itself times out", async () => {
+    class TimingOutFlashAdapter extends MockDebugAdapter {
+      prepareCount = 0;
+
+      async prepareFlashLoad(): Promise<{ flashLoadEvidence?: Record<string, unknown> }> {
+        this.prepareCount += 1;
+        throw new DebugMcpError(
+          "FlashPreparationTimeout",
+          "F28P65x Flash preparation timed out after 120000 ms; the owner core did not finish ConfigureClock/ConfigureBanks",
+          {
+            stage: "prepare-flash",
+            ownerCoreId: 0,
+            targetCoreId: 2,
+            flashBanks: [3],
+            timeoutMs: 120000,
+            targetMemoryWritten: false,
+            cause: { code: "PersistentChannelReconnectFailed", message: "DssCommandTimeout: Timed out waiting for DSS response" }
+          }
+        );
+      }
+    }
+
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-flash-prepare-timeout-"));
+    const cpu2Out = path.join(tempDir, "cpu2.out");
+    const cpu2Map = path.join(tempDir, "cpu2.map");
+    await writeFile(cpu2Out, "cpu2-image");
+    await writeFile(cpu2Map, [
+      "MEMORY CONFIGURATION",
+      "  FLASH_BANK3           000e0002   0001fffe  00000872  0001f78c  RWIX"
+    ].join("\n"));
+    const adapter = new TimingOutFlashAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "flash-prepare-timeout", coreMap });
+    try {
+      await manager.connectCores(session.sessionId, [0, 2]);
+      await manager.haltCores(session.sessionId, [0, 2]);
+
+      await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map)).rejects.toMatchObject({
+        code: "FlashPreparationTimeout",
+        details: expect.objectContaining({
+          stage: "prepare-flash",
+          ownerCoreId: 0,
+          targetCoreId: 2,
+          flashBanks: [3],
+          timeoutMs: 120000
+        })
+      });
+      // A preparation deadline leaves the Flash controller in an unknown state,
+      // so the session is quarantined instead of being retried in place.
+      await expect(manager.loadProgramWithMap(session.sessionId, 2, cpu2Out, cpu2Map, "require-map", undefined, true))
+        .rejects.toMatchObject({
+          code: "FlashLoadSessionQuarantined",
+          details: { quarantine: { failureClass: "flash_operation_timeout", errorCode: "FlashPreparationTimeout" } }
+        });
+      expect(adapter.prepareCount).toBe(1);
     } finally {
       await manager.closeDebugSession(session.sessionId);
     }
@@ -799,6 +945,7 @@ MEMORY CONFIGURATION
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const session = await manager.createDebugSession({ sessionName: "poisoned-flash-session", coreMap });
     await manager.connectCores(session.sessionId, [0, 2]);
+    await manager.haltCores(session.sessionId, [0, 2]);
 
     const first = await manager.loadPrograms(session.sessionId, [
       { coreId: 0, programUri: cpu1Out },

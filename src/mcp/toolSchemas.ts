@@ -508,6 +508,52 @@ export const multicoreSnapshotSchema = z.object({
   coreIds: z.array(z.number().int()).min(1).optional()
 });
 
+const residentImageManifestCheckSchema = z.object({
+  coreId: z.number().int(),
+  programUri: z.string().min(1),
+  manifestUri: z.string().min(1),
+  mapUri: z.string().min(1).optional()
+});
+
+export const residentImageManifestSchema = z.object({
+  format: z.literal("c2000-resident-image-manifest"),
+  version: z.literal(1),
+  programSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  identity: z.object({
+    symbol: z.string().min(1).optional(),
+    address: z.string().min(1).optional(),
+    page: z.string().min(1).default("DATA"),
+    typeSize: z.union([z.literal(8), z.literal(16), z.literal(32)]).default(32),
+    expectedValue: z.union([
+      z.number().int().nonnegative().max(0xffffffff),
+      z.string().regex(/^(?:0x[0-9a-f]+|[0-9]+)$/i)
+    ])
+  }).superRefine((value, context) => {
+    if ((value.symbol === undefined) === (value.address === undefined)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["identity"],
+        message: "identity must contain exactly one of symbol or address"
+      });
+    }
+  })
+});
+
+export const verifyResidentImageSchema = z.object({
+  sessionId: z.string().min(1),
+  checks: z.array(residentImageManifestCheckSchema).min(1).max(8),
+  connectIfNeeded: z.boolean().default(true)
+}).superRefine((value, context) => {
+  const coreIds = value.checks.map(check => check.coreId);
+  if (new Set(coreIds).size !== coreIds.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["checks"],
+      message: "checks must contain at most one manifest per core"
+    });
+  }
+});
+
 export const resetCoreSchema = sessionCoreSchema.extend({
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default")
 });

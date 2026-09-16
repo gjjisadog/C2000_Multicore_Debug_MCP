@@ -36,7 +36,8 @@ export interface BoardRecord extends BoardRegistration {
  * Host-side identity evidence for the image currently believed to be on the
  * physical target.  UNKNOWN is deliberate: a new lease, worker restart, or
  * external target access invalidates the previous belief until MCP performs a
- * controlled program load again.
+ * controlled program load or a manifest-bound resident-image verification
+ * again under the current lease.
  */
 export interface BoardTargetIdentity {
   status: "UNKNOWN" | "KNOWN";

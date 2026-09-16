@@ -6,8 +6,8 @@ import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridg
 function harness() {
   const source = persistentServerScriptSource("C:/ti/json2.js");
   const calls: unknown[][] = [];
-  const state = { bank: 0, lock: 0, clock: 0, connected: [true, true], failReads: false,
-    failStates: false, failLoad: false, failPrepare: false, failBanks: false,
+  const state = { bank: 0, lock: 0, clock: 0, connected: [true, true], halted: [true, true],
+    failReads: false, failStates: false, failLoad: false, failPrepare: false, failBanks: false,
     configuredBank: 0x3c0, configuredLock: 0,
     loadError: "original Bank 3 erase failed",
     registerValues: {} as Record<string, number> };
@@ -18,7 +18,7 @@ function harness() {
         if (state.failStates) throw Error("state unavailable");
         return state.connected[index];
       },
-      isHalted() { calls.push(["halted", id]); return id === 2; }
+      isHalted() { calls.push(["halted", id]); return state.halted[index]; }
     },
     memory: {
       readData(page: number, address: number, bits: number) {
@@ -55,20 +55,35 @@ function harness() {
   const context = { sessionsByCoreId: sessions, pendingFlashLoadEvidence: {},
     coreNamesByCoreId: { 0: "C28xx_CPU1", 2: "C28xx_CPU2" },
     Memory: { Page: { DATA: 1 } }, logDiagnostic() {} };
-  const handle = runInNewContext(source.slice(source.indexOf("function getSessionForCommand("),
+  const rawHandle = runInNewContext(source.slice(source.indexOf("function getSessionForCommand("),
     source.indexOf("function startCoreThread(")) + "\nhandleCommand;", context);
-  const command = (name: string, coreId = 2, flashBanks = [3, 4]) => handle({ name, coreId,
-    coreName: coreId === 2 ? "C28xx_CPU2" : "C28xx_CPU1", program: "cpu2.out", flashBanks });
-  return { command, calls, state, context, source };
+  // Mirror the socket loop: a handler exception becomes a bounded FAIL response
+  // instead of escaping as a raw script error.
+  const handle = (command: Record<string, unknown>) => {
+    try {
+      return rawHandle(command);
+    } catch (ex) {
+      return { status: "FAIL", message: String(ex).slice(0, 2048) };
+    }
+  };
+  const command = (name: string, coreId = 2, flashBanks = [3, 4], extra: Record<string, unknown> = {}) =>
+    handle({ name, coreId, coreName: coreId === 2 ? "C28xx_CPU2" : "C28xx_CPU1",
+      program: "cpu2.out", flashBanks, ...extra });
+  // The owner core executes the preparation; the target core receives the
+  // prepared bank mapping. The command is delivered over the owner's socket.
+  const prepare = (flashBanks = [3, 4], extra: Record<string, unknown> = {}) =>
+    command("prepareFlashLoad", 0, flashBanks, { targetCoreId: 2, ...extra });
+  return { command, prepare, calls, state, context, source };
 }
 
 describe("F28P65x Flash load state evidence", () => {
   test("records both cores and actual mapping before/after preparation and load", () => {
     const h = harness();
-    expect(h.command("prepareFlashLoad").status).toBe("OK");
+    expect(h.prepare().status).toBe("OK");
     const result = h.command("load");
     expect(result).toMatchObject({ status: "OK", value: { coreId: 2, coreName: "C28xx_CPU2",
-      flashLoadEvidence: { readOnly: true, atomic: false, requestedFlashBanks: [3, 4] } } });
+      flashLoadEvidence: { readOnly: true, atomic: false, requestedFlashBanks: [3, 4],
+        ownerCoreId: 0, targetCoreId: 2 } } });
     expect(result.value.flashLoadEvidence.boundaryValidation).toMatchObject({
       status: "verified", expectedBankMuxSel: 0x3c0, actualBankMuxSel: 0x3c0, bankMuxLocked: false
     });
@@ -82,7 +97,7 @@ describe("F28P65x Flash load state evidence", () => {
     for (const snapshot of snapshots) {
       expect(snapshot.finishedAtMs).toBeGreaterThanOrEqual(snapshot.startedAtMs);
       expect(snapshot.cores).toEqual([
-        { coreId: 0, coreName: "C28xx_CPU1", success: true, connected: true, state: "Running" },
+        { coreId: 0, coreName: "C28xx_CPU1", success: true, connected: true, state: "Halted" },
         { coreId: 2, coreName: "C28xx_CPU2", success: true, connected: true, state: "Halted" }
       ]);
     }
@@ -104,9 +119,69 @@ describe("F28P65x Flash load state evidence", () => {
     expect(h.context.pendingFlashLoadEvidence).toEqual({});
   });
 
+  test("executes the Flash Plugin on the owner core and keeps the mapping on the target", () => {
+    const h = harness();
+    h.state.configuredBank = 0xC0;
+    expect(h.prepare([3]).status).toBe("OK");
+
+    const performCores = h.calls.filter(c => c[0] === "perform").map(c => c[1]);
+    const mapOptionCores = h.calls.filter(c => c[0] === "option" && String(c[2]).startsWith("FlashMapC28Bank")).map(c => c[1]);
+    const targetOptionCores = h.calls.filter(c => c[0] === "option" &&
+      (String(c[2]).startsWith("FlashC28Bank") || c[2] === "FlashEraseSelection")).map(c => c[1]);
+    expect(new Set(performCores)).toEqual(new Set([0]));
+    expect(new Set(mapOptionCores)).toEqual(new Set([0]));
+    expect(new Set(targetOptionCores)).toEqual(new Set([2]));
+  });
+
+  test("rejects a preparation whose owner core is running instead of halting it implicitly", () => {
+    const h = harness();
+    h.state.halted = [false, true];
+
+    const result = h.prepare();
+    expect(result.status).toBe("FAIL");
+    expect(result.message).toContain("requires owner core 0 to be connected and halted");
+    expect(result.message).toContain("\"state\":\"Running\"");
+    expect(h.calls.filter(c => c[0] === "perform")).toHaveLength(0);
+    expect(h.calls.filter(c => c[0] === "option")).toHaveLength(0);
+    expect(h.context.pendingFlashLoadEvidence).toEqual({});
+  });
+
+  test("rejects a preparation whose owner state cannot be read", () => {
+    const h = harness();
+    h.state.failStates = true;
+
+    const result = h.prepare();
+    expect(result.status).toBe("FAIL");
+    expect(result.message).toContain("requires owner core 0 to be connected and halted");
+    expect(h.calls.filter(c => c[0] === "perform")).toHaveLength(0);
+  });
+
+  test("rejects a preparation without an explicit distinct target core", () => {
+    const h = harness();
+    const sameCore = h.command("prepareFlashLoad", 2, [3]);
+    expect(sameCore.status).toBe("FAIL");
+    expect(sameCore.message).toContain("requires an explicit targetCoreId");
+    const missingTarget = h.command("prepareFlashLoad", 0, [3]);
+    expect(missingTarget.status).toBe("FAIL");
+    expect(missingTarget.message).toContain("requires an explicit targetCoreId");
+    expect(h.calls.filter(c => c[0] === "perform")).toHaveLength(0);
+  });
+
+  test("arms the target core's next load, not the owner's", () => {
+    const h = harness();
+    expect(h.prepare().status).toBe("OK");
+
+    // The owner core's own load must not consume the CPU2 preparation.
+    const ownerLoad = h.command("load", 0);
+    expect(ownerLoad.value).not.toHaveProperty("flashLoadEvidence");
+    const targetLoad = h.command("load", 2);
+    expect(targetLoad.value.flashLoadEvidence).toMatchObject({ requestedFlashBanks: [3, 4] });
+    expect(h.context.pendingFlashLoadEvidence).toEqual({});
+  });
+
   test("retains original load failure and its snapshots without a load retry", () => {
     const h = harness();
-    h.command("prepareFlashLoad");
+    h.prepare();
     h.state.failLoad = true;
     h.state.failReads = true;
     const result = h.command("load");
@@ -124,8 +199,8 @@ describe("F28P65x Flash load state evidence", () => {
   test("accepts the DK9 CPU2 Bank3-only mapping and keeps Bank4 on CPU1", () => {
     const h = harness();
     h.state.configuredBank = 0xC0;
-    const result = h.command("prepareFlashLoad", 2, [3]);
-    expect(result).toMatchObject({ status: "OK", value: { flashLoadEvidence: {
+    const result = h.prepare([3]);
+    expect(result).toMatchObject({ status: "OK", value: { targetCoreId: 2, flashLoadEvidence: {
       expectedBankMuxSel: 0xC0,
       boundaryValidation: { status: "verified", actualBankMuxSel: 0xC0 }
     } } });
@@ -146,11 +221,20 @@ describe("F28P65x Flash load state evidence", () => {
 
   test("classifies the TI locked-register erase message without calling it permanent protection", () => {
     const h = harness();
-    h.command("prepareFlashLoad");
+    h.prepare();
     h.state.failLoad = true;
     h.state.loadError = "Flash Programmer: Error erasing Bank 3 Flash registers are locked and hence are not configurable to issue the erase command. Operation Cancelled (3).";
     const result = h.command("load");
     expect(result).toMatchObject({ status: "FAIL", flashLoadEvidence: { failureClass: "flash_programmer_state" } });
+  });
+
+  test("labels a DSS deadline as a Flash operation timeout, not a bank failure", () => {
+    const h = harness();
+    h.prepare();
+    h.state.failLoad = true;
+    h.state.loadError = "Script timeout exceeded while programming Bank 3";
+    const result = h.command("load");
+    expect(result).toMatchObject({ status: "FAIL", flashLoadEvidence: { failureClass: "flash_operation_timeout" } });
   });
 
   test.each([
@@ -160,7 +244,7 @@ describe("F28P65x Flash load state evidence", () => {
     const h = harness();
     h.state.configuredBank = configuredBank;
     h.state.configuredLock = configuredLock;
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result).toMatchObject({ status: "FAIL", flashLoadEvidence: { boundaryValidation: { status: "mismatch" } } });
     expect(h.context.pendingFlashLoadEvidence).toEqual({});
     expect(h.calls.filter(c => c[0] === "load")).toHaveLength(0);
@@ -169,7 +253,7 @@ describe("F28P65x Flash load state evidence", () => {
   test("records a preparation failure but does not arm stale evidence for another load", () => {
     const h = harness();
     h.state.failPrepare = true;
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result.status).toBe("FAIL");
     expect(result.message).toContain("original preparation failed");
     expect(result.flashLoadEvidence.snapshots.map((s: any) => s.phase)).toEqual([
@@ -178,24 +262,23 @@ describe("F28P65x Flash load state evidence", () => {
     expect(h.calls.filter(c => c[0] === "load")).toHaveLength(0);
   });
 
-  test.each(["failReads", "failStates"] as const)("%s cannot turn a successful load into failure", fault => {
+  test("register read failures cannot turn a successful load into failure", () => {
     const h = harness();
-    h.state[fault] = true;
-    expect(h.command("prepareFlashLoad").status).toBe("OK");
+    h.state.failReads = true;
+    expect(h.prepare().status).toBe("OK");
     const result = h.command("load");
     expect(result.status).toBe("OK");
     expect(result.value.flashLoadEvidence.snapshots.every((s: any) =>
       s.registers.every((r: any) => r.success === false))).toBe(true);
-    if (fault === "failStates") expect(h.calls.filter(c => c[0] === "read")).toHaveLength(0);
   });
 
-  test("never queries halted state or memory through a disconnected core", () => {
+  test("never queries halted state or memory through a disconnected target core", () => {
     const h = harness();
-    h.state.connected = [false, false];
-    h.command("prepareFlashLoad");
+    h.state.connected = [true, false];
+    expect(h.prepare().status).toBe("OK");
     const snapshots = h.command("load").value.flashLoadEvidence.snapshots;
-    expect(snapshots[0].cores.map((c: any) => c.state)).toEqual(["Disconnected", "Disconnected"]);
-    expect(h.calls.filter(c => c[0] === "halted" || c[0] === "read")).toHaveLength(0);
+    expect(snapshots[0].cores.map((c: any) => c.state)).toEqual(["Halted", "Disconnected"]);
+    expect(h.calls.filter(c => (c[0] === "halted" || c[0] === "read") && c[1] === 2)).toHaveLength(0);
   });
 
   test("unprepared loads and symbol-only loads do not add target probes", () => {
@@ -210,17 +293,29 @@ describe("F28P65x Flash load state evidence", () => {
 
   test("fresh preparations replace prior evidence and one load consumes at most five snapshots", () => {
     const h = harness();
-    for (let i = 0; i < 10; i++) h.command("prepareFlashLoad");
+    for (let i = 0; i < 10; i++) h.prepare();
     expect(h.command("load").value.flashLoadEvidence.snapshots).toHaveLength(5);
     h.calls.length = 0;
     expect(h.command("load").value).not.toHaveProperty("flashLoadEvidence");
     expect(h.calls).toEqual([["load", 2, "cpu2.out"]]);
   });
 
+  test("a second CPU2 load requires a fresh preparation", () => {
+    const h = harness();
+    expect(h.prepare().status).toBe("OK");
+    expect(h.command("load").value).toHaveProperty("flashLoadEvidence");
+    h.calls.length = 0;
+    expect(h.command("load").value).not.toHaveProperty("flashLoadEvidence");
+    expect(h.calls).toEqual([["load", 2, "cpu2.out"]]);
+
+    expect(h.prepare().status).toBe("OK");
+    expect(h.command("load").value).toHaveProperty("flashLoadEvidence");
+  });
+
   test("invalid register values are missing evidence, never a plausible zero", () => {
     const h = harness();
     h.state.bank = NaN;
-    const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
+    const snapshot = h.prepare().value.flashLoadEvidence.snapshots[0];
     expect(snapshot.registers[0]).toMatchObject({ success: false });
     expect(snapshot.registers[0]).not.toHaveProperty("value");
   });
@@ -228,7 +323,7 @@ describe("F28P65x Flash load state evidence", () => {
   test.each([0x0bad, 0x0bad0bad])("rejects suspect DSS placeholder %i only in its core view", value => {
     const h = harness();
     h.state.registerValues["2:" + 0x5f804] = value;
-    const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
+    const snapshot = h.prepare().value.flashLoadEvidence.snapshots[0];
     expect(snapshot.registers.find((r: any) => r.name === "FLPROT" && r.coreId === 2))
       .toMatchObject({ success: false, rawValue: value,
         error: "Suspect DSS bad-access sentinel; not usable as register evidence" });
@@ -236,21 +331,21 @@ describe("F28P65x Flash load state evidence", () => {
     expect(h.command("load").status).toBe("OK");
   });
 
-  test.each([0, 2])("never reads through disconnected core %i, preserves other view", core => {
+  test("never reads through a disconnected target core view, preserves the owner view", () => {
     const h = harness();
-    h.state.connected[core === 0 ? 0 : 1] = false;
-    const snapshot = h.command("prepareFlashLoad").value.flashLoadEvidence.snapshots[0];
-    expect(h.calls.filter(c => c[0] === "read" && c[1] === core)).toHaveLength(0);
-    expect(snapshot.registers.filter((r: any) => r.coreId === core)
+    h.state.connected[1] = false;
+    const snapshot = h.prepare().value.flashLoadEvidence.snapshots[0];
+    expect(h.calls.filter(c => c[0] === "read" && c[1] === 2)).toHaveLength(0);
+    expect(snapshot.registers.filter((r: any) => r.coreId === 2)
       .every((r: any) => !r.success && r.error)).toBe(true);
-    expect(snapshot.registers.filter((r: any) => r.coreId !== core)
+    expect(snapshot.registers.filter((r: any) => r.coreId !== 2)
       .every((r: any) => r.success)).toBe(true);
   });
 
   test("a bank configuration failure retains the completed clock boundary", () => {
     const h = harness();
     h.state.failBanks = true;
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result.status).toBe("FAIL");
     expect(result.message).toContain("original bank preparation failed");
     expect(result.flashLoadEvidence.snapshots.map((s: any) => s.phase)).toEqual([
@@ -261,7 +356,7 @@ describe("F28P65x Flash load state evidence", () => {
   test("mid-preparation diagnostic exceptions cannot skip bank configuration or load", () => {
     const h = harness();
     h.context.logDiagnostic = () => { throw Error("diagnostic output failed"); };
-    expect(h.command("prepareFlashLoad").status).toBe("OK");
+    expect(h.prepare().status).toBe("OK");
     expect(h.command("load").status).toBe("OK");
     expect(h.calls.filter(c => c[0] === "perform")).toEqual([
       ["perform", 0, "ConfigureClock"], ["perform", 0, "ConfigureBanks"]]);
@@ -274,5 +369,12 @@ describe("F28P65x Flash load state evidence", () => {
       h.source.indexOf("function runFlashLoadWithEvidence("));
     expect(helper).not.toMatch(/writeData|\.reset\(|\.halt\(|\.run|evaluate\(|setScriptTimeout|connect\(/);
     expect(helper.match(/memory\.readData\(/g)).toHaveLength(1);
+  });
+
+  test("the owner precondition helper never starts, halts or writes to the target", () => {
+    const h = harness();
+    const helper = h.source.slice(h.source.indexOf("function readCoreRunState("),
+      h.source.indexOf("function handleCommand("));
+    expect(helper).not.toMatch(/\.halt\(|\.run|assig|writeData|loadProgram|performOperation/);
   });
 });

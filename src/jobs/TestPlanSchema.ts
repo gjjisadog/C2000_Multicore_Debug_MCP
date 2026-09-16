@@ -1,6 +1,12 @@
 import { z } from "zod";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
-import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
+import {
+  HYBRID30K_DK9_OWNER_FIRST_STARTUP,
+  IPC_STARTUP_PRESET_NAMES,
+  ipcStartupPreset,
+  mismatchedStartupPresetFields,
+  type IpcStartupPresetName
+} from "../workflows/startupProfiles.js";
 import { workflowStartupContractIssues } from "../debug/startupContract.js";
 import { allowDestructiveFlashReloadSchema } from "../contracts/FlashReloadContract.js";
 
@@ -360,12 +366,8 @@ export const testPlanSchema = z.object({
       if (!step.loadPrograms && step.loadSequence.mode !== "cpu1-then-cpu2") {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "loadSequence"], message: "loadSequence cannot request CPU1 pre-run when loadPrograms=false" });
       }
-      if (step.startupPreset === "hybrid30k-dk9-owner-first") {
-        if (step.resetType !== HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType
-          || JSON.stringify(step.loadSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence)
-          || (step.runSequence !== undefined && JSON.stringify(step.runSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence))) {
-          context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: "hybrid30k-dk9-owner-first parameters must remain cpu / owner-first 250ms / debugger-runs-both 500ms" });
-        }
+      if (step.startupPreset && mismatchedStartupPresetFields(step.startupPreset, step).length > 0) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: startupPresetParameterMessage(step.startupPreset) });
       }
       continue;
     }
@@ -426,12 +428,8 @@ export const testPlanSchema = z.object({
     if ((step.type === "waitForExpressions" || step.type === "runIpcAcceptance") && Math.ceil(step.timeoutMs / step.intervalMs) > DURABLE_PLAN_LIMITS.maxGuardPolls) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex], message: `${step.type} polling exceeds ${DURABLE_PLAN_LIMITS.maxGuardPolls} bounded iterations` });
     }
-    if (step.type === "runIpcAcceptance" && step.startupPreset === "hybrid30k-dk9-owner-first") {
-      if (step.resetType !== HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType
-        || JSON.stringify(step.loadSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence)
-        || JSON.stringify(step.runSequence) !== JSON.stringify(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence)) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: "hybrid30k-dk9-owner-first parameters must remain cpu / owner-first 250ms / debugger-runs-both 500ms" });
-      }
+    if (step.type === "runIpcAcceptance" && step.startupPreset && mismatchedStartupPresetFields(step.startupPreset, step).length > 0) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"], message: startupPresetParameterMessage(step.startupPreset) });
     }
     if (plan.safetyGuards && step.type === "runCores" && step.monitorMs === 0) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "monitorMs"], message: "guarded runCores requires a positive bounded monitorMs" });
@@ -573,6 +571,12 @@ function guardEvidenceValueCount(plan: Pick<TestPlan, "safetyGuards">, step: Tes
 
 function reconnectPollCount(step: Extract<TestPlanStep, { type: "reconnectAfterTargetReset" }>, guardIntervalMs?: number): number {
   return Math.ceil(step.timeoutMs / Math.min(step.intervalMs, guardIntervalMs ?? step.intervalMs));
+}
+
+/** Preset parameters are a contract; report the exact values a step must keep. */
+function startupPresetParameterMessage(name: IpcStartupPresetName): string {
+  const expected = ipcStartupPreset(name);
+  return `startupPreset ${name} parameters must remain resetType=${expected.resetType} / loadSequence=${JSON.stringify(expected.loadSequence)} / runSequence=${JSON.stringify(expected.runSequence)}`;
 }
 
 function migrateLegacyStep(value: unknown): Record<string, unknown> {

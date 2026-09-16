@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { CcsScriptingAdapter } from "../src/adapters/CcsScriptingAdapter.js";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "../src/adapters/CcsScriptingBridge.js";
 import { createApplicationEntryPlan, waitForApplicationEntry } from "../src/debug/applicationEntry.js";
+import { DebugMcpError } from "../src/utils/errors.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -27,7 +28,11 @@ class RecordingBridge implements CcsScriptingBridge {
 
   async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
     this.commands.push(command);
-    const identity = { coreId: command.coreId, coreName: command.coreName };
+    const identity = {
+      coreId: command.coreId,
+      coreName: command.coreName,
+      ...(command.targetCoreId === undefined ? {} : { targetCoreId: command.targetCoreId })
+    };
     if (command.operation === "reset") {
       return {
         ...identity, requestedResetType: command.resetType, effectiveResetType: command.resetType,
@@ -210,7 +215,7 @@ describe("CcsScriptingAdapter", () => {
     await adapter.reset(session, 2, "cpu");
     await adapter.loadProgram(session, 0, "/tmp/cpu1.out");
     await adapter.loadSymbols(session, 2, "/tmp/cpu2.out");
-    await adapter.prepareFlashLoad(session, 2, [3, 4]);
+    await adapter.prepareFlashLoad(session, 0, 2, [3, 4]);
     await adapter.writeMemory(session, 0, "DATA", 0x0005F444, 0x10, 32);
     await adapter.assignExpression(session, 2, "g_ulHybrid30kIpcPass", "0");
 
@@ -226,11 +231,21 @@ describe("CcsScriptingAdapter", () => {
       { operation: "reset", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" },
       { operation: "loadProgram", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
       { operation: "loadSymbols", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" },
-      { operation: "prepareFlashLoad", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" },
+      { operation: "prepareFlashLoad", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
       { operation: "writeMemory", coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
       { operation: "assignExpression", coreId: 2, coreName: "C28xx_CPU2", corePattern: "C28xx_CPU2" }
     ]);
-    expect(bridge.commands.find(command => command.operation === "prepareFlashLoad")?.flashBanks).toEqual([3, 4]);
+    // Flash preparation executes on the owner channel; the target core travels
+    // as an explicit field so the prepared bank mapping is never inferred.
+    expect(bridge.commands.find(command => command.operation === "prepareFlashLoad")).toEqual(
+      expect.objectContaining({
+        operation: "prepareFlashLoad",
+        coreId: 0,
+        coreName: "C28xx_CPU1",
+        targetCoreId: 2,
+        flashBanks: [3, 4]
+      })
+    );
     expect(bridge.commands.at(-2)).toEqual(expect.objectContaining({
       page: "DATA",
       address: 0x0005F444,
@@ -394,5 +409,135 @@ describe("CcsScriptingAdapter", () => {
     await adapter.disposeSession(session);
 
     expect(bridge.disposedSessions).toEqual([session.adapterSessionId]);
+  });
+
+  test("budgets Flash preparation with the Flash-operation timeout, never the state-read timeout", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({ timeouts: { stateReadMs: 5000, flashPrepareMs: 120000 } }, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-timeout-budget", ccxmlPath, coreMap });
+
+    await adapter.prepareFlashLoad(session, 0, 2, [3]);
+    await adapter.getState(session, 2);
+
+    expect(bridge.commands.find(command => command.operation === "prepareFlashLoad")?.timeoutMs).toBe(120000);
+    expect(bridge.commands.find(command => command.operation === "getState")?.timeoutMs).toBe(5000);
+  });
+
+  test("defaults Flash preparation to a dedicated budget and honours an explicit override", async () => {
+    const defaultBridge = new RecordingBridge();
+    const defaultAdapter = new CcsScriptingAdapter({}, defaultBridge);
+    const defaultSession = await defaultAdapter.createSession({ sessionName: "flash-timeout-default", ccxmlPath, coreMap });
+    await defaultAdapter.prepareFlashLoad(defaultSession, 0, 2, [3]);
+    expect(defaultBridge.commands[0]?.timeoutMs).toBe(120000);
+    expect(defaultBridge.commands[0]?.timeoutMs).not.toBe(5000);
+
+    const overridingBridge = new RecordingBridge();
+    const overridingAdapter = new CcsScriptingAdapter({ timeouts: { flashPrepareMs: 200000 } }, overridingBridge);
+    const overridingSession = await overridingAdapter.createSession({ sessionName: "flash-timeout-override", ccxmlPath, coreMap });
+    await overridingAdapter.prepareFlashLoad(overridingSession, 0, 2, [3]);
+    expect(overridingBridge.commands[0]?.timeoutMs).toBe(200000);
+  });
+
+  test("rejects a Flash preparation that names the same core as owner and target", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-self-prepare", ccxmlPath, coreMap });
+
+    await expect(adapter.prepareFlashLoad(session, 2, 2, [3])).rejects.toMatchObject({
+      code: "FlashLoadPreparationUnsupported",
+      details: expect.objectContaining({ ownerCoreId: 2, targetCoreId: 2 })
+    });
+    expect(bridge.commands).toEqual([]);
+  });
+
+  test("requires the Flash preparation response to confirm the requested target core", async () => {
+    class UnconfirmedTargetBridge extends RecordingBridge {
+      override async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
+        this.commands.push(command);
+        return { coreId: command.coreId, coreName: command.coreName, configured: true };
+      }
+    }
+    const bridge = new UnconfirmedTargetBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-target-confirmation", ccxmlPath, coreMap });
+
+    await expect(adapter.prepareFlashLoad(session, 0, 2, [3])).rejects.toMatchObject({
+      code: "CoreIdentityMismatch",
+      details: expect.objectContaining({ ownerCoreId: 0, targetCoreId: 2 })
+    });
+  });
+
+  test("returns Flash evidence from the owner-routed preparation", async () => {
+    const bridge = new RecordingBridge();
+    const evidence = { device: "F28P65x", readOnly: true, ownerCoreId: 0, targetCoreId: 2, snapshots: [] };
+    bridge.execute = async command => {
+      bridge.commands.push(command);
+      return {
+        coreId: command.coreId,
+        coreName: command.coreName,
+        targetCoreId: command.targetCoreId,
+        flashLoadEvidence: evidence
+      };
+    };
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-prepare-evidence", ccxmlPath, coreMap });
+
+    await expect(adapter.prepareFlashLoad(session, 0, 2, [3])).resolves.toEqual({ flashLoadEvidence: evidence });
+  });
+
+  test("classifies a DSS deadline during Flash preparation as a stage-specific timeout", async () => {
+    class TimingOutBridge extends RecordingBridge {
+      override async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
+        this.commands.push(command);
+        if (command.operation === "prepareFlashLoad") {
+          throw new DebugMcpError("PersistentChannelReconnectFailed", "DSS channel reconnect failed", {
+            firstError: "DssCommandTimeout: Timed out waiting for DSS response",
+            secondError: "DssCommandTimeout: Timed out waiting for DSS response"
+          });
+        }
+        return super.execute(command);
+      }
+    }
+    const bridge = new TimingOutBridge();
+    const adapter = new CcsScriptingAdapter({ timeouts: { flashPrepareMs: 120000 } }, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-prepare-timeout", ccxmlPath, coreMap });
+
+    await expect(adapter.prepareFlashLoad(session, 0, 2, [3, 4])).rejects.toMatchObject({
+      code: "FlashPreparationTimeout",
+      details: expect.objectContaining({
+        stage: "prepare-flash",
+        ownerCoreId: 0,
+        targetCoreId: 2,
+        flashBanks: [3, 4],
+        timeoutMs: 120000,
+        targetMemoryWritten: false
+      })
+    });
+  });
+
+  test("preserves a non-timeout Flash preparation failure so DSS Flash evidence survives", async () => {
+    class BoundaryFailingBridge extends RecordingBridge {
+      override async execute(command: CcsScriptingCommand): Promise<Record<string, unknown>> {
+        this.commands.push(command);
+        if (command.operation === "prepareFlashLoad") {
+          throw new DebugMcpError("DssCommandFailed", "F28P65x Flash boundary validation failed", {
+            response: {
+              flashLoadEvidence: { device: "F28P65x", failureClass: "bank_mapping_boundary_mismatch" }
+            }
+          });
+        }
+        return super.execute(command);
+      }
+    }
+    const bridge = new BoundaryFailingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "flash-prepare-boundary", ccxmlPath, coreMap });
+
+    await expect(adapter.prepareFlashLoad(session, 0, 2, [3])).rejects.toMatchObject({
+      code: "DssCommandFailed",
+      details: {
+        response: { flashLoadEvidence: expect.objectContaining({ device: "F28P65x" }) }
+      }
+    });
   });
 });

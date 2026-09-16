@@ -21,6 +21,7 @@ import { DEFAULT_CPU1_BOOT_EXPRESSIONS, defaultExpressionReadSets, defaultIpcRea
 import { classifyDebugFailure, classifyIpcAcceptance } from "../debug/DebugFailureClassifier.js";
 import { describeWorkflowStartupContract, workflowStartupContractIssues } from "../debug/startupContract.js";
 import { createApplicationEntryPlan, waitForApplicationEntry, type ApplicationEntryCheck } from "../debug/applicationEntry.js";
+import { isPairedFlashPreset } from "./startupProfiles.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
@@ -212,6 +213,17 @@ export class DebugWorkflowService {
     // ownership plan up front and prevents a malformed map from leaving a
     // partially reset or partially loaded multicore session behind.
     const ramOwnership = await this.analyzeRamOwnership({ maps });
+    // Resolve the F28P65x Flash programming contract from real linker-map
+    // evidence before the first halt/reset/load reaches the target.
+    const pairedFlash = resolvePairedFlashContract({
+      startupPreset: input.startupPreset ?? null,
+      loadMode: input.loadSequence.mode,
+      ownerCoreId: input.cpu1CoreId,
+      targetCoreId: input.cpu2CoreId,
+      cpu2FlashBanks: ramOwnership.flashOwnershipActions
+        .filter(action => action.targetCoreId === input.cpu2CoreId)
+        .flatMap(action => action.flashBanks)
+    });
     performedSteps.push("artifactPreflight", "analyzeRamOwnership");
     const applicationEntryPlan = runPlan.releaseCpu2BeforeCpu1
       ? createApplicationEntryPlan({
@@ -237,6 +249,7 @@ export class DebugWorkflowService {
     }
 
     let load: ToolResult | undefined;
+    let flashProgramming: ToolResult | undefined;
     const safetyGuardChecks: ToolResult[] = [];
     if (input.programPreparation === "symbols-only") {
       // Resident Flash has no program-load side effect. Load both symbol
@@ -317,9 +330,74 @@ export class DebugWorkflowService {
         const cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
         load = { sessionId: input.sessionId, results: [...cpu1Load.results, ...cpu2Load.results] };
         performedSteps.push("loadCpu2Program");
+      } else if (pairedFlash.required) {
+        // Flash programming boundary. Both images are programmed while every
+        // application core stays halted; the manager refuses to start any core
+        // for as long as this boundary is open. Application startup is a
+        // separate stage that only begins after the boundary closes.
+        setStage("paired-flash");
+        await this.manager.beginPairedFlashProgramming(input.sessionId, {
+          ownerCoreId: input.cpu1CoreId,
+          targetCoreId: input.cpu2CoreId,
+          flashBanks: pairedFlash.flashBanks
+        });
+        performedSteps.push("beginPairedFlashProgramming");
+        let cpu1Load: ToolResult | undefined;
+        let ownerHalt: ToolResult | undefined;
+        let cpu2Load: ToolResult | undefined;
+        let loadError: unknown;
+        try {
+          cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
+          assertBatchSucceeded("loadCpu1Program", cpu1Load);
+          performedSteps.push("loadCpu1Program");
+          setStage("paired-flash-owner-halt");
+          ownerHalt = await this.manager.haltCore(input.sessionId, input.cpu1CoreId);
+          performedSteps.push("confirmHaltedOwnerDuringPairedFlash");
+          cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
+          assertBatchSucceeded("loadCpu2Program", cpu2Load);
+          performedSteps.push("loadCpu2Program");
+        } catch (error) {
+          loadError = error;
+        } finally {
+          await this.manager.endPairedFlashProgramming(input.sessionId, {
+            success: loadError === undefined,
+            ...(loadError === undefined ? {} : { reason: toStructuredError(loadError).message.slice(0, 256) })
+          });
+        }
+        if (cpu1Load || cpu2Load) {
+          load = {
+            sessionId: input.sessionId,
+            results: [...(cpu1Load?.results ?? []), ...(cpu2Load?.results ?? [])]
+          };
+        }
+        if (loadError !== undefined) {
+          throw loadError;
+        }
+        flashProgramming = {
+          stage: "paired-flash",
+          performed: true,
+          mode: "cpu1-then-cpu2",
+          preset: pairedFlash.preset,
+          contractSource: pairedFlash.source,
+          ownerCoreId: input.cpu1CoreId,
+          targetCoreId: input.cpu2CoreId,
+          flashBanks: pairedFlash.flashBanks,
+          ownerStateAfterCpu1Load: ownerHalt,
+          cpu1LoadedBeforeCpu2: true,
+          applicationCoresStartedDuringFlash: false,
+          boundary: "Both Flash images are programmed while every application core stays halted; application startup begins only after this boundary."
+        };
+        performedSteps.push("completePairedFlashProgramming");
       } else {
         load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
         performedSteps.push("loadPrograms");
+      }
+      if (!load) {
+        throw new DebugMcpError("BatchOperationFailed", "Program preparation produced no load result", {
+          sessionId: input.sessionId,
+          loadSequence: input.loadSequence,
+          pairedFlash: { required: pairedFlash.required, source: pairedFlash.source, flashBanks: pairedFlash.flashBanks }
+        });
       }
       assertBatchSucceeded("loadPrograms", load);
     }
@@ -328,6 +406,24 @@ export class DebugWorkflowService {
         sessionId: input.sessionId,
         programPreparation: input.programPreparation
       });
+    }
+    if (!flashProgramming) {
+      // Every IPC acceptance reports its Flash programming contract, even when
+      // it never opened a Flash boundary.
+      flashProgramming = {
+        stage: "paired-flash",
+        performed: false,
+        mode: input.loadSequence.mode,
+        preset: pairedFlash.preset,
+        contractSource: pairedFlash.source,
+        ownerCoreId: input.cpu1CoreId,
+        targetCoreId: input.cpu2CoreId,
+        flashBanks: pairedFlash.flashBanks,
+        applicationCoresStartedDuringFlash: false,
+        reason: input.programPreparation === "symbols-only"
+          ? "symbols-only preparation does not program Flash"
+          : "no CPU2 Flash image was found in the CPU2 linker map"
+      };
     }
     let cpu2Release: ToolResult | undefined;
     let postLoadReset: ToolResult | undefined;
@@ -454,6 +550,7 @@ export class DebugWorkflowService {
       firstFailureStage: ipcReady.timedOut ? "ipc-readiness-wait" : "post-readiness-diagnostics",
       firstFailureCode: ipcReady.timedOut ? "IPC_READY_TIMEOUT" : "POST_READINESS_DIAGNOSTIC_FAILED",
       ipcReady, ...(applicationEntry ? { applicationEntry } : {}),
+      ...(flashProgramming ? { flashProgramming } : {}),
       artifactPreflight, elfFreshness, ramOwnership, runPlan, snapshot,
       snapshotPhase: "post-load-before-startup", initialHalt, reset, load, postLoadHalt,
       ...(postLoadReset ? { postLoadReset } : {}), loadSequence: input.loadSequence,
@@ -541,6 +638,7 @@ export class DebugWorkflowService {
         postLoadHalt,
         ...(postLoadReset ? { postLoadReset } : {}),
         ...(applicationEntry ? { applicationEntry } : {}),
+        ...(flashProgramming ? { flashProgramming } : {}),
         snapshot,
         artifactPreflight,
         ramOwnership,
@@ -1779,6 +1877,66 @@ function assertPreStartupSafetyGuardScope(
       invalidHaltCoreIds
     });
   }
+}
+
+export interface PairedFlashContract {
+  /** True when this run programs Flash and must honour the paired boundary. */
+  required: boolean;
+  preset: string | null;
+  source: "startup-preset" | "cpu2-linker-map" | "none";
+  ownerCoreId: CoreId;
+  targetCoreId: CoreId;
+  flashBanks: number[];
+}
+
+/**
+ * F28P65x paired Flash programming contract.
+ *
+ * Programming a CPU2 Flash image requires the CPU1 on-chip Flash Plugin to
+ * prepare the shared Flash clock and bank mapping while CPU1 holds the target.
+ * The legacy `cpu1-run-before-cpu2` load sequence starts CPU1 before CPU2 is
+ * loaded, so it cannot be combined with a CPU2 Flash image; that combination is
+ * rejected here, before the first target access, instead of being discovered as
+ * a DSS timeout during preparation.
+ */
+export function resolvePairedFlashContract(input: {
+  startupPreset?: string | null;
+  loadMode: "cpu1-then-cpu2" | "cpu1-run-before-cpu2";
+  ownerCoreId: CoreId;
+  targetCoreId: CoreId;
+  cpu2FlashBanks: number[];
+}): PairedFlashContract {
+  const flashBanks = [...new Set(input.cpu2FlashBanks)]
+    .filter(bank => Number.isInteger(bank) && bank >= 0)
+    .sort((left, right) => left - right);
+  const presetRequested = isPairedFlashPreset(input.startupPreset);
+  const source: PairedFlashContract["source"] = presetRequested
+    ? "startup-preset"
+    : flashBanks.length > 0 ? "cpu2-linker-map" : "none";
+  if (input.loadMode === "cpu1-run-before-cpu2" && flashBanks.length > 0) {
+    throw new DebugMcpError(
+      "StartupContractInvalid",
+      "A CPU2 Flash image cannot use loadSequence.mode cpu1-run-before-cpu2: CPU1 must stay halted while the CPU1 Flash Plugin prepares the shared Flash clock and bank mapping",
+      {
+        loadMode: input.loadMode,
+        cpu1CoreId: input.ownerCoreId,
+        cpu2CoreId: input.targetCoreId,
+        cpu2FlashBanks: flashBanks,
+        diagnosisCode: "PAIRED_FLASH_REQUIRES_HALTED_OWNER",
+        targetMemoryWritten: false,
+        requiredLoadMode: "cpu1-then-cpu2",
+        nextAction: "Use startupPreset f28p65x-paired-flash (or loadSequence.mode cpu1-then-cpu2); both Flash images are then programmed before any application core is started."
+      }
+    );
+  }
+  return {
+    required: presetRequested || flashBanks.length > 0,
+    preset: input.startupPreset ?? null,
+    source,
+    ownerCoreId: input.ownerCoreId,
+    targetCoreId: input.targetCoreId,
+    flashBanks
+  };
 }
 
 function assertWorkflowStartupContract(input: {

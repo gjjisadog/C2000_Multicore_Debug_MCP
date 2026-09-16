@@ -232,13 +232,63 @@ describe("DSS generated scripts", () => {
     const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
 
     expect(source).toContain("function applyCommandScriptTimeout(command)");
+    expect(source).toContain("function commandTimeoutMs(command)");
     expect(source).toContain("var timeoutMs = Number(command && command.timeoutMs);");
-    expect(source).toContain("script.setScriptTimeout(Math.floor(timeoutMs));");
+    expect(source).toContain("script.setScriptTimeout(Math.floor(effectiveScriptTimeoutMs()));");
 
     const applyIndex = source.indexOf("applyCommandScriptTimeout(command);");
-    const handleIndex = source.indexOf("var response = handleCommand(command);");
+    const handleIndex = source.indexOf("response = handleCommand(command);");
     expect(applyIndex).toBeGreaterThanOrEqual(0);
     expect(handleIndex).toBeGreaterThan(applyIndex);
+  });
+
+  test("persistent DSS never lets one core's short budget shorten another core's long operation", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+
+    // The DSS script deadline is process-wide, so the applied value is the
+    // longest budget in flight rather than the most recently requested one.
+    expect(source).toContain("var inFlightScriptTimeouts = {};");
+    expect(source).toContain("function effectiveScriptTimeoutMs()");
+    expect(source).toContain("inFlightScriptTimeouts[command.__scriptTimeoutSlot] = timeoutMs;");
+    expect(source).toContain("function releaseCommandScriptTimeout(command)");
+    expect(source).toContain("delete inFlightScriptTimeouts[command.__scriptTimeoutSlot];");
+    expect(source).toContain("releaseCommandScriptTimeout(command);");
+    const releaseIndex = source.indexOf("releaseCommandScriptTimeout(command);");
+    const applyIndex = source.indexOf("applyCommandScriptTimeout(command);");
+    expect(releaseIndex).toBeGreaterThan(applyIndex);
+  });
+
+  test("persistent DSS routes Flash preparation through the owner core with an explicit target", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+    const prepareIndex = source.indexOf('command.name === "prepareFlashLoad"');
+    const block = source.slice(prepareIndex, source.indexOf('} else if (command.name === "writeData")', prepareIndex));
+
+    expect(block).toContain("var ownerCoreId = Number(command.coreId);");
+    expect(block).toContain("var flashTargetCoreId = Number(command.targetCoreId);");
+    expect(block).toContain("prepareFlashLoad requires an explicit targetCoreId that differs from the executing owner core");
+    // The owner executes ConfigureClock/ConfigureBanks; the target receives the
+    // per-image ownership and erase selection.
+    expect(block).toContain("ownerSession.flash.performOperation(\"ConfigureClock\")");
+    expect(block).toContain("ownerSession.flash.performOperation(\"ConfigureBanks\")");
+    expect(block).toContain("targetSession.flash.options.setBoolean(\"FlashC28Bank\" + bankIndex, mappedToCpu2)");
+    expect(block).toContain("ownerSession.flash.options.setString(\"FlashMapC28Bank\" + bankIndex");
+    // One preparation arms exactly the target core's next load.
+    expect(block).toContain("delete pendingFlashLoadEvidence[String(flashTargetCoreId)];");
+    expect(block).toContain("if (preparation.status === \"OK\") pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;");
+  });
+
+  test("persistent DSS fails closed when the Flash owner core is not halted", () => {
+    const source = persistentServerScriptSource(resolveDssJson2Path("/Applications/ti/ccs2100/ccs"));
+    const prepareIndex = source.indexOf('command.name === "prepareFlashLoad"');
+    const block = source.slice(prepareIndex, source.indexOf('} else if (command.name === "writeData")', prepareIndex));
+
+    expect(block).toContain("var ownerRunState = readCoreRunState(ownerCoreId);");
+    expect(block).toContain("if (!ownerRunState.connected || ownerRunState.state !== \"Halted\")");
+    expect(block).toContain("to be connected and halted; observed ");
+    // The owner is never halted implicitly: an automatic halt would hide a
+    // workflow that started an application core too early.
+    expect(block).not.toContain("ownerSession.target.halt()");
+    expect(block).not.toMatch(/\.target\.run\w*\(/);
   });
 
   test("persistent DSS server binds its configured host and authenticates every command", () => {

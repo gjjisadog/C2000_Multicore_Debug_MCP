@@ -77,7 +77,7 @@ export class BoardRegistry {
           reason: identity.reason,
           requestedCoreIds: coreIds,
           missingCoreIds,
-          nextAction: "Load the exact image through MCP under the current board lease before loading symbols or starting observation."
+          nextAction: "Use c2000_verifyResidentImage with a valid manifest, or load the exact image through MCP under the current board lease, before loading symbols or starting observation."
         }
       );
     }
@@ -111,5 +111,9 @@ export class BoardRegistry {
       }
     });
     return board;
+  }
+
+  recordVerifiedResidentPrograms(boardId: string, programs: TargetProgramMutation[]): BoardRecord {
+    return this.recordTargetPrograms(boardId, programs, "resident-image-verification");
   }
 }

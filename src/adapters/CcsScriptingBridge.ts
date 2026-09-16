@@ -36,6 +36,12 @@ export interface CcsScriptingCommand {
   coreId: CoreId;
   coreName: string;
   corePattern: string;
+  /**
+   * Flash-preparation routing only: `coreId` identifies the core that executes
+   * the preparation (the Flash Plugin owner), while `targetCoreId` identifies
+   * the core whose image the prepared bank mapping applies to.
+   */
+  targetCoreId?: CoreId;
   resetType?: ResetType;
   programUri?: string;
   expression?: string;

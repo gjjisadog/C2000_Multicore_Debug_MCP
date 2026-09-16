@@ -38,9 +38,17 @@ artifact preflight, readiness evidence, and diagnosis are recorded together.
 1. Before target access, inspect `c2000_getEnvironment`,
    `c2000_getServerHealth`, `c2000_getDaemonHealth`, and `c2000_listBoards` as
    applicable. A missing or unready board/worker is an infrastructure result,
-   not an IPC result. Treat an `UNKNOWN` target identity as a blocked attempt;
-   do not reuse a previous Scope/session. Load the exact pair through the
-   current lease first.
+   not an IPC result. Treat an `UNKNOWN` target identity as a blocked IPC
+   acceptance attempt; do not reuse a previous Scope/session. A single bounded
+   read-only triage snapshot is allowed under the current lease for explicit
+   core state, PC, reset/boot state, and image-identity evidence, but it is
+   `blocked/not-run` evidence only. It must not use old symbols or establish
+   stack/CPU-utilization, IPC-readiness, or firmware conclusions. Load the exact
+   pair through the current lease before any resident-symbol observation.
+   When the firmware supplies a `c2000-resident-image-manifest`,
+   `c2000_verifyResidentImage` may establish the current image identity
+   through raw memory without program load, reset, run, or target write; the
+   daemon re-hashes the `.out` and manifest before recording `KNOWN`.
 2. Validate the image pair and maps in the configured read roots. Confirm
    device/build compatibility, freshness or declared hashes, and that every
    requested IPC symbol exists in the real map/symbol table. A missing symbol,
@@ -83,7 +91,22 @@ must not be substituted for one another.
   does not itself connect, load, run, reset, or prove target state.
 - The repository's `hybrid30k-dk9-owner-first` preset is valid only when the
   image pair and firmware contract are the matching Hybrid30K/DK9 case. Do not
-  apply that name to an unrelated firmware family.
+  apply that name to an unrelated firmware family. It loads and runs CPU1 before
+  the CPU2 image, so it is not usable for a CPU2 Flash image: that request is
+  rejected before target access.
+
+### Flash programming the pair
+
+- Use `startupPreset: "f28p65x-paired-flash"` when both images are programmed
+  into Flash. Both images are programmed while every application core stays
+  halted, and no application core is started inside that boundary.
+- The CPU1 on-chip Flash Plugin prepares the shared Flash clock and bank mapping
+  with CPU1 held. Do not start CPU1 to give the Flash Plugin a clock, and do not
+  expect the server to halt a running CPU1 for you: it reports
+  `FlashOwnerCoreNotHalted` instead.
+- Do not retry a failed CPU2 Flash preparation or load in the same session. The
+  session is quarantined after the first failure; preserve that failure evidence
+  and open a fresh session before any intentional destructive re-program.
 
 ### Flash/firmware-owned startup
 
@@ -95,16 +118,23 @@ must not be substituted for one another.
 - Never start CPU1 so that it releases CPU2 and then load the CPU2 image. That
   creates a release/alive timeout by construction for a Flash-owned handoff.
 - For a freshly programmed Flash image, program the complete pair before the
-  product boot. Then use the product-defined XRS/power reset and stop debugger
-  control during the boot window; reconnect only for read-only evidence. A
-  controlled MCP post-load boot is debugger-controlled evidence, not proof of a
-  physical cold start.
+  product boot. Flash programming completion is not itself a cold-start
+  validation. Before making a Flash-boot or IPC conclusion, perform and record
+  one product-level startup boundary: (a) power off and power on the board,
+  (b) use the product-level restart path, or (c) trigger the board's hardware
+  reset circuit (for example XRSn). Then stop debugger control during the boot
+  window and reconnect only for read-only evidence. A debugger-only reconnect,
+  reset, or run is controlled-debugger evidence and does not substitute for the
+  power/restart/hardware-reset boundary. If that boundary was not performed,
+  classify startup/IPC as `blocked/not-run`, not as a pass or target-side
+  failure.
 - For an image already resident in Flash, use `c2000_loadSymbols` for matching
   `.out` symbols. Do not repeatedly call program-load as a symbol-only action,
   but only after the target-identity guard confirms that the current resident
   image matches the requested `.out`. `symbols-only` does not independently
   prove Flash contents. If identity is unknown or mismatched, stop and perform
-  a controlled exact-pair load or a separately valid resident-image check. Do
+  a controlled exact-pair load or `c2000_verifyResidentImage` with a valid
+  resident-image manifest. Do
   not repeat CPU2 Flash programming without the explicit destructive reload
   authorization required by the server.
 

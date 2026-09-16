@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Read-only resident-image verification
+
+- Add `c2000_verifyResidentImage`: under the current board lease it can attach
+  disconnected cores and read a manifest-bound firmware identity marker through
+  raw memory without programming Flash, loading symbols, resetting, running, or
+  writing target memory. The daemon re-hashes the `.out` and manifest before
+  promoting the requested cores from `UNKNOWN` to `KNOWN`; mismatches remain
+  failed verification evidence.
+
+### F28P65x dual-core Flash programming contract
+
+- Add the `f28p65x-paired-flash` startup preset: both Flash images are
+  programmed while every application core stays halted, and application startup
+  begins only after the Flash programming boundary closes. The historical
+  `hybrid30k-dk9-owner-first` preset remains available for CPU2 **RAM** images
+  but is no longer usable for a CPU2 Flash image.
+- Reject `loadSequence.mode=cpu1-run-before-cpu2` for a CPU2 Flash image before
+  the first target access (`StartupContractInvalid` with
+  `diagnosisCode=PAIRED_FLASH_REQUIRES_HALTED_OWNER`).
+- Budget `prepareFlashLoad` with a dedicated `flashPrepareMs` DSS deadline
+  (default 120000 ms) instead of the 5000 ms state-read deadline. ConfigureClock
+  and ConfigureBanks are Flash operations, so a preparation deadline no longer
+  reports as a bank or transport failure: it surfaces as
+  `FlashPreparationTimeout` with `stage=prepare-flash`, owner/target core ids,
+  the bank list and the expired budget.
+- Apply the process-wide DSS script deadline as the longest budget currently in
+  flight and retire each command's budget on completion, so a short state poll on
+  one core can no longer shorten a long Flash preparation on another.
+- Route `prepareFlashLoad` through the owner core with an explicit
+  `targetCoreId`. ConfigureClock/ConfigureBanks execute in the CPU1 Flash Plugin
+  context (the owner's DSS channel and thread), and the target core is never
+  inferred from whichever channel carried the command.
+- Fail closed with `FlashOwnerCoreNotHalted` when the CPU1 Flash Plugin owner is
+  not connected and halted before CPU2 Flash preparation, and with
+  `FlashProgrammingWindowActive` when any core is started inside the paired Flash
+  boundary. Neither layer halts the owner implicitly, so a workflow that starts
+  an application core too early is reported instead of hidden.
+- Quarantine the session when CPU2 Flash preparation times out, and classify the
+  preparation deadline as `flash_operation_timeout` in Flash evidence.
+- Report the applied boundary in `flashProgramming` (`performed`, `preset`,
+  `contractSource`, `ownerCoreId`, `targetCoreId`, `flashBanks`,
+  `ownerStateAfterCpu1Load`, `applicationCoresStartedDuringFlash`) on every IPC
+  acceptance result and in first-failure evidence.
+- Preserve the reset contract: `system`/`cpu` resets still go through
+  `ResetType.issueReset` with `requestedResetType == effectiveResetType` and no
+  silent fallback; regression coverage was extended to the paired Flash flow.
+- Document the contract, error catalog and DK9 first-bring-up validation steps in
+  `docs/f28p65x-paired-flash-contract.md`.
+
 ## 0.7.1 - 2026-09-16
 
 - Add deterministic Build, TI C2000 Map, declared host/Mock Regression, and

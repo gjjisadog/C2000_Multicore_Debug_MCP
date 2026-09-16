@@ -101,7 +101,7 @@ export class BoardRepository {
     return this.require(boardId);
   }
 
-  /** Record only images loaded by the MCP; symbol-only loads never call this. */
+  /** Record images loaded by MCP or proven by an explicit resident-image manifest. */
   recordTargetPrograms(boardId: string, programs: TargetProgramMutation[], reason = "mcp-program-load"): BoardRecord {
     const current = this.require(boardId);
     const now = new Date().toISOString();
