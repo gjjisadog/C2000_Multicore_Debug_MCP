@@ -33,6 +33,7 @@ export function decideRetry(input: {
   errorCode: string;
 }): { retry: boolean; reason: string; backoffMs: number; requiresReconcile: boolean } {
   if (input.errorCode === "SafetyGuardViolation") return { retry: false, reason: "SAFETY_GUARD_VIOLATION", backoffMs: 0, requiresReconcile: false };
+  if (input.errorCode === "Cpu2BootContractTimeout") return { retry: false, reason: "CPU2_BOOT_CONTRACT_FAILED", backoffMs: 0, requiresReconcile: false };
   if (new Set([
     "LeaseExpired",
     "LeaseInvalidated",

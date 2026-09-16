@@ -168,7 +168,11 @@ export class BoardWorkerSupervisor {
         targetAccessAttempted: false
       });
     }
-    this.options.registry.transition(boardId, "RUNNING");
+    // A fenced isolation/cleanup command is not recovery authorization.
+    // Preserve a quarantine and its reason throughout that command.
+    if (this.options.registry.get(boardId).status !== "QUARANTINED") {
+      this.options.registry.transition(boardId, "RUNNING");
+    }
     try {
       const result = await worker.invokeTool(toolName, input, timeoutMs ?? this.commandTimeoutMs(toolName, input));
       this.assertResponseIdentity(boardId, worker, result);
@@ -179,7 +183,8 @@ export class BoardWorkerSupervisor {
       }
       throw error;
     } finally {
-      if (this.workers.get(boardId)?.client === worker) {
+      if (this.workers.get(boardId)?.client === worker
+          && this.options.registry.get(boardId).status !== "QUARANTINED") {
         this.options.registry.transition(boardId, "READY");
       }
     }

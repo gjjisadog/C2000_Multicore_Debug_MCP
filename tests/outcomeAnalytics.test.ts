@@ -50,6 +50,23 @@ function event(overrides: Partial<OutcomeEvent> = {}): OutcomeEvent {
 }
 
 describe("C2000 outcome analytics", () => {
+  test("keeps a classified Flash loader failure ahead of incidental evidence metadata", () => {
+    expect(classifyOutcomeFailure({
+      code: "ProgramLoadFailed",
+      message: "Program load failed for core 2",
+      details: {
+        stage: "cpu2-load",
+        ccxmlPath: "F28P650DK9_XDS110_CL650002.ccxml",
+        worker: "worker-owned",
+        lease: "lease-owned",
+        ramOwnership: { required: true, matched: true },
+        cause: { code: "DssCommandFailed", details: {
+          stderrTail: "Flash Programmer: Error erasing Bank 3 Flash registers are locked; Operation Cancelled (3)."
+        } }
+      }
+    })).toEqual({ failureClass: "program-load", stage: "cpu2-load" });
+  });
+
   test("classifies bounded review-provider limits as environment-owned evidence", () => {
     expect(classifyOutcomeFailure({
       code: "GitHubPaginationLimit",

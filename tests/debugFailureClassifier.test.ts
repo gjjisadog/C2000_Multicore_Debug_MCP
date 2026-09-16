@@ -2,6 +2,41 @@ import { describe, expect, test } from "vitest";
 import { classifyDebugFailure, classifyIpcAcceptance } from "../src/debug/DebugFailureClassifier.js";
 
 describe("classifyDebugFailure", () => {
+  test.each(["F28P650DK9_XDS110_CL650002.ccxml", "IcePick_C_0"])(
+    "does not treat healthy probe metadata %s as a probe failure",
+    identity => {
+      expect(classifyDebugFailure({
+        code: "ProgramLoadFailed",
+        message: "Program load failed for core 2",
+        details: {
+          identity,
+          probe: { ready: true },
+          cause: { code: "DssCommandFailed", details: {
+            stderrTail: "Flash Programmer: Error erasing Bank 3 Flash registers are locked; Operation Cancelled (3)."
+          } }
+        }
+      })).toEqual(expect.objectContaining({
+        failureSignature: "FLASH_PROGRAMMER_STATE",
+        automaticRetry: "never"
+      }));
+    }
+  );
+
+  test.each(["XDS110", "IcePick_C_0"])("requires failure evidence for identity %s", identity => {
+    expect(classifyDebugFailure({ code: "DssCommandFailed", details: { identity } }))
+      .toEqual(expect.objectContaining({ failureSignature: "TARGET_OPERATION_FAILED" }));
+  });
+
+  test("retains a nested explicit probe failure despite a previous Flash diagnostic", () => {
+    expect(classifyDebugFailure({
+      code: "ProgramLoadFailed",
+      details: {
+        cause: { code: "ProbeNotConnected" },
+        previousDiagnostic: "Flash registers are locked"
+      }
+    })).toEqual(expect.objectContaining({ failureSignature: "PROBE_TRANSIENT_UNAVAILABLE" }));
+  });
+
   test("classifies application-entry failure without recommending an automatic retry", () => {
     expect(classifyDebugFailure({
       code: "ApplicationEntryNotReached",

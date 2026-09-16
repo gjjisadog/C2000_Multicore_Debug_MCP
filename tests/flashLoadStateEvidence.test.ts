@@ -10,7 +10,9 @@ function harness() {
     failReads: false, failStates: false, failLoad: false, failPrepare: false, failBanks: false,
     configuredBank: 0x3c0, configuredLock: 0,
     loadError: "original Bank 3 erase failed",
-    registerValues: {} as Record<string, number> };
+    registerValues: {} as Record<string, number>,
+    coreSelections: { 0: "CPU1", 2: "CPU2" } as Record<number, string>,
+    selectionFault: "" as "" | "read" | "write" | "readback" };
   const sessions = Object.fromEntries([0, 2].map((id, index) => [id, {
     target: {
       isConnected() {
@@ -37,7 +39,18 @@ function harness() {
     },
     flash: {
       options: {
-        setString(name: string, value: string) { calls.push(["option", id, name, value]); },
+        getString(name: string) {
+          calls.push(["get-option", id, name]);
+          if (state.selectionFault === "read") throw Error("selection read unavailable");
+          return state.coreSelections[id];
+        },
+        setString(name: string, value: string) {
+          calls.push(["option", id, name, value]);
+          if (name === "FlashCoreSelection") {
+            if (state.selectionFault === "write") throw Error("selection write unavailable");
+            if (state.selectionFault !== "readback") state.coreSelections[id] = value;
+          }
+        },
         setBoolean(name: string, value: boolean) { calls.push(["option", id, name, value]); }
       },
       performOperation(name: string) {
@@ -77,6 +90,46 @@ function harness() {
 }
 
 describe("F28P65x Flash load state evidence", () => {
+  test("binds the Flash plugin core independently of the DebugSession", () => {
+    const h = harness();
+    h.state.coreSelections = { 0: "CPU2", 2: "CPU1" };
+    const result = h.command("prepareFlashLoad");
+    expect(result.status).toBe("OK");
+    expect(result.value.flashLoadEvidence.loaderCoreSelection).toEqual([
+      { coreId: 0, coreName: "C28xx_CPU1", option: "FlashCoreSelection",
+        before: "CPU2", expected: "CPU1", after: "CPU1", changed: true, verified: true },
+      { coreId: 2, coreName: "C28xx_CPU2", option: "FlashCoreSelection",
+        before: "CPU1", expected: "CPU2", after: "CPU2", changed: true, verified: true }
+    ]);
+    expect(h.calls.filter(c => c[0] === "option" && c[2] === "FlashCoreSelection")).toEqual([
+      ["option", 0, "FlashCoreSelection", "CPU1"], ["option", 2, "FlashCoreSelection", "CPU2"]
+    ]);
+    expect(h.calls.findIndex(c => c[0] === "perform")).toBeGreaterThan(
+      h.calls.findLastIndex(c => c[0] === "get-option"));
+  });
+
+  test("records already-correct plugin core selections without rewriting them", () => {
+    const h = harness();
+    const result = h.command("prepareFlashLoad");
+    expect(result.value.flashLoadEvidence.loaderCoreSelection).toEqual([
+      expect.objectContaining({ coreId: 0, before: "CPU1", after: "CPU1", changed: false, verified: true }),
+      expect.objectContaining({ coreId: 2, before: "CPU2", after: "CPU2", changed: false, verified: true })
+    ]);
+    expect(h.calls.filter(c => c[0] === "option" && c[2] === "FlashCoreSelection")).toEqual([]);
+  });
+
+  test.each(["read", "write", "readback"] as const)("plugin selection %s failure stops preparation", fault => {
+    const h = harness();
+    h.state.coreSelections[0] = "CPU2";
+    h.state.selectionFault = fault;
+    const result = h.command("prepareFlashLoad");
+    expect(result.status).toBe("FAIL");
+    expect(result.flashLoadEvidence.loaderCoreSelection[0]).toMatchObject({ coreId: 0, verified: false });
+    expect(result.flashLoadEvidence.loaderCoreSelection[0].error).toBeTruthy();
+    expect(h.context.pendingFlashLoadEvidence).toEqual({});
+    expect(h.calls.filter(c => c[0] === "perform" || c[0] === "load")).toEqual([]);
+  });
+
   test("records both cores and actual mapping before/after preparation and load", () => {
     const h = harness();
     expect(h.prepare().status).toBe("OK");

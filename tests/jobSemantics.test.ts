@@ -57,6 +57,7 @@ describe("job step semantics", () => {
     expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: DURABLE_PLAN_LIMITS.maxAttempts, policy, errorCode: "RpcRequestTimeout" })).toMatchObject({ retry: false, reason: "MAX_ATTEMPTS" });
     expect(decideRetry({ step: { idempotencyClass: "NON_IDEMPOTENT" }, attempt: 1, policy, errorCode: "RpcRequestTimeout" })).toMatchObject({ retry: false, reason: "NON_IDEMPOTENT" });
     expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: 1, policy, errorCode: "SafetyGuardViolation" })).toMatchObject({ retry: false, reason: "SAFETY_GUARD_VIOLATION" });
+    expect(decideRetry({ step: { idempotencyClass: "RECONCILABLE" }, attempt: 1, policy, errorCode: "Cpu2BootContractTimeout" })).toMatchObject({ retry: false, reason: "CPU2_BOOT_CONTRACT_FAILED" });
   });
 
   test("never retries or restart-replays interrupted durable writes and reset recovery", () => {

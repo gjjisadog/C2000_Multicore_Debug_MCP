@@ -62,8 +62,10 @@ export function classifyDebugFailure(input: {
   const text = `${input.code ?? ""} ${input.message ?? ""} ${JSON.stringify(input.details ?? {})}`;
   const nestedCodes = collectErrorCodes(input.details);
   const hasCode = (...codes: string[]) => codes.some(code => input.code === code || nestedCodes.has(code));
+  // A registered probe name/ccxml path is identity evidence, not a failure.
+  // Require an explicit error code or failure phrase, not a bare XDS110/IcePick.
   if (hasCode("ProbeNotFound", "ProbeNotConnected", "ProbeSelectionRequired")
-    || /Error\s*-260|Found 0 devices|XDS110|IcePick_C_0|probe(?:Id| serial)?.*(?:missing|not found|unavailable)/i.test(text)) {
+    || /Error\s*-260|Found 0 devices|(?:XDS110|IcePick_C_0|probe(?:Id| serial)?)(?::|\s)+(?:(?:is|was)\s+)?(?:missing|not found|unavailable)/i.test(text)) {
     return failureFeedback("PROBE_TRANSIENT_UNAVAILABLE", "readiness-recheck", "The debug probe was not available to the host; re-run read-only daemon/board/probe readiness before interpreting target evidence.");
   }
   if (hasCode("ArtifactPairInvalid", "LaunchArtifactsMissing", "ArtifactHashMismatch", "ProgramFileNotFound", "PathOutsideAllowedReadRoots", "PathResolutionFailed", "RamOwnershipMapUnavailable")) {

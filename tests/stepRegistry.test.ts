@@ -37,6 +37,87 @@ class RecordingToolInvoker implements C2000ToolInvoker {
 }
 
 describe("StepRegistry", () => {
+  test("two-phase launch defers only CPU2 guards; later reads enforce boolean domains under the same lease", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const cpu2BootContract = { abiExpression: "state.abi", abiVersion: 48,
+      roleExpression: "state.role", roleValue: 2, epochExpression: "state.epoch",
+      statusExpression: "state.status", appInitMask: 32, logicAliveExpression: "state.logic",
+      mirrorBooleanExpressions: ["mirror.blocked"], timeoutMs: 100, intervalMs: 20 };
+    const input = { planVersion: 1, name: "two-phase", boardIds: ["board-a"],
+      safetyGuards: { conditions: [
+        { coreId: 0, expression: "safe.cpu1", expected: 1 },
+        { coreId: 2, expression: "safe.cpu2", expected: 1 }
+      ] },
+      steps: [{ type: "launchMulticore", loadPrograms: true }, {
+        type: "runIpcAcceptance", runMode: "cpu1_boots_cpu2", programPreparation: "symbols-only",
+        loadPolicy: "verify-mcp-registry", loadSequence: { mode: "cpu1-then-cpu2" },
+        systemResetBeforeHandoff: { authorized: true, cpu2BootContract,
+          postStartupConditions: [{ coreId: 0, expression: "safe.cpu1", expected: 1 }] }
+      }, { type: "captureExpressions", reads: [{ coreId: 0, expressions: ["safe.cpu1"] }] }]
+    };
+    const plan = testPlanSchema.parse(input);
+    expect(parsePersistedTestPlan(plan).steps[1]).toMatchObject({ systemResetBeforeHandoff: { cpu2BootContract } });
+    const leaseContext = { leaseId: "lease", leaseToken: "token", fencingToken: 7, leaseGeneration: 2,
+      ownerJobId: "job", boardId: "board-a", probeSerial: "CL650002", workerInstanceId: "worker" };
+    const context = { jobId: "job", boardId: "board-a", sessionId: "dbg-current", leaseContext, plan,
+      step: plan.steps[0]! };
+    const afterLoad = await registry.assertSafetyGuards(context, "dbg-current", "after-step");
+    expect(afterLoad).toMatchObject({ matched: true, cpu2GuardState: "DISARMED" });
+    expect(invoker.calls).toHaveLength(1);
+    expect(invoker.calls[0]!.input).toMatchObject({ coreId: 0, __leaseContext: leaseContext });
+    const runtime = await registry.assertSafetyGuards({ ...context, step: plan.steps[2]! }, "dbg-current", "before-step");
+    expect(runtime).toMatchObject({ matched: true, mirrorDomain: [{ status: "OK", value: 1 }] });
+    invoker.failedExpressions.add("mirror.blocked");
+    await expect(registry.assertSafetyGuards({ ...context, step: plan.steps[2]! }, "dbg-current", "before-step"))
+      .rejects.toMatchObject({ code: "SafetyGuardViolation" });
+    expect(invoker.calls.at(-1)).toMatchObject({ toolName: "c2000_haltCores", input: { __leaseContext: leaseContext } });
+    expect(testPlanSchema.safeParse({ ...input, steps: [input.steps[0], { type: "delay", delayMs: 1 }, ...input.steps.slice(1)] }).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...input, steps: [{ type: "launchMulticore", loadPrograms: false }, ...input.steps.slice(1)] }).success).toBe(false);
+  });
+  test("persists and forwards authorized pre-handoff System Reset with its post-startup guard", async () => {
+    const invoker = new RecordingToolInvoker();
+    const registry = new StepRegistry(invoker);
+    const systemResetBeforeHandoff = { authorized: true, postStartupConditions: [
+      { coreId: 0, expression: "safe.ost", expected: 1 }
+    ] };
+    const planInput = {
+      planVersion: 1, name: "isolated-system-reset", boardIds: ["board-a"],
+      safetyGuards: { conditions: [
+        { coreId: 0, expression: "safe.arm", expected: 0 },
+        { coreId: 2, expression: "safe.gate", expected: 0 }
+      ] },
+      steps: [{ type: "launchMulticore", loadPrograms: false }, {
+        type: "runIpcAcceptance", runMode: "cpu1_boots_cpu2", systemResetBeforeHandoff,
+        programPreparation: "symbols-only", loadPolicy: "verify-mcp-registry",
+        loadSequence: { mode: "cpu1-then-cpu2" }
+      }]
+    };
+    const plan = testPlanSchema.parse(planInput);
+    expect(parsePersistedTestPlan(planInput).steps[1]).toMatchObject({ systemResetBeforeHandoff });
+    const leaseContext = {
+      leaseId: "lease-a", leaseToken: "secret", fencingToken: 7, leaseGeneration: 3,
+      ownerJobId: "job-a", boardId: "board-a", probeSerial: "XDS-A", workerInstanceId: "worker-a"
+    };
+    await registry.execute({ jobId: "job-a", boardId: "board-a", sessionId: "dbg-current",
+      leaseContext, plan, step: plan.steps[1]! });
+    expect(invoker.calls[0]).toMatchObject({ toolName: "c2000_runIpcAcceptance", input: {
+      sessionId: "dbg-current", __leaseContext: leaseContext, systemResetBeforeHandoff,
+      preStartupSafetyGuard: { conditions: plan.safetyGuards!.conditions }
+    } });
+    for (const overrides of [
+      { postLoadResetType: "cpu" }, { programPreparation: "load" }, { loadPolicy: "always" },
+      { runMode: "debugger_runs_both" },
+      { systemResetBeforeHandoff: { ...systemResetBeforeHandoff, authorized: false } },
+      { systemResetBeforeHandoff: { ...systemResetBeforeHandoff, postStartupConditions: [] } }
+    ]) {
+      expect(testPlanSchema.safeParse({ ...planInput,
+        steps: [planInput.steps[0], { ...planInput.steps[1], ...overrides }]
+      }).success).toBe(false);
+    }
+    expect(testPlanSchema.safeParse({ ...planInput, safetyGuards: undefined }).success).toBe(false);
+  });
+
   test("forwards an explicit CPU1 post-load reset through the fenced durable IPC step", async () => {
     const invoker = new RecordingToolInvoker();
     const registry = new StepRegistry(invoker);
