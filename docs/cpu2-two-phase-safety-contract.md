@@ -116,3 +116,19 @@ mirrors, require explicit per-core halt confirmation, and keep quarantine throug
 fenced cleanup. Boot-contract timeouts are not automatically retryable. Secondary
 failures remain in their step/event records. These fixes require fresh runtime
 activation and hardware verification; the original hardware evidence is immutable.
+
+The next attempt (`run-579ce326-51cd-4f70-913e-cd12a3cd01c4`) used the activated
+`bc34cf5` runtime, but failed earlier at CPU2 Bank3 program load. CPU1 loaded;
+System Reset, the boot contract and IPC were skipped. BANKMUXSEL was 0xC0 and
+both observed FLPROT views were zero at the failed load boundary. The loader's
+register-lock message is not proof of permanent protection or the IPC root cause.
+The durable job retained ProgramLoadFailed as the first failure despite the later
+always-halt reporting SessionNotFound after launch had already closed its session.
+This verifies first-cause preservation only, not disconnected-core quarantine.
+
+The same real failure exposed a classification defect: bare XDS110/IcePick names
+in successful probe metadata could overwrite the Flash failure classification.
+Require actual probe failure evidence and preserve the specific Flash classifier
+result before generic analytics keyword matching. Host regression and historical
+error replay validate this classification change; they do not recover Flash or
+authorize another hardware retry. The classification candidate is not yet deployed.

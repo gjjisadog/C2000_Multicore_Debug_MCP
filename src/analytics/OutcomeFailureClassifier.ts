@@ -22,19 +22,24 @@ export function classifyOutcomeFailure(input: {
   // Review-provider pagination and evidence-volume bounds are host/provider
   // conditions. Keep them out of MCP-deficiency learning and target recovery.
   if (/githubpaginationlimit|reviewfeedbacklimitexceeded/.test(text)) return { failureClass: "environment", ...(stage ? { stage } : {}) };
+  // These debug classifications have specific causal evidence. Do not replace
+  // them with matches on ccxml/probe/lease/RAM metadata in the diagnostic bundle.
+  if (feedback.failureSignature === "PROBE_TRANSIENT_UNAVAILABLE") {
+    return { failureClass: "probe", ...(stage ? { stage } : {}) };
+  }
+  if (["FLASH_PROGRAMMER_STATE", "FLASH_BOUNDARY_INVALID", "FLASH_LOAD_SESSION_QUARANTINED"].includes(feedback.failureSignature)) {
+    return { failureClass: "program-load", ...(stage ? { stage } : {}) };
+  }
   if (/capability|required|expired|safetyguard|safety-fence/.test(text)) return { failureClass: "capability", ...(stage ? { stage } : {}) };
   if (/expressionwaittimeout|ipc_ready_timeout|ipc readiness timed out/i.test(text) || feedback.failureSignature === "IPC_HANDSHAKE_TIMEOUT") return { failureClass: "ipc-timeout", ...(stage ? { stage } : {}) };
   if (/path|filesystem|file.?not.?found|artifact|ccxml|map/.test(text) && !/programload|program-load/.test(text)) return { failureClass: "filesystem", ...(stage ? { stage } : {}) };
-  if (/probe|xds110|dssnotfound|adapternotavailable/.test(text) || feedback.failureSignature === "PROBE_TRANSIENT_UNAVAILABLE") return { failureClass: "probe", ...(stage ? { stage } : {}) };
+  if (/probe|xds110|dssnotfound|adapternotavailable/.test(text)) return { failureClass: "probe", ...(stage ? { stage } : {}) };
   if (/worker|heartbeat|daemonunavailable|workerunavailable/.test(text)) return { failureClass: "worker", ...(stage ? { stage } : {}) };
   if (/lease|boardleased|boardlease|fencing/.test(text)) return { failureClass: "board-lease", ...(stage ? { stage } : {}) };
   if (/\bcan\b|pcan|bus.?off|frame.?mismatch/.test(text)) return { failureClass: "can", ...(stage ? { stage } : {}) };
   if (/dlog/.test(text)) return { failureClass: "dlog", ...(stage ? { stage } : {}) };
   if (/erad/.test(text)) return { failureClass: "erad", ...(stage ? { stage } : {}) };
   if (/\bram\b|ownership/.test(text)) return { failureClass: "ram-ownership", ...(stage ? { stage } : {}) };
-  if (["FLASH_PROGRAMMER_STATE", "FLASH_BOUNDARY_INVALID", "FLASH_LOAD_SESSION_QUARANTINED"].includes(feedback.failureSignature)) {
-    return { failureClass: "program-load", ...(stage ? { stage } : {}) };
-  }
   if (/flash|destructiveflash|resident/.test(text)) return { failureClass: "flash-protection", ...(stage ? { stage } : {}) };
   if (/program|symbol|load/.test(text) || feedback.failureSignature === "HOST_ARTIFACT_INVALID" || feedback.failureSignature === "PRELOADED_LOAD_SEMANTICS") return { failureClass: "program-load", ...(stage ? { stage } : {}) };
   if (/boot|handoff|startupcontract/.test(text) || feedback.failureSignature === "STARTUP_CONTRACT_INVALID") return { failureClass: "boot-handoff", ...(stage ? { stage } : {}) };
