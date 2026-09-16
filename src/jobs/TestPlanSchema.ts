@@ -132,6 +132,12 @@ const resetEvidenceStepSchema = z.discriminatedUnion("freshness", [
 ]);
 const coreIdsSchema = z.array(coreIdSchema).min(1).max(2)
   .refine(values => new Set(values).size === values.length, "coreIds must be unique");
+export const systemResetBeforeHandoffSchema = z.object({
+  authorized: z.literal(true),
+  postStartupConditions: z.array(expressionConditionStepSchema.extend({
+    expression: bootObservationExpressionSchema
+  }).strict()).min(1).max(64)
+}).strict().describe("Explicitly authorized, isolated-board System Reset while both cores remain connected. Resets peripheral/GPIO/protection state; requires verified resident images and post-startup safety checks. Not a physical cold-start proof.");
 const restoreArtifactSchema = (coreId: 0 | 2) => z.object({
   coreId: z.literal(coreId),
   outPath: z.string().min(1).max(4096),
@@ -248,6 +254,7 @@ export const testPlanStepSchema = z.discriminatedUnion("type", [
     startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
     resetType: z.enum(["cpu", "system", "restart", "default"]).default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.resetType),
     postLoadResetType: z.enum(["cpu", "restart"]).optional(),
+    systemResetBeforeHandoff: systemResetBeforeHandoffSchema.optional(),
     programPreparation: programPreparationSchema,
     loadPolicy: loadPolicySchema.default("always"),
     allowDestructiveFlashReload: allowDestructiveFlashReloadSchema,
@@ -374,6 +381,15 @@ export const testPlanSchema = z.object({
       && (step.runMode !== undefined || !step.runSequence?.releaseCpu2BeforeCpu1)) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "postLoadResetType"],
         message: "postLoadResetType requires firmware-owned CPU2 boot" });
+    }
+    if (step.type === "runIpcAcceptance" && step.systemResetBeforeHandoff) {
+      if ((step.runMode ?? step.runSequence.runMode) !== "cpu1_boots_cpu2"
+        || step.postLoadResetType !== undefined || step.programPreparation !== "symbols-only"
+        || step.loadPolicy !== "verify-mcp-registry" || !plan.safetyGuards) {
+        context.addIssue({ code: z.ZodIssueCode.custom,
+          path: ["steps", stepIndex, "systemResetBeforeHandoff"],
+          message: "System Reset requires explicit cpu1_boots_cpu2, symbols-only, verify-mcp-registry, plan safety guards, and no postLoadResetType" });
+      }
     }
     if (step.type === "runIpcAcceptance" && step.loadSequence && (step.runMode || step.runSequence?.releaseCpu2BeforeCpu1)) {
       const runCpu1First = step.runMode ? step.runMode !== "cpu2_pre_running" : step.runSequence?.runCpu1First ?? true;
@@ -548,7 +564,8 @@ function evidenceValueCount(step: TestPlanStep, guardIntervalMs?: number): numbe
     case "resetReconnectCapture": return step.reads.reduce((total, read) => total + read.expressions.length, 0);
     case "reconnectAfterTargetReset": return ((reconnectPollCount(step, guardIntervalMs) + 1) * (step.resetEvidence?.length ?? 0))
       + step.resetCauseReads.reduce((total, read) => total + read.expressions.length, 0);
-    case "runIpcAcceptance": return (step.ipcReadyExpressions?.length ?? 0) + (step.bootSyncExpressions?.length ?? 0);
+    case "runIpcAcceptance": return (step.ipcReadyExpressions?.length ?? 0) + (step.bootSyncExpressions?.length ?? 0)
+      + (step.systemResetBeforeHandoff?.postStartupConditions.length ?? 0);
     default: return 0;
   }
 }
@@ -557,6 +574,7 @@ function guardEvidenceValueCount(plan: Pick<TestPlan, "safetyGuards">, step: Tes
   const guardCount = plan.safetyGuards?.conditions.length ?? 0;
   if (guardCount === 0 || step.type === "cleanup" || step.type === "restorePrograms") return 0;
   let monitoredPolls = 0;
+  if (step.type === "runIpcAcceptance" && step.systemResetBeforeHandoff) monitoredPolls += 1;
   if (step.type === "delay") monitoredPolls = Math.ceil(step.delayMs / plan.safetyGuards!.intervalMs);
   if (step.type === "waitForExpressions") monitoredPolls = Math.ceil(step.timeoutMs / step.intervalMs);
   if (step.type === "runCores") monitoredPolls = Math.ceil(step.monitorMs / step.intervalMs);

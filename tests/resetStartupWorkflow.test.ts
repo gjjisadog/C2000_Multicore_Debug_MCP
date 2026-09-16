@@ -9,6 +9,7 @@ import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { DebugMcpError } from "../src/utils/errors.js";
+import { sha256File } from "../src/utils/fileHash.js";
 
 const coreMap = [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "C28xx_CPU2" }];
 
@@ -101,10 +102,119 @@ async function fixture() {
     runSequence: { runMode: "cpu1_boots_cpu2" as const, runCpu1First: true, runCpu2: false, settleMs: 0 },
     ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 1 }], timeoutMs: 20, intervalMs: 1
   };
-  return { adapter, handlers, input };
+  return { adapter, handlers, input, manager };
+}
+
+async function systemResetFixture() {
+  const context = await fixture();
+  const { input, manager, adapter } = context;
+  await manager.loadPrograms(input.sessionId, [
+    { coreId: 0, programUri: input.cpu1OutPath }, { coreId: 2, programUri: input.cpu2OutPath }
+  ]);
+  adapter.events = [];
+  return { ...context, input: { ...input,
+    programPreparation: "symbols-only" as const, loadPolicy: "verify-mcp-registry" as const,
+    cpu1OutSha256: await sha256File(input.cpu1OutPath), cpu2OutSha256: await sha256File(input.cpu2OutPath),
+    cpu1MapSha256: await sha256File(input.cpu1MapPath), cpu2MapSha256: await sha256File(input.cpu2MapPath),
+    preStartupSafetyGuard: { haltCoreIds: [0, 2], conditions: [
+      { coreId: 0, expression: "ipc.ready", expected: 1 },
+      { coreId: 2, expression: "ipc.ready", expected: 1 }
+    ] },
+    systemResetBeforeHandoff: { authorized: true as const, postStartupConditions: [
+      { coreId: 0, expression: "boot.sync", expected: "waiting" }
+    ] }
+  } };
 }
 
 describe("post-load reset and firmware-owned handoff", () => {
+  test("authorized System Reset occurs with both cores connected and no later CPU reset/run authority", async () => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result.success).toBe(true);
+    expect(adapter.events).toEqual([
+      "prepare:2", "prepare:0", "reset:0:system", "disconnect:2", "run:0", "connect:2"
+    ]);
+    expect(result.postLoadReset).toMatchObject({ authorized: true, phase: "before-cpu2-disconnect",
+      physicalColdStartVerified: false, affectsPeripheralAndProtectionState: true,
+      before: { cores: [
+        { coreId: 0, connected: true, state: "Halted" }, { coreId: 2, connected: true, state: "Halted" }
+      ] }
+    });
+    expect(result.safetyGuardChecks.map((check: { phase: string }) => check.phase)).toEqual([
+      "symbols-loaded-before-startup", "post-system-reset-startup"
+    ]);
+    expect(result.ipcReady.conditions).toHaveLength(1);
+    expect(result.effectsApplied).toContain("target-reset");
+  });
+
+  test.each([
+    { systemResetBeforeHandoff: { authorized: false, postStartupConditions: [] } },
+    { postLoadResetType: "cpu" }, { postLoadResetType: "system" },
+    { programPreparation: "load" }, { loadPolicy: "always" },
+    { preStartupSafetyGuard: undefined }, { cpu1OutSha256: undefined },
+    { runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true } },
+    { systemResetBeforeHandoff: { authorized: true, postStartupConditions: [
+      { coreId: 0, expression: "clearTrip()", expected: 1 }
+    ] } }
+  ] as Array<Record<string, unknown>>)("rejects incomplete or contradictory System Reset authorization %j before target access", async overrides => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    const result = await handlers.runIpcAcceptance({ ...input, ...overrides });
+    expect(result.success).toBe(false);
+    expect(adapter.events).toEqual([]);
+    expect(adapter.haltedCores).toEqual([]);
+  });
+
+  test("symbols alone cannot establish the current-session identity required for System Reset", async () => {
+    const { adapter, handlers, input, manager } = await systemResetFixture();
+    const created = await handlers.createDebugSession({ sessionName: "symbols-not-identity", coreMap });
+    cleanups.push(() => manager.closeDebugSession(created.sessionId));
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+    adapter.events = [];
+    const result = await handlers.runIpcAcceptance({ ...input, sessionId: created.sessionId });
+    expect(result.success).toBe(false);
+    expect(adapter.events).toEqual([]);
+  });
+
+  test.each(["prepare", "cpu1-prepare", "post-load-reset"] as const)(
+    "System Reset %s failure never disconnects or runs either core", async failure => {
+      const { adapter, handlers, input } = await systemResetFixture();
+      adapter.fail = failure;
+      const result = await handlers.runIpcAcceptance(input);
+      expect(result.success).toBe(false);
+      expect(adapter.events.some(event => /^(disconnect|run|connect):/.test(event))).toBe(false);
+    }
+  );
+
+  test("System Reset pre-guard mismatch stops before reset", async () => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    input.preStartupSafetyGuard.conditions[1]!.expected = 0;
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result).toMatchObject({ success: false, error: { code: "SafetyGuardViolation" } });
+    expect(adapter.events).toEqual([]);
+    expect(adapter.haltedCores.slice(-2)).toEqual([0, 2]);
+  });
+
+  test("post-System Reset guard mismatch preserves reset evidence and halts without IPC acceptance", async () => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    input.systemResetBeforeHandoff.postStartupConditions[0]!.expected = "unsafe";
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result).toMatchObject({ success: false, error: { code: "SafetyGuardViolation", details: {
+      workflowStage: "post-system-reset-safety-guard", ipcReadySkipped: true,
+      evidence: { phase: "post-system-reset-startup", matched: false },
+      postLoadReset: { phase: "before-cpu2-disconnect", authorized: true }
+    } } });
+    expect(adapter.haltedCores.slice(-2)).toEqual([0, 2]);
+    expect(result.ipcReady).toBeUndefined();
+  });
+
+  test("System Reset entry failure leaves CPU2 disconnected", async () => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    adapter.stayInBootRom = true;
+    const result = await handlers.runIpcAcceptance({ ...input, applicationEntryTimeoutMs: 5 });
+    expect(result).toMatchObject({ success: false, error: { code: "ApplicationEntryNotReached" } });
+    expect(adapter.events.slice(adapter.events.indexOf("disconnect:2") + 1)).toEqual(["run:0"]);
+  });
+
   test("incomplete observations fail closed even when every IPC ready condition matches", async () => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance({ ...input, bootSyncExpressions: ["boot.missing"] });

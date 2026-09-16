@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { bootObservationExpressionSchema, canHealthPolicySchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
+import { bootObservationExpressionSchema, canHealthPolicySchema, systemResetBeforeHandoffSchema, testArtifactsSchema, testPlanSchema } from "../jobs/TestPlanSchema.js";
 import { canAcceptanceProfileSchema } from "../can/CanProfileSchema.js";
 import { HYBRID30K_DK9_OWNER_FIRST_STARTUP, IPC_STARTUP_PRESET_NAMES } from "../workflows/startupProfiles.js";
 import { allowDestructiveFlashReloadSchema } from "../contracts/FlashReloadContract.js";
@@ -702,6 +702,7 @@ const runIpcAcceptanceObjectSchema = z.object({
   startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
   resetType: resetTypeSchema.default("default"),
   postLoadResetType: resetTypeSchema.optional().describe("CPU1-only reset after CPU2 disconnect for firmware-owned boot. Defaults to restart after program load; unavailable explicit reset types fail closed."),
+  systemResetBeforeHandoff: systemResetBeforeHandoffSchema.optional(),
   cpu1EntryAddress: addressValueSchema.optional()
     .describe("CPU1 application entry address; if omitted, codestart/executable sections are taken from cpu1MapPath"),
   applicationEntryTimeoutMs: applicationEntryTimeoutSchema,
