@@ -584,6 +584,10 @@ export class TestJobEngine {
               current = { ...current, sessionId };
               this.options.runs.updateBoard(current, executionId);
             }
+            if (output.success === false) {
+              this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
+              throw structuredToolFailure(output, step.stepType);
+            }
             if (sessionOpen && sessionId && guardAfterStep(plannedStep)) {
               safetyGuardChecks.push(await this.steps.assertSafetyGuards({ ...executionContext, sessionId }, sessionId, "after-step"));
             }
@@ -592,7 +596,6 @@ export class TestJobEngine {
               output = { ...output, safetyGuardChecks: [...safetyGuardChecks, ...internalChecks] };
             }
             this.assertStepOutputWithinLimits(jobId, step.stepRunId, step.stepType, output);
-            if (output.success === false) throw new DebugMcpError("BatchOperationFailed", `Job step ${step.stepType} returned failure`, { output });
             if (plannedStep.type === "cleanup") {
               if (sessionOpen && sessionId) {
                 assertConfirmedSessionClose(output, sessionId, "Explicit durable cleanup did not confirm closure of the active fenced board-flow session");
@@ -640,7 +643,9 @@ export class TestJobEngine {
               continue;
             }
             failed = !cancelled;
-            lastError = structuredWithOptimization;
+            // The first failed boundary is authoritative. Later on:always
+            // isolation/cleanup failures retain their own step and event evidence.
+            lastError ??= structuredWithOptimization;
             const persistedFailureOutput = failedToolOutput
               ? {
                 ...(step.stepType === "launchMulticore"
@@ -651,7 +656,7 @@ export class TestJobEngine {
                 optimization
               }
               : { retryDecision, reconcileEvidence, optimization };
-            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: lastError, output: persistedFailureOutput }, executionId);
+            this.options.runs.updateStep({ ...running, status: "FAILED", finishedAt, error: structuredWithOptimization, output: persistedFailureOutput }, executionId);
             this.options.events.append({
               level: cancelled ? "warn" : "error",
               sourceType: "job",
@@ -661,7 +666,7 @@ export class TestJobEngine {
               eventType: cancelled ? "JOB_STEP_CANCELLED" : "JOB_STEP_FAILED",
               payload: {
                 stepType: step.stepType,
-                error: lastError,
+                error: structuredWithOptimization,
                 ...(failedToolOutput ? {
                   launchFailureOutput: step.stepType === "launchMulticore"
                     ? boundedLaunchFailureOutput(failedToolOutput)
@@ -877,6 +882,9 @@ function guardBeforeStep(step: TestPlanStep): boolean {
 }
 
 function guardAfterStep(step: TestPlanStep): boolean {
+  // Isolation must not depend on readable application symbols. A halt has
+  // per-core confirmation; unreadable guards must never prevent that attempt.
+  if (step.type === "haltCores") return false;
   // A connect-only launch has no loaded symbols. Evaluating firmware safety
   // expressions here creates a false failure (`identifier not found`) before
   // the first load/run step has made those expressions readable.
@@ -916,6 +924,7 @@ function isWorkerRouteMismatch(error: unknown): boolean {
 }
 
 function failedSafetyIsolation(error: Record<string, unknown>): boolean {
+  if (error.code === "TargetHaltFailed") return true;
   const details = error.details;
   if (!details || typeof details !== "object" || Array.isArray(details)) return false;
   const isolation = error.code === "SafetyGuardViolation" || (details as Record<string, unknown>).twoPhaseIsolation === true

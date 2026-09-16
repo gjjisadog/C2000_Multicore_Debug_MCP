@@ -102,3 +102,17 @@ and cleanup. FaultTask index 1, 1 ms period, stack HWM, deadline counters and ph
 Safe-Off/OST/Trip waveform evidence are separate gates. Observed task-body maximum
 is not a proof of whole-task WCET. A Flash load failure makes all later gates
 NOT_RUN_HARDWARE, even if every Host test passes.
+
+Hardware replay on 2026-09-16 (`run-1c4b7e49-7781-4580-897c-b326a97b6f98`)
+reached CPU1 application code after successful pair loading, but CPU2 epoch stayed
+1023 and LogicAlive stayed 2849. The gate timed out DISARMED with Cpu2BootEpochStale;
+IPC was skipped. This establishes the stale-state boundary, not its firmware cause.
+
+The replay exposed durable finalization defects: wrapping a failed IPC tool result
+hid its twoPhaseIsolation marker; an always-halt guard read a disconnected CPU2;
+and worker cleanup replaced QUARANTINED with READY. Preserve structured workflow
+errors and the first failing boundary, never gate a halt on readable firmware
+mirrors, require explicit per-core halt confirmation, and keep quarantine through
+fenced cleanup. Boot-contract timeouts are not automatically retryable. Secondary
+failures remain in their step/event records. These fixes require fresh runtime
+activation and hardware verification; the original hardware evidence is immutable.

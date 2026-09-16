@@ -129,7 +129,7 @@ export class StepRegistry {
       }
       case "haltCores": {
         const activeSessionId = requiredSessionId(sessionId);
-        const halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId: activeSessionId, coreIds: step.coreIds }));
+        const halt = await this.invokeConfirmedHalt(context, activeSessionId, step.coreIds);
         return { success: true, sessionId: activeSessionId, halt };
       }
       case "reconnectAfterTargetReset":
@@ -659,10 +659,10 @@ export class StepRegistry {
   }
 
   private async invokeConfirmedHalt(context: StepExecutionContext, sessionId: string, coreIds: readonly number[]): Promise<Record<string, unknown>> {
-    const halt = await this.invokeRequired("c2000_haltCores", fenced(context, { sessionId, coreIds: [...coreIds] }));
+    const halt = await this.tools.invokeTool("c2000_haltCores", fenced(context, { sessionId, coreIds: [...coreIds] }));
     const results = Array.isArray(halt.results) ? halt.results.filter(isRecord) : [];
     const unconfirmedCoreIds = coreIds.filter(coreId => !results.some(result => result.coreId === coreId && result.success === true));
-    if (unconfirmedCoreIds.length > 0) {
+    if (halt.success !== true || unconfirmedCoreIds.length > 0) {
       throw new DebugMcpError("TargetHaltFailed", "Fenced halt did not confirm every requested core", { sessionId, coreIds, unconfirmedCoreIds, halt });
     }
     return halt;

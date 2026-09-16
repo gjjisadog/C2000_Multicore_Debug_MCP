@@ -22,6 +22,33 @@ afterEach(async () => {
 });
 
 describe("board worker supervisor", () => {
+  test("fenced cleanup cannot clear an isolation quarantine", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-quarantine-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    const supervisor = new BoardWorkerSupervisor({ config: configFor(directory),
+      daemonInstanceId: "daemon-test", registry, workers: new WorkerRepository(store), events,
+      factory: options => new FakeWorker(options, false) });
+    try {
+      const worker = await supervisor.startBoard("board-a");
+      const lease = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-isolation",
+        workerInstanceId: worker.workerInstanceId, ttlMs: 1000 });
+      const reason = { code: "DurableSafetyIsolationFailed", jobId: "job-isolation" };
+      registry.transition("board-a", "QUARANTINED", reason);
+      await supervisor.invokeBoard("board-a", "c2000_closeDebugSession", { __leaseContext: lease.context });
+      registry.leases.release(lease.lease.leaseId, lease.leaseToken);
+      expect(registry.get("board-a")).toMatchObject({ status: "QUARANTINED", lastError: reason });
+      expect(() => registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-next",
+        workerInstanceId: worker.workerInstanceId, ttlMs: 1000 })).toThrow();
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("coalesces concurrent worker startup into one live route", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-start-race-"));
     directories.push(directory);

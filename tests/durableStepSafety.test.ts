@@ -18,6 +18,58 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 
 describe("durable step cleanup and output safety", () => {
+  test.each([false, true])("retains boot timeout and quarantine through halt/cleanup (halt=%s)", async haltOk => {
+    const calls: string[] = [];
+    const primary = {
+      code: "Cpu2BootContractTimeout", message: "stale CPU2 boot epoch",
+      details: { classification: "Cpu2BootEpochStale", twoPhaseIsolation: true,
+        cpu2BootGate: { guardState: "DISARMED" }, halt: { success: false } }
+    };
+    const fixture = await createFixture({
+      async invokeTool(toolName) {
+        calls.push(toolName);
+        if (toolName === "c2000_launchMulticoreDebug") return { success: true, sessionId: "dbg-current" };
+        if (toolName === "c2000_runIpcAcceptance") return { success: false, sessionId: "dbg-current", error: primary };
+        if (toolName === "c2000_haltCores") return {
+          success: haltOk, results: [
+            { coreId: 0, success: true }, { coreId: 2, success: haltOk }
+          ], error: haltOk ? undefined : { code: "TargetHaltFailed" }
+        };
+        if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-current", closed: true };
+        throw new Error(`unexpected tool ${toolName}`);
+      }
+    });
+    try {
+      const jobId = String(fixture.engine.submit({
+        planVersion: 1, name: "boot-timeout-cleanup-replay", boardIds: ["board-a"],
+        artifacts: { cpu1OutPath: "/fw/cpu1.out", cpu2OutPath: "/fw/cpu2.out" },
+        safetyGuards: { conditions: [{ coreId: 2, expression: "g_safe", expected: 0 }] },
+        retryPolicy: { runIpcAcceptance: 3 },
+        steps: [
+          { type: "launchMulticore", loadPrograms: false },
+          { type: "runIpcAcceptance", programPreparation: "symbols-only" },
+          { type: "haltCores", on: "always", coreIds: [0, 2] },
+          { type: "cleanup", on: "always" }
+        ]
+      }).jobId);
+      const terminal = await waitForTerminal(fixture.runs, jobId);
+      expect(terminal).toMatchObject({ status: "FAILED", error: primary });
+      const steps = fixture.runs.steps(jobId);
+      expect(steps[1]).toMatchObject({ status: "FAILED", attempt: 1, error: primary });
+      expect(steps[2]?.status).toBe(haltOk ? "PASSED" : "FAILED");
+      if (!haltOk) expect(steps[2]?.error?.code).not.toBe(primary.code);
+      expect(steps[3]?.status).toBe("PASSED");
+      expect(calls).toEqual(["c2000_launchMulticoreDebug", "c2000_runIpcAcceptance",
+        "c2000_haltCores", "c2000_closeDebugSession"]);
+      expect(fixture.registry.get("board-a")).toMatchObject({ status: "QUARANTINED",
+        lastError: { code: "DurableSafetyIsolationFailed" } });
+      expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    } finally {
+      await fixture.engine.stop();
+      fixture.store.close();
+    }
+  });
+
   test("retries structured cleanup failure in finally before releasing the lease", async () => {
     let closeCalls = 0;
     const fixture = await createFixture({

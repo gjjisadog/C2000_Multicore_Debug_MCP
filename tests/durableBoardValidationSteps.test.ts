@@ -109,7 +109,9 @@ describe("durable board-validation safety steps", () => {
   });
 
   test("runs and halts explicit cores through the same fenced session", async () => {
-    const invoker = new ScriptedInvoker((_toolName, input) => ({ success: true, sessionId: input.sessionId, results: [] }));
+    const invoker = new ScriptedInvoker((_toolName, input) => ({ success: true,
+      sessionId: input.sessionId,
+      results: (input.coreIds as number[]).map(coreId => ({ coreId, success: true })) }));
     const registry = new StepRegistry(invoker);
     const plan = parsePlan([
       { type: "launchMulticore", loadPrograms: false },
