@@ -918,7 +918,7 @@ function isWorkerRouteMismatch(error: unknown): boolean {
 function failedSafetyIsolation(error: Record<string, unknown>): boolean {
   const details = error.details;
   if (!details || typeof details !== "object" || Array.isArray(details)) return false;
-  const isolation = error.code === "SafetyGuardViolation"
+  const isolation = error.code === "SafetyGuardViolation" || (details as Record<string, unknown>).twoPhaseIsolation === true
     ? (details as Record<string, unknown>).halt
     : error.code === "RestoreProgramsFailed" ? (details as Record<string, unknown>).isolation : undefined;
   return Boolean(isolation && typeof isolation === "object" && !Array.isArray(isolation) && (isolation as Record<string, unknown>).success !== true);

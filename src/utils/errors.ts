@@ -124,6 +124,8 @@ export type DebugErrorCode =
   | "EvidenceLimitExceeded"
   | "EvidenceSerializationFailed"
   | "SafetyGuardViolation"
+  | "Cpu2ReadUnavailable"
+  | "Cpu2BootContractTimeout"
   | "ExpressionWaitTimeout"
   | "TargetResetNotObserved"
   | "TargetResetBaselineInvalid"

@@ -6,6 +6,8 @@ import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { assertAllowedReadPath, type FilesystemPolicy } from "../security/pathPolicy.js";
 import { sha256File } from "../utils/fileHash.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
+import { unsignedSample } from "../debug/Cpu2BootGate.js";
+import type { EvaluateResult } from "../debug/types.js";
 
 export interface StepExecutionContext {
   jobId: string;
@@ -238,10 +240,33 @@ export class StepRegistry {
   async assertSafetyGuards(context: StepExecutionContext, sessionId: string, phase: string): Promise<Record<string, unknown>> {
     const guards = context.plan.safetyGuards;
     if (!guards) return { phase, skipped: true };
+    const stepIndex = context.plan.steps.indexOf(context.step);
+    const nextStep = context.plan.steps[stepIndex + 1];
+    const deferCpu2 = phase === "after-step" && context.step.type === "launchMulticore"
+      && nextStep?.type === "runIpcAcceptance"
+      && Boolean(nextStep.systemResetBeforeHandoff?.cpu2BootContract);
+    const conditions = guards.conditions.filter(condition => !deferCpu2 || condition.coreId === 0);
     let evidence: Record<string, unknown>;
     try {
-      const evaluated = await this.evaluateConditions(context, sessionId, guards.conditions);
-      evidence = { phase, checkedAt: new Date().toISOString(), ...evaluated };
+      const evaluated = await this.evaluateConditions(context, sessionId, conditions);
+      const previousIpc = context.plan.steps.slice(0, stepIndex).reverse()
+        .find(step => step.type === "runIpcAcceptance");
+      const booleanExpressions = previousIpc?.type === "runIpcAcceptance"
+        ? previousIpc.systemResetBeforeHandoff?.cpu2BootContract?.mirrorBooleanExpressions ?? [] : [];
+      let mirrorDomain: ReturnType<typeof unsignedSample>[] | undefined;
+      if (!deferCpu2 && booleanExpressions.length > 0) {
+        const read = await this.invokeRequired("c2000_evaluateMany", fenced(context, {
+          sessionId, coreId: 2, expressions: booleanExpressions
+        }));
+        const results = read.results as EvaluateResult[];
+        mirrorDomain = booleanExpressions.map(expression => unsignedSample(
+          results?.find(result => result.expression === expression), 1));
+        evaluated.matched &&= mirrorDomain.every(value => value.status === "OK");
+      }
+      evidence = { phase, checkedAt: new Date().toISOString(), ...evaluated,
+        ...(mirrorDomain ? { mirrorDomain } : {}),
+        ...(deferCpu2 ? { cpu2GuardState: "DISARMED", reason: "exact-pair-loaded-awaiting-two-phase-boot",
+          deferredConditions: guards.conditions.filter(condition => condition.coreId === 2) } : {}) };
       if (evaluated.matched) return evidence;
     } catch (error) {
       evidence = { phase, checkedAt: new Date().toISOString(), matched: false, evaluationError: toStructuredError(error) };

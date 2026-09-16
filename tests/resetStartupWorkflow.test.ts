@@ -6,7 +6,7 @@ import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import type { AdapterSession } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
-import type { CoreId, ResetType } from "../src/debug/types.js";
+import type { CoreId, ResetType, EvaluateResult } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { DebugMcpError } from "../src/utils/errors.js";
 import { sha256File } from "../src/utils/fileHash.js";
@@ -19,6 +19,9 @@ class StartupAdapter extends MockDebugAdapter {
   fail?: "prepare" | "cpu1-prepare" | "post-load-reset";
   stayInBootRom = false;
   failCpu2Pc = false;
+  gateFailure?: "stale" | "app-init" | "logic" | "mirror" | "unsafe" | "armed-read" | "fenced";
+  gateLogic = 0;
+  gateMirrorReads = 0;
   private handedOff = false;
   private applicationStarted = false;
 
@@ -65,6 +68,28 @@ class StartupAdapter extends MockDebugAdapter {
   override async loadProgram(session: AdapterSession, coreId: CoreId, uri: string) {
     this.events.push(`load:${coreId}`);
     await super.loadProgram(session, coreId, uri);
+  }
+  override async evaluateExpression(session: AdapterSession, coreId: CoreId, expression: string): Promise<EvaluateResult> {
+    if (expression.startsWith("c2.")) {
+      this.events.push(`read:${coreId}:${expression}`);
+      if (this.applicationStarted && this.gateFailure === "fenced") return { expression, success: false,
+        error: { code: "LeaseFencingRejected", message: "test fencing" } };
+      const values: Record<string, number> = {
+        "c2.abi": 48, "c2.role": 2,
+        "c2.epoch": this.applicationStarted && this.gateFailure !== "stale" ? 11 : 10,
+        "c2.status": this.gateFailure === "app-init" ? 0 : 32,
+        "c2.logic": this.gateFailure === "logic" ? 0 : ++this.gateLogic
+      };
+      return { expression, success: true, value: String(values[expression]) };
+    }
+    if (coreId === 2 && expression === "ipc.ready") {
+      this.gateMirrorReads++;
+      if (this.gateFailure === "mirror" || (this.gateFailure === "armed-read" && this.gateMirrorReads > 1)) {
+        return { expression, success: true, value: "0x0BAD" };
+      }
+      if (this.gateFailure === "unsafe") return { expression, success: true, value: "0" };
+    }
+    return super.evaluateExpression(session, coreId, expression);
   }
 }
 
@@ -127,6 +152,46 @@ async function systemResetFixture() {
 }
 
 describe("post-load reset and firmware-owned handoff", () => {
+  const bootContract = { abiExpression: "c2.abi", abiVersion: 48, roleExpression: "c2.role", roleValue: 2,
+    epochExpression: "c2.epoch", statusExpression: "c2.status", appInitMask: 32,
+    logicAliveExpression: "c2.logic", timeoutMs: 100, intervalMs: 20 };
+  test("two-phase workflow arms after committed LogicAlive and before IPC readiness", async () => {
+    const { adapter, handlers, input } = await systemResetFixture();
+    const result = await handlers.runIpcAcceptance({ ...input, systemResetBeforeHandoff: {
+      ...input.systemResetBeforeHandoff, cpu2BootContract: bootContract
+    } });
+    expect(result).toMatchObject({ success: true, cpu2BootGate: { guardState: "ARMED", bootEpoch: 11 } });
+    expect(adapter.events.indexOf("read:0:c2.logic")).toBeLessThan(adapter.events.indexOf("connect:2"));
+    expect(result.performedSteps.indexOf("armCpu2SafetyGuard")).toBeLessThan(result.performedSteps.indexOf("waitForIpcReady"));
+    expect(adapter.events).not.toContain("run:2");
+  });
+  test.each(["stale", "app-init", "logic", "mirror"] as const)(
+    "two-phase %s failure halts and captures CPU1 before cleanup without IPC acceptance", async failure => {
+      const { adapter, handlers, input } = await systemResetFixture(); adapter.gateFailure = failure;
+      const result = await handlers.runIpcAcceptance({ ...input, bootSyncExpressions: ["boot.sync"],
+        systemResetBeforeHandoff: { ...input.systemResetBeforeHandoff, cpu2BootContract: bootContract } });
+      expect(result).toMatchObject({ success: false, error: { code: "Cpu2BootContractTimeout", details: {
+        ipcReadySkipped: true, halt: { success: failure === "mirror" }, cpu2BootGate: { guardState: "DISARMED" },
+        firstFaultCpu1: { phase: "after-confirmed-cpu1-halt", results: [{ success: true, value: "waiting" }] }
+      } } });
+      expect(adapter.haltedCores.slice(-2)).toEqual([0, 2]);
+      expect(result.ipcReady).toBeUndefined();
+    });
+  test.each(["unsafe", "armed-read"] as const)("two-phase %s still fails safe", async failure => {
+    const { adapter, handlers, input } = await systemResetFixture(); adapter.gateFailure = failure;
+    const result = await handlers.runIpcAcceptance({ ...input,
+      systemResetBeforeHandoff: { ...input.systemResetBeforeHandoff, cpu2BootContract: bootContract } });
+    expect(result).toMatchObject({ success: false, error: { code: "SafetyGuardViolation", details: { halt: { success: true } } } });
+    expect(adapter.haltedCores.slice(-2)).toEqual([0, 2]);
+  });
+  test("two-phase fencing failure cannot reconnect, retry, or submit a diagnostic halt", async () => {
+    const { adapter, handlers, input } = await systemResetFixture(); adapter.gateFailure = "fenced";
+    const result = await handlers.runIpcAcceptance({ ...input,
+      systemResetBeforeHandoff: { ...input.systemResetBeforeHandoff, cpu2BootContract: bootContract } });
+    expect(result).toMatchObject({ success: false, error: { code: "LeaseFencingRejected" } });
+    expect(adapter.events.filter(event => event === "connect:2")).toHaveLength(0);
+    expect(result.error.details.halt).toBeUndefined();
+  });
   test("authorized System Reset occurs with both cores connected and no later CPU reset/run authority", async () => {
     const { adapter, handlers, input } = await systemResetFixture();
     const result = await handlers.runIpcAcceptance(input);

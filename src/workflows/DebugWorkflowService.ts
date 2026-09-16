@@ -15,13 +15,15 @@ import type {
   runIpcAcceptanceSchema,
   runReloadAndDiagnoseSchema
 } from "../mcp/toolSchemas.js";
-import { DebugMcpError, toStructuredError } from "../utils/errors.js";
+import { DebugMcpError, toStructuredError, type DebugErrorCode } from "../utils/errors.js";
 import { buildBootHandoffVerdict } from "../debug/bootHandoffVerdict.js";
 import { DEFAULT_CPU1_BOOT_EXPRESSIONS, defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
 import { classifyDebugFailure, classifyIpcAcceptance } from "../debug/DebugFailureClassifier.js";
 import { describeWorkflowStartupContract, workflowStartupContractIssues } from "../debug/startupContract.js";
 import { createApplicationEntryPlan, waitForApplicationEntry, type ApplicationEntryCheck } from "../debug/applicationEntry.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
+import { Cpu2BootGate, assertReadOwnership } from "../debug/Cpu2BootGate.js";
+import { bootObservationExpressionSchema, type Cpu2BootContract } from "../jobs/TestPlanSchema.js";
 import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
 import type { DebugEvidence } from "../debug/DebugEvidence.js";
@@ -163,8 +165,29 @@ export class DebugWorkflowService {
       return { ...result, effectiveStartup, workflowStage: "completed" };
     } catch (error) {
       if (error instanceof DebugMcpError) {
+        let isolation: ToolResult | undefined;
+        let firstFaultCpu1: ToolResult | undefined;
+        if (input.systemResetBeforeHandoff?.cpu2BootContract
+          && !["artifact-validation", "artifact-preflight"].includes(workflowStage)
+          && !/lease|fenc|worker|session|cancel|abort|permission|policy/i.test(error.code)) {
+          try {
+            const halt = await this.manager.haltCores(input.sessionId, [input.cpu1CoreId, input.cpu2CoreId]);
+            isolation = { ...halt, success: halt.results.every(result => result.success === true) };
+            assertReadOwnership(halt.results.map(result => ({ ...result, expression: `core:${result.coreId}` })));
+            const expressions = input.bootSyncExpressions ?? [];
+            if (expressions.length > 0 && halt.results.some(result => result.coreId === input.cpu1CoreId && result.success)) {
+              firstFaultCpu1 = { phase: "after-confirmed-cpu1-halt", results:
+                await this.manager.evaluateMany(input.sessionId, input.cpu1CoreId, expressions) };
+            }
+          } catch (failure) {
+            if (!isolation) isolation = { success: false, error: toStructuredError(failure) };
+            else firstFaultCpu1 = { error: toStructuredError(failure) };
+          }
+        }
         throw new DebugMcpError(error.code, error.message, {
           ...error.details,
+          ...(isolation ? { halt: isolation, twoPhaseIsolation: true } : {}),
+          ...(firstFaultCpu1 ? { firstFaultCpu1 } : {}),
           workflowStage,
           effectiveStartup
         });
@@ -194,6 +217,18 @@ export class DebugWorkflowService {
     const maps = this.normalizeMaps(mapsFromPaths(input));
     const runPlan = resolveRunPlan(input.runSequence, input.cpu1CoreId, input.cpu2CoreId);
     const systemResetRequested = input.systemResetBeforeHandoff !== undefined;
+    const bootContract = input.systemResetBeforeHandoff?.cpu2BootContract;
+    const allGuards = [...(input.preStartupSafetyGuard?.conditions ?? []),
+      ...(input.systemResetBeforeHandoff?.postStartupConditions ?? [])];
+    if (bootContract && allGuards.some(condition =>
+      !bootObservationExpressionSchema.safeParse(condition.expression).success
+      || (condition.coreId === input.cpu2CoreId && condition.expected !== 0 && condition.expected !== 1))) {
+      throw new DebugMcpError("StartupContractInvalid", "Two-phase boot requires read-only guards and numeric CPU2 boolean predicates");
+    }
+    const cpu2BootGate = bootContract ? new Cpu2BootGate(bootContract,
+      (coreId, expressions) => this.manager.evaluateManyWithTimeout(input.sessionId, coreId, expressions,
+        bootContract.timeoutMs, { diagnostics: "errors-only" }),
+      allGuards.filter(condition => condition.coreId === input.cpu2CoreId)) : undefined;
     if (systemResetRequested) {
       if (input.device !== "F28P65x" || input.cpu1CoreId !== 0 || input.cpu2CoreId !== 2
         || input.runSequence.runMode !== "cpu1_boots_cpu2" || input.postLoadResetType !== undefined
@@ -291,7 +326,11 @@ export class DebugWorkflowService {
       assertBatchSucceeded("loadSymbols", load);
       if (input.preStartupSafetyGuard) {
         setStage("pre-startup-safety-guard");
-        safetyGuardChecks.push(await this.verifyPreStartupSafetyGuard(input.sessionId, input.preStartupSafetyGuard));
+        safetyGuardChecks.push(await this.verifyPreStartupSafetyGuard(input.sessionId, {
+          ...input.preStartupSafetyGuard,
+          conditions: input.preStartupSafetyGuard.conditions.filter(condition =>
+            !cpu2BootGate || condition.coreId === input.cpu1CoreId)
+        }));
         performedSteps.push("verifyPreStartupSafetyGuard");
       }
     }
@@ -361,6 +400,11 @@ export class DebugWorkflowService {
         throw new DebugMcpError("ArtifactPairInvalid", "System Reset requires an exact pair loaded in the current session", { elfFreshness: systemResetFreshness });
       }
       performedSteps.push("verifyPairBeforeSystemReset");
+      if (cpu2BootGate) {
+        setStage("cpu2-boot-epoch-baseline");
+        await cpu2BootGate.captureBaseline();
+        performedSteps.push("captureCpu2BootEpochBeforeReset");
+      }
     }
     if (runPlan.releaseCpu2BeforeCpu1) {
       // Normally disconnect CPU2 immediately: firmware may already hold it in
@@ -471,7 +515,7 @@ export class DebugWorkflowService {
           performedSteps
         });
       }
-      await sleep(input.runSequence.settleMs);
+      if (!cpu2BootGate) await sleep(input.runSequence.settleMs);
     } else {
       for (const coreId of runPlan.coreOrder) {
         await this.manager.runCore(input.sessionId, coreId);
@@ -479,7 +523,28 @@ export class DebugWorkflowService {
         await sleep(input.runSequence.settleMs);
       }
     }
-    if (runPlan.releaseCpu2BeforeCpu1) {
+    if (cpu2BootGate) {
+      setStage("cpu2-boot-contract");
+      try {
+        await cpu2BootGate.waitAndArm(
+          () => this.verifyPreStartupSafetyGuard(input.sessionId, {
+            conditions: input.preStartupSafetyGuard!.conditions.filter(condition => condition.coreId === input.cpu1CoreId),
+            haltCoreIds: coreIds
+          }, "cpu2-disarmed-cpu1-invariants"),
+          async () => {
+            cpu2Release = { ...cpu2Release,
+              reconnected: await this.manager.connectTarget(input.sessionId, input.cpu2CoreId),
+              reason: "fresh-epoch-app-init-and-logic-commit", fixedSettleUsed: false };
+            performedSteps.push("reconnectCpu2AfterLogicCommit");
+          });
+        performedSteps.push("verifyCpu2BootContract", "armCpu2SafetyGuard");
+      } catch (error) {
+        const cause = toStructuredError(error);
+        throw new DebugMcpError(cause.code as DebugErrorCode, cause.message, { ...cause.details,
+          cpu2BootGate: cpu2BootGate.evidence, postLoadReset, applicationEntry, cpu2Release,
+          artifactPreflight, elfFreshness, performedSteps, ipcReadySkipped: true });
+      }
+    } else if (runPlan.releaseCpu2BeforeCpu1) {
       setStage("cpu2-reconnect");
       cpu2Release = {
         ...cpu2Release,
@@ -492,8 +557,7 @@ export class DebugWorkflowService {
       setStage("post-system-reset-safety-guard");
       try {
         safetyGuardChecks.push(await this.verifyPreStartupSafetyGuard(input.sessionId, {
-          conditions: [...input.preStartupSafetyGuard!.conditions,
-            ...input.systemResetBeforeHandoff.postStartupConditions],
+          conditions: allGuards.filter(condition => !cpu2BootGate || condition.coreId === input.cpu1CoreId),
           haltCoreIds: coreIds
         }, "post-system-reset-startup"));
         performedSteps.push("verifyPostSystemResetSafetyGuard");
@@ -505,10 +569,17 @@ export class DebugWorkflowService {
       }
     }
     setStage("ipc-readiness-wait");
+    const runtimeSafetyCheck = cpu2BootGate ? async () => {
+      await this.verifyPreStartupSafetyGuard(input.sessionId, {
+        conditions: allGuards.filter(condition => condition.coreId === input.cpu1CoreId), haltCoreIds: coreIds
+      }, "cpu2-armed-cpu1-invariants");
+      await cpu2BootGate.verifyRuntime();
+    } : undefined;
     const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
     const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs,
       input.intervalMs, input.pollingStrategy, input.pollingSchedule,
-      input.bootSyncExpressions?.length ? { coreId: input.cpu1CoreId, expressions: input.bootSyncExpressions } : undefined);
+      input.bootSyncExpressions?.length ? { coreId: input.cpu1CoreId, expressions: input.bootSyncExpressions } : undefined,
+      runtimeSafetyCheck);
     performedSteps.push("waitForIpcReady");
     // Freeze the first read set before any follow-up target access. Diagnostic
     // errors must still stop the workflow, but must not erase startup evidence.
@@ -522,6 +593,7 @@ export class DebugWorkflowService {
       snapshotPhase: "post-load-before-startup", initialHalt, reset, load, postLoadHalt,
       ...(postLoadReset ? { postLoadReset } : {}), loadSequence: input.loadSequence,
       safetyGuardChecks: [...safetyGuardChecks],
+      ...(cpu2BootGate ? { cpu2BootGate: cpu2BootGate.evidence } : {}),
       ...(cpu2Release ? { cpu2Release } : {}),
       performedSteps: [...performedSteps]
     };
@@ -567,6 +639,7 @@ export class DebugWorkflowService {
       });
       const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan, applicationEntry });
       performedSteps.push("diagnoseBootHandoff");
+      if (runtimeSafetyCheck && !ipcReady.timedOut) await runtimeSafetyCheck();
       const result: ToolResult = {
         workflow: "c2000_runIpcAcceptance",
         orchestration: "server-internal",
@@ -622,6 +695,7 @@ export class DebugWorkflowService {
         }),
         ipcReady,
         optimization,
+        ...(cpu2BootGate ? { cpu2BootGate: cpu2BootGate.evidence } : {}),
         ...(safetyGuardChecks.length > 0 ? { safetyGuardChecks } : {}),
         ...(timeoutRecovery ? { timeoutRecovery } : {}),
         diagnosis,
@@ -1247,7 +1321,8 @@ export class DebugWorkflowService {
     intervalMs: number,
     strategy: "fixed" | "adaptive" = "adaptive",
     schedule?: Array<{ untilMs?: number; intervalMs: number }>,
-    observations?: { coreId: CoreId; expressions: string[] }
+    observations?: { coreId: CoreId; expressions: string[] },
+    runtimeSafetyCheck?: () => Promise<void>
   ) {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
@@ -1269,12 +1344,14 @@ export class DebugWorkflowService {
     const uniqueExpressionsPerPoll = grouped.reduce((count, group) => count + group.expressions.length, 0);
     while (performance.now() <= deadline) {
       pollIterations++;
+      if (runtimeSafetyCheck) await runtimeSafetyCheck();
       const batches = await Promise.all(grouped.map(async group => ({
         group,
         results: await this.manager.evaluateMany(sessionId, group.coreId, group.expressions)
       })));
       expressionBatchCalls += batches.length;
       expressionCount += uniqueExpressionsPerPoll;
+      if (runtimeSafetyCheck) await runtimeSafetyCheck();
       lastConditions = batches.flatMap(({ group, results }) => group.conditions.map(condition =>
         conditionResult(condition, results.find(result => result.expression === condition.expression))
       ));
@@ -1462,7 +1539,7 @@ async function assertIpcArtifactSet(input: {
   cpu2MapSha256?: string;
   ipcReadyExpressions?: ExpressionCondition[];
   bootSyncExpressions?: string[];
-  systemResetBeforeHandoff?: { postStartupConditions: ExpressionCondition[] };
+  systemResetBeforeHandoff?: { postStartupConditions: ExpressionCondition[]; cpu2BootContract?: Cpu2BootContract };
 }, normalizePath: (artifactPath: string) => string = artifactPath => artifactPath): Promise<ToolResult> {
   const normalizedInput = {
     ...input,
@@ -1520,7 +1597,12 @@ async function assertIpcArtifactSet(input: {
       ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
       // Symbol validation only: these observations never become readiness gates.
       ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 })),
-      ...(input.systemResetBeforeHandoff?.postStartupConditions ?? [])
+      ...(input.systemResetBeforeHandoff?.postStartupConditions ?? []),
+      ...Object.entries(input.systemResetBeforeHandoff?.cpu2BootContract ?? {})
+        .filter(([key]) => key.endsWith("Expression"))
+        .map(([, expression]) => ({ coreId: input.cpu1CoreId, expression: String(expression), expected: 0 })),
+      ...(input.systemResetBeforeHandoff?.cpu2BootContract?.mirrorBooleanExpressions ?? [])
+        .map(expression => ({ coreId: input.cpu2CoreId, expression, expected: 0 }))
     ]
   });
   issues.push(...artifactSemantics.issues);
