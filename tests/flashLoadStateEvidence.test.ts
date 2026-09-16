@@ -93,7 +93,7 @@ describe("F28P65x Flash load state evidence", () => {
   test("binds the Flash plugin core independently of the DebugSession", () => {
     const h = harness();
     h.state.coreSelections = { 0: "CPU2", 2: "CPU1" };
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result.status).toBe("OK");
     expect(result.value.flashLoadEvidence.loaderCoreSelection).toEqual([
       { coreId: 0, coreName: "C28xx_CPU1", option: "FlashCoreSelection",
@@ -110,7 +110,7 @@ describe("F28P65x Flash load state evidence", () => {
 
   test("records already-correct plugin core selections without rewriting them", () => {
     const h = harness();
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result.value.flashLoadEvidence.loaderCoreSelection).toEqual([
       expect.objectContaining({ coreId: 0, before: "CPU1", after: "CPU1", changed: false, verified: true }),
       expect.objectContaining({ coreId: 2, before: "CPU2", after: "CPU2", changed: false, verified: true })
@@ -122,7 +122,7 @@ describe("F28P65x Flash load state evidence", () => {
     const h = harness();
     h.state.coreSelections[0] = "CPU2";
     h.state.selectionFault = fault;
-    const result = h.command("prepareFlashLoad");
+    const result = h.prepare();
     expect(result.status).toBe("FAIL");
     expect(result.flashLoadEvidence.loaderCoreSelection[0]).toMatchObject({ coreId: 0, verified: false });
     expect(result.flashLoadEvidence.loaderCoreSelection[0].error).toBeTruthy();
