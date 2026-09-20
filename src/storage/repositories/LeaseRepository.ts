@@ -27,6 +27,11 @@ export class LeaseRepository {
     return row ? mapLease(row) : undefined;
   }
 
+  latestForBoard(boardId: string): (BoardLease & { leaseTokenHash: string }) | undefined {
+    const row = this.store.get<LeaseRow>("SELECT * FROM board_leases WHERE board_id = ? ORDER BY fencing_token DESC LIMIT 1", [boardId]);
+    return row ? mapLease(row) : undefined;
+  }
+
   /**
    * Return every unreleased generation, including invalidated generations.
    * Invalidated rows are no longer active, but they still need terminal

@@ -8,7 +8,7 @@ import { BoardRegistry } from "./BoardRegistry.js";
 import type { BoardWorkerClient, BoardWorkerFactory } from "./BoardWorkerClient.js";
 import { BoardWorkerProcess } from "./BoardWorkerProcess.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
-import type { BoardLeaseContext } from "./types.js";
+import type { BoardLeaseContext, BoardLeaseReconciliationResult } from "./types.js";
 
 interface ManagedWorker {
   client: BoardWorkerClient;
@@ -37,6 +37,7 @@ export class BoardWorkerSupervisor {
       workers: WorkerRepository;
       events: EventRepository;
       factory?: BoardWorkerFactory;
+      reconcileWorkerLease?: (boardId: string, workerInstanceId: string) => BoardLeaseReconciliationResult;
     }
   ) {
     this.factory = options.factory ?? ((launch, config) => new BoardWorkerProcess(launch, config));
@@ -86,13 +87,14 @@ export class BoardWorkerSupervisor {
 
   private async startBoardInternal(boardId: string): Promise<BoardWorkerClient> {
     const board = this.options.registry.get(boardId);
+    const previousWorkerInstanceId = board.currentWorkerInstanceId;
     if (this.requiresCcxmlProbeValidation) {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
     }
     // A daemon restart can publish a new worker without going through
     // restartBoard().  Invalidate any persisted resident-image belief before
     // that worker can service a new target command.
-    if (this.options.registry.targetIdentity(boardId).status !== "UNKNOWN") {
+    if (this.options.registry.targetIdentity(boardId).status !== "UNKNOWN" || previousWorkerInstanceId !== undefined) {
       this.options.registry.markTargetIdentityUnknown(boardId, "worker-start");
     }
     this.options.registry.transition(boardId, "STARTING");
@@ -121,9 +123,23 @@ export class BoardWorkerSupervisor {
         startedAt: client.processStartTime,
         ownedDssProcesses: []
       });
+      const leaseReconciliation = this.options.reconcileWorkerLease?.(boardId, client.workerInstanceId);
       this.options.registry.setWorker(boardId, client.workerInstanceId);
       this.options.registry.transition(boardId, "READY");
-      this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, workerGeneration, eventType: "WORKER_STARTED", payload: { pid: client.pid, probeSerial: board.probeSerial } });
+      this.options.events.append({
+        level: "info",
+        sourceType: "worker",
+        sourceId: client.workerInstanceId,
+        boardId,
+        workerInstanceId: client.workerInstanceId,
+        workerGeneration,
+        eventType: "WORKER_STARTED",
+        payload: {
+          pid: client.pid,
+          probeSerial: board.probeSerial,
+          ...(leaseReconciliation ? { leaseReconciliation } : {})
+        }
+      });
       return client;
     } catch (error) {
       this.workers.delete(boardId);

@@ -33,6 +33,13 @@ export interface TestRunBoardRecord {
   error?: Record<string, unknown>;
 }
 
+export interface ActiveTestRunBoardRecord {
+  jobId: string;
+  boardId: string;
+  status: string;
+  sessionId?: string;
+}
+
 export interface TestStepRecord {
   stepRunId: string;
   jobId: string;
@@ -78,6 +85,22 @@ export class TestRunRepository {
     return this.store.all<Record<string, unknown>>("SELECT * FROM test_run_boards WHERE job_id = ? ORDER BY board_id", [jobId]).map(row => ({
       jobId: String(row.job_id), boardId: String(row.board_id), probeSerial: String(row.probe_serial), status: String(row.status), currentStepIndex: Number(row.current_step_index),
       ...(row.session_id ? { sessionId: String(row.session_id) } : {}), ...(row.started_at ? { startedAt: String(row.started_at) } : {}), ...(row.finished_at ? { finishedAt: String(row.finished_at) } : {}), ...(row.error_json ? { error: parseJson(String(row.error_json), {}) } : {})
+    }));
+  }
+
+  listActiveForBoard(boardId: string): ActiveTestRunBoardRecord[] {
+    return this.store.all<Record<string, unknown>>(`
+      SELECT test_runs.job_id, test_runs.status, test_run_boards.board_id, test_run_boards.session_id
+      FROM test_runs
+      INNER JOIN test_run_boards ON test_run_boards.job_id = test_runs.job_id
+      WHERE test_run_boards.board_id = ?
+        AND test_runs.status NOT IN ('PASSED', 'FAILED', 'PARTIAL', 'CANCELLED', 'NEEDS_MANUAL_INTERVENTION')
+      ORDER BY test_runs.submitted_at
+    `, [boardId]).map(row => ({
+      jobId: String(row.job_id),
+      boardId: String(row.board_id),
+      status: String(row.status),
+      ...(row.session_id ? { sessionId: String(row.session_id) } : {})
     }));
   }
 

@@ -1640,6 +1640,7 @@ export class DebugWorkflowService {
       const details = structured.details ?? {};
       return {
         requested: true,
+        applicable: true,
         supported: true,
         skipped: false,
         matched: false,
@@ -2463,7 +2464,7 @@ function defaultBundleDir(label: string, filesystem?: FilesystemPolicy): string 
 }
 
 function runtimeRamOwnershipAccepted(status: ToolResult | undefined): boolean {
-  return status?.requested !== true || status.matched === true;
+  return status?.requested !== true || status.applicable === false || status.matched === true;
 }
 
 function numberValue(value: unknown): number | undefined {

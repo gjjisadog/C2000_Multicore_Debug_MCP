@@ -497,6 +497,17 @@ export class DebugDaemon {
       registry: this.registry,
       workers: this.workers,
       events,
+      reconcileWorkerLease: (boardId, workerInstanceId) => {
+        if (!this.registry || !this.sessions || !this.testRuns) {
+          throw new DebugMcpError("DaemonStarting", "Lease reconciliation is not ready");
+        }
+        return this.registry.reconcileWorkerChange(boardId, workerInstanceId, {
+          activeJobs: this.testRuns.listActiveForBoard(boardId).map(job => ({ jobId: job.jobId, status: job.status })),
+          openSessions: this.sessions.listByBoard(boardId)
+            .filter(session => !session.closedAt)
+            .map(session => ({ sessionId: session.sessionId, ...(session.workerInstanceId ? { workerInstanceId: session.workerInstanceId } : {}) }))
+        });
+      },
     });
     this.workerSupervisor = workerSupervisor;
     const toolRouter = new DaemonToolRouter(
@@ -773,13 +784,22 @@ export class DebugDaemon {
     const supervisor = this.workerSupervisor;
     if (!board || !supervisor) throw new Error("Board recovery is not ready");
     const activeLease = this.registry?.leases.active(input.boardId);
+    const leaseState = this.registry?.leaseState(input.boardId);
+    const activeJobs = this.testRuns?.listActiveForBoard(input.boardId) ?? [];
+    const openSessions = this.sessions?.listByBoard(input.boardId).filter(session => !session.closedAt) ?? [];
     const recoveryBlocked = activeLease
       ? {
-          code: "ActiveBoardLease",
+          code: leaseState?.status === "STALE" ? "StaleBoardLease" : "ActiveBoardLease",
           leaseId: activeLease.leaseId,
           ownerJobId: activeLease.ownerJobId,
           workerInstanceId: activeLease.workerInstanceId,
-          remediation: "Close or fence the owning session/job first; do not restart a worker behind a live board owner."
+          leaseStatus: leaseState?.status,
+          reason: leaseState?.reason,
+          blockers: [
+            ...activeJobs.map(job => ({ kind: "job", id: job.jobId, status: job.status })),
+            ...openSessions.map(session => ({ kind: "session", id: session.sessionId, workerInstanceId: session.workerInstanceId }))
+          ],
+          remediation: "Close the owning session/job through the daemon first; stale leases are never force-released behind a live owner."
         }
       : undefined;
     if (input.dryRun) {
@@ -788,7 +808,9 @@ export class DebugDaemon {
         dryRun: true,
         boardId: board.boardId,
         probeSerial: board.probeSerial,
-        action: recoveryBlocked ? "BLOCKED_ACTIVE_BOARD_LEASE" : "RESTART_DAEMON_OWNED_WORKER_ONLY",
+        action: recoveryBlocked
+          ? recoveryBlocked.code === "StaleBoardLease" ? "BLOCKED_STALE_BOARD_LEASE" : "BLOCKED_ACTIVE_BOARD_LEASE"
+          : "RESTART_DAEMON_OWNED_WORKER_ONLY",
         externalProcessTermination: false,
         ...(recoveryBlocked ? { blocked: recoveryBlocked } : {})
       };
