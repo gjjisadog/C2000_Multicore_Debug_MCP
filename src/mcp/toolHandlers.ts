@@ -9,8 +9,8 @@ import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js"
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
-import { resolveSymbolAddressFromMap } from "../hardware/mapSymbols.js";
 import { formatDebugProcessOwners, getConnectedProbeSerials, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
+import { verifyResidentImageForSession } from "../debug/residentImageVerification.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
@@ -89,6 +89,7 @@ import {
   runBootHandoffDiagnosisSchema,
   runFullDebugBundleSchema,
   runIpcAcceptanceSchema,
+  launchResidentIpcDebugSchema,
   runResidentIpcDebugSchema,
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
@@ -110,7 +111,6 @@ import {
   verifyMapSchema,
   verifyRegressionSchema,
   verifyReviewSchema,
-  residentImageManifestSchema,
   verifyResidentImageSchema,
   runEngineeringVerificationSchema,
   getVerificationResultSchema,
@@ -1107,7 +1107,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
 
     async loadSymbols(input: z.infer<typeof loadSymbolsSchema>) {
       try {
-        return ok(await manager.loadSymbols(input.sessionId, input.coreId, input.programUri));
+        return ok(await manager.loadSymbols(input.sessionId, input.coreId, input.programUri, input.mapUri));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, coreId: input.coreId, targetMemoryWritten: false });
       }
@@ -1220,94 +1220,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
      */
     async verifyResidentImage(input: z.infer<typeof verifyResidentImageSchema>) {
       try {
-        const connectedCoreIds = new Set<number>();
-        const results: ToolResult[] = [];
-        const connectIfNeeded = input.connectIfNeeded !== false;
-        for (const request of input.checks) {
-          const programUri = manager.normalizeArtifactUri(request.programUri);
-          const manifestUri = manager.normalizeArtifactUri(request.manifestUri);
-          const manifestMetadata = await fileMetadata(manifestUri);
-          const manifest = residentImageManifestSchema.parse(JSON.parse(await readFile(manifestUri, "utf8")));
-          const programMetadata = await fileMetadata(programUri);
-          if (programMetadata.sha256.toLowerCase() !== manifest.programSha256.toLowerCase()) {
-            throw new DebugMcpError("ResidentImageManifestMismatch", "Resident-image manifest does not bind to the requested .out artifact", {
-              sessionId: input.sessionId,
-              coreId: request.coreId,
-              programUri,
-              manifestUri,
-              programSha256: programMetadata.sha256,
-              manifestProgramSha256: manifest.programSha256,
-              targetMemoryWritten: false,
-              nextAction: "Regenerate the manifest from the exact .out artifact and retry the read-only verification."
-            });
-          }
-
-          if (connectIfNeeded && !connectedCoreIds.has(request.coreId)) {
-            const state = await manager.getTargetState(input.sessionId, request.coreId);
-            if (!state.connected) await manager.connectTarget(input.sessionId, request.coreId);
-            connectedCoreIds.add(request.coreId);
-          }
-
-          const identity = manifest.identity;
-          const mapUri = request.mapUri === undefined ? undefined : manager.normalizeArtifactUri(request.mapUri);
-          const address = identity.address !== undefined
-            ? parseStrictAddress(identity.address)
-            : mapUri === undefined
-              ? (() => { throw new DebugMcpError("ResidentImageManifestInvalid", "A mapUri is required when the manifest identifies its marker by symbol", { manifestUri, coreId: request.coreId, targetMemoryWritten: false }); })()
-              : await resolveSymbolAddressFromMap(mapUri, identity.symbol!);
-          const expectedValue = normalizeIdentityValue(identity.expectedValue, identity.typeSize);
-          const actualValue = normalizeIdentityValue(
-            await manager.readMemory(input.sessionId, request.coreId, identity.page, address, identity.typeSize),
-            identity.typeSize
-          );
-          const coreName = await resolveCoreName(input.sessionId, request.coreId);
-          results.push({
-            coreId: request.coreId,
-            coreName,
-            programUri,
-            manifestUri,
-            manifestSha256: manifestMetadata.sha256,
-            programSha256: programMetadata.sha256,
-            marker: {
-              ...(identity.symbol !== undefined ? { symbol: identity.symbol } : {}),
-              address: formatHexAddress(address),
-              page: identity.page,
-              typeSize: identity.typeSize,
-              expectedValue,
-              actualValue,
-              matched: actualValue === expectedValue
-            }
-          });
-        }
-
-        const verified = results.every(result => result.marker.matched === true);
-        const evidence = {
+        return ok(await verifyResidentImageForSession(manager, {
           sessionId: input.sessionId,
-          verified,
-          verificationMethod: "resident-image-manifest-raw-memory",
-          targetAccess: {
-            connection: connectIfNeeded ? "connect-if-needed" : "existing-session-only",
-            programming: false,
-            symbolLoad: false,
-            reset: false,
-            run: false,
-            targetMemoryWrite: false
-          },
-          checks: results
-        };
-        if (!verified) {
-          return {
-            ...evidence,
-            success: false,
-            timestamp: new Date().toISOString(),
-            error: {
-              code: "ResidentImageMismatch",
-              message: "One or more resident-image identity markers did not match the manifest",
-              details: { sessionId: input.sessionId, targetMemoryWritten: false }
-            }
-          };
-        }
-        return ok(evidence);
+          checks: input.checks,
+          connectIfNeeded: input.connectIfNeeded
+        }));
       } catch (error) {
         return fail(error, { sessionId: input.sessionId, targetMemoryWritten: false });
       }
@@ -1562,8 +1479,10 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async runResidentIpcDebug(input: z.input<typeof runResidentIpcDebugSchema>) {
       try {
         const resident = runResidentIpcDebugSchema.parse(input);
+        const artifacts = await resolveResidentDebugArtifacts(manager, resident);
         const parsed = runIpcAcceptanceSchema.parse({
           ...resident,
+          ...artifacts,
           resetType: "default",
           programPreparation: "symbols-only",
           loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 0 },
@@ -1589,6 +1508,51 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         });
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
+      }
+    },
+
+    async launchResidentIpcDebug(input: z.input<typeof launchResidentIpcDebugSchema>) {
+      try {
+        const resident = launchResidentIpcDebugSchema.parse(input);
+        const artifacts = await resolveResidentDebugArtifacts(manager, resident);
+        const parsed = launchAndRunIpcAcceptanceSchema.parse({
+          ...resident,
+          ...artifacts,
+          sessionName: resident.sessionName ?? "launch-resident-ipc-debug",
+          resetType: "default",
+          programPreparation: "symbols-only",
+          loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 0 },
+          runSequence: {
+            runMode: resident.runMode,
+            runCpu1First: resident.runMode !== "cpu2_pre_running",
+            runCpu2: resident.runMode !== "cpu1_boots_cpu2",
+            settleMs: resident.settleMs
+          }
+        });
+        assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
+        const result = await workflows.launchAndRunIpcAcceptance(parsed);
+        return ok({
+          ...result,
+          workflow: "c2000_launchResidentIpcDebug",
+          residentDebug: {
+            programPreparation: "symbols-only",
+            targetMemoryWritten: false,
+            targetFlashVerified: false,
+            flashProgramming: false,
+            defaultRunMode: "cpu1_boots_cpu2",
+            residentIdentityPolicy: resident.residentIdentityPolicy,
+            sessionMode: resident.sessionMode
+          }
+        });
+      } catch (error) {
+        const structured = toStructuredError(error);
+        const launch = structured.details?.launch;
+        const launchEvidence = launch && typeof launch === "object" && !Array.isArray(launch)
+          ? launch as Record<string, unknown>
+          : undefined;
+        return fail(error, {
+          ...(typeof launchEvidence?.sessionId === "string" ? { sessionId: launchEvidence.sessionId } : {})
+        });
       }
     },
 
@@ -2259,6 +2223,127 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   }
 }
 
+type ResidentDebugArtifactRequest = {
+  sessionId?: string;
+  cpu1CoreId: number;
+  cpu2CoreId: number;
+  cpu1OutPath?: string;
+  cpu2OutPath?: string;
+  cpu1MapPath?: string;
+  cpu2MapPath?: string;
+  residentImageManifests?: Array<{
+    coreId: number;
+    programUri?: string;
+    manifestUri: string;
+    mapUri?: string;
+  }>;
+};
+
+/**
+ * Materialize the resident workflow's artifact pair from explicit paths or
+ * the session's MCP-owned loaded-image registry.  Maps are convenience data:
+ * an omitted map is inferred from a sibling .map when present, while address-
+ * based manifests remain valid without one.
+ */
+async function resolveResidentDebugArtifacts(
+  manager: DebugSessionManager,
+  input: ResidentDebugArtifactRequest
+): Promise<Record<string, unknown>> {
+  const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
+  const loaded = new Map<number, Awaited<ReturnType<DebugSessionManager["getLoadedProgramInfo"]>>>();
+  if (input.sessionId) {
+    for (const coreId of coreIds) {
+      loaded.set(coreId, await manager.getLoadedProgramInfo(input.sessionId, coreId));
+    }
+  }
+
+  const resolveProgram = (coreId: number, explicitUri: string | undefined): string | undefined => {
+    const uri = explicitUri ?? loaded.get(coreId)?.programUri;
+    return uri ? manager.normalizeArtifactUri(uri) : undefined;
+  };
+  const cpu1OutPath = resolveProgram(input.cpu1CoreId, input.cpu1OutPath);
+  const cpu2OutPath = resolveProgram(input.cpu2CoreId, input.cpu2OutPath);
+  if (!cpu1OutPath || !cpu2OutPath) {
+    throw new DebugMcpError("ResidentArtifactsMissing", "Resident IPC debug needs the CPU1/CPU2 .out pair", {
+      sessionId: input.sessionId,
+      missingCoreIds: [
+        ...(!cpu1OutPath ? [input.cpu1CoreId] : []),
+        ...(!cpu2OutPath ? [input.cpu2CoreId] : [])
+      ],
+      nextAction: input.sessionId
+        ? "Load both programs through MCP first, or provide cpu1OutPath and cpu2OutPath explicitly."
+        : "Provide cpu1OutPath and cpu2OutPath for the no-session resident launch."
+    });
+  }
+
+  const resolveMap = async (coreId: number, explicitUri: string | undefined, programUri: string): Promise<string | undefined> => {
+    const loadedUri = loaded.get(coreId)?.mapUri;
+    if (explicitUri) return manager.normalizeArtifactUri(explicitUri);
+    if (loadedUri) return manager.normalizeArtifactUri(loadedUri);
+    return deriveSiblingMap(programUri);
+  };
+  const cpu1MapPath = await resolveMap(input.cpu1CoreId, input.cpu1MapPath, cpu1OutPath);
+  const cpu2MapPath = await resolveMap(input.cpu2CoreId, input.cpu2MapPath, cpu2OutPath);
+
+  const programByCore = new Map([
+    [input.cpu1CoreId, cpu1OutPath],
+    [input.cpu2CoreId, cpu2OutPath]
+  ]);
+  const mapByCore = new Map([
+    [input.cpu1CoreId, cpu1MapPath],
+    [input.cpu2CoreId, cpu2MapPath]
+  ]);
+  const manifests = input.residentImageManifests?.map(request => {
+    if (!programByCore.has(request.coreId)) {
+      throw new DebugMcpError("ResidentArtifactsMissing", "Resident-image manifest coreId is not part of the CPU1/CPU2 workflow pair", {
+        sessionId: input.sessionId,
+        coreId: request.coreId,
+        allowedCoreIds: coreIds,
+        targetMemoryWritten: false
+      });
+    }
+    const programUri = request.programUri
+      ? manager.normalizeArtifactUri(request.programUri)
+      : programByCore.get(request.coreId);
+    if (!programUri) {
+      throw new DebugMcpError("ResidentArtifactsMissing", "Resident-image manifest has no resolvable .out artifact", {
+        sessionId: input.sessionId,
+        coreId: request.coreId,
+        manifestUri: request.manifestUri,
+        targetMemoryWritten: false
+      });
+    }
+    const mapUri = request.mapUri
+      ? manager.normalizeArtifactUri(request.mapUri)
+      : mapByCore.get(request.coreId);
+    return {
+      ...request,
+      programUri,
+      ...(mapUri ? { mapUri } : {})
+    };
+  });
+
+  return {
+    cpu1OutPath,
+    cpu2OutPath,
+    ...(cpu1MapPath ? { cpu1MapPath } : {}),
+    ...(cpu2MapPath ? { cpu2MapPath } : {}),
+    ...(manifests ? { residentImageManifests: manifests } : {})
+  };
+}
+
+async function deriveSiblingMap(programUri: string): Promise<string | undefined> {
+  const extension = path.extname(programUri);
+  if (!extension) return undefined;
+  const candidate = path.join(path.dirname(programUri), `${path.basename(programUri, extension)}.map`);
+  try {
+    const file = await stat(candidate);
+    return file.isFile() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function defaultIpcReadyConditions(cpu1CoreId: number, cpu2CoreId: number) {
   return defaultIpcReadyConditionsCore(cpu1CoreId, cpu2CoreId);
 }
@@ -2619,31 +2704,6 @@ function hardwareAcceptanceCommand(options: {
 
 function shellValue(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
-}
-
-function parseStrictAddress(value: string): number {
-  const trimmed = value.trim();
-  const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
-  const isDecimal = /^[0-9]+$/.test(trimmed);
-  if (!isHex && !isDecimal) throw new Error(`Invalid resident-image marker address: ${value}`);
-  const parsed = isHex ? Number.parseInt(trimmed.slice(2), 16) : Number.parseInt(trimmed, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`Invalid resident-image marker address: ${value}`);
-  return parsed;
-}
-
-function normalizeIdentityValue(value: string | number, typeSize: 8 | 16 | 32): number {
-  const parsed = typeof value === "number"
-    ? value
-    : /^0x/i.test(value) ? Number.parseInt(value.slice(2), 16) : Number.parseInt(value, 10);
-  const max = typeSize === 8 ? 0xff : typeSize === 16 ? 0xffff : 0xffffffff;
-  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > max) {
-    throw new Error(`Resident-image marker value is outside uint${typeSize}: ${String(value)}`);
-  }
-  return parsed;
-}
-
-function formatHexAddress(value: number): string {
-  return `0x${value.toString(16).toUpperCase()}`;
 }
 
 function normalizeExpressionAssignment<T extends {

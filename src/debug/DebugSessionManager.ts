@@ -7,6 +7,10 @@ import type {
   CoreId,
   CoreInfo,
   CoreSnapshot,
+  Cpu2FaultEvidence,
+  Cpu2FaultEvidenceOptions,
+  DiagnosticExpressionEvidence,
+  DiagnosticMemoryWindow,
   CreateDebugSessionOptions,
   EvaluateResult,
   ExpressionComparisonRequest,
@@ -39,7 +43,7 @@ import { normalizeProgramUri, normalizeWorkspacePath } from "../utils/pathUtils.
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
 import { flashOwnershipActionsForMap, mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
-import { resolveDiagnosticsDefaults, type DiagnosticsDefaults } from "./defaultDiagnostics.js";
+import { resolveCpu2FaultEvidenceOptions, resolveDiagnosticsDefaults, type DiagnosticsDefaults } from "./defaultDiagnostics.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
 import { SessionQueue } from "../utils/sessionQueue.js";
@@ -614,9 +618,10 @@ export class DebugSessionManager {
     return this.loadProgramWithMap(sessionId, coreId, programUri);
   }
 
-  async loadSymbols(sessionId: string, coreId: CoreId, programUri: string) {
+  async loadSymbols(sessionId: string, coreId: CoreId, programUri: string, mapUri?: string) {
     return this.exclusive(sessionId, async () => {
       const normalizedUri = this.normalizeArtifactUri(programUri);
+      const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
       const { session, core } = this.requireCore(sessionId, coreId);
       try {
         await access(normalizedUri);
@@ -641,18 +646,25 @@ export class DebugSessionManager {
         });
       }
       const metadata = await fileMetadata(normalizedUri);
-      this.logger.info("symbols loaded without target programming", { sessionId, coreId, programUri: normalizedUri, sha256: metadata.sha256 });
-      return {
+      const info: LoadedProgramInfo = {
         sessionId,
         coreId,
         coreName: core.coreName,
         programUri: normalizedUri,
-        symbolsLoaded: true,
-        targetMemoryWritten: false,
+        ...(normalizedMapUri ? { mapUri: normalizedMapUri } : {}),
         loadedAt: new Date().toISOString(),
         fileMTime: metadata.fileMTime,
         fileSize: metadata.fileSize,
-        sha256: metadata.sha256
+        sha256: metadata.sha256,
+        symbolsLoaded: true,
+        warning: "Symbols were loaded through this MCP; target memory was not written."
+      };
+      this.loadedPrograms.set(info);
+      this.logger.info("symbols loaded without target programming", { sessionId, coreId, programUri: normalizedUri, sha256: metadata.sha256 });
+      return {
+        ...info,
+        targetMemoryWritten: false,
+        targetFlashVerified: false
       };
     });
   }
@@ -1785,12 +1797,235 @@ export class DebugSessionManager {
     }
   }
 
+  /**
+   * Collect a bounded CPU2 fault context without issuing run, halt, reset, or
+   * memory-write commands.  This is intentionally a manager primitive rather
+   * than an arbitrary-address MCP tool so the session/core lease fencing stays
+   * in one place.
+   */
+  async collectCpu2FaultEvidence(options: {
+    sessionId: string;
+    cpu1CoreId: CoreId;
+    cpu2CoreId: CoreId;
+    cpu2Pc?: ResolveResult;
+    cpu2FaultEvidence?: Cpu2FaultEvidenceOptions;
+  }): Promise<Cpu2FaultEvidence> {
+    return this.exclusive(options.sessionId, async () => this.collectCpu2FaultEvidenceUnlocked(options));
+  }
+
+  private async collectCpu2FaultEvidenceUnlocked(options: {
+    sessionId: string;
+    cpu1CoreId: CoreId;
+    cpu2CoreId: CoreId;
+    cpu2Pc?: ResolveResult;
+    cpu2FaultEvidence?: Cpu2FaultEvidenceOptions;
+  }): Promise<Cpu2FaultEvidence> {
+    const { core: cpu1 } = this.requireCore(options.sessionId, options.cpu1CoreId);
+    const { core: cpu2 } = this.requireCore(options.sessionId, options.cpu2CoreId);
+    const configuration = resolveCpu2FaultEvidenceOptions(options.cpu2FaultEvidence, options.cpu1CoreId);
+    const pc = options.cpu2Pc ?? await this.resolvePcUnlocked(options.sessionId, options.cpu2CoreId);
+    const failures: Array<Record<string, unknown>> = [];
+
+    const registerExpressions = [
+      { label: "sp", expression: configuration.cpu2SpExpression },
+      { label: "ier", expression: configuration.cpu2IerExpression },
+      { label: "ifr", expression: configuration.cpu2IfrExpression }
+    ] as const;
+    const registerResults = await this.evaluateDiagnosticExpressionsUnlocked(
+      options.sessionId,
+      options.cpu2CoreId,
+      registerExpressions.map(item => item.expression)
+    );
+    const resetResults = await this.evaluateDiagnosticExpressionsUnlocked(
+      options.sessionId,
+      configuration.resetReasonCoreId,
+      [configuration.cpu2ResetReasonExpression, configuration.systemResetCauseExpression]
+    );
+    const registerEvidence = (item: typeof registerExpressions[number]): DiagnosticExpressionEvidence => {
+      const result = resultForExpression(registerResults, item.expression);
+      if (!result.success) {
+        failures.push({ scope: "register", label: item.label, coreId: options.cpu2CoreId, expression: item.expression, error: result.error });
+      }
+      return { label: item.label, coreId: options.cpu2CoreId, coreName: cpu2.coreName, expression: item.expression, result };
+    };
+    const resetEvidence = (
+      label: "cpu2" | "system",
+      expression: string
+    ): DiagnosticExpressionEvidence => {
+      const result = resultForExpression(resetResults, expression);
+      if (!result.success) {
+        failures.push({ scope: "reset-reason", label, coreId: configuration.resetReasonCoreId, expression, error: result.error });
+      }
+      let coreName = `core-${configuration.resetReasonCoreId}`;
+      if (configuration.resetReasonCoreId === options.cpu1CoreId) {
+        coreName = cpu1.coreName;
+      } else {
+        // The reset-status expression is operator-overridable.  Keep a bad
+        // optional core override inside the best-effort evidence record
+        // instead of allowing core-name formatting to abort the whole read.
+        try {
+          coreName = this.requireCore(options.sessionId, configuration.resetReasonCoreId).core.coreName;
+        } catch {
+          // evaluateDiagnosticExpressionsUnlocked already records the failed
+          // expression result; the fallback name preserves that evidence.
+        }
+      }
+      return { label, coreId: configuration.resetReasonCoreId, coreName, expression, result };
+    };
+
+    const registers = {
+      sp: registerEvidence(registerExpressions[0]),
+      ier: registerEvidence(registerExpressions[1]),
+      ifr: registerEvidence(registerExpressions[2])
+    };
+    const resetReason = {
+      cpu2: resetEvidence("cpu2", configuration.cpu2ResetReasonExpression),
+      system: resetEvidence("system", configuration.systemResetCauseExpression)
+    };
+    const stackAddress = numericDiagnosticAddress(registers.sp.result.value);
+    const pcAddress = numericDiagnosticAddress(pc.pc ?? pc.address);
+    const stack = await this.readDiagnosticMemoryWindowUnlocked({
+      sessionId: options.sessionId,
+      coreId: options.cpu2CoreId,
+      page: configuration.stackPage,
+      typeSize: configuration.memoryTypeSize,
+      purpose: "stack-neighborhood",
+      centerAddress: stackAddress,
+      beforeWords: configuration.stackWindowWords,
+      afterWords: configuration.stackWindowWords,
+      missingAddressReason: "SP did not evaluate to a non-negative numeric target address."
+    });
+    const illegalInstructionRegion = await this.readDiagnosticMemoryWindowUnlocked({
+      sessionId: options.sessionId,
+      coreId: options.cpu2CoreId,
+      page: configuration.codePage,
+      typeSize: configuration.memoryTypeSize,
+      purpose: "illegal-instruction-neighborhood",
+      centerAddress: pcAddress,
+      beforeWords: configuration.illegalInstructionWindowWords,
+      afterWords: configuration.illegalInstructionWindowWords,
+      missingAddressReason: "CPU2 PC did not evaluate to a non-negative numeric target address."
+    });
+    if (!stack.complete) failures.push({ scope: "memory", label: "stack", coreId: options.cpu2CoreId, reason: stack.reason });
+    if (!illegalInstructionRegion.complete) {
+      failures.push({ scope: "memory", label: "illegal-instruction-region", coreId: options.cpu2CoreId, reason: illegalInstructionRegion.reason });
+    }
+
+    return {
+      coreId: options.cpu2CoreId,
+      coreName: cpu2.coreName,
+      pc,
+      registers,
+      resetReason,
+      stack,
+      illegalInstructionRegion,
+      collection: {
+        readOnly: true,
+        bestEffort: true,
+        targetMemoryWritten: false,
+        executionControlIssued: false,
+        complete: failures.length === 0,
+        failures
+      }
+    };
+  }
+
+  private async evaluateDiagnosticExpressionsUnlocked(
+    sessionId: string,
+    coreId: CoreId,
+    expressions: string[]
+  ): Promise<EvaluateResult[]> {
+    try {
+      return await this.evaluateManyUnlocked(sessionId, coreId, expressions);
+    } catch (error) {
+      const structured = toStructuredError(error);
+      return expressions.map(expression => ({ expression, success: false, error: structured }));
+    }
+  }
+
+  private async readDiagnosticMemoryWindowUnlocked(options: {
+    sessionId: string;
+    coreId: CoreId;
+    page: string;
+    typeSize: 8 | 16 | 32;
+    purpose: DiagnosticMemoryWindow["purpose"];
+    centerAddress?: number;
+    beforeWords: number;
+    afterWords: number;
+    missingAddressReason: string;
+  }): Promise<DiagnosticMemoryWindow> {
+    const { session, core } = this.requireCore(options.sessionId, options.coreId);
+    const base: DiagnosticMemoryWindow = {
+      coreId: options.coreId,
+      coreName: core.coreName,
+      page: options.page,
+      typeSize: options.typeSize,
+      purpose: options.purpose,
+      ...(options.centerAddress !== undefined ? {
+        centerAddress: options.centerAddress,
+        centerAddressHex: formatDiagnosticAddress(options.centerAddress)
+      } : {}),
+      beforeWords: options.beforeWords,
+      afterWords: options.afterWords,
+      words: [],
+      complete: false
+    };
+    if (options.centerAddress === undefined) {
+      return { ...base, reason: options.missingAddressReason };
+    }
+    if (!this.adapter.readMemory) {
+      return { ...base, reason: "The active debug adapter does not implement readMemory." };
+    }
+    const startAddress = Math.max(0, options.centerAddress - options.beforeWords);
+    const endAddress = Math.min(Number.MAX_SAFE_INTEGER, options.centerAddress + options.afterWords);
+    const words: Cpu2FaultEvidence["stack"]["words"] = [];
+    for (let address = startAddress; address <= endAddress; address += 1) {
+      try {
+        const value = await this.adapter.readMemory(
+          session.adapterSession,
+          options.coreId,
+          options.page,
+          address,
+          options.typeSize
+        );
+        if (!Number.isFinite(value)) {
+          throw new DebugMcpError("MemoryReadFailed", "Diagnostic memory read returned a non-numeric value", {
+            coreId: options.coreId,
+            page: options.page,
+            address,
+            typeSize: options.typeSize,
+            value
+          });
+        }
+        words.push({ address, addressHex: formatDiagnosticAddress(address), success: true, value });
+      } catch (error) {
+        words.push({
+          address,
+          addressHex: formatDiagnosticAddress(address),
+          success: false,
+          error: toStructuredError(error)
+        });
+      }
+    }
+    const complete = words.length > 0 && words.every(word => word.success);
+    return {
+      ...base,
+      startAddress,
+      endAddress,
+      words,
+      complete,
+      ...(complete ? {} : { reason: "One or more bounded diagnostic memory reads failed." })
+    };
+  }
+
   async diagnoseCpu2Boot(options: {
     sessionId: string;
     cpu1CoreId: CoreId;
     cpu2CoreId: CoreId;
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
+    cpu2FaultEvidence?: Cpu2FaultEvidenceOptions;
+    collectCpu2FaultEvidence?: boolean;
     /**
      * Internal workflow optimization: reuse expression results collected by
      * the immediately preceding readiness poll. Snapshot and PC reads still
@@ -1813,6 +2048,15 @@ export class DebugSessionManager {
         ?? await this.evaluateManyUnlocked(options.sessionId, cpu1CoreId, cpu1Expressions);
       const cpu2Results = precomputedExpressionResults.get(cpu2CoreId)
         ?? await this.evaluateManyUnlocked(options.sessionId, cpu2CoreId, cpu2Expressions);
+      const cpu2FaultEvidence = options.collectCpu2FaultEvidence === false
+        ? undefined
+        : await this.collectCpu2FaultEvidenceUnlocked({
+          sessionId: options.sessionId,
+          cpu1CoreId,
+          cpu2CoreId,
+          cpu2Pc,
+          cpu2FaultEvidence: options.cpu2FaultEvidence
+        });
 
       return {
         sessionId: options.sessionId,
@@ -1825,7 +2069,8 @@ export class DebugSessionManager {
         cpu2: {
           coreId: cpu2CoreId,
           pc: cpu2Pc,
-          expressions: cpu2Results
+          expressions: cpu2Results,
+          ...(cpu2FaultEvidence ? { faultEvidence: cpu2FaultEvidence } : {})
         }
       };
     });
@@ -2107,6 +2352,24 @@ function formatAssignmentValue(value: ExpressionAssignmentValue): string {
     return value ? "1" : "0";
   }
   return String(value);
+}
+
+function resultForExpression(results: EvaluateResult[], expression: string): EvaluateResult {
+  return results.find(result => result.expression === expression) ?? {
+    expression,
+    success: false,
+    error: { code: "DiagnosticExpressionMissing", message: "The adapter returned no result for this diagnostic expression." }
+  };
+}
+
+function numericDiagnosticAddress(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim().length === 0) return undefined;
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function formatDiagnosticAddress(address: number): string {
+  return `0x${address.toString(16).toUpperCase().padStart(6, "0")}`;
 }
 
 function assignmentValuesEqual(actual: unknown, expected: string): boolean {

@@ -515,6 +515,26 @@ const residentImageManifestCheckSchema = z.object({
   mapUri: z.string().min(1).optional()
 });
 
+/** Optional manifest input for resident workflows; programUri may be filled
+ * from the workflow's .out pair or the current session's loaded-image record. */
+const residentImageManifestRequestSchema = z.object({
+  coreId: z.number().int(),
+  programUri: z.string().min(1).optional(),
+  manifestUri: z.string().min(1),
+  mapUri: z.string().min(1).optional()
+}).strict();
+
+const residentImageManifestRequestsSchema = z.array(residentImageManifestRequestSchema).min(1).max(2).superRefine((requests, context) => {
+  const coreIds = requests.map(request => request.coreId);
+  if (new Set(coreIds).size !== coreIds.length) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [],
+      message: "residentImageManifests must contain at most one manifest per core"
+    });
+  }
+});
+
 export const residentImageManifestSchema = z.object({
   format: z.literal("c2000-resident-image-manifest"),
   version: z.literal(1),
@@ -570,7 +590,8 @@ export const loadProgramSchema = sessionCoreSchema.extend({
 });
 
 export const loadSymbolsSchema = sessionCoreSchema.extend({
-  programUri: z.string().min(1)
+  programUri: z.string().min(1),
+  mapUri: z.string().min(1).optional()
 });
 
 export const loadProgramsSchema = z.object({
@@ -667,12 +688,37 @@ export const waitForExpressionSetSchema = z.object({
   intervalMs: z.number().int().positive().default(100)
 });
 
+/** Bounded, read-only CPU2 register and memory evidence for fault diagnosis. */
+export const cpu2FaultEvidenceSchema = z.object({
+  cpu2SpExpression: z.string().min(1).default("SP")
+    .describe("CPU2 stack-pointer expression; normally the C28x SP register"),
+  cpu2IerExpression: z.string().min(1).default("IER")
+    .describe("CPU2 interrupt-enable register expression"),
+  cpu2IfrExpression: z.string().min(1).default("IFR")
+    .describe("CPU2 interrupt-flag register expression"),
+  cpu2ResetReasonExpression: z.string().min(1).default("SysCtl_getCPU2ResetStatus()")
+    .describe("Read-only CPU2 reset-status expression, normally evaluated on CPU1 for F28P65x"),
+  systemResetCauseExpression: z.string().min(1).default("SysCtl_getResetCause()")
+    .describe("Read-only system reset-cause expression, normally evaluated on CPU1"),
+  resetReasonCoreId: z.number().int().optional()
+    .describe("Core used for reset-cause expressions; defaults to cpu1CoreId"),
+  stackPage: z.string().min(1).default("DATA"),
+  codePage: z.string().min(1).default("PROGRAM"),
+  stackWindowWords: z.number().int().min(0).max(64).default(16)
+    .describe("Words read before and after SP"),
+  illegalInstructionWindowWords: z.number().int().min(0).max(64).default(8)
+    .describe("Program words read before and after PC"),
+  memoryTypeSize: z.union([z.literal(8), z.literal(16), z.literal(32)]).default(16)
+    .describe("Target memory word width in bits for the two bounded windows")
+}).strict();
+
 export const diagnoseCpu2BootSchema = z.object({
   sessionId: z.string().min(1),
   cpu1CoreId: z.number().int(),
   cpu2CoreId: z.number().int(),
   cpu1Expressions: z.array(z.string().min(1)).optional(),
-  cpu2Expressions: z.array(z.string().min(1)).optional()
+  cpu2Expressions: z.array(z.string().min(1)).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional()
 });
 
 export const diagnoseBootHandoffSchema = diagnoseCpu2BootSchema.extend({
@@ -743,8 +789,8 @@ const runIpcAcceptanceObjectSchema = z.object({
   cpu2CoreId: z.number().int(),
   cpu1OutPath: z.string().min(1),
   cpu2OutPath: z.string().min(1),
-  cpu1MapPath: z.string().min(1),
-  cpu2MapPath: z.string().min(1),
+  cpu1MapPath: z.string().min(1).optional(),
+  cpu2MapPath: z.string().min(1).optional(),
   startupPreset: z.enum(IPC_STARTUP_PRESET_NAMES).optional(),
   resetType: resetTypeSchema.default("default"),
   postLoadResetType: resetTypeSchema.optional().describe("CPU1-only reset after CPU2 disconnect for firmware-owned boot. Defaults to restart after program load; unavailable explicit reset types fail closed."),
@@ -768,6 +814,9 @@ const runIpcAcceptanceObjectSchema = z.object({
   runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
   preStartupSafetyGuard: preStartupSafetyGuardSchema.optional(),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional(),
+  residentImageManifests: residentImageManifestRequestsSchema.optional()
+    .describe("Optional manifest-bound, read-only resident-image checks performed before symbols are loaded"),
   timeoutMs: z.number().int().positive(),
   intervalMs: z.number().int().positive().default(100),
   pollingStrategy: z.enum(["fixed", "adaptive"]).default("adaptive"),
@@ -792,10 +841,10 @@ export const runResidentIpcDebugSchema = z.object({
   device: z.string().min(1).default("F28P65x"),
   cpu1CoreId: z.number().int(),
   cpu2CoreId: z.number().int(),
-  cpu1OutPath: z.string().min(1),
-  cpu2OutPath: z.string().min(1),
-  cpu1MapPath: z.string().min(1),
-  cpu2MapPath: z.string().min(1),
+  cpu1OutPath: z.string().min(1).optional(),
+  cpu2OutPath: z.string().min(1).optional(),
+  cpu1MapPath: z.string().min(1).optional(),
+  cpu2MapPath: z.string().min(1).optional(),
   cpu1EntryAddress: addressValueSchema.optional(),
   applicationEntryTimeoutMs: applicationEntryTimeoutSchema,
   bootModeExpression: z.string().min(1).optional(),
@@ -808,6 +857,9 @@ export const runResidentIpcDebugSchema = z.object({
     haltCoreIds: z.array(z.number().int()).min(1).max(2).default([0, 2])
   }).strict().optional(),
   ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional(),
+  residentImageManifests: residentImageManifestRequestsSchema.optional()
+    .describe("Optional manifest-bound, read-only resident-image checks performed before symbols are loaded"),
   timeoutMs: z.number().int().positive().default(5_000),
   intervalMs: z.number().int().positive().default(100),
   pollingStrategy: z.enum(["fixed", "adaptive"]).default("adaptive"),
@@ -816,6 +868,28 @@ export const runResidentIpcDebugSchema = z.object({
   collectDebugBundle: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
 }).describe("One-call resident-Flash IPC debug: load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory.");
+
+/**
+ * No-session variant of the resident debug shortcut. The daemon selects the
+ * registered board, owns its lease, creates the debug session, and connects
+ * both application cores before entering the symbols-only workflow.
+ */
+export const launchResidentIpcDebugSchema = runResidentIpcDebugSchema.omit({ sessionId: true }).extend({
+  cpu1OutPath: z.string().min(1),
+  cpu2OutPath: z.string().min(1),
+  boardId: z.string().min(1).optional(),
+  residentIdentityPolicy: z.enum(["require-known", "operator-confirmed"]).default("require-known")
+    .describe("Require daemon-verified resident image identity by default. Use operator-confirmed only when the operator explicitly confirms that the programmed Flash image has not changed outside MCP; this still performs symbols-only, no-write debugging."),
+  sessionMode: z.enum(["ephemeral", "interactive"]).default("interactive"),
+  cleanupOnFailure: z.boolean().default(false)
+    .describe("Keep the interactive session after a failed diagnosis so CPU1/CPU2 state can be inspected; ephemeral sessions are always cleaned up."),
+  sessionName: z.string().min(1).optional(),
+  ccxmlPath: z.string().min(1).optional(),
+  autoCloseOnComplete: z.boolean().default(false),
+  autoCloseIdleTimeoutMs: z.number().int().positive().default(60_000),
+  cpu1CoreId: z.number().int().default(0),
+  cpu2CoreId: z.number().int().default(2)
+}).describe("One-call resident-Flash IPC debug: select a registered board, create and connect CPU1/CPU2, load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory.");
 
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true, preStartupSafetyGuard: true }).extend({
   boardId: z.string().min(1).optional(),
@@ -847,6 +921,7 @@ export const runBootHandoffDiagnosisSchema = z.object({
   cpu2MapPath: z.string().min(1).optional(),
   maps: z.array(ramOwnershipMapSchema).min(1).optional(),
   expressions: z.array(expressionConditionSchema).min(1).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   expectedPostLoadHalt: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
@@ -873,6 +948,7 @@ export const runReloadAndDiagnoseSchema = z.object({
   bootModeExpression: z.string().min(1).optional(),
   cpu1ResetStateExpression: z.string().min(1).optional(),
   bootSyncExpressions: z.array(z.string().min(1)).min(1).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional(),
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default"),
   runCpu1: z.boolean().default(true),
   runCpu2: z.boolean().default(false),
@@ -906,6 +982,7 @@ export const runFullDebugBundleSchema = z.object({
   cpu2MapPath: z.string().min(1).optional(),
   maps: z.array(ramOwnershipMapSchema).min(1).optional(),
   expressions: z.array(expressionReadSetSchema).min(1).optional(),
+  cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
 });
@@ -981,7 +1058,8 @@ export const launchMulticoreDebugSchema = z.object({
       cpu1CoreId: z.number().int(),
       cpu2CoreId: z.number().int(),
       cpu1Expressions: z.array(z.string().min(1)).optional(),
-      cpu2Expressions: z.array(z.string().min(1)).optional()
+      cpu2Expressions: z.array(z.string().min(1)).optional(),
+      cpu2FaultEvidence: cpu2FaultEvidenceSchema.optional()
     }).optional(),
     verifyRunPauseIsolation: z.object({
       cpu1CoreId: z.number().int().default(0),

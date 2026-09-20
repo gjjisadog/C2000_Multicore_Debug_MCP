@@ -1,4 +1,4 @@
-import type { CoreId } from "./types.js";
+import type { CoreId, Cpu2FaultEvidenceOptions } from "./types.js";
 
 /** Default Hybrid30K core-communication watch symbols used when callers omit expression lists. */
 export const DEFAULT_CPU1_BOOT_EXPRESSIONS = [
@@ -11,6 +11,36 @@ export const DEFAULT_CPU2_BOOT_EXPRESSIONS = [
   "g_stCoreCommCpu2Watch.emStage",
   "g_stCoreCommCpu2Watch.uiInitParamApplied"
 ] as const;
+
+/**
+ * Register expressions are deliberately overridable because a custom CCS
+ * symbol/register view may use a different spelling.  The reset expressions
+ * are read-only driverlib calls; the CPU2 status API is normally evaluated on
+ * CPU1, where F28P65x exposes the CPU2 reset-status register.
+ */
+export const DEFAULT_CPU2_FAULT_EVIDENCE: Required<Omit<Cpu2FaultEvidenceOptions, "resetReasonCoreId">> = {
+  cpu2SpExpression: "SP",
+  cpu2IerExpression: "IER",
+  cpu2IfrExpression: "IFR",
+  cpu2ResetReasonExpression: "SysCtl_getCPU2ResetStatus()",
+  systemResetCauseExpression: "SysCtl_getResetCause()",
+  stackPage: "DATA",
+  codePage: "PROGRAM",
+  stackWindowWords: 16,
+  illegalInstructionWindowWords: 8,
+  memoryTypeSize: 16
+};
+
+export function resolveCpu2FaultEvidenceOptions(
+  overrides: Cpu2FaultEvidenceOptions | undefined,
+  resetReasonCoreId: CoreId
+): Required<Cpu2FaultEvidenceOptions> {
+  return {
+    ...DEFAULT_CPU2_FAULT_EVIDENCE,
+    ...(overrides ?? {}),
+    resetReasonCoreId: overrides?.resetReasonCoreId ?? resetReasonCoreId
+  };
+}
 
 export interface DefaultIpcReadyCondition {
   label: string;

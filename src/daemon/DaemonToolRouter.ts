@@ -157,7 +157,8 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       "c2000_launchMulticoreDebug",
       "c2000_launchMulticoreDebugSafe",
       "c2000_launchMulticoreDebugWithActions",
-      "c2000_launchAndRunIpcAcceptance"
+      "c2000_launchAndRunIpcAcceptance",
+      "c2000_launchResidentIpcDebug"
     ].includes(toolName)) {
       const boardId = this.selectBoard(record(input).boardId);
       const supplied = readLease(input);
@@ -173,6 +174,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           throw error;
         }
         this.recordTargetMutation(boardId, toolName, input, result);
+        await this.recordVerifiedResidentImage(boardId, toolName, input, result);
         if (result.success === false && result.cleanedUp !== true && failedLaunchCleanupEnabled(toolName, input)) {
           const failedSessionId = launchSessionIdFromResult(result);
           if (failedSessionId) {
@@ -405,12 +407,32 @@ export class DaemonToolRouter implements C2000ToolInvoker {
   private async assertResidentImageIdentity(boardId: string, toolName: string, input: unknown): Promise<void> {
     const requirements = residentImageRequirements(toolName, input);
     if (requirements.length === 0) return;
-    const identity = this.registry.requireKnownTargetIdentity(boardId, requirements.map(item => item.coreId));
+    const values = record(input);
+    const existingIdentity = this.registry.targetIdentity(boardId);
+    const missingCoreIds = requirements
+      .map(item => item.coreId)
+      .filter(coreId => !existingIdentity.programs[String(coreId)]);
+    const manifestVerificationRequested = hasResidentManifestVerification(toolName, input);
+    const operatorConfirmed = toolName === "c2000_launchResidentIpcDebug"
+      && values.residentIdentityPolicy === "operator-confirmed";
+    if ((existingIdentity.status !== "KNOWN" || missingCoreIds.length > 0) &&
+        !operatorConfirmed && !manifestVerificationRequested) {
+      this.registry.requireKnownTargetIdentity(boardId, requirements.map(item => item.coreId));
+    }
+    if (existingIdentity.status !== "KNOWN" || missingCoreIds.length > 0) {
+      // The resident workflow will establish identity through its read-only
+      // manifest marker before symbols are loaded. Do not force a separate
+      // verifyResidentImage round trip when that evidence was supplied.
+      return;
+    }
+    const identity = existingIdentity;
     for (const requirement of requirements) {
-      if (!requirement.programUri) continue;
       const expected = identity.programs[String(requirement.coreId)];
+      const requestedProgramUri = requirement.programUri ?? expected?.programUri;
+      if (!requestedProgramUri) continue;
       try {
-        const metadata = await fileMetadata(normalizeProgramUri(requirement.programUri, this.workspacePath));
+        const normalizedRequestedUri = normalizeProgramUri(requestedProgramUri, this.workspacePath);
+        const metadata = await fileMetadata(normalizedRequestedUri);
         if (metadata.sha256 !== expected?.sha256) {
           throw new DebugMcpError("TargetImageMismatch", "Requested symbols do not match the image recorded for the resident target", {
             boardId,
@@ -418,7 +440,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
             targetGeneration: identity.generation,
             expectedSha256: expected?.sha256,
             requestedSha256: metadata.sha256,
-            requestedProgramUri: normalizeProgramUri(requirement.programUri, this.workspacePath),
+            requestedProgramUri: normalizedRequestedUri,
             nextAction: "Discard the old observation session and load the exact CPU1/CPU2 image pair under one fresh board lease."
           });
         }
@@ -427,7 +449,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         throw new DebugMcpError("TargetImageMismatch", "The requested resident-image artifact could not be hashed for identity verification", {
           boardId,
           coreId: requirement.coreId,
-          programUri: requirement.programUri,
+          programUri: requestedProgramUri,
           targetGeneration: identity.generation,
           cause: error instanceof Error ? error.message : String(error)
         });
@@ -469,17 +491,22 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     input: unknown,
     result: Record<string, unknown>
   ): Promise<void> {
-    if (toolName !== "c2000_verifyResidentImage" || result.success !== true || result.verified !== true) return;
-    if (result.verificationMethod !== "resident-image-manifest-raw-memory") {
+    const directVerification = toolName === "c2000_verifyResidentImage" ? result : record(result.residentVerification);
+    const workflowVerification = toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug";
+    if (!workflowVerification && toolName !== "c2000_verifyResidentImage") return;
+    if (directVerification.success !== true || directVerification.verified !== true) return;
+    if (directVerification.verificationMethod !== "resident-image-manifest-raw-memory") {
       throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification did not report the required verification method", { boardId, targetMemoryWritten: false });
     }
-    const access = record(result.targetAccess);
+    const access = record(directVerification.targetAccess);
     if (access.programming !== false || access.symbolLoad !== false || access.reset !== false || access.run !== false || access.targetMemoryWrite !== false) {
       throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification reported an unsafe target access", { boardId, targetMemoryWritten: false });
     }
-    const inputChecks = record(input).checks;
+    const inputChecks = workflowVerification
+      ? record(input).residentImageManifests
+      : record(input).checks;
     const requested = Array.isArray(inputChecks) ? inputChecks.map(record) : [];
-    const reported = Array.isArray(result.checks) ? result.checks.map(record) : [];
+    const reported = Array.isArray(directVerification.checks) ? directVerification.checks.map(record) : [];
     if (requested.length === 0 || requested.length !== reported.length) {
       throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification did not return one result for each requested core", { boardId, requestedChecks: requested.length, reportedChecks: reported.length, targetMemoryWritten: false });
     }
@@ -487,15 +514,17 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     const programs: TargetProgramMutation[] = [];
     for (const request of requested) {
       const coreId = typeof request.coreId === "number" ? request.coreId : undefined;
-      const programUri = typeof request.programUri === "string" ? normalizeProgramUri(request.programUri, this.workspacePath) : undefined;
-      const manifestUri = typeof request.manifestUri === "string" ? normalizeProgramUri(request.manifestUri, this.workspacePath) : undefined;
       const match = reported.find(candidate => candidate.coreId === coreId);
+      const programUri = typeof request.programUri === "string"
+        ? normalizeProgramUri(request.programUri, this.workspacePath)
+        : typeof match?.programUri === "string" ? normalizeProgramUri(match.programUri, this.workspacePath) : undefined;
+      const manifestUri = typeof request.manifestUri === "string" ? normalizeProgramUri(request.manifestUri, this.workspacePath) : undefined;
       const marker = record(match?.marker);
       if (coreId === undefined || !programUri || !manifestUri || !match || marker.matched !== true) {
         throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification returned incomplete core evidence", { boardId, coreId, targetMemoryWritten: false });
       }
       const [programMetadata, manifestMetadata] = await Promise.all([fileMetadata(programUri), fileMetadata(manifestUri)]);
-      if (match.programUri !== programUri || match.manifestUri !== manifestUri ||
+      if ((typeof request.programUri === "string" && match.programUri !== programUri) || match.manifestUri !== manifestUri ||
           match.programSha256 !== programMetadata.sha256 || match.manifestSha256 !== manifestMetadata.sha256) {
         throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification artifact metadata changed before daemon recording", {
           boardId,
@@ -579,16 +608,28 @@ interface ImageRequirement {
   programUri?: string;
 }
 
+function hasResidentManifestVerification(toolName: string, input: unknown): boolean {
+  if (toolName !== "c2000_runResidentIpcDebug" && toolName !== "c2000_launchResidentIpcDebug") return false;
+  const manifests = record(input).residentImageManifests;
+  return Array.isArray(manifests) && manifests.length > 0;
+}
+
 function residentImageRequirements(toolName: string, input: unknown): ImageRequirement[] {
   const values = record(input);
   if (toolName === "c2000_loadSymbols" && typeof values.coreId === "number" && typeof values.programUri === "string") {
     return [{ coreId: values.coreId, programUri: values.programUri }];
   }
-  if ((toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance" || toolName === "c2000_runResidentIpcDebug") &&
-      (toolName === "c2000_runResidentIpcDebug" || values.programPreparation === "symbols-only")) {
+  if ((toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance" || toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug") &&
+      (toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug" || values.programPreparation === "symbols-only")) {
+    const cpu1CoreId = typeof values.cpu1CoreId === "number"
+      ? values.cpu1CoreId
+      : toolName === "c2000_launchResidentIpcDebug" ? 0 : undefined;
+    const cpu2CoreId = typeof values.cpu2CoreId === "number"
+      ? values.cpu2CoreId
+      : toolName === "c2000_launchResidentIpcDebug" ? 2 : undefined;
     return [
-      ...(typeof values.cpu1CoreId === "number" ? [{ coreId: values.cpu1CoreId, programUri: stringValue(values.cpu1OutPath) }] : []),
-      ...(typeof values.cpu2CoreId === "number" ? [{ coreId: values.cpu2CoreId, programUri: stringValue(values.cpu2OutPath) }] : [])
+      ...(typeof cpu1CoreId === "number" ? [{ coreId: cpu1CoreId, programUri: stringValue(values.cpu1OutPath) }] : []),
+      ...(typeof cpu2CoreId === "number" ? [{ coreId: cpu2CoreId, programUri: stringValue(values.cpu2OutPath) }] : [])
     ];
   }
   return [];
@@ -724,7 +765,7 @@ function logicalCleanupEvidence(result: Record<string, unknown>, expectedSession
 }
 
 function failedLaunchCleanupEnabled(toolName: string, input: unknown): boolean {
-  if (toolName !== "c2000_launchAndRunIpcAcceptance" && !toolName.startsWith("c2000_launchMulticoreDebug")) {
+  if (toolName !== "c2000_launchAndRunIpcAcceptance" && toolName !== "c2000_launchResidentIpcDebug" && !toolName.startsWith("c2000_launchMulticoreDebug")) {
     return false;
   }
   const values = record(input);
@@ -753,7 +794,7 @@ function boardRegistrationError(details: Record<string, unknown>): DebugMcpError
     {
       ...details,
       nextTool: "c2000_registerBoard",
-      remediation: "Register a board with its XDS110 serial-bound ccxml, then retry the original launch with that boardId.",
+      remediation: "Register a board with its debug-probe serial-bound ccxml, then retry the original launch with that boardId.",
       standardCoreIds: { cpu1: 0, cpu2: 2 }
     }
   );

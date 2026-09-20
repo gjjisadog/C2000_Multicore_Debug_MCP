@@ -268,6 +268,79 @@ describe("F28P65x paired Flash programming contract", () => {
     expect(adapter.events.some(event => event.startsWith("prepareFlashLoad:"))).toBe(false);
   });
 
+  test("resident debug reuses the session image pair and inferred maps", async () => {
+    const { adapter, handlers, input } = await fixture();
+    await handlers.loadSymbols({
+      sessionId: input.sessionId,
+      coreId: input.cpu1CoreId,
+      programUri: input.cpu1OutPath
+    });
+    await handlers.loadSymbols({
+      sessionId: input.sessionId,
+      coreId: input.cpu2CoreId,
+      programUri: input.cpu2OutPath
+    });
+    adapter.events = [];
+
+    const result = await handlers.runResidentIpcDebug({
+      sessionId: input.sessionId,
+      cpu1CoreId: input.cpu1CoreId,
+      cpu2CoreId: input.cpu2CoreId,
+      runMode: "debugger_runs_both",
+      ipcReadyExpressions: input.ipcReadyExpressions,
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      workflow: "c2000_runResidentIpcDebug",
+      artifactPreflight: {
+        normalizedPaths: {
+          cpu1OutPath: input.cpu1OutPath,
+          cpu2OutPath: input.cpu2OutPath,
+          cpu1MapPath: input.cpu1MapPath,
+          cpu2MapPath: input.cpu2MapPath
+        }
+      }
+    });
+    expect(adapter.events.some(event => event.startsWith("prepareFlashLoad:"))).toBe(false);
+  });
+
+  test("no-session resident debug creates and connects both cores before loading symbols", async () => {
+    const { adapter, handlers, input, manager } = await fixture();
+    const result = await handlers.launchResidentIpcDebug({
+      ...input,
+      sessionId: undefined,
+      startupPreset: undefined,
+      runMode: "debugger_runs_both",
+      timeoutMs: 20,
+      intervalMs: 1
+    } as any);
+
+    expect(result).toMatchObject({
+      success: true,
+      workflow: "c2000_launchResidentIpcDebug",
+      sessionMode: "interactive",
+      residentDebug: {
+        programPreparation: "symbols-only",
+        targetMemoryWritten: false,
+        targetFlashVerified: false,
+        flashProgramming: false,
+        residentIdentityPolicy: "require-known"
+      },
+      launch: {
+        connectedCoreIds: [0, 2]
+      }
+    });
+    expect(result.launch?.created?.sessionId).toEqual(expect.any(String));
+    expect(adapter.events.filter(event => event.startsWith("connect:"))).toEqual(["connect:0", "connect:2"]);
+    expect(adapter.events.some(event => event.startsWith("load:"))).toBe(false);
+    expect(adapter.events.some(event => event.startsWith("prepareFlashLoad:"))).toBe(false);
+
+    await manager.closeDebugSession(result.launch.created.sessionId);
+  });
+
   test("the paired Flash preset pins programming but leaves post-program startup selectable", () => {
     expect(isPairedFlashPreset("f28p65x-paired-flash")).toBe(true);
     expect(isPairedFlashPreset("hybrid30k-dk9-owner-first")).toBe(false);

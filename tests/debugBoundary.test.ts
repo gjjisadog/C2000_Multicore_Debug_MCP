@@ -356,7 +356,7 @@ describe("debug control boundary", () => {
             name: "c2000_launchAndRunIpcAcceptance",
             inputScope: "launch",
             targetEffect: "launch-workflow",
-            requiredInputFields: ["cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "timeoutMs"],
+            requiredInputFields: ["cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"],
             coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"],
             responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
           },
@@ -364,7 +364,7 @@ describe("debug control boundary", () => {
             name: "c2000_runIpcAcceptance",
             inputScope: "launch",
             targetEffect: "launch-workflow",
-            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "timeoutMs"],
+            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"],
             coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"],
             responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
           },
@@ -372,9 +372,17 @@ describe("debug control boundary", () => {
             name: "c2000_runResidentIpcDebug",
             inputScope: "launch",
             targetEffect: "launch-workflow",
-            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath"],
+            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"],
             coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"],
             responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
+          },
+          {
+            name: "c2000_launchResidentIpcDebug",
+            inputScope: "launch",
+            targetEffect: "launch-workflow",
+            requiredInputFields: ["cpu1OutPath", "cpu2OutPath"],
+            coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"],
+            responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
           },
           {
             name: "c2000_runBootHandoffDiagnosis",
