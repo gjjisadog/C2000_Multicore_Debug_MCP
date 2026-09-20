@@ -849,24 +849,37 @@ the installed Windows offline server with an absolute private runtime path:
 }
 ```
 
-For local development:
+For local development, use the fixed checkout launcher instead of registering a
+versioned `dist` entrypoint:
 
-```json
-{
-  "mcpServers": {
-    "c2000-multicore-dev": {
-      "command": "npx",
-      "args": [
-        "tsx",
-        "/absolute/path/to/c2000-multicore-mcp/src/index.ts"
-      ],
-      "env": {
-        "C2000_MCP_CONFIG": "/absolute/path/to/c2000-multicore-mcp/examples/f28p65x.config.json"
-      }
-    }
-  }
-}
+```powershell
+npm ci
+$env:C2000_MCP_CONFIG = "C:\absolute\path\to\c2000-multicore-mcp\examples\f28p65x.config.json"
+npm run register:dev
 ```
+
+`register:dev` is a one-time, idempotent registration. It points Codex at
+`node.exe scripts/codex-dev-launcher.mjs`; the launcher resolves the checkout
+from its own path, fingerprints the current source, sets `C2000_MCP_DEV_MODE=1`,
+and starts `src/index.ts` through the repository's `tsx`. If
+`C2000_MCP_CONFIG` is omitted, the example mock configuration is used.
+
+After that, daily development is only:
+
+```text
+edit src/**/*.ts
+→ reconnect MCP in Codex
+```
+
+The launcher does not build `dist`, run the installer, create an immutable
+runtime slot, or rewrite Codex configuration. When the source fingerprint or
+frontend/daemon contract changes, development mode authenticates the owned
+daemon, sends the existing `shutdown` RPC, waits for its PID, instance file,
+and singleton lock to clear, launches the current source daemon, and reconnects.
+If that safe boundary cannot be completed, it reports `DaemonMaintenanceRequired`
+with the old PID, instance ID, runtime directory, and mismatch reason; it never
+force-kills an external process. Release/offline runtimes retain the strict
+immutable-slot and manual-maintenance behavior.
 
 ### Automatic recovery for Codex
 

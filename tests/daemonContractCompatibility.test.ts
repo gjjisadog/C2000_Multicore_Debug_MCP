@@ -7,7 +7,7 @@ import type { C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { DaemonRpcServer } from "../src/daemon/DaemonRpcServer.js";
 import { daemonRuntimePaths, writeDaemonInstance } from "../src/daemon/DaemonInstanceFile.js";
-import { discoverDaemon } from "../src/proxy/DaemonDiscovery.js";
+import { discoverDaemon, discoverDaemonInstance } from "../src/proxy/DaemonDiscovery.js";
 import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
 import { compareRuntimeContract, runtimeContractIdentity } from "../src/contracts/RuntimeContract.js";
 
@@ -55,6 +55,9 @@ describe("frontend / daemon contract compatibility", () => {
         databasePath: path.join(runtimeDir, "debugd.sqlite"),
         version: "0.7.0"
       }, authToken);
+      const discovered = await discoverDaemonInstance(configFor(runtimeDir));
+      expect(discovered.compatibility.compatible).toBe(false);
+      expect(discovered.compatibility.mismatches).toEqual(expect.arrayContaining(["contract.durableTestPlanVersion", "runtime.version"]));
       await expect(discoverDaemon(configFor(runtimeDir))).rejects.toMatchObject({ code: "DaemonContractMismatch" });
       await expect(access(paths.instanceFile)).resolves.toBeUndefined();
     } finally {

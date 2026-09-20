@@ -1,7 +1,9 @@
-import { mkdtemp, readdir, access, rm } from "node:fs/promises";
+import { mkdtemp, readdir, access, readFile, rm } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+
+const packageVersion = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8")).version;
 
 const root = process.cwd();
 const tarball = (await readdir(root)).find(name => /^c2000-multicore-mcp-.*\.tgz$/.test(name));
@@ -19,7 +21,7 @@ try {
   }
   const python = spawnSync(process.platform === "win32" ? "python.exe" : "python3", [
     "-c",
-    "import c2000_hil; assert c2000_hil.__version__ == '0.7.0'; print(c2000_hil.__version__)"
+    `import c2000_hil; assert c2000_hil.__version__ == '${packageVersion}'; print(c2000_hil.__version__)`
   ], {
     cwd: temporary,
     encoding: "utf8",
