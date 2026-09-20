@@ -243,7 +243,32 @@ describe("F28P65x paired Flash programming contract", () => {
     expect(adapter.events.some(event => event.startsWith("prepareFlashLoad:"))).toBe(false);
   });
 
-  test("the paired Flash preset is selectable, cloneable, and pinned to its contract", () => {
+  test("resident debug shortcut loads symbols and never enters the Flash programming path", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runResidentIpcDebug({
+      ...input,
+      runMode: "debugger_runs_both",
+      timeoutMs: 20,
+      intervalMs: 1
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      workflow: "c2000_runResidentIpcDebug",
+      programPreparation: "symbols-only",
+      targetFlashVerified: false,
+      residentDebug: {
+        programPreparation: "symbols-only",
+        targetMemoryWritten: false,
+        targetFlashVerified: false,
+        flashProgramming: false
+      }
+    });
+    expect(adapter.events.some(event => event.startsWith("load:"))).toBe(false);
+    expect(adapter.events.some(event => event.startsWith("prepareFlashLoad:"))).toBe(false);
+  });
+
+  test("the paired Flash preset pins programming but leaves post-program startup selectable", () => {
     expect(isPairedFlashPreset("f28p65x-paired-flash")).toBe(true);
     expect(isPairedFlashPreset("hybrid30k-dk9-owner-first")).toBe(false);
     expect(isPairedFlashPreset(undefined)).toBe(false);
@@ -256,6 +281,23 @@ describe("F28P65x paired Flash programming contract", () => {
     });
     expect(resolved.loadSequence).toEqual({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 });
     expect(ipcStartupPreset("f28p65x-paired-flash")).toEqual(F28P65X_PAIRED_FLASH_STARTUP);
+
+    const firmwareOwned = resolveIpcStartupPreset({
+      startupPreset: "f28p65x-paired-flash",
+      resetType: "default",
+      loadSequence: { mode: "cpu1-then-cpu2" },
+      runSequence: { runMode: "cpu1_boots_cpu2" }
+    });
+    expect(firmwareOwned).toMatchObject({
+      resetType: "cpu",
+      loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 250 },
+      runSequence: { runMode: "cpu1_boots_cpu2" }
+    });
+
+    expect(() => resolveIpcStartupPreset({
+      startupPreset: "f28p65x-paired-flash",
+      resetType: "system"
+    })).toThrowError(/conflicts with explicit resetType/);
 
     expect(() => resolveIpcStartupPreset({
       startupPreset: "f28p65x-paired-flash",

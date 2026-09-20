@@ -314,7 +314,7 @@ export class BoardWorkerSupervisor {
     if (toolName === "c2000_launchAndRunIpcAcceptance") {
       return Math.max(baseMs, startupEnvelopeMs + 2 * connectMs + 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
     }
-    if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_runReloadAndDiagnose") {
+    if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_runReloadAndDiagnose") {
       return Math.max(baseMs, 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
     }
     if (requestedMs > 0) {

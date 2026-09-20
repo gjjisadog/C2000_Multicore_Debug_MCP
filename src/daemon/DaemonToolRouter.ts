@@ -584,7 +584,8 @@ function residentImageRequirements(toolName: string, input: unknown): ImageRequi
   if (toolName === "c2000_loadSymbols" && typeof values.coreId === "number" && typeof values.programUri === "string") {
     return [{ coreId: values.coreId, programUri: values.programUri }];
   }
-  if ((toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance") && values.programPreparation === "symbols-only") {
+  if ((toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance" || toolName === "c2000_runResidentIpcDebug") &&
+      (toolName === "c2000_runResidentIpcDebug" || values.programPreparation === "symbols-only")) {
     return [
       ...(typeof values.cpu1CoreId === "number" ? [{ coreId: values.cpu1CoreId, programUri: stringValue(values.cpu1OutPath) }] : []),
       ...(typeof values.cpu2CoreId === "number" ? [{ coreId: values.cpu2CoreId, programUri: stringValue(values.cpu2OutPath) }] : [])

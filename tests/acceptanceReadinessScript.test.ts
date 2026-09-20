@@ -78,7 +78,8 @@ describe("Hardware acceptance readiness script contract", () => {
     expect(source).toContain('"c2000_runIpcAcceptance", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath", "timeoutMs"]');
     expect(source).toContain('"c2000_runBootHandoffDiagnosis", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId"]');
     expect(source).toContain('"c2000_runReloadAndDiagnose", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath"]');
-    expect(source).toContain('"c2000_runFullDebugBundle", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId", "outputDir"]');
+    expect(source).toContain('"c2000_runFullDebugBundle", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId"]');
+    expect(source).toContain('"c2000_runResidentIpcDebug", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath"]');
     expect(source).toContain('assertCoreIdentityFields(contracts, "c2000_runIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"])');
     expect(source).toContain('"postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"');
     expect(source).toContain('"postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreName"');
