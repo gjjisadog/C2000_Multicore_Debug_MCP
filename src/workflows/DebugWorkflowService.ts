@@ -501,7 +501,8 @@ export class DebugWorkflowService {
         { coreId: input.cpu2CoreId, outPath: input.cpu2OutPath }
       ], artifactPreflight, load.results);
       if (!systemResetFreshness.allFresh
-        || !systemResetFreshness.programs.every((program: ToolResult) => program.loadedProgramInfo)) {
+        || !systemResetFreshness.programs.every((program: ToolResult) =>
+          program.programmedProgramFresh === true)) {
         throw new DebugMcpError("ArtifactPairInvalid", "System Reset requires an exact pair loaded in the current session", { elfFreshness: systemResetFreshness });
       }
       performedSteps.push("verifyPairBeforeSystemReset");
@@ -1574,6 +1575,7 @@ export class DebugWorkflowService {
       .map(async program => {
         const expectedPath = this.manager.normalizeArtifactUri(program.outPath);
         const loadedProgramInfo = await this.manager.getLoadedProgramInfo(sessionId, program.coreId);
+        const programmedProgramInfo = await this.manager.getProgrammedProgramInfo(sessionId, program.coreId);
         const preparationResult = preparationResults?.find(item => item.coreId === program.coreId);
         const metadata = await fileMetadata(expectedPath);
         const preflightFile = preflightFiles.find(item => item.path === expectedPath);
@@ -1582,6 +1584,10 @@ export class DebugWorkflowService {
         const loadedProgramFresh = loadedProgramInfo?.programUri === expectedPath
           && loadedProgramInfo.fileSize === metadata.fileSize
           && loadedProgramInfo.sha256 === metadata.sha256;
+        const programmedProgramFresh = programmedProgramInfo?.targetMemoryWritten === true
+          && programmedProgramInfo.programUri === expectedPath
+          && programmedProgramInfo.fileSize === metadata.fileSize
+          && programmedProgramInfo.sha256 === metadata.sha256;
         const symbolsFresh = preparationResult?.success === true
           && preparationResult.symbolsLoaded === true
           && preparationResult.targetMemoryWritten === false
@@ -1592,10 +1598,12 @@ export class DebugWorkflowService {
           coreId: program.coreId,
           expectedPath,
           fresh: (loadedProgramInfo ? loadedProgramFresh : symbolsFresh) && preflightStable,
+          programmedProgramFresh: programmedProgramFresh && preflightStable,
           preflightStable,
           ...(preflightFile ? { preflightFile } : {}),
           hostFile: metadata,
           loadedProgramInfo,
+          programmedProgramInfo,
           ...(preparationResult ? { preparationResult } : {})
         };
       }));
