@@ -31,3 +31,8 @@ c2000-multicore-mcp-*.tgz
 
 # Local hardware demo workspaces
 .hardware-demo-workspace-ipc-ex1/
+
+# Local hardware acceptance and firmware build artifacts
+/acceptance/
+/runtime_inputs/
+/h30k-rtos-stats-20260909/
