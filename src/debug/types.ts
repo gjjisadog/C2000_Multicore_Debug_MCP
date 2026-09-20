@@ -110,6 +110,8 @@ export interface LoadedProgramInfo {
   fileSize: number;
   sha256: string;
   symbolsLoaded: boolean;
+  /** True only when the target memory was programmed; false marks symbol-only evidence. */
+  targetMemoryWritten?: boolean;
   warning: string;
   ramOwnership?: RamOwnershipPreparation;
   /** Read-only, non-atomic F28P65x preparation/load snapshots, when available. */

@@ -657,6 +657,7 @@ export class DebugSessionManager {
         fileSize: metadata.fileSize,
         sha256: metadata.sha256,
         symbolsLoaded: true,
+        targetMemoryWritten: false,
         warning: "Symbols were loaded through this MCP; target memory was not written."
       };
       this.loadedPrograms.set(info);
@@ -753,6 +754,7 @@ export class DebugSessionManager {
       fileSize: metadata.fileSize,
       sha256: metadata.sha256,
       symbolsLoaded: true,
+      targetMemoryWritten: true,
       ...(flashLoadEvidence ? { flashLoadEvidence } : {}),
       warning: warnings.join(" ")
     };
