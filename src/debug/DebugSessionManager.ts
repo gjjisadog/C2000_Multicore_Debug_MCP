@@ -1163,6 +1163,7 @@ export class DebugSessionManager {
     actions: RamOwnershipAction[]
   ): Promise<{
     requested: true;
+    applicable: boolean;
     supported: boolean;
     skipped: boolean;
     matched?: boolean;
@@ -1179,24 +1180,26 @@ export class DebugSessionManager {
     reads?: Array<{ address: number; value: number; expectedBits: number }>;
   }> {
     return this.exclusive(sessionId, async () => {
-      if (!this.adapter.readMemory) {
-        return {
-          requested: true as const,
-          supported: false,
-          skipped: true,
-          source: "MEMCFG_GSXMSEL" as const,
-          register: "MEMCFG_GSXMSEL" as const,
-          reason: "Debug adapter does not implement readMemory for MEMCFG verification."
-        };
-      }
       if (actions.length === 0) {
         return {
           requested: true as const,
+          applicable: false,
           supported: true,
           skipped: true,
           source: "MEMCFG_GSXMSEL" as const,
           register: "MEMCFG_GSXMSEL" as const,
           reason: "No ownership actions to verify."
+        };
+      }
+      if (!this.adapter.readMemory) {
+        return {
+          requested: true as const,
+          applicable: true,
+          supported: false,
+          skipped: true,
+          source: "MEMCFG_GSXMSEL" as const,
+          register: "MEMCFG_GSXMSEL" as const,
+          reason: "Debug adapter does not implement readMemory for MEMCFG verification."
         };
       }
       const expectedMask = actions.reduce((mask, action) => mask | action.value, 0);
@@ -1223,6 +1226,7 @@ export class DebugSessionManager {
       }
       return {
         requested: true as const,
+        applicable: true,
         supported: true,
         skipped: false,
         matched: true,

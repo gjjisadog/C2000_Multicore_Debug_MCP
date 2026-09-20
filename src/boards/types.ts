@@ -12,6 +12,38 @@ export const boardStatuses = [
 
 export type BoardStatus = typeof boardStatuses[number];
 
+export const boardLeaseStatuses = ["NONE", "ACTIVE", "STALE", "EXPIRED", "INVALIDATED"] as const;
+
+export type BoardLeaseStatus = typeof boardLeaseStatuses[number];
+
+export interface BoardLeaseBlocker {
+  kind: "session" | "job";
+  id: string;
+  status?: string;
+  workerInstanceId?: string;
+}
+
+export interface BoardLeaseState {
+  status: BoardLeaseStatus;
+  leaseId?: string;
+  ownerJobId?: string;
+  workerInstanceId?: string;
+  currentWorkerInstanceId?: string;
+  expiresAt?: string;
+  invalidatedAt?: string;
+  reason?: string;
+  blockers?: BoardLeaseBlocker[];
+}
+
+export interface BoardLeaseReconciliationBlockers {
+  activeJobs?: Array<{ jobId: string; status: string }>;
+  openSessions?: Array<{ sessionId: string; workerInstanceId?: string }>;
+}
+
+export interface BoardLeaseReconciliationResult extends BoardLeaseState {
+  action: "UNCHANGED" | "RECLAIMED_STALE" | "BLOCKED" | "RELEASED_EXPIRED" | "CLEARED_STALE_REFERENCE";
+}
+
 export interface BoardRegistration {
   boardId: string;
   probeSerial: string;

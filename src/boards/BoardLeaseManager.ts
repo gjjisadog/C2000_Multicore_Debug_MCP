@@ -1,5 +1,11 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import type { BoardLease, BoardLeaseContext } from "./types.js";
+import type {
+  BoardLease,
+  BoardLeaseContext,
+  BoardLeaseReconciliationBlockers,
+  BoardLeaseReconciliationResult,
+  BoardLeaseState
+} from "./types.js";
 import { BoardRepository } from "../storage/repositories/BoardRepository.js";
 import { LeaseRepository } from "../storage/repositories/LeaseRepository.js";
 import { SqliteStore } from "../storage/SqliteStore.js";
@@ -103,6 +109,129 @@ export class BoardLeaseManager {
     if (!lease || Date.parse(lease.expiresAt) <= Date.now()) return undefined;
     const { leaseTokenHash: _token, ...publicLease } = lease;
     return publicLease;
+  }
+
+  /**
+   * Describe the durable lease route without treating an expired or terminal
+   * row as an active owner. This is intentionally read-only so listBoards can
+   * expose stale state without changing lease ownership as a side effect.
+   */
+  describe(boardId: string, currentWorkerInstanceId?: string): BoardLeaseState {
+    const active = this.leases.activeForBoard(boardId);
+    if (active) {
+      const expired = Date.parse(active.expiresAt) <= Date.now();
+      const stale = currentWorkerInstanceId !== undefined
+        && active.workerInstanceId !== currentWorkerInstanceId;
+      return {
+        status: expired ? "EXPIRED" : stale ? "STALE" : "ACTIVE",
+        leaseId: active.leaseId,
+        ...(active.ownerJobId ? { ownerJobId: active.ownerJobId } : {}),
+        ...(active.workerInstanceId ? { workerInstanceId: active.workerInstanceId } : {}),
+        ...(currentWorkerInstanceId ? { currentWorkerInstanceId } : {}),
+        expiresAt: active.expiresAt,
+        ...(stale ? { reason: workerMismatchReason(active.workerInstanceId, currentWorkerInstanceId) } : {})
+      };
+    }
+
+    const latest = this.leases.latestForBoard(boardId);
+    if (latest?.invalidatedAt) {
+      return {
+        status: "INVALIDATED",
+        leaseId: latest.leaseId,
+        ...(latest.ownerJobId ? { ownerJobId: latest.ownerJobId } : {}),
+        ...(latest.workerInstanceId ? { workerInstanceId: latest.workerInstanceId } : {}),
+        ...(currentWorkerInstanceId ? { currentWorkerInstanceId } : {}),
+        ...(latest.expiresAt ? { expiresAt: latest.expiresAt } : {}),
+        invalidatedAt: latest.invalidatedAt,
+        ...(latest.invalidationReason ? { reason: latest.invalidationReason } : {})
+      };
+    }
+    if (latest && Date.parse(latest.expiresAt) <= Date.now()) {
+      return {
+        status: "EXPIRED",
+        leaseId: latest.leaseId,
+        ...(latest.ownerJobId ? { ownerJobId: latest.ownerJobId } : {}),
+        ...(latest.workerInstanceId ? { workerInstanceId: latest.workerInstanceId } : {}),
+        ...(currentWorkerInstanceId ? { currentWorkerInstanceId } : {}),
+        expiresAt: latest.expiresAt,
+        reason: "Lease expired and is no longer active."
+      };
+    }
+    return {
+      status: "NONE",
+      ...(currentWorkerInstanceId ? { currentWorkerInstanceId } : {})
+    };
+  }
+
+  /**
+   * Reconcile a persisted lease when a new daemon-owned worker is published.
+   * A worker mismatch is reclaimable only when no durable job or open debug
+   * session can still own the target. Blocked cases remain fenced and are
+   * surfaced as STALE; this method never force-closes a session or steals a
+   * live owner.
+   */
+  reconcileWorkerChange(
+    boardId: string,
+    currentWorkerInstanceId: string,
+    blockers: BoardLeaseReconciliationBlockers = {}
+  ): BoardLeaseReconciliationResult {
+    return this.store.transaction(() => {
+      const board = this.boards.require(boardId);
+      const active = this.leases.activeForBoard(boardId);
+      if (!active) {
+        const hadStaleReference = Boolean(board.currentLeaseId);
+        if (hadStaleReference) this.boards.setLease(boardId, undefined);
+        return {
+          ...this.describe(boardId, currentWorkerInstanceId),
+          action: hadStaleReference ? "CLEARED_STALE_REFERENCE" as const : "UNCHANGED" as const
+        };
+      }
+
+      const expired = Date.parse(active.expiresAt) <= Date.now();
+      const stale = active.workerInstanceId !== currentWorkerInstanceId;
+      const normalizedBlockers = reconciliationBlockers(blockers);
+      if ((stale || expired) && normalizedBlockers.length > 0) {
+        const reason = stale
+          ? `${workerMismatchReason(active.workerInstanceId, currentWorkerInstanceId)}; automatic reclaim blocked by active session/job ownership.`
+          : "Lease is expired but an active session/job still requires daemon-managed closure.";
+        return {
+          ...this.describe(boardId, currentWorkerInstanceId),
+          status: stale ? "STALE" : "EXPIRED",
+          reason,
+          blockers: normalizedBlockers,
+          action: "BLOCKED" as const
+        };
+      }
+
+      if (expired) {
+        this.leases.release(active.leaseId, new Date().toISOString());
+        this.boards.setLease(boardId, undefined);
+        return {
+          ...this.describe(boardId, currentWorkerInstanceId),
+          status: "EXPIRED",
+          reason: "Lease expired and was released before publishing the new worker route.",
+          action: "RELEASED_EXPIRED" as const
+        };
+      }
+
+      if (stale) {
+        const reason = `worker-change:${active.workerInstanceId ?? "unknown"}->${currentWorkerInstanceId}`;
+        this.leases.invalidate(active.leaseId, new Date().toISOString(), reason);
+        this.boards.setLease(boardId, undefined);
+        return {
+          ...this.describe(boardId, currentWorkerInstanceId),
+          status: "INVALIDATED",
+          reason,
+          action: "RECLAIMED_STALE" as const
+        };
+      }
+
+      if (board.currentLeaseId !== active.leaseId) this.boards.setLease(boardId, active.leaseId);
+      return {
+        ...this.describe(boardId, currentWorkerInstanceId),
+        action: "UNCHANGED" as const
+      };
+    });
   }
 
   invalidate(leaseId: string, leaseToken: string, reason: string): void {
@@ -244,4 +373,19 @@ function tokensMatch(left: string, right: string): boolean {
   const first = Buffer.from(left, "utf8");
   const second = Buffer.from(right, "utf8");
   return first.length === second.length && timingSafeEqual(first, second);
+}
+
+function workerMismatchReason(leaseWorkerInstanceId: string | undefined, currentWorkerInstanceId: string): string {
+  return `Lease worker ${leaseWorkerInstanceId ?? "unknown"} does not match current worker ${currentWorkerInstanceId}.`;
+}
+
+function reconciliationBlockers(blockers: BoardLeaseReconciliationBlockers) {
+  return [
+    ...(blockers.activeJobs ?? []).map(job => ({ kind: "job" as const, id: job.jobId, status: job.status })),
+    ...(blockers.openSessions ?? []).map(session => ({
+      kind: "session" as const,
+      id: session.sessionId,
+      ...(session.workerInstanceId ? { workerInstanceId: session.workerInstanceId } : {})
+    }))
+  ];
 }

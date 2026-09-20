@@ -64,6 +64,11 @@ describe("lease fencing", () => {
     expect(registry.leases.invalidateForWorkerRestart("board-a", "worker-1", "test")).toBe(true);
     expect(registry.leases.active("board-a")).toBeUndefined();
     expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+    expect(registry.list()[0]).toEqual(expect.objectContaining({
+      leaseStatus: "INVALIDATED",
+      leaseState: expect.objectContaining({ status: "INVALIDATED", reason: "test" }),
+      leaseReason: "test"
+    }));
     expect(store.get<{ released_at: string | null; invalidated_at: string | null; worker_instance_id: string }>("SELECT released_at, invalidated_at, worker_instance_id FROM board_leases WHERE lease_id = ?", [leased.lease.leaseId])).toEqual(expect.objectContaining({
       released_at: expect.any(String),
       invalidated_at: expect.any(String),
@@ -72,6 +77,67 @@ describe("lease fencing", () => {
     expect(() => registry.leases.validate(leased.context)).toThrowError(
       expect.objectContaining({ code: "LeaseInvalidated" })
     );
+    store.close();
+  });
+
+  test("reclaims a persisted lease after a worker change when no owner remains", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-lease-worker-reconcile-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "test.sqlite"));
+    const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.setWorker("board-a", "worker-old");
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-old", workerInstanceId: "worker-old", ttlMs: 60_000 });
+
+    const result = registry.reconcileWorkerChange("board-a", "worker-new");
+
+    expect(result).toEqual(expect.objectContaining({
+      action: "RECLAIMED_STALE",
+      status: "INVALIDATED",
+      leaseId: leased.lease.leaseId,
+      reason: "worker-change:worker-old->worker-new"
+    }));
+    expect(registry.leases.active("board-a")).toBeUndefined();
+    expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+    registry.setWorker("board-a", "worker-new");
+    expect(registry.list()[0]).toEqual(expect.objectContaining({
+      leaseStatus: "INVALIDATED",
+      leaseState: expect.objectContaining({
+        status: "INVALIDATED",
+        leaseId: leased.lease.leaseId,
+        reason: "worker-change:worker-old->worker-new"
+      })
+    }));
+    expect(() => registry.leases.validate(leased.context)).toThrowError(expect.objectContaining({ code: "LeaseInvalidated" }));
+    store.close();
+  });
+
+  test("keeps a stale lease fenced when an open session blocks automatic reclaim", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-lease-worker-reconcile-blocked-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "test.sqlite"));
+    const registry = new BoardRegistry(new BoardRepository(store), new EventRepository(store), store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.setWorker("board-a", "worker-old");
+    const leased = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-old", workerInstanceId: "worker-old", ttlMs: 60_000 });
+
+    const result = registry.reconcileWorkerChange("board-a", "worker-new", {
+      openSessions: [{ sessionId: "session-old", workerInstanceId: "worker-old" }]
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      action: "BLOCKED",
+      status: "STALE",
+      leaseId: leased.lease.leaseId,
+      blockers: [{ kind: "session", id: "session-old", workerInstanceId: "worker-old" }]
+    }));
+    expect(registry.leases.active("board-a")?.leaseId).toBe(leased.lease.leaseId);
+    registry.setWorker("board-a", "worker-new");
+    expect(registry.list()[0]).toEqual(expect.objectContaining({
+      leaseStatus: "STALE",
+      leaseState: expect.objectContaining({ status: "STALE", leaseId: leased.lease.leaseId })
+    }));
+    expect(() => registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-new", workerInstanceId: "worker-new", ttlMs: 60_000 })).toThrowError(expect.objectContaining({ code: "BoardLeased" }));
     store.close();
   });
 
