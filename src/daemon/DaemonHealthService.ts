@@ -3,6 +3,7 @@ import type { DatabaseConsistencyReport } from "../storage/DatabaseConsistencyCh
 import type { BoardExecutionSnapshot } from "../jobs/BoardExecutionSemaphore.js";
 import type { BoardRecord } from "../boards/types.js";
 import { runtimeContractIdentity } from "../contracts/RuntimeContract.js";
+import { runtimeBuildIdentity } from "../runtimeInfo.js";
 
 export interface DaemonHealthSnapshot {
   instanceId: string;
@@ -33,6 +34,7 @@ export function createDaemonHealth(
   };
   return {
     contracts: runtimeContractIdentity(),
+    runtimeIdentity: runtimeBuildIdentity(),
     daemon,
     workers,
     boards: {

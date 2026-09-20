@@ -5,24 +5,33 @@ import path from "node:path";
 import type { C2000McpConfig } from "../config/config.schema.js";
 import { resolveDaemonConfig } from "./DaemonConfig.js";
 import { discoverDaemon, type DiscoveredDaemon } from "../proxy/DaemonDiscovery.js";
+import { restartOwnedDaemon } from "./DaemonMaintenance.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { runtimeEntrypointCandidates } from "../runtimePaths.js";
+import { isDevelopmentMode } from "../runtimeInfo.js";
 
 export async function ensureDaemon(config: C2000McpConfig): Promise<DiscoveredDaemon> {
   const daemon = resolveDaemonConfig(config);
+  const developmentMode = isDevelopmentMode();
   if (!daemon.enabled) {
     throw new DebugMcpError("DaemonUnavailable", "c2000-debugd is disabled by configuration");
   }
   try {
-    return await discoverDaemon(config);
+    const discovered = await discoverDaemon(config, { allowIncompatible: developmentMode });
+    if (developmentMode && !discovered.compatibility.compatible) {
+      return await restartOwnedDaemon(config, discovered, {
+        launch: () => launchDetachedDaemon({ preferSource: true })
+      });
+    }
+    return discovered;
   } catch (error) {
     // A live daemon with an incompatible contract must be updated through the
     // maintenance flow. Never try to start a second daemon or replace the
     // existing process behind its back.
-    if (error instanceof DebugMcpError && error.code === "DaemonContractMismatch") throw error;
+    if (error instanceof DebugMcpError && ["DaemonContractMismatch", "DaemonMaintenanceRequired"].includes(error.code)) throw error;
     if (!daemon.autoStart) throw error;
   }
-  await launchDetachedDaemon();
+  await launchDetachedDaemon({ preferSource: developmentMode });
   const deadline = Date.now() + daemon.startupTimeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {

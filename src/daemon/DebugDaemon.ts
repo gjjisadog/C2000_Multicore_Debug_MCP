@@ -31,7 +31,7 @@ import { DatabaseConsistencyChecker } from "../storage/DatabaseConsistencyChecke
 import { MockCanBusAdapter } from "../can/MockCanBusAdapter.js";
 import { NoopCanBusAdapter } from "../can/NoopCanBusAdapter.js";
 import { CanWorkerProcess } from "../can-worker/CanWorkerProcess.js";
-import { runtimeBuildInfo, SERVER_VERSION } from "../runtimeInfo.js";
+import { runtimeBuildIdentity, runtimeBuildInfo, SERVER_VERSION } from "../runtimeInfo.js";
 import { runtimeContractIdentity } from "../contracts/RuntimeContract.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import { DebugMcpError } from "../utils/errors.js";
@@ -601,7 +601,8 @@ export class DebugDaemon {
         authTokenFile: newAuthTokenFile(this.paths, this.instanceId),
         databasePath,
         version: SERVER_VERSION,
-        contract: runtimeContractIdentity()
+        contract: runtimeContractIdentity(),
+        runtimeIdentity: runtimeBuildIdentity()
       };
       // Do not publish discovery metadata before every configured worker has
       // completed its own runtime handshake. Otherwise a fresh proxy can

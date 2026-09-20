@@ -16,6 +16,7 @@ const runtimeConfig = JSON.parse(await readFile(
   "utf8"
 ));
 const configuredRuntime = runtimeConfig.runtime;
+const packageJson = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
 if (!configuredRuntime || typeof configuredRuntime !== "object") {
   throw new Error("config/runtime-manifest.json is missing the runtime configuration");
 }
@@ -58,6 +59,7 @@ await build({
   target: "node20",
   sourcemap: true,
   define: {
+    __C2000_SERVER_VERSION__: JSON.stringify(packageJson.version),
     __C2000_RUNTIME_BUNDLED__: "true",
     __C2000_RUNTIME_BUILT_AT__: JSON.stringify(builtAt),
     __C2000_RUNTIME_SOURCE_REVISION__: JSON.stringify(sourceState.revision),
@@ -166,7 +168,6 @@ async function copyKoffiPackage(root, runtimeDirectory) {
 }
 
 async function writeRuntimeManifest(root, runtimeDirectory, runtimeBuiltAt, runtimeSourceState, nativeBindings) {
-  const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   const sqlitePackage = JSON.parse(await readFile(path.join(root, "node_modules", "better-sqlite3", "package.json"), "utf8"));
   const runtime = fixedRuntimeBuild
     ? {

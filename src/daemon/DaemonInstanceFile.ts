@@ -2,6 +2,7 @@ import { chmod, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/pro
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { RuntimeContract } from "../contracts/RuntimeContract.js";
+import type { RuntimeBuildIdentity } from "../contracts/RuntimeIdentity.js";
 
 export interface DaemonRuntimePaths {
   runtimeDir: string;
@@ -20,6 +21,8 @@ export interface DebugDaemonInstance {
   version: string;
   /** Optional so an older instance file remains readable during maintenance. */
   contract?: RuntimeContract;
+  /** Optional so a pre-identity daemon can be authenticated and retired safely. */
+  runtimeIdentity?: RuntimeBuildIdentity;
 }
 
 export function daemonRuntimePaths(runtimeDir: string): DaemonRuntimePaths {
@@ -57,7 +60,7 @@ export async function acquireDaemonSingletonLock(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const existing = await readLockOwner(paths.lockFile);
-      if (existing && isPidAlive(existing.pid)) {
+      if (existing && isDaemonProcessAlive(existing.pid)) {
         throw new Error(
           `c2000-debugd is already running for ${paths.runtimeDir} `
           + `(pid ${existing.pid}, instance ${existing.instanceId})`
@@ -128,6 +131,16 @@ export function newAuthTokenFile(paths: DaemonRuntimePaths, instanceId: string):
   return path.join(paths.runtimeDir, `debugd-token-${instanceId}.txt`);
 }
 
+export function isDaemonProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 async function atomicWrite(filePath: string, data: string): Promise<void> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(temporaryPath, data, { encoding: "utf8", mode: 0o600 });
@@ -161,15 +174,5 @@ async function readLockOwner(lockFile: string): Promise<{ instanceId: string; pi
       : undefined;
   } catch {
     return undefined;
-  }
-}
-
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }

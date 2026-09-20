@@ -3,13 +3,14 @@ import type { C2000McpConfig } from "../config/config.schema.js";
 import { registerC2000Tools } from "../mcp/tools.js";
 import { ensureDaemon } from "../daemon/DaemonBootstrap.js";
 import { McpDaemonClient } from "./McpDaemonClient.js";
-import { runtimeBuildInfo, SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
+import { isDevelopmentMode, runtimeBuildIdentity, runtimeBuildInfo, SERVER_NAME, SERVER_VERSION } from "../runtimeInfo.js";
 import path from "node:path";
 import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 import { CapabilitySessionManager } from "../mcp/capabilities.js";
 import { Logger } from "../utils/logger.js";
 import { capabilityAuditToOutcomeEvent } from "../analytics/OutcomeAnalyticsService.js";
 import { compareRuntimeContract, runtimeContractIdentity } from "../contracts/RuntimeContract.js";
+import { compareRuntimeBuildIdentity } from "../contracts/RuntimeIdentity.js";
 
 export interface C2000McpProxyRuntime {
   server: McpServer;
@@ -81,12 +82,17 @@ function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<str
   const runtime = asRecord(health.runtime);
   const build = asRecord(runtime.build);
   const daemonVersion = typeof server.version === "string" ? server.version : undefined;
-  const daemonSha = typeof build.sourceRevision === "string" ? build.sourceRevision : undefined;
-  const proxySha = runtimeBuildInfo().sourceRevision ?? undefined;
-  const versionMismatch = (daemonVersion !== undefined && daemonVersion !== SERVER_VERSION)
-    || (daemonSha !== undefined && proxySha !== undefined && daemonSha !== "unknown" && proxySha !== "unknown" && daemonSha.toLowerCase() !== proxySha.toLowerCase());
+  const daemonIdentity = Object.keys(asRecord(health.runtimeIdentity)).length > 0
+    ? asRecord(health.runtimeIdentity)
+    : Object.keys(asRecord(runtime.identity)).length > 0
+      ? asRecord(runtime.identity)
+      : { version: daemonVersion ?? "unknown", ...build };
+  const proxyIdentity = runtimeBuildIdentity();
+  const runtimeCompatibility = compareRuntimeBuildIdentity(proxyIdentity, daemonIdentity, {
+    development: isDevelopmentMode()
+  });
   const contractCompatibility = compareRuntimeContract(health.contracts);
-  const mismatch = versionMismatch || !contractCompatibility.compatible;
+  const mismatch = !runtimeCompatibility.compatible || !contractCompatibility.compatible;
   const configuration = asRecord(health.configuration);
   const tools = asRecord(health.tools);
   return {
@@ -100,8 +106,9 @@ function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<str
     },
     tools: { ...tools, runtimeVersionMismatch: mismatch, runtimeContractMismatch: !contractCompatibility.compatible },
     runtimeIdentity: {
-      proxy: { mcpVersion: SERVER_VERSION, mcpGitSha: proxySha ?? "unknown", contracts: runtimeContractIdentity() },
-      daemon: { mcpVersion: daemonVersion ?? "unknown", mcpGitSha: daemonSha ?? "unknown", contracts: health.contracts ?? null }
+      proxy: { ...proxyIdentity, contracts: runtimeContractIdentity() },
+      daemon: { ...daemonIdentity, contracts: health.contracts ?? null },
+      compatibility: runtimeCompatibility
     }
   };
 }
