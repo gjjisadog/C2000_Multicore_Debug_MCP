@@ -51,7 +51,7 @@ needed to install an intentionally identical artifact again.
 The managed Codex block is updated to the absolute private runtime path:
 
 ```toml
-command = "C:/Users/<user>/.c2000-multicore-mcp/runtime/node.exe"
+command = "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/runtime/node.exe"
 args = ["C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/dist/src/index.js"]
 ```
 

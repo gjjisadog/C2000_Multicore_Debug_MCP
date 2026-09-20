@@ -316,7 +316,13 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     { allowAbiMismatch: !bundledNodeRequired }
   );
 
-  const runtimeDirectory = path.join(installRoot, "runtime");
+  // Keep the private Node executable inside the immutable version slot. A
+  // Codex process can keep the old executable image open while a new offline
+  // bundle is installed; sharing one installRoot/runtime/node.exe would make
+  // a future Node-runtime change fail with a Windows sharing violation.
+  const runtimeDirectory = bundledNodeRequired
+    ? path.join(installDirectory, "runtime")
+    : path.join(installRoot, "runtime");
   const dataDirectory = path.join(installRoot, "runtime-data");
   await mkdir(runtimeDirectory, { recursive: true });
   await mkdir(dataDirectory, { recursive: true });
