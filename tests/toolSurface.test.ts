@@ -18,7 +18,7 @@ import {
   registerC2000Tools
 } from "../src/mcp/tools.js";
 
-const MAX_AGENT_TOOL_COUNT = 29;
+const MAX_AGENT_TOOL_COUNT = 30;
 
 function names(profile: "readonly" | "safe" | "full", surface: "agent" | "advanced" | "compatibility") {
   return new Set(definitionsForExposure(profile, surface).map(tool => tool.name));
@@ -126,6 +126,7 @@ describe("MCP tool surface profiles", () => {
       "c2000_exportTrace",
       "c2000_launchAndRunIpcAcceptance",
       "c2000_runIpcAcceptance",
+      "c2000_runResidentIpcDebug",
       "c2000_runBootHandoffDiagnosis",
       "c2000_runReloadAndDiagnose",
       "c2000_runFullDebugBundle"
@@ -286,7 +287,7 @@ describe("MCP tool surface profiles", () => {
     expect(summary).toEqual(expect.objectContaining({
       profile: "safe",
       surface: "agent",
-      registeredToolCount: 29,
+      registeredToolCount: 30,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 94,
       advancedOnlyCount: 92,
@@ -325,13 +326,13 @@ describe("MCP tool surface profiles", () => {
       activeToolProfile: "safe",
       activeToolSurfaceProfile: "agent",
       surface: "agent",
-      registeredToolCount: 29,
+      registeredToolCount: 30,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 94,
       advancedOnlyCount: 92,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
-        registered: 29,
+        registered: 30,
         hiddenBySafety: 8,
         hiddenBySurface: 94,
         advancedOnly: 92,
@@ -412,8 +413,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(123);
-    expect(fullCompatibility.count).toBe(131);
+    expect(safeCompatibility.count).toBe(124);
+    expect(fullCompatibility.count).toBe(132);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

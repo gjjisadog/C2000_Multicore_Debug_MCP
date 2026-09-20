@@ -57,6 +57,15 @@ describe("daemon tool router interactive session lifecycle", () => {
       coreId: 0,
       programUri: programPath
     })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
+    await expect(router.invokeTool("c2000_runResidentIpcDebug", {
+      sessionId: "dbg-image",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: programPath,
+      cpu2OutPath: programPath,
+      cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map")
+    })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
 
     fixture.registry.recordTargetPrograms("board-a", [{
       coreId: 0,

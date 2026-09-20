@@ -49,6 +49,7 @@ describe("debug control boundary", () => {
         "c2000_reloadResetRunToMain",
         "c2000_launchAndRunIpcAcceptance",
         "c2000_runIpcAcceptance",
+        "c2000_runResidentIpcDebug",
         "c2000_runBootHandoffDiagnosis",
         "c2000_runReloadAndDiagnose",
         "c2000_runFullDebugBundle"
@@ -368,6 +369,14 @@ describe("debug control boundary", () => {
             responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
           },
           {
+            name: "c2000_runResidentIpcDebug",
+            inputScope: "launch",
+            targetEffect: "launch-workflow",
+            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "cpu1MapPath", "cpu2MapPath"],
+            coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"],
+            responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]
+          },
+          {
             name: "c2000_runBootHandoffDiagnosis",
             inputScope: "launch",
             targetEffect: "launch-workflow",
@@ -387,7 +396,7 @@ describe("debug control boundary", () => {
             name: "c2000_runFullDebugBundle",
             inputScope: "launch",
             targetEffect: "launch-workflow",
-            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "outputDir"],
+            requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"],
             coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"],
             responseCoreIdentityFields: ["snapshot.cores[].coreId", "loadedPrograms[].coreId", "expressions[].coreId", "pc[].coreId", "ramOwnership.maps[].coreId", "bootHandoff.cpu1.coreId", "bootHandoff.cpu2.coreId"]
           },

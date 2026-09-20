@@ -145,13 +145,35 @@ bank failure.
 
 ## Presets
 
-| Preset | Load sequence | Use |
+| Preset | Programming contract | Post-program startup |
 | --- | --- | --- |
-| `f28p65x-paired-flash` | `cpu1-then-cpu2` | Official dual-core Flash programming |
-| `hybrid30k-dk9-owner-first` | `cpu1-run-before-cpu2` | Historical Hybrid30K DK9 bring-up with a CPU2 **RAM** image only |
+| `f28p65x-paired-flash` | CPU reset + `cpu1-then-cpu2` | Select independently with `runSequence.runMode`; defaults to debugger-owned |
+| `hybrid30k-dk9-owner-first` | `cpu1-run-before-cpu2` | Historical Hybrid30K DK9 RAM bring-up contract |
 
-Both presets materialize into durable test plans, and explicit parameters that
-contradict a preset are rejected before target access.
+The paired Flash preset describes the programming phase only. After the Flash
+boundary closes, `runSequence.runMode` may be `debugger_runs_both` or
+`cpu1_boots_cpu2`, depending on who owns the product CPU2 handoff. An explicit
+`resetType: "default"` is normalized to the paired contract's required CPU
+reset. A contradictory reset or load mode is still rejected before target
+access; repeated CPU2 Flash programming remains separately fail-closed.
+
+## Resident-image debug shortcut
+
+When both Flash images are already resident and the durable session is already
+connected, use `c2000_runResidentIpcDebug`. It materializes the safe common
+path in one call:
+
+1. validate the CPU1/CPU2 artifacts and linker maps;
+2. load both `.out` symbol tables only;
+3. default to the CPU1-owned CPU2 handoff, with bounded entry/IPC evidence;
+4. return boot diagnosis without opening the paired Flash programming boundary.
+
+This shortcut never programs Flash, writes target memory, or assumes a Flash
+image when the board identity is `UNKNOWN`. The daemon must still have a
+verifiable resident identity; otherwise the result points to manifest
+verification or an exact pair load as the next action. Evidence-bundle output
+is disabled by default, and an omitted `outputDir` uses the configured write
+root when a bundle is explicitly requested.
 
 ## Host verification
 

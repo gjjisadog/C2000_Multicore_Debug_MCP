@@ -89,6 +89,7 @@ import {
   runBootHandoffDiagnosisSchema,
   runFullDebugBundleSchema,
   runIpcAcceptanceSchema,
+  runResidentIpcDebugSchema,
   runReloadAndDiagnoseSchema,
   sessionCoreSchema,
   sessionSchema,
@@ -1553,6 +1554,39 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const parsed = runIpcAcceptanceSchema.parse(resolveIpcStartupPreset(input as Record<string, unknown>));
         assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
         return ok(await workflows.runIpcAcceptance(parsed));
+      } catch (error) {
+        return fail(error, { sessionId: input.sessionId });
+      }
+    },
+
+    async runResidentIpcDebug(input: z.input<typeof runResidentIpcDebugSchema>) {
+      try {
+        const resident = runResidentIpcDebugSchema.parse(input);
+        const parsed = runIpcAcceptanceSchema.parse({
+          ...resident,
+          resetType: "default",
+          programPreparation: "symbols-only",
+          loadSequence: { mode: "cpu1-then-cpu2", cpu1SettleMs: 0 },
+          runSequence: {
+            runMode: resident.runMode,
+            runCpu1First: resident.runMode !== "cpu2_pre_running",
+            runCpu2: resident.runMode !== "cpu1_boots_cpu2",
+            settleMs: resident.settleMs
+          }
+        });
+        assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
+        const result = await workflows.runIpcAcceptance(parsed);
+        return ok({
+          ...result,
+          workflow: "c2000_runResidentIpcDebug",
+          residentDebug: {
+            programPreparation: "symbols-only",
+            targetMemoryWritten: false,
+            targetFlashVerified: false,
+            flashProgramming: false,
+            defaultRunMode: "cpu1_boots_cpu2"
+          }
+        });
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
       }

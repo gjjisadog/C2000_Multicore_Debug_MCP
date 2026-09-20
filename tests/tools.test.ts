@@ -111,6 +111,7 @@ describe("MCP tool registration contract", () => {
       "c2000_reloadResetRunToMain",
       "c2000_launchAndRunIpcAcceptance",
       "c2000_runIpcAcceptance",
+      "c2000_runResidentIpcDebug",
       "c2000_runBootHandoffDiagnosis",
       "c2000_runReloadAndDiagnose",
       "c2000_runFullDebugBundle",
@@ -381,6 +382,7 @@ describe("MCP tool registration contract", () => {
       inputFields: expect.arrayContaining(["autoCloseOnComplete", "autoCloseIdleTimeoutMs"])
     }));
     expect(byName.get("c2000_runIpcAcceptance")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
+    expect(byName.get("c2000_runResidentIpcDebug")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow", effects: expect.arrayContaining(["symbol-load", "target-read"]) }));
     expect(byName.get("c2000_runBootHandoffDiagnosis")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runReloadAndDiagnose")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
     expect(byName.get("c2000_runFullDebugBundle")).toEqual(expect.objectContaining({ inputScope: "launch", targetEffect: "launch-workflow" }));
@@ -448,6 +450,7 @@ describe("MCP tool registration contract", () => {
       ["c2000_reloadResetRunToMain", ["coreId"]],
       ["c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
       ["c2000_runIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
+      ["c2000_runResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
       ["c2000_runBootHandoffDiagnosis", ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"]],
       ["c2000_runReloadAndDiagnose", ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"]],
       ["c2000_runFullDebugBundle", ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"]],
@@ -523,6 +526,15 @@ describe("MCP tool registration contract", () => {
         "ramOwnership.maps[].coreId"
       ]],
       ["c2000_runIpcAcceptance", [
+        "snapshot.cores[].coreId",
+        "ipcReady.conditions[].coreId",
+        "applicationEntry.coreId",
+        "diagnosis.cpu1.coreId",
+        "diagnosis.cpu2.coreId",
+        "diagnosis.snapshot.cores[].coreId",
+        "ramOwnership.maps[].coreId"
+      ]],
+      ["c2000_runResidentIpcDebug", [
         "snapshot.cores[].coreId",
         "ipcReady.conditions[].coreId",
         "applicationEntry.coreId",

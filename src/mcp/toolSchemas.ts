@@ -779,6 +779,44 @@ const runIpcAcceptanceObjectSchema = z.object({
 
 export const runIpcAcceptanceSchema = runIpcAcceptanceObjectSchema;
 
+/**
+ * Short path for the common "Flash is already resident" debug loop.
+ *
+ * Keep this schema intentionally small: programming, Flash reload policy, and
+ * output-bundle selection are not part of this flow.  The handler materializes
+ * the full IPC workflow contract with symbols-only preparation and the
+ * firmware-owned CPU2 handoff as the safe F28P65x default.
+ */
+export const runResidentIpcDebugSchema = z.object({
+  sessionId: z.string().min(1),
+  device: z.string().min(1).default("F28P65x"),
+  cpu1CoreId: z.number().int(),
+  cpu2CoreId: z.number().int(),
+  cpu1OutPath: z.string().min(1),
+  cpu2OutPath: z.string().min(1),
+  cpu1MapPath: z.string().min(1),
+  cpu2MapPath: z.string().min(1),
+  cpu1EntryAddress: addressValueSchema.optional(),
+  applicationEntryTimeoutMs: applicationEntryTimeoutSchema,
+  bootModeExpression: z.string().min(1).optional(),
+  cpu1ResetStateExpression: z.string().min(1).optional(),
+  bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(64).optional(),
+  runMode: workflowRunModeSchema.default("cpu1_boots_cpu2"),
+  settleMs: z.number().int().nonnegative().default(0),
+  preStartupSafetyGuard: z.object({
+    conditions: z.array(expressionConditionSchema).min(1).max(128),
+    haltCoreIds: z.array(z.number().int()).min(1).max(2).default([0, 2])
+  }).strict().optional(),
+  ipcReadyExpressions: z.array(expressionConditionSchema).min(1).optional(),
+  timeoutMs: z.number().int().positive().default(5_000),
+  intervalMs: z.number().int().positive().default(100),
+  pollingStrategy: z.enum(["fixed", "adaptive"]).default("adaptive"),
+  pollingSchedule: z.array(pollingScheduleItemSchema).min(1).optional(),
+  verifyRuntimeRamOwnership: z.boolean().default(false),
+  collectDebugBundle: z.boolean().default(false),
+  outputDir: z.string().min(1).optional()
+}).describe("One-call resident-Flash IPC debug: load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory.");
+
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true, preStartupSafetyGuard: true }).extend({
   boardId: z.string().min(1).optional(),
   sessionMode: z.enum(["ephemeral", "interactive"]).default("ephemeral"),
@@ -869,7 +907,7 @@ export const runFullDebugBundleSchema = z.object({
   maps: z.array(ramOwnershipMapSchema).min(1).optional(),
   expressions: z.array(expressionReadSetSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
-  outputDir: z.string().min(1)
+  outputDir: z.string().min(1).optional()
 });
 
 export const verifyRunPauseIsolationSchema = z.object({
