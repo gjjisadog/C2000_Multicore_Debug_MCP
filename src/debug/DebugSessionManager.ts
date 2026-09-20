@@ -1730,6 +1730,15 @@ export class DebugSessionManager {
     return this.loadedPrograms.get(sessionId, coreId);
   }
 
+  /**
+   * Return the most recent image that this session actually programmed into
+   * target memory. Symbol-only loads intentionally do not replace this record.
+   */
+  async getProgrammedProgramInfo(sessionId: string, coreId: CoreId): Promise<LoadedProgramInfo | undefined> {
+    this.requireCore(sessionId, coreId);
+    return this.loadedPrograms.getProgrammed(sessionId, coreId);
+  }
+
   async resolvePc(sessionId: string, coreId: CoreId): Promise<ResolveResult> {
     return this.exclusive(sessionId, async () => this.resolvePcUnlocked(sessionId, coreId));
   }

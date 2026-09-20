@@ -355,9 +355,20 @@ describe("DebugSessionManager", () => {
       coreId: 0,
       programUri: cpu1Out,
       fileSize: 10,
-      symbolsLoaded: true
+      symbolsLoaded: true,
+      targetMemoryWritten: true
     }));
     expect(info!.sha256).toHaveLength(64);
+
+    await manager.loadSymbols(session.sessionId, 0, cpu1Out);
+    expect(await manager.getLoadedProgramInfo(session.sessionId, 0)).toEqual(expect.objectContaining({
+      programUri: cpu1Out,
+      targetMemoryWritten: false
+    }));
+    expect(await manager.getProgrammedProgramInfo(session.sessionId, 0)).toEqual(expect.objectContaining({
+      programUri: cpu1Out,
+      targetMemoryWritten: true
+    }));
   });
 
   test("fails a batch load closed before the first program write when a target core is disconnected", async () => {
