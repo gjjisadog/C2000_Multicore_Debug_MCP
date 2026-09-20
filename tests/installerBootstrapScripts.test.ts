@@ -85,8 +85,13 @@ describe("installer bootstrap scripts", () => {
   test("source installation builds outside the repository dist directory", async () => {
     const source = await readFile("scripts/install-source.ps1", "utf8");
     expect(source).toContain("C2000_BUILD_RUNTIME_OUTDIR");
+    expect(source).toContain("$stagingSource");
+    expect(source).toContain("New-Item -ItemType Junction");
+    expect(source).toContain("npm.cmd ci --no-audit --fund=false");
+    expect(source).toContain("Push-Location $stagingSource");
     expect(source).toContain("c2000-source-install-");
-    expect(source).toContain("Dependencies are current; skipping npm ci.");
+    expect(source).toContain("using the checkout dependencies read-only");
+    expect(source).toContain("C2000_BUILD_SOURCE_REVISION");
     expect(source).toContain("Remove-Item -LiteralPath $stagingRoot");
     expect(source).not.toContain("daemon:stop");
     expect(source).not.toContain("Stop-Process");

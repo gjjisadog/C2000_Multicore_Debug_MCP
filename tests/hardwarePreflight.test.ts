@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { defaultCcsInstallPath, hasBlockingDebugProcesses, recoverDebugProbe, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+import { defaultCcsInstallPath, getConnectedProbeSerials, hasBlockingDebugProcesses, recoverDebugProbe, resolveXds2xxConfPath, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
 
 test.each([
   ["123 /ti/ccstudio", false],
@@ -30,6 +30,14 @@ Configuration: Standard
 Found 1 device.
 `;
 
+const xds2xxOutput = `
+productClass=XDS2XX
+productName=XDS200
+serialNum=S200-1A2F00022635
+swRev=1.0.0.9
+portUSB=true
+`;
+
 describe("hardware preflight", () => {
   test("resolves the platform-native XDS110 executable path", () => {
     expect(defaultCcsInstallPath("darwin")).toBe("/Applications/ti/ccs2100/ccs");
@@ -39,6 +47,9 @@ describe("hardware preflight", () => {
     );
     expect(resolveXdsdfuPath("D:\\ccs21.0\\ccs", "win32")).toBe(
       "D:\\ccs21.0\\ccs\\ccs_base\\common\\uscif\\xds110\\xdsdfu.exe"
+    );
+    expect(resolveXds2xxConfPath("D:\\ccs21.0\\ccs", "win32")).toBe(
+      "D:\\ccs21.0\\ccs\\ccs_base\\common\\uscif\\xds2xx\\xds2xx_conf.exe"
     );
   });
 
@@ -168,6 +179,30 @@ describe("hardware preflight", () => {
       }
     ]);
     expect(result.xdsdfuPath).toBe("/Applications/ti/ccs2100/ccs/ccs_base/common/uscif/xds110/xdsdfu");
+  });
+
+  test("enumerates an XDS2xx probe when XDS110 is absent", async () => {
+    const result = await runHardwarePreflight({
+      ccsInstallPath: "D:\\ccs21.0\\ccs",
+      platform: "win32",
+      execFile: async (command, args) => {
+        if (command.endsWith("xdsdfu.exe") && args[0] === "-e") {
+          return { stdout: "Found 0 devices.", stderr: "" };
+        }
+        if (command.endsWith("xds2xx_conf.exe")) {
+          expect(args).toEqual(["get", "xds2xxu", "0", "serialNum", "productName", "productClass", "swRev", "portUSB"]);
+          return { stdout: xds2xxOutput, stderr: "" };
+        }
+        return { stdout: "", stderr: "" };
+      }
+    });
+
+    expect(result.xds2xx).toEqual(expect.objectContaining({
+      ok: true,
+      probeReady: true,
+      devices: [expect.objectContaining({ serialNumber: "S200-1A2F00022635", productName: "XDS200" })]
+    }));
+    expect(getConnectedProbeSerials(result)).toEqual(["S200-1A2F00022635"]);
   });
 
   test("includes parent process and elapsed runtime for possible debug owners", async () => {

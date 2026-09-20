@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<configurations XML_version="1.2" id="configurations_0">
+    <configuration XML_version="1.2" id="Texas Instruments XDS2xx USB Debug Probe_0">
+        <instance XML_version="1.2" desc="Texas Instruments XDS2xx USB Debug Probe_0" href="connections/TIXDS2XXUSB_Connection.xml" id="Texas Instruments XDS2xx USB Debug Probe_0" xml="TIXDS2XXUSB_Connection.xml" xmlpath="connections"/>
+        <connection XML_version="1.2" id="Texas Instruments XDS2xx USB Debug Probe_0">
+            <instance XML_version="1.2" href="drivers/tixds560icepick_c.xml" id="drivers" xml="tixds560icepick_c.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds560c28x.xml" id="drivers" xml="tixds560c28x.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds560cla2.xml" id="drivers" xml="tixds560cla2.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds560cs_child.xml" id="drivers" xml="tixds560cs_child.xml" xmlpath="drivers"/>
+            <instance XML_version="1.2" href="drivers/tixds560ajsm.xml" id="drivers" xml="tixds560ajsm.xml" xmlpath="drivers"/>
+            <property Type="choicelist" Value="2" id="Debug Probe Selection">
+                <choice Name="Only one XDS2xx installed" value="0"/>
+                <choice Name="Select by port number" value="1">
+                    <property Type="stringfield" Value="0" id="-- Enter the port number"/>
+                </choice>
+                <choice Name="Select by serial number" value="2">
+                    <property Type="stringfield" Value="S200-1A2F00022635" id="-- Enter the serial number"/>
+                </choice>
+            </property>
+            <platform XML_version="1.2" id="platform_0">
+                <instance XML_version="1.2" desc="TMS320F28P650DK8_0" href="devices/f28p650dk8.xml" id="TMS320F28P650DK8_0" xml="f28p650dk8.xml" xmlpath="devices"/>
+                <device HW_revision="1" XML_version="1.2" description="" id="TMS320F28P650DK8_0" partnum="TMS320F28P650DK8">
+                    <router HW_revision="1.0" XML_version="1.2" description="ICEPick_C router" id="IcePick_C_0" isa="ICEPICK_C">
+                        <subpath id="Subpath_1">
+                            <property Type="numericfield" Value="0x11" desc="Port Number_0" id="Port Number"/>
+                        </subpath>
+                    </router>
+                </device>
+            </platform>
+        </connection>
+    </configuration>
+</configurations>

@@ -430,15 +430,17 @@ Pass installer options after `--`, for example:
 npm run install:source:windows -- --config C:\absolute\c2000.json --force
 ```
 
-This developer-only path validates the complete developer Node version before changing dependencies,
-skips `npm ci` when the lockfile dependencies and native SQLite binding are
-already usable, and builds under a unique temporary directory. It never
-overwrites the repository `dist` directory, so running Codex MCP
-proxy/supervisor/daemon processes cannot lock the upgrade build. The temporary
-staging directory is removed on success or failure. When `--force` upgrades an
-already-present semantic version, the installer activates an immutable
-build-fingerprinted sibling directory instead of deleting a runtime whose
-native SQLite binding may still be loaded by an existing Windows MCP process.
+This developer-only path validates the complete developer Node version and
+builds from a disposable source tree under a unique temporary directory. If
+the checkout dependencies are healthy, the build reads them through a temporary
+junction; otherwise `npm ci` runs only in the disposable tree. The repository's
+`node_modules`, `dist`, and active Codex runtime are never cleaned or replaced,
+so an existing Codex MCP connection does not have to be disconnected before an
+upgrade. The temporary staging directory is removed on success or failure.
+When the source/build identity changes, the installer automatically activates
+an immutable build-fingerprinted sibling slot and leaves the old slot intact;
+`--force` is only needed when an intentionally identical artifact must be
+installed again.
 
 The lower-level cross-platform development sequence remains:
 

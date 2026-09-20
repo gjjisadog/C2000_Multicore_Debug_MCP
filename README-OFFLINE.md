@@ -36,15 +36,18 @@ If Codex is not installed yet, install the MCP runtime without registration:
 
 When the Codex CLI is unavailable, the normal install also succeeds and writes
 only the C2000 MCP managed block to `%USERPROFILE%\.codex\config.toml`.
-Unrelated Codex settings and MCP servers are preserved. Restart Codex after a
-successful registration.
+Unrelated Codex settings and MCP servers are preserved. An already running
+Codex MCP session is left untouched; the next MCP launch uses the installed
+slot, so installation does not require disconnecting Codex.
 
 ## Upgrade and uninstall
 
 Each release is installed into an immutable `versions\` slot. `current.json`
 records the active slot, entrypoint, configuration, and private runtime path.
-Reinstalling an existing version reuses its slot; `--force` creates a
-build-fingerprinted side-by-side slot, so an in-use MCP process is not deleted.
+Reinstalling an unchanged version reuses its slot. A changed build of the same
+semantic version automatically gets a build-fingerprinted side-by-side slot,
+so an in-use MCP process is never deleted or overwritten; `--force` is only
+needed to install an intentionally identical artifact again.
 The managed Codex block is updated to the absolute private runtime path:
 
 ```toml
@@ -60,7 +63,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 The installer cleans temporary download, extraction, and `.installing-*`
 staging paths on success or failure. It never runs npm, node-gyp, a package
-manager, or a network repair step.
+manager, or a network repair step. An already connected Codex process may
+continue using its old immutable slot; the upgrade itself does not require
+disconnecting Codex, and the next MCP launch uses the new slot.
 
 ## What remains external
 

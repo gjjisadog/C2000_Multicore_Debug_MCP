@@ -218,6 +218,14 @@ async function writeRuntimeManifest(root, runtimeDirectory, runtimeBuiltAt, runt
 }
 
 function readSourceState(root) {
+  const revisionOverride = process.env.C2000_BUILD_SOURCE_REVISION?.trim();
+  const dirtyOverride = process.env.C2000_BUILD_SOURCE_DIRTY?.trim().toLowerCase();
+  if (revisionOverride || dirtyOverride) {
+    return {
+      revision: revisionOverride || "unknown",
+      dirty: dirtyOverride === "true" ? true : dirtyOverride === "false" ? false : null
+    };
+  }
   const revision = spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true });
   const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], { cwd: root, encoding: "utf8", windowsHide: true });
   return {
