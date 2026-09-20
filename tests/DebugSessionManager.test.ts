@@ -1139,6 +1139,134 @@ MEMORY CONFIGURATION
     ]);
   });
 
+  test("captures CPU2 registers, reset evidence, stack words, and PC neighborhood without control writes", async () => {
+    class FaultEvidenceAdapter extends MockDebugAdapter {
+      readonly memoryReads: Array<{ coreId: CoreId; page: string; address: number; typeSize: number }> = [];
+      readonly controlCalls: string[] = [];
+
+      constructor() {
+        super({
+          expressionValues: {
+            SP: { value: "0x0100", type: "register" },
+            IER: { value: "0x0002", type: "register" },
+            IFR: { value: "0x0004", type: "register" },
+            "SysCtl_getCPU2ResetStatus()": { value: "0x0010", type: "uint16_t" },
+            "SysCtl_getResetCause()": { value: "0x0020", type: "uint32_t" }
+          }
+        });
+      }
+
+      override async readPc(_session: AdapterSession, coreId: CoreId): Promise<string> {
+        return coreId === 2 ? "0x0200" : "0x0100";
+      }
+
+      override async readMemory(
+        _session: AdapterSession,
+        coreId: CoreId,
+        page: string,
+        address: number,
+        typeSize: number
+      ): Promise<number> {
+        this.memoryReads.push({ coreId, page, address, typeSize });
+        return address + (page === "PROGRAM" ? 0x10000 : 0x20000);
+      }
+
+      override async run(): Promise<void> {
+        this.controlCalls.push("run");
+        throw new Error("diagnosis must not run a core");
+      }
+
+      override async halt(): Promise<void> {
+        this.controlCalls.push("halt");
+        throw new Error("diagnosis must not halt a core");
+      }
+
+      override async reset(): Promise<void> {
+        this.controlCalls.push("reset");
+        throw new Error("diagnosis must not reset a core");
+      }
+
+      override async writeMemory(): Promise<void> {
+        this.controlCalls.push("writeMemory");
+        throw new Error("diagnosis must not write target memory");
+      }
+    }
+
+    const adapter = new FaultEvidenceAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "fault-evidence", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    const diagnosis = await manager.diagnoseCpu2Boot({
+      sessionId: session.sessionId,
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu2FaultEvidence: {
+        stackWindowWords: 2,
+        illegalInstructionWindowWords: 1
+      }
+    });
+
+    expect(diagnosis.cpu2.faultEvidence).toEqual(expect.objectContaining({
+      coreId: 2,
+      pc: expect.objectContaining({ pc: "0x0200" }),
+      registers: {
+        sp: expect.objectContaining({ coreId: 2, result: expect.objectContaining({ success: true, value: "0x0100" }) }),
+        ier: expect.objectContaining({ result: expect.objectContaining({ success: true, value: "0x0002" }) }),
+        ifr: expect.objectContaining({ result: expect.objectContaining({ success: true, value: "0x0004" }) })
+      },
+      resetReason: {
+        cpu2: expect.objectContaining({ coreId: 0, result: expect.objectContaining({ success: true, value: "0x0010" }) }),
+        system: expect.objectContaining({ coreId: 0, result: expect.objectContaining({ success: true, value: "0x0020" }) })
+      },
+      stack: expect.objectContaining({ page: "DATA", centerAddress: 0x100, startAddress: 0xfe, endAddress: 0x102, complete: true }),
+      illegalInstructionRegion: expect.objectContaining({ page: "PROGRAM", centerAddress: 0x200, startAddress: 0x1ff, endAddress: 0x201, complete: true }),
+      collection: expect.objectContaining({ readOnly: true, targetMemoryWritten: false, executionControlIssued: false, complete: true })
+    }));
+    expect(adapter.memoryReads).toHaveLength(8);
+    expect(adapter.memoryReads).toEqual(expect.arrayContaining([
+      { coreId: 2, page: "DATA", address: 0xfe, typeSize: 16 },
+      { coreId: 2, page: "DATA", address: 0x102, typeSize: 16 },
+      { coreId: 2, page: "PROGRAM", address: 0x1ff, typeSize: 16 },
+      { coreId: 2, page: "PROGRAM", address: 0x201, typeSize: 16 }
+    ]));
+    expect(adapter.controlCalls).toEqual([]);
+  });
+
+  test("keeps an invalid reset-evidence core override best effort", async () => {
+    const adapter = new MockDebugAdapter({
+      expressionValues: {
+        SP: { value: "0x0100", type: "register" },
+        IER: { value: "0x0002", type: "register" },
+        IFR: { value: "0x0004", type: "register" }
+      }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const session = await manager.createDebugSession({ sessionName: "invalid-reset-core", coreMap });
+    await manager.connectCores(session.sessionId, [0, 2]);
+
+    const diagnosis = await manager.diagnoseCpu2Boot({
+      sessionId: session.sessionId,
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu2FaultEvidence: {
+        resetReasonCoreId: 99,
+        stackWindowWords: 0,
+        illegalInstructionWindowWords: 0
+      }
+    });
+
+    expect(diagnosis.cpu2.faultEvidence?.resetReason.cpu2).toEqual(expect.objectContaining({
+      coreId: 99,
+      coreName: "core-99",
+      result: expect.objectContaining({ success: false })
+    }));
+    expect(diagnosis.cpu2.faultEvidence?.collection).toEqual(expect.objectContaining({
+      bestEffort: true,
+      complete: false
+    }));
+  });
+
   test("keeps batch operation results independent when one core fails", async () => {
     const manager = createManager();
     const session = await manager.createDebugSession({ sessionName: "partial-batch", coreMap });

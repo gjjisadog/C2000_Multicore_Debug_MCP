@@ -222,6 +222,84 @@ export interface ResolveResult {
   };
 }
 
+/** Optional expressions and bounded windows used by the CPU2 fault snapshot. */
+export interface Cpu2FaultEvidenceOptions {
+  cpu2SpExpression?: string;
+  cpu2IerExpression?: string;
+  cpu2IfrExpression?: string;
+  /** Usually evaluated on CPU1 because F28P65x exposes CPU2 reset status there. */
+  cpu2ResetReasonExpression?: string;
+  systemResetCauseExpression?: string;
+  resetReasonCoreId?: CoreId;
+  stackPage?: string;
+  codePage?: string;
+  stackWindowWords?: number;
+  illegalInstructionWindowWords?: number;
+  memoryTypeSize?: 8 | 16 | 32;
+}
+
+export interface DiagnosticExpressionEvidence {
+  label: string;
+  coreId: CoreId;
+  coreName: string;
+  expression: string;
+  result: EvaluateResult;
+}
+
+export interface DiagnosticMemoryWord {
+  address: number;
+  addressHex: string;
+  success: boolean;
+  value?: number;
+  error?: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+export interface DiagnosticMemoryWindow {
+  coreId: CoreId;
+  coreName: string;
+  page: string;
+  typeSize: 8 | 16 | 32;
+  purpose: "stack-neighborhood" | "illegal-instruction-neighborhood";
+  centerAddress?: number;
+  centerAddressHex?: string;
+  startAddress?: number;
+  endAddress?: number;
+  beforeWords: number;
+  afterWords: number;
+  words: DiagnosticMemoryWord[];
+  complete: boolean;
+  reason?: string;
+}
+
+export interface Cpu2FaultEvidence {
+  coreId: CoreId;
+  coreName: string;
+  pc: ResolveResult;
+  registers: {
+    sp: DiagnosticExpressionEvidence;
+    ier: DiagnosticExpressionEvidence;
+    ifr: DiagnosticExpressionEvidence;
+  };
+  resetReason: {
+    cpu2: DiagnosticExpressionEvidence;
+    system: DiagnosticExpressionEvidence;
+  };
+  stack: DiagnosticMemoryWindow;
+  illegalInstructionRegion: DiagnosticMemoryWindow;
+  collection: {
+    readOnly: true;
+    bestEffort: true;
+    targetMemoryWritten: false;
+    executionControlIssued: false;
+    complete: boolean;
+    failures: Array<Record<string, unknown>>;
+  };
+}
+
 export interface CoreSnapshot {
   coreId: CoreId;
   coreName: string;

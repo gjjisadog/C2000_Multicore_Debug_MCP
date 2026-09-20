@@ -2856,7 +2856,7 @@ describe("tool handlers", () => {
     );
   });
 
-  test("loadSymbols exposes symbol metadata without recording or writing a target program", async () => {
+  test("loadSymbols remembers the symbol pair without writing a target program", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-symbols-"));
     const programUri = path.join(tempDir, "cpu2-flash.out");
     await writeFile(programUri, "flash-symbols");
@@ -2876,7 +2876,7 @@ describe("tool handlers", () => {
       })
     );
     await expect(handlers.getLoadedProgramInfo({ sessionId: created.sessionId, coreId: 2 })).resolves.toEqual(
-      expect.objectContaining({ success: true, warning: expect.stringContaining("No program was loaded") })
+      expect.objectContaining({ success: true, programUri, symbolsLoaded: true, warning: expect.stringContaining("Symbols were loaded") })
     );
   });
 

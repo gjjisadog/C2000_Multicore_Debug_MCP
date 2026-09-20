@@ -2,7 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { z } from "zod";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
-import type { CoreId, EvaluateResult, LoadedProgramInfo, ResetType } from "../debug/types.js";
+import type { CoreId, Cpu2FaultEvidenceOptions, EvaluateResult, LoadedProgramInfo, ResetType } from "../debug/types.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput, type RamOwnershipAnalysis } from "../hardware/mapOwnership.js";
 import { describeProgramArtifact, validateProgramPair } from "../hardware/programDiscovery.js";
 import { fileMetadata } from "../utils/fileHash.js";
@@ -27,6 +27,7 @@ import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
 import type { DebugEvidence } from "../debug/DebugEvidence.js";
 import { assertAllowedWritePath, type FilesystemPolicy } from "../security/pathPolicy.js";
+import { verifyResidentImageForSession, type ResidentImageVerificationCheck } from "../debug/residentImageVerification.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -79,10 +80,13 @@ export class DebugWorkflowService {
       });
       sessionId = created.sessionId;
       const connected = await this.manager.connectCores(sessionId, coreIds);
+      const residentVerification = input.residentImageManifests?.length
+        ? await this.verifyResidentImage(sessionId, input.residentImageManifests)
+        : undefined;
       const acceptance = await this.runIpcAcceptanceInternal({
         ...input,
         sessionId
-      }, artifactPreflight, () => undefined);
+      }, artifactPreflight, () => undefined, residentVerification);
 
       const result = {
         ...acceptance,
@@ -174,13 +178,18 @@ export class DebugWorkflowService {
     assertWorkflowStartupContract(input);
     const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
     setStage("artifact-preflight");
-    return this.runIpcAcceptanceInternal(input, artifactPreflight, setStage);
+    setStage("resident-image-verification");
+    const residentVerification = input.residentImageManifests?.length
+      ? await this.verifyResidentImage(input.sessionId, input.residentImageManifests)
+      : undefined;
+    return this.runIpcAcceptanceInternal(input, artifactPreflight, setStage, residentVerification);
   }
 
   private async runIpcAcceptanceInternal(
     input: z.infer<typeof runIpcAcceptanceSchema>,
     artifactPreflight: ToolResult,
-    setStage: (stage: string) => void
+    setStage: (stage: string) => void,
+    residentVerification?: ToolResult
   ): Promise<ToolResult> {
     const workflowStartedAt = performance.now();
     const bundleOutputDir = input.collectDebugBundle
@@ -258,7 +267,7 @@ export class DebugWorkflowService {
       // now-available symbols before any reset or run authority is exercised.
       setStage("symbols-load");
       const symbolLoadResults: ToolResult[] = [];
-      const cpu1Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu1CoreId, input.cpu1OutPath);
+      const cpu1Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu1CoreId, input.cpu1OutPath, input.cpu1MapPath);
       symbolLoadResults.push({
         ...cpu1Symbols,
         success: true,
@@ -268,7 +277,7 @@ export class DebugWorkflowService {
         targetFlashVerified: false
       });
       performedSteps.push("loadCpu1Symbols");
-      const cpu2Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu2CoreId, input.cpu2OutPath);
+      const cpu2Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu2CoreId, input.cpu2OutPath, input.cpu2MapPath);
       symbolLoadResults.push({
         ...cpu2Symbols,
         success: true,
@@ -596,7 +605,8 @@ export class DebugWorkflowService {
         extraExpressions: conditions,
         ipcAcceptance: true,
         cpu1Expressions: conditions.filter(condition => condition.coreId === input.cpu1CoreId).map(condition => condition.expression),
-        cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression)
+        cpu2Expressions: conditions.filter(condition => condition.coreId === input.cpu2CoreId).map(condition => condition.expression),
+        cpu2FaultEvidence: input.cpu2FaultEvidence
       });
       const optimization = classifyIpcAcceptance({ ipcReady, elfFreshness, runtimeRamOwnership, runPlan, applicationEntry });
       performedSteps.push("diagnoseBootHandoff");
@@ -625,6 +635,7 @@ export class DebugWorkflowService {
         reset,
         load,
         programPreparation: input.programPreparation,
+        ...(residentVerification ? { residentVerification } : {}),
         ...(input.programPreparation === "symbols-only" ? {
           targetFlashVerified: false,
           programPreparationEvidence: {
@@ -702,6 +713,7 @@ export class DebugWorkflowService {
       elfFreshness,
       runtimeRamOwnership,
       extraExpressions: input.expressions,
+      cpu2FaultEvidence: input.cpu2FaultEvidence,
       expectedPostLoadHalt: input.expectedPostLoadHalt
     });
   }
@@ -943,7 +955,8 @@ export class DebugWorkflowService {
         elfFreshness,
         runtimeRamOwnership,
         ipcReady: wait,
-        applicationEntry
+        applicationEntry,
+        cpu2FaultEvidence: input.cpu2FaultEvidence
       });
       performedSteps.push("diagnoseBootHandoff");
       const result: ToolResult = {
@@ -1030,6 +1043,13 @@ export class DebugWorkflowService {
     })));
     const expressions = await this.evaluateReadSets(input.sessionId, input.expressions ?? defaultExpressionReadSets(input.cpu1CoreId, input.cpu2CoreId));
     const pc = await Promise.all(coreIds.map(async coreId => ({ coreId, ...(await this.manager.resolvePc(input.sessionId, coreId)) })));
+    const cpu2FaultEvidence = await this.manager.collectCpu2FaultEvidence({
+      sessionId: input.sessionId,
+      cpu1CoreId: input.cpu1CoreId,
+      cpu2CoreId: input.cpu2CoreId,
+      cpu2Pc: pc.find(item => item.coreId === input.cpu2CoreId),
+      cpu2FaultEvidence: input.cpu2FaultEvidence
+    });
     const ramOwnership = maps.length > 0 ? await this.analyzeRamOwnership({ maps }) : undefined;
     const elfFreshness = await this.checkElfFreshness(input.sessionId, [
       { coreId: input.cpu1CoreId, outPath: input.cpu1OutPath },
@@ -1058,6 +1078,7 @@ export class DebugWorkflowService {
       ramOwnership,
       runtimeRamOwnership,
       elfFreshness,
+      cpu2FaultEvidence,
       commandStats: { total: 0, byOperation: {} }
     };
     const bootHandoff = await this.buildBootHandoffDiagnosis({
@@ -1117,6 +1138,7 @@ export class DebugWorkflowService {
     evidence?: DebugEvidence;
     cpu1Expressions?: string[];
     cpu2Expressions?: string[];
+    cpu2FaultEvidence?: Cpu2FaultEvidenceOptions;
     expectedPostLoadHalt?: boolean;
     precomputedExpressionResults?: Array<{ coreId: CoreId; results: EvaluateResult[] }>;
   }): Promise<ToolResult> {
@@ -1128,7 +1150,7 @@ export class DebugWorkflowService {
       .map(condition => condition.expression);
     const precomputedExpressionResults = options.precomputedExpressionResults
       ?? buildPrecomputedExpressionResults(options.extraExpressions, options.ipcReady);
-    const boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
+    let boot = options.evidence ? bootEvidence(options.evidence, options.cpu1CoreId, options.cpu2CoreId) : await this.manager.diagnoseCpu2Boot({
       sessionId: options.sessionId,
       cpu1CoreId: options.cpu1CoreId,
       cpu2CoreId: options.cpu2CoreId,
@@ -1142,6 +1164,8 @@ export class DebugWorkflowService {
         cpu1Expressions: options.cpu1Expressions,
         cpu2Expressions: options.cpu2Expressions
       }),
+      ...(options.cpu2FaultEvidence ? { cpu2FaultEvidence: options.cpu2FaultEvidence } : {}),
+      collectCpu2FaultEvidence: false,
       ...(precomputedExpressionResults ? { precomputedExpressionResults } : {})
     });
     const extraExpressions = options.extraExpressions
@@ -1166,6 +1190,30 @@ export class DebugWorkflowService {
         ? bootVerdict.reasons
         : [...bootVerdict.reasons, "Runtime RAM ownership verification was requested but did not match."]
     };
+    // Keep the normal, successful IPC path timing-light.  A bounded fault
+    // snapshot is collected automatically after a failed handoff, or when a
+    // caller explicitly supplies the evidence configuration.  A CPU2 entry
+    // failure intentionally keeps the existing CPU2-access suppression.
+    const shouldCollectCpu2FaultEvidence = !options.evidence
+      && options.applicationEntry?.reached !== false
+      && (options.cpu2FaultEvidence !== undefined || !verdict.ready);
+    if (shouldCollectCpu2FaultEvidence && !boot.cpu2?.faultEvidence) {
+      try {
+        const faultEvidence = await this.manager.collectCpu2FaultEvidence({
+          sessionId: options.sessionId,
+          cpu1CoreId: options.cpu1CoreId,
+          cpu2CoreId: options.cpu2CoreId,
+          cpu2Pc: boot.cpu2?.pc,
+          cpu2FaultEvidence: options.cpu2FaultEvidence
+        });
+        boot = {
+          ...boot,
+          cpu2: { ...boot.cpu2, faultEvidence }
+        };
+      } catch (error) {
+        boot = { ...boot, faultEvidenceError: toStructuredError(error) };
+      }
+    }
     const applicationEntryNotReached = options.applicationEntry?.reached === false;
     const ipcTimedOut = options.ipcReady?.timedOut === true;
     const diagnosisCode = applicationEntryNotReached
@@ -1460,6 +1508,43 @@ export class DebugWorkflowService {
     }
   }
 
+  private async verifyResidentImage(
+    sessionId: string,
+    requests: Array<{ coreId: number; programUri?: string; manifestUri: string; mapUri?: string }>
+  ): Promise<ToolResult> {
+    const checks: ResidentImageVerificationCheck[] = requests.map(request => {
+      if (!request.programUri) {
+        throw new DebugMcpError("ResidentArtifactsMissing", "Resident-image verification requires a CPU .out artifact", {
+          sessionId,
+          coreId: request.coreId,
+          manifestUri: request.manifestUri,
+          targetMemoryWritten: false,
+          nextAction: "Provide programUri, or let the resident shortcut resolve it from the session's loaded-image record."
+        });
+      }
+      return {
+        coreId: request.coreId,
+        programUri: request.programUri,
+        manifestUri: request.manifestUri,
+        ...(request.mapUri ? { mapUri: request.mapUri } : {})
+      };
+    });
+    const verification = await verifyResidentImageForSession(this.manager, {
+      sessionId,
+      checks,
+      connectIfNeeded: true
+    });
+    if (verification.success !== true || verification.verified !== true) {
+      throw new DebugMcpError("ResidentImageMismatch", "Resident-image manifest verification failed before symbols were loaded", {
+        sessionId,
+        targetMemoryWritten: false,
+        residentVerification: verification,
+        nextAction: "Check that the manifest matches the exact resident CPU1/CPU2 Flash image pair, then retry the symbols-only workflow."
+      });
+    }
+    return verification as ToolResult;
+  }
+
   private async writeDebugBundle(outputDir: string, result: ToolResult) {
     await mkdir(outputDir, { recursive: true });
     const files: string[] = [];
@@ -1487,8 +1572,10 @@ async function assertIpcArtifactSet(input: {
   cpu2CoreId: CoreId;
   cpu1OutPath: string;
   cpu2OutPath: string;
-  cpu1MapPath: string;
-  cpu2MapPath: string;
+  cpu1MapPath?: string;
+  cpu2MapPath?: string;
+  programPreparation?: "load" | "symbols-only";
+  verifyRuntimeRamOwnership?: boolean;
   cpu1OutSha256?: string;
   cpu2OutSha256?: string;
   cpu1MapSha256?: string;
@@ -1500,17 +1587,24 @@ async function assertIpcArtifactSet(input: {
     ...input,
     cpu1OutPath: normalizePath(input.cpu1OutPath),
     cpu2OutPath: normalizePath(input.cpu2OutPath),
-    cpu1MapPath: normalizePath(input.cpu1MapPath),
-    cpu2MapPath: normalizePath(input.cpu2MapPath)
+    ...(input.cpu1MapPath ? { cpu1MapPath: normalizePath(input.cpu1MapPath) } : {}),
+    ...(input.cpu2MapPath ? { cpu2MapPath: normalizePath(input.cpu2MapPath) } : {})
   };
   const programPair = validateProgramPair(normalizedInput.cpu1OutPath, normalizedInput.cpu2OutPath, input.device);
+  const mapsComplete = Boolean(normalizedInput.cpu1MapPath && normalizedInput.cpu2MapPath);
+  const allowMissingMaps = input.programPreparation === "symbols-only" && input.verifyRuntimeRamOwnership !== true;
   const mapPair = validateProgramPair(normalizedInput.cpu1MapPath, normalizedInput.cpu2MapPath, input.device);
-  const issues = [...programPair.issues, ...mapPair.issues.map(issue => `map: ${issue}`)];
+  const issues = [...programPair.issues];
+  if (mapsComplete || !allowMissingMaps) {
+    issues.push(...mapPair.issues.map(issue => `map: ${issue}`));
+  } else if (normalizedInput.cpu1MapPath || normalizedInput.cpu2MapPath) {
+    issues.push("map: CPU1 and CPU2 maps must be supplied together when one map is provided");
+  }
   const files = [
     ["CPU1 output", normalizedInput.cpu1OutPath],
     ["CPU2 output", normalizedInput.cpu2OutPath],
-    ["CPU1 map", normalizedInput.cpu1MapPath],
-    ["CPU2 map", normalizedInput.cpu2MapPath]
+    ...(normalizedInput.cpu1MapPath ? [["CPU1 map", normalizedInput.cpu1MapPath] as const] : []),
+    ...(normalizedInput.cpu2MapPath ? [["CPU2 map", normalizedInput.cpu2MapPath] as const] : [])
   ] as const;
   const fileChecks = await Promise.all(files.map(async ([label, filePath]) => {
     try {
@@ -1543,27 +1637,31 @@ async function assertIpcArtifactSet(input: {
       ? [`${declaration.label} SHA-256 does not match declared hash: ${declaration.path}`]
       : [];
   }));
-  const artifactSemantics = await validateIpcArtifactSymbols({
-    cpu1CoreId: input.cpu1CoreId,
-    cpu2CoreId: input.cpu2CoreId,
-    cpu1MapPath: normalizedInput.cpu1MapPath,
-    cpu2MapPath: normalizedInput.cpu2MapPath,
-    expressions: [
-      ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
-      // Symbol validation only: these observations never become readiness gates.
-      ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 }))
-    ]
-  });
+  const artifactSemantics = mapsComplete
+    ? await validateIpcArtifactSymbols({
+      cpu1CoreId: input.cpu1CoreId,
+      cpu2CoreId: input.cpu2CoreId,
+      cpu1MapPath: normalizedInput.cpu1MapPath!,
+      cpu2MapPath: normalizedInput.cpu2MapPath!,
+      expressions: [
+        ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
+        // Symbol validation only: these observations never become readiness gates.
+        ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 }))
+      ]
+    })
+    : { skipped: true, reason: "Map validation is not required for symbols-only resident debugging when runtime RAM ownership verification is disabled.", issues: [] };
   issues.push(...artifactSemantics.issues);
   const cpu1Out = describeProgramArtifact(normalizedInput.cpu1OutPath);
-  const cpu1Map = describeProgramArtifact(normalizedInput.cpu1MapPath);
   const cpu2Out = describeProgramArtifact(normalizedInput.cpu2OutPath);
-  const cpu2Map = describeProgramArtifact(normalizedInput.cpu2MapPath);
-  if (cpu1Out.configuration && cpu1Map.configuration && cpu1Out.configuration !== cpu1Map.configuration) {
-    issues.push(`CPU1 output/map configuration mismatch: ${cpu1Out.configuration} vs ${cpu1Map.configuration}`);
-  }
-  if (cpu2Out.configuration && cpu2Map.configuration && cpu2Out.configuration !== cpu2Map.configuration) {
-    issues.push(`CPU2 output/map configuration mismatch: ${cpu2Out.configuration} vs ${cpu2Map.configuration}`);
+  if (mapsComplete) {
+    const cpu1Map = describeProgramArtifact(normalizedInput.cpu1MapPath!);
+    const cpu2Map = describeProgramArtifact(normalizedInput.cpu2MapPath!);
+    if (cpu1Out.configuration && cpu1Map.configuration && cpu1Out.configuration !== cpu1Map.configuration) {
+      issues.push(`CPU1 output/map configuration mismatch: ${cpu1Out.configuration} vs ${cpu1Map.configuration}`);
+    }
+    if (cpu2Out.configuration && cpu2Map.configuration && cpu2Out.configuration !== cpu2Map.configuration) {
+      issues.push(`CPU2 output/map configuration mismatch: ${cpu2Out.configuration} vs ${cpu2Map.configuration}`);
+    }
   }
   if (issues.length > 0) {
     throw new DebugMcpError("ArtifactPairInvalid", "IPC acceptance artifacts are incomplete or incompatible", {
@@ -1578,8 +1676,8 @@ async function assertIpcArtifactSet(input: {
     normalizedPaths: {
       cpu1OutPath: normalizedInput.cpu1OutPath,
       cpu2OutPath: normalizedInput.cpu2OutPath,
-      cpu1MapPath: normalizedInput.cpu1MapPath,
-      cpu2MapPath: normalizedInput.cpu2MapPath
+      ...(normalizedInput.cpu1MapPath ? { cpu1MapPath: normalizedInput.cpu1MapPath } : {}),
+      ...(normalizedInput.cpu2MapPath ? { cpu2MapPath: normalizedInput.cpu2MapPath } : {})
     },
     hostFiles: hostFiles.filter(item => item !== undefined),
     declaredHashes: hashDeclarations
@@ -2052,7 +2150,12 @@ function bootEvidence(evidence: DebugEvidence, cpu1CoreId: CoreId, cpu2CoreId: C
       cores: evidence.cores.map(core => ({ coreId: core.coreId, coreName: core.coreName, connected: core.connected, state: core.state, pc: core.pc?.pc }))
     },
     cpu1: { coreId: cpu1CoreId, pc: cpu1?.pc, expressions: cpu1?.expressions ?? [] },
-    cpu2: { coreId: cpu2CoreId, pc: cpu2?.pc, expressions: cpu2?.expressions ?? [] }
+    cpu2: {
+      coreId: cpu2CoreId,
+      pc: cpu2?.pc,
+      expressions: cpu2?.expressions ?? [],
+      ...(evidence.cpu2FaultEvidence ? { faultEvidence: evidence.cpu2FaultEvidence } : {})
+    }
   };
 }
 function recommendedActions(diagnosisCode: string, verdict: ToolResult, ramOwnership?: RamOwnershipAnalysis): string[] {

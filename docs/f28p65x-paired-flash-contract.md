@@ -159,21 +159,47 @@ access; repeated CPU2 Flash programming remains separately fail-closed.
 
 ## Resident-image debug shortcut
 
-When both Flash images are already resident and the durable session is already
-connected, use `c2000_runResidentIpcDebug`. It materializes the safe common
-path in one call:
+When both Flash images are already resident and a durable session is already
+connected, use `c2000_runResidentIpcDebug`. When no session exists, use
+`c2000_launchResidentIpcDebug`; it selects the registered board (or accepts an
+explicit `boardId`), acquires the board lease, creates the session, connects
+CPU1/CPU2, and then enters the same resident-image path. It materializes the
+safe common path in one call:
 
-1. validate the CPU1/CPU2 artifacts and linker maps;
-2. load both `.out` symbol tables only;
-3. default to the CPU1-owned CPU2 handoff, with bounded entry/IPC evidence;
-4. return boot diagnosis without opening the paired Flash programming boundary.
+1. resolve the CPU1/CPU2 `.out` pair from the request or the current session's
+   MCP-loaded image record, and infer sibling `.map` files when they exist;
+2. when `residentImageManifests` is supplied, verify the manifest-bound marker
+   before loading either symbol table; this read-only check can establish a
+   previously `UNKNOWN` board identity without a separate verification call;
+3. load both `.out` symbol tables only;
+4. default to the CPU1-owned CPU2 handoff, with bounded entry/IPC evidence;
+5. return boot diagnosis without opening the paired Flash programming boundary.
 
 This shortcut never programs Flash, writes target memory, or assumes a Flash
-image when the board identity is `UNKNOWN`. The daemon must still have a
-verifiable resident identity; otherwise the result points to manifest
-verification or an exact pair load as the next action. Evidence-bundle output
-is disabled by default, and an omitted `outputDir` uses the configured write
-root when a bundle is explicitly requested.
+image when the board identity is `UNKNOWN`. The default no-session policy is
+`residentIdentityPolicy: "require-known"`; when Flash was programmed outside
+MCP, an operator may explicitly set `residentIdentityPolicy:
+"operator-confirmed"` to acknowledge that the image has not changed. This
+still performs symbols-only, no-write debugging and does not promote the
+board identity to `KNOWN` unless a manifest check succeeds. The no-session
+entry is `interactive` by default
+and preserves a failed diagnostic session for CPU2 inspection; set
+`sessionMode: "ephemeral"` for automatic cleanup. Close a preserved session
+with `c2000_closeDebugSession`. Evidence-bundle output is disabled by default,
+and an omitted `outputDir` uses the configured write root when a bundle is
+explicitly requested.
+
+For an existing session, `cpu1OutPath`/`cpu2OutPath` may be omitted after both
+images were loaded through MCP; the shortcut reuses that session's loaded-image
+record. `cpu1MapPath`/`cpu2MapPath` are optional for symbols-only diagnosis and
+are inferred from the loaded record or the adjacent `.map` files when present.
+No-session launch still requires the two `.out` paths because it has no prior
+session record to consult.
+
+The standard F28P650DK8 + X200/XDS2xx registration shape is available at
+`examples/f28p650dk8-x200.config.json` and binds the example probe serial
+`S200-1A2F00022635` to
+`examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml`.
 
 ## Host verification
 

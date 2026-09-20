@@ -286,7 +286,7 @@ export class BoardWorkerSupervisor {
     const programLoadMs = config.timeouts?.programLoadMs ?? 300000;
     const requestedMs = positiveNumber(record(input).timeoutMs) ?? 0;
     const marginMs = 30000;
-    // Session creation performs host-side XDS110 enumeration/recovery before
+    // Session creation performs host-side debug-probe enumeration/recovery before
     // DSS startup. Keep that outer envelope separate from the inner DSS
     // startup timeout so a slow probe cannot be reported as an unexplained
     // worker timeout while the nested stage is still collecting evidence.
@@ -311,7 +311,7 @@ export class BoardWorkerSupervisor {
       const connectCount = Math.max(1, cores.filter(core => core.connect !== false).length);
       return Math.max(baseMs, startupEnvelopeMs + connectCount * connectMs + loadCount * programLoadMs + requestedMs + marginMs);
     }
-    if (toolName === "c2000_launchAndRunIpcAcceptance") {
+    if (toolName === "c2000_launchAndRunIpcAcceptance" || toolName === "c2000_launchResidentIpcDebug") {
       return Math.max(baseMs, startupEnvelopeMs + 2 * connectMs + 2 * resetMs + 2 * programLoadMs + requestedMs + marginMs);
     }
     if (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_runReloadAndDiagnose") {

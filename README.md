@@ -332,6 +332,7 @@ This MCP must not wrap those TI official debug control tools for dual-core contr
 - `c2000_reloadResetRunToMain`
 - `c2000_launchAndRunIpcAcceptance`
 - `c2000_runResidentIpcDebug`
+- `c2000_launchResidentIpcDebug`
 - `c2000_runIpcAcceptance`
 - `c2000_runBootHandoffDiagnosis`
 - `c2000_runReloadAndDiagnose`
@@ -475,7 +476,7 @@ Closing a stdio client therefore does **not** dispose board workers, debug
 sessions, DSS children, leases, or queued jobs. The daemon keeps SQLite state
 in `storage.sqlitePath` (WAL enabled by default) and starts one worker per
 registered `boards[]` entry. A non-mock worker checks that its `.ccxml` binds
-the expected XDS110 serial before it starts. An atomic runtime lock prevents
+the expected debug-probe serial before it starts. An atomic runtime lock prevents
 concurrent proxies from starting two daemons against the same database. If a
 daemon is restarted, the MCP proxy safely rediscovers its endpoint and token
 once after a connection or authentication failure; it never retries a request
@@ -660,6 +661,26 @@ Example runtime registration:
 }
 ```
 
+### F28P650DK8 + X200/XDS2xx
+
+For the DK8 board with an X200 (XDS2xx) USB debug probe, start from
+[`examples/f28p650dk8-x200.config.json`](examples/f28p650dk8-x200.config.json).
+The example binds device `F28P650DK8`, CPU1/CPU2 as cores `0`/`2`, the probe
+serial `S200-1A2F00022635`, and
+`examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml`. Replace the
+serial and paths when using another X200; the `.ccxml` serial binding and the
+registered `serialNumber` must remain identical.
+
+```json
+{
+  "boardId": "dk8-x200",
+  "probeSerial": "S200-1A2F00022635",
+  "device": "F28P650DK8",
+  "ccxmlPath": "./examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml",
+  "tags": ["dk8", "x200", "xds2xx"]
+}
+```
+
 ## Two-board CAN acceptance
 
 `c2000_submitMultiBoardCanAcceptance` creates a durable `CAN_PAIR` group,
@@ -759,7 +780,7 @@ If a client reports an empty tool list:
 3. Re-run `npm run doctor` and confirm `runtime.bundled === true`.
 4. Restart or reload the MCP client so it performs a fresh `initialize` and `tools/list` handshake.
 
-These checks do not connect XDS110, create a debug session, load programs, reset cores, or run the target.
+These checks do not connect the debug probe, create a debug session, load programs, reset cores, or run the target.
 
 ## Debug Workflow Performance
 
@@ -781,14 +802,20 @@ returns `targetFlashVerified: false` and must not be presented as target Flash
 verification. `verify-only` remains a deprecated alias. A bounded host cache
 shares hashes between loading and ELF freshness checks.
 
-For firmware that is already resident in Flash, use `c2000_loadSymbols` with
-the matching `.out` file. It calls the DSS symbol loader only and returns
-`targetMemoryWritten: false`; it does not erase or program Flash and does not
-insert a false entry into the MCP loaded-program registry.
+For firmware that is already resident in Flash, use the resident workflow
+(`c2000_launchResidentIpcDebug` without a session, or
+`c2000_runResidentIpcDebug` with one). It loads matching symbols only and
+returns `targetMemoryWritten: false`; it does not erase or program Flash.
+With an existing MCP session, the CPU1/CPU2 `.out` paths can be omitted after
+both images have been loaded through MCP. The workflow reuses that loaded-image
+record and infers adjacent `.map` files when present. A no-session launch still
+requires the two `.out` paths.
 
-If the current daemon lease reports target identity `UNKNOWN`, use
-`c2000_verifyResidentImage` before loading symbols when the build provides a
-manifest in this form:
+If the current daemon lease reports target identity `UNKNOWN`, either call
+`c2000_verifyResidentImage` explicitly, or pass `residentImageManifests` to a
+resident workflow. The workflow performs this manifest check automatically
+before loading symbols, so there is no separate verify call in the common path.
+The build manifest has this form:
 
 ```json
 {
@@ -814,7 +841,7 @@ verification and does not authorize old symbols.
 The manager also fails closed on a repeated CPU2 Flash load in the same MCP
 session. `DestructiveFlashReloadBlocked` is raised before CCS can select or
 erase a bank, and batch loads are preflighted so CPU1 is not partially loaded.
-Use `c2000_loadSymbols` for a resident image. Set
+Use `c2000_loadSymbols` for a manual resident-image symbol load. Set
 `allowDestructiveFlashReload: true` only after confirming target ownership and
 an intentional erase/reprogram operation.
 
@@ -1005,7 +1032,7 @@ There are many tools by design (host gates, atomics, batches, workflows). Semant
 | `c2000_runCore` | `c2000_continue` |
 | `c2000_haltCore` | `c2000_pause` |
 
-Prefer one workflow (`c2000_launchAndRunIpcAcceptance`, `c2000_runResidentIpcDebug`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. For an already-programmed Flash image, use `c2000_runResidentIpcDebug`: it loads both symbol tables, applies the CPU1-owned CPU2 handoff by default, and captures bounded evidence without programming Flash. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` and `configuration.surfaceProfile` report the effective frontend profiles, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
+Prefer one workflow (`c2000_launchResidentIpcDebug`, `c2000_launchAndRunIpcAcceptance`, `c2000_runResidentIpcDebug`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, `c2000_runFullDebugBundle`) over long atomic chains. For an already-programmed Flash image, use `c2000_launchResidentIpcDebug` when no session exists; it selects the board, acquires the lease, creates/connects CPU1/CPU2, and loads both symbol tables without programming Flash. Use `c2000_runResidentIpcDebug` when a session is already connected. Both default to the CPU1-owned CPU2 handoff and capture bounded evidence without programming Flash. Call `c2000_getToolContracts` once when contract discovery is actually needed; do not poll it to infer profile reload. `c2000_getServerHealth.configuration.profile` and `configuration.surfaceProfile` report the effective frontend profiles, source, config path, and application time, while `configuration.reload` reports whether a frontend reconnect is required. Reconnect only that frontend after a profile edit; the daemon and board workers do not require restart.
 
 Hybrid30K DK9 **RAM** acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. It is not a paired Flash programming preset: a CPU2 Flash image combined with CPU1-run-before-CPU2 is rejected before target access, so use `startupPreset: "f28p65x-paired-flash"` when both images are programmed into Flash.
 
@@ -1102,6 +1129,7 @@ Phase 3:
 - `c2000_launchMulticoreDebug`
 - `c2000_launchAndRunIpcAcceptance`
 - `c2000_runResidentIpcDebug`
+- `c2000_launchResidentIpcDebug`
 - `c2000_runIpcAcceptance`
 - `c2000_runBootHandoffDiagnosis`
 - `c2000_runReloadAndDiagnose`
@@ -1111,7 +1139,7 @@ All tool responses include `success`, `timestamp`, and scoped fields such as `se
 
 `c2000_getServerHealth` is available in every safety/surface combination. It reports server/runtime version, whether the active artifact is bundled, process uptime, selected adapter, active safety/surface profiles, configured TI path presence, and the exact registered tool names. It is host-read only and never enumerates or controls the target.
 
-Each registered tool definition also declares `inputScope` and `targetEffect` contracts. Core-scoped debug tools use `inputScope: "core"` and must expose both `sessionId` and `coreId`; host-only tools such as `c2000_getDebugBoundary`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, `c2000_getAcceptanceReadiness`, and `c2000_analyzeRamOwnership` use `inputScope: "host"` and do not connect to the target. MCP clients can call `c2000_getToolContracts` to inspect each tool's `inputScope`, `targetEffect`, `inputFields`, `requiredInputFields`, `coreIdentityFields`, and `responseCoreIdentityFields`. Single-core debug controls declare response identity fields `["coreId", "coreName"]`; batch tools declare per-result identity fields; multicore snapshots declare `["cores[].coreId", "cores[].coreName"]`; and `c2000_verifyRunPauseIsolation` declares `["acceptanceSummary.steps[].commandCoreId", "acceptanceSummary.steps[].commandCoreName"]`. Advanced IPC, MSGRAM, parameter-sync, CPU2 bring-up, and fault-injection tools also declare response identity paths, for example `c2000_assignExpressions` and `c2000_injectFaults` use `["results[].coreId", "results[].coreName"]`, `c2000_compareExpressions` uses `["comparisons[].left.coreId", "comparisons[].right.coreId"]`, `c2000_waitForExpressionSet` and `c2000_waitForIpcReady` use `["conditions[].coreId"]`, `c2000_analyzeRamOwnership` uses `["maps[].coreId", "ownershipActions[].targetCoreId"]`, `c2000_diagnoseCpu2Boot` uses `["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"]`, and `c2000_diagnoseBootHandoff` also includes `["ramOwnership.maps[].coreId"]` when map evidence is supplied. `c2000_reloadResetRunToMain` declares `["coreId", "coreName"]` and reports the current adapter limitation for true breakpoint/run-to-symbol behavior. Workflow tools such as `c2000_runResidentIpcDebug`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, and `c2000_runFullDebugBundle` declare `targetEffect: "launch-workflow"` because they perform multi-step orchestration inside the MCP server. `c2000_launchMulticoreDebug` declares response identity paths for its snapshot, post-launch actions, post-launch checks, and nested run/pause isolation summary. The readiness and hardware acceptance scripts assert these response identity contracts before any target connection or launch step, so weak contracts fail fast before touching the board.
+Each registered tool definition also declares `inputScope` and `targetEffect` contracts. Core-scoped debug tools use `inputScope: "core"` and must expose both `sessionId` and `coreId`; host-only tools such as `c2000_getDebugBoundary`, `c2000_getHardwarePreflight`, `c2000_discoverAcceptancePrograms`, `c2000_getAcceptanceReadiness`, and `c2000_analyzeRamOwnership` use `inputScope: "host"` and do not connect to the target. MCP clients can call `c2000_getToolContracts` to inspect each tool's `inputScope`, `targetEffect`, `inputFields`, `requiredInputFields`, `coreIdentityFields`, and `responseCoreIdentityFields`. Single-core debug controls declare response identity fields `["coreId", "coreName"]`; batch tools declare per-result identity fields; multicore snapshots declare `["cores[].coreId", "cores[].coreName"]`; and `c2000_verifyRunPauseIsolation` declares `["acceptanceSummary.steps[].commandCoreId", "acceptanceSummary.steps[].commandCoreName"]`. Advanced IPC, MSGRAM, parameter-sync, CPU2 bring-up, and fault-injection tools also declare response identity paths, for example `c2000_assignExpressions` and `c2000_injectFaults` use `["results[].coreId", "results[].coreName"]`, `c2000_compareExpressions` uses `["comparisons[].left.coreId", "comparisons[].right.coreId"]`, `c2000_waitForExpressionSet` and `c2000_waitForIpcReady` use `["conditions[].coreId"]`, `c2000_analyzeRamOwnership` uses `["maps[].coreId", "ownershipActions[].targetCoreId"]`, `c2000_diagnoseCpu2Boot` uses `["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"]`, and `c2000_diagnoseBootHandoff` also includes `["ramOwnership.maps[].coreId"]` when map evidence is supplied. `c2000_reloadResetRunToMain` declares `["coreId", "coreName"]` and reports the current adapter limitation for true breakpoint/run-to-symbol behavior. Workflow tools such as `c2000_launchResidentIpcDebug`, `c2000_runResidentIpcDebug`, `c2000_runIpcAcceptance`, `c2000_runBootHandoffDiagnosis`, `c2000_runReloadAndDiagnose`, and `c2000_runFullDebugBundle` declare `targetEffect: "launch-workflow"` because they perform multi-step orchestration inside the MCP server. `c2000_launchMulticoreDebug` declares response identity paths for its snapshot, post-launch actions, post-launch checks, and nested run/pause isolation summary. The readiness and hardware acceptance scripts assert these response identity contracts before any target connection or launch step, so weak contracts fail fast before touching the board.
 
 For automated boundary checks, call `c2000_getDebugBoundary` and assert:
 
@@ -1235,7 +1263,8 @@ Use workflow tools for AI-driven automation:
 
 - `c2000_launchAndRunIpcAcceptance`: preferred default when no debug session exists; it creates the logical session, connects CPU1/CPU2, then runs IPC acceptance in one client-visible call.
 - `c2000_runIpcAcceptance`: use when a session already exists and both cores are connected.
-- `c2000_runResidentIpcDebug`: use for an already-programmed Flash image. It loads symbols only, never programs or verifies Flash, defaults to the CPU1-owned CPU2 handoff, and keeps evidence-bundle output disabled unless requested. If a bundle is requested without `outputDir`, the MCP selects an allowed write root automatically.
+- `c2000_runResidentIpcDebug`: use for an already-programmed Flash image. It loads symbols only, never programs Flash, defaults to the CPU1-owned CPU2 handoff, and keeps evidence-bundle output disabled unless requested. It can reuse the session's MCP-loaded `.out` pair, infer sibling maps, and verify optional `residentImageManifests` before symbols are loaded. If a bundle is requested without `outputDir`, the MCP selects an allowed write root automatically.
+- `c2000_launchResidentIpcDebug`: use for an already-programmed Flash image when no session exists. Omit `sessionId`; the daemon selects the only registered board (or use `boardId`), acquires its lease, creates/connects CPU1/CPU2, and then performs the same symbols-only diagnosis. It defaults to `residentIdentityPolicy: "require-known"`; when the image was programmed outside MCP, set `residentIdentityPolicy: "operator-confirmed"` only after explicitly confirming that Flash was not changed. It defaults to `sessionMode: "interactive"` and preserves a failed session for inspection; use `sessionMode: "ephemeral"` for cleanup.
 - `c2000_runBootHandoffDiagnosis`: one-shot CPU2 boot handoff diagnosis.
 - `c2000_runReloadAndDiagnose`: reload/reset/prepare, optionally perform a
   controlled post-load reset and CPU1-first boot, then wait/diagnose. Set
@@ -1370,6 +1399,19 @@ The workflow reports the boundary it actually applied in `flashProgramming` (`pe
 - CPU2 expressions:
   - `g_stCoreCommCpu2Watch.emStage`
   - `g_stCoreCommCpu2Watch.uiInitParamApplied`
+- CPU2 fault evidence in `cpu2.faultEvidence`:
+  - CPU2 `SP`, `IER`, and `IFR` expression results
+  - CPU2 PC plus CPU1-side `SysCtl_getCPU2ResetStatus()` and `SysCtl_getResetCause()` results by default; `resetReasonCoreId` and expressions are overrideable
+  - a bounded `DATA` window around `SP`
+  - a bounded `PROGRAM` window around the CPU2 PC for illegal-instruction/entry inspection
+  - `collection.failures` for individual read failures, while preserving all successful evidence
+
+The fault snapshot is best-effort and read-only: it does not run, halt, reset,
+connect, disconnect, or write target memory. Direct diagnosis collects it by
+default. Higher-level run workflows collect it automatically when the handoff
+verdict is not ready, or when `cpu2FaultEvidence: {}` is explicitly supplied.
+Window sizes, memory pages, type width, and all expressions can be overridden
+through the optional `cpu2FaultEvidence` object.
 
 Example:
 
@@ -1535,7 +1577,7 @@ For `c2000_startVariableStream`, prefer each variable as `{ "symbol": "...", "ty
 
 ### Multi-board allocation
 
-`c2000_launchMultiBoardDebug` dispatches one MCP request across multiple physically connected boards. Each entry must provide a unique XDS110 `probeSerial` and a `.ccxml` that contains that serial-number binding. The tool performs one host preflight, rejects missing or duplicate probes, creates isolated sessions in sequence, and rolls back already-created sessions if a later board fails. Sessions remain simultaneously usable after allocation; sequential setup avoids overlapping operations in the current CCS adapter.
+`c2000_launchMultiBoardDebug` dispatches one MCP request across multiple physically connected boards. Each entry must provide a unique debug-probe `probeSerial` and a `.ccxml` that contains that serial-number binding. The tool performs one host preflight, rejects missing or duplicate probes, creates isolated sessions in sequence, and rolls back already-created sessions if a later board fails. Sessions remain simultaneously usable after allocation; sequential setup avoids overlapping operations in the current CCS adapter.
 
 ```json
 {
@@ -1658,7 +1700,7 @@ The hardware acceptance scripts use `CcsScriptingAdapter` and the persistent DSS
 
 On physical F28P65x boards, CPU2 program loading can take several minutes depending on the current target state. The target-touching acceptance scripts default `C2000_MCP_DSS_TIMEOUT_MS` to `300000` ms and pass it into the MCP server / `CcsScriptingAdapter`; the MCP stdio hardware acceptance client defaults `C2000_MCP_REQUEST_TIMEOUT_MS` to `600000` ms so long CCS/DSS operations do not lose their tool response at the SDK layer. Set both explicitly when diagnosing slower CCS/DSS sessions. Timeout errors include the requested `adapterSessionId`, `operation`, `dssCommandName`, `coreId`, `coreName`, DSS process `pid`, exit state, and stdout/stderr tails, including `C2000_DSS_SERVER_EVENT` command lifecycle records.
 
-Read-only preflight checks XDS110 enumeration and possible debug-process owners. It does not connect to the target, load programs, or run CPU1/CPU2. MCP clients can call `c2000_getHardwarePreflight` before creating a debug session:
+Read-only preflight checks debug-probe enumeration (XDS110/XDS2xx) and possible debug-process owners. It does not connect to the target, load programs, or run CPU1/CPU2. MCP clients can call `c2000_getHardwarePreflight` before creating a debug session:
 
 ```json
 {
@@ -1914,11 +1956,12 @@ Tool exposure is two-dimensional:
 | Safety Profile | `readonly` / `safe` / `full` | Which side effects are allowed |
 | Surface Profile | `agent` / `advanced` / `compatibility` | Which registered tools are shown |
 
-The default is `safe` + `agent`. The agent surface is intentionally task-oriented (currently 28 base tools): it keeps runtime, board/job entry points, focused read evidence, capability controls, and the recommended workflows, while hiding raw core control, program/load primitives, generic waits, and DLOG/ERAD/Variable Stream lifecycle tools. Every definition declares an exposure tier; omitted exposure fails closed to `advanced`, so new backend capability cannot silently enlarge the default surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
+The default is `safe` + `agent`. The agent surface is intentionally task-oriented (currently 31 base tools): it keeps runtime, board/job entry points, focused read evidence, capability controls, and the recommended workflows, while hiding raw core control, program/load primitives, generic waits, and DLOG/ERAD/Variable Stream lifecycle tools. Every definition declares an exposure tier; omitted exposure fails closed to `advanced`, so new backend capability cannot silently enlarge the default surface. Safety filtering always runs before surface filtering, so a surface profile cannot grant a forbidden effect. Configure `toolProfile` and `toolSurfaceProfile` in the JSON config, or use `C2000_MCP_TOOL_PROFILE` and `C2000_MCP_TOOL_SURFACE`.
 
 Recommended Agent Workflows:
 
 - `c2000_launchAndRunIpcAcceptance` — launch CPU1/CPU2 and run IPC acceptance.
+- `c2000_launchResidentIpcDebug` — attach to an already-programmed Flash image without a session and preserve an interactive diagnosis session by default.
 - `c2000_runIpcAcceptance` — run IPC acceptance with an existing session.
 - `c2000_runBootHandoffDiagnosis` — diagnose CPU2 boot handoff.
 - `c2000_runReloadAndDiagnose` — reload safely, wait, and diagnose.
@@ -1966,7 +2009,10 @@ For Hybrid30K runtime acceptance, the OFF-state startup baseline must not requir
 
 CPU2 loads no longer assume RAMGS4. Use `ramOwnershipPolicy: "require-map"` (default) with a readable linker map, `"explicit-fallback"` with explicit `fallbackGsRegions`, or `"skip"`. CPU1 loading is unchanged. Results record policy, fallback use, ownership writes, and whether ownership was prepared or skipped.
 
-Migration: callers that previously omitted a CPU2 map must now provide map evidence, explicitly authorize fallback regions, or explicitly skip ownership changes.
+For normal Flash/RAM programming workflows, map evidence is still validated when
+ownership preparation is required. For symbols-only resident debugging, maps
+are optional when runtime RAM ownership verification is disabled; provide them
+only when entry-range or static ownership evidence is needed.
 
 ## Safe Workflow vs Mutation Workflow
 
@@ -1980,9 +2026,9 @@ CCS can remain open for source browsing while MCP uses the probe. Readiness chec
 
 Persistent DSS children also register a parent-process exit fallback. Every DSS launch is placed in a session-owned process group on POSIX (and uses `taskkill /T` on Windows), so normal cleanup first sends the structured shutdown command and then removes only that session's DSS/Java/DSLite descendants. If the MCP process is terminated unexpectedly, the same ownership-scoped fallback prevents an orphan process without killing an external CCS GUI or another conversation's debug session.
 
-All CCS-backed MCP instances coordinate through a filesystem FIFO lease. The lease is acquired before probe recovery/session creation and held until the logical debug session closes, so multiple Agents or conversations cannot interleave operations on one XDS110. Dead active owners and dead waiting tickets are reclaimed automatically. Configure every instance with the same absolute `C2000_MCP_PROBE_QUEUE_DIR`.
+All CCS-backed MCP instances coordinate through a filesystem FIFO lease. The lease is acquired before probe recovery/session creation and held until the logical debug session closes, so multiple Agents or conversations cannot interleave operations on one debug probe. Dead active owners and dead waiting tickets are reclaimed automatically. Configure every instance with the same absolute `C2000_MCP_PROBE_QUEUE_DIR`.
 
-For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique XDS110 `serialNumber`, and a separate `.ccxml` already bound to that serial number:
+For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique debug-probe `serialNumber` (XDS110 or XDS2xx), and a separate `.ccxml` already bound to that serial number:
 
 ```json
 {
@@ -2000,7 +2046,7 @@ For multiple boards, configure `debugProbe.probes` in the config file (or `C2000
 }
 ```
 
-Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true` and at least two enabled, uniquely identified probes are configured. At Session creation the MCP verifies that the selected XDS110 serial is currently enumerated and that its dedicated `.ccxml` contains that serial binding. A mismatch aborts before DSS creation or target access.
+Multi-board mode is fail-closed. It activates only when `multiBoardEnabled: true` and at least two enabled, uniquely identified probes are configured. At Session creation the MCP verifies that the selected debug-probe serial is currently enumerated and that its dedicated `.ccxml` contains that serial binding. A mismatch aborts before DSS creation or target access.
 
 Launch tools accept optional `probeId`, `preferredProbeIds`, and `allowAutoProbeAllocation`. The default requires an explicit `probeId`. Automatic least-loaded selection occurs only when `allowAutoProbeAllocation: true`; preferences do not implicitly enable it. Sessions on different boards use separate DSS processes and can execute concurrently. Calls targeting the same board remain FIFO-serialized. The creation response records `probeId`, `serialNumber`, selected `ccxmlPath`, queue position, wait time, and `startupDiagnostics.stages` for probe lease, host preflight/recovery, DSS startup, and initial core-state discovery. If explicit multi-board activation is absent, the original single-board queue remains active even if probe entries exist.
 
@@ -2010,7 +2056,7 @@ The default `owned-and-stale` recovery policy blocks on a live external DSLite o
 
 Hardware acceptance is fail-closed. Without `C2000_HARDWARE_TEST=1`, every
 hardware entry prints `SKIPPED_NO_HARDWARE` and exits before CCS discovery,
-DSS startup, XDS110 access, program load, reset, or PCAN initialization.
+DSS startup, debug-probe access, program load, reset, or PCAN initialization.
 PCAN additionally requires `C2000_PCAN_HARDWARE_TEST=1`; two-board tests also
 require `C2000_TWO_BOARD_TEST=1`.
 

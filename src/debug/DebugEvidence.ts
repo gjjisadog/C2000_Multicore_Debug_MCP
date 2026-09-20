@@ -1,4 +1,4 @@
-import type { CoreId, EvaluateResult, LoadedProgramInfo, ResolveResult } from "./types.js";
+import type { CoreId, Cpu2FaultEvidence, EvaluateResult, LoadedProgramInfo, ResolveResult } from "./types.js";
 
 export interface DebugEvidence {
   sessionId: string;
@@ -15,5 +15,6 @@ export interface DebugEvidence {
   ramOwnership?: unknown;
   runtimeRamOwnership?: unknown;
   elfFreshness?: unknown;
+  cpu2FaultEvidence?: Cpu2FaultEvidence;
   commandStats: { total: number; byOperation: Record<string, number> };
 }

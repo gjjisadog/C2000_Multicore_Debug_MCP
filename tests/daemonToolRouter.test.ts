@@ -66,6 +66,28 @@ describe("daemon tool router interactive session lifecycle", () => {
       cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
       cpu2MapPath: path.join(fixture.directory, "cpu2.map")
     })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
+    await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
+      boardId: "board-a",
+      __leaseContext: lease.context,
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: programPath,
+      cpu2OutPath: programPath,
+      cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map")
+    })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
+    fixture.workers.invokeBoard = async () => ({ success: true, sessionId: "dbg-image", workflow: "c2000_launchResidentIpcDebug" });
+    await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
+      boardId: "board-a",
+      __leaseContext: lease.context,
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: programPath,
+      cpu2OutPath: programPath,
+      cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map"),
+      residentIdentityPolicy: "operator-confirmed"
+    })).resolves.toEqual(expect.objectContaining({ success: true, workflow: "c2000_launchResidentIpcDebug" }));
 
     fixture.registry.recordTargetPrograms("board-a", [{
       coreId: 0,
@@ -176,6 +198,74 @@ describe("daemon tool router interactive session lifecycle", () => {
       status: "KNOWN",
       reason: "resident-image-verification",
       programs: { "0": expect.objectContaining({ coreId: 0, sha256: programSha256 }) }
+    }));
+    fixture.store.close();
+  });
+
+  test("lets a resident workflow establish UNKNOWN identity from inline manifest evidence", async () => {
+    const fixture = await makeFixture();
+    const cpu1Path = path.join(fixture.directory, "cpu1.out");
+    const cpu2Path = path.join(fixture.directory, "cpu2.out");
+    const cpu1ManifestPath = path.join(fixture.directory, "cpu1.resident-image.json");
+    const cpu2ManifestPath = path.join(fixture.directory, "cpu2.resident-image.json");
+    await writeFile(cpu1Path, "cpu1-image-v1");
+    await writeFile(cpu2Path, "cpu2-image-v1");
+    const cpu1Sha256 = await sha256File(cpu1Path);
+    const cpu2Sha256 = await sha256File(cpu2Path);
+    await writeFile(cpu1ManifestPath, JSON.stringify({
+      format: "c2000-resident-image-manifest",
+      version: 1,
+      programSha256: cpu1Sha256,
+      identity: { address: "0x1000", page: "DATA", typeSize: 32, expectedValue: 0xA5A5A5A5 }
+    }));
+    await writeFile(cpu2ManifestPath, JSON.stringify({
+      format: "c2000-resident-image-manifest",
+      version: 1,
+      programSha256: cpu2Sha256,
+      identity: { address: "0x1004", page: "DATA", typeSize: 32, expectedValue: 0xA5A5A5A5 }
+    }));
+    const cpu1ManifestSha256 = await sha256File(cpu1ManifestPath);
+    const cpu2ManifestSha256 = await sha256File(cpu2ManifestPath);
+    fixture.workers.invokeBoard = async () => ({
+      success: true,
+      workflow: "c2000_launchResidentIpcDebug",
+      residentVerification: {
+        success: true,
+        verified: true,
+        verificationMethod: "resident-image-manifest-raw-memory",
+        targetAccess: {
+          programming: false,
+          symbolLoad: false,
+          reset: false,
+          run: false,
+          targetMemoryWrite: false
+        },
+        checks: [
+          { coreId: 0, programUri: cpu1Path, manifestUri: cpu1ManifestPath, programSha256: cpu1Sha256, manifestSha256: cpu1ManifestSha256, marker: { matched: true } },
+          { coreId: 2, programUri: cpu2Path, manifestUri: cpu2ManifestPath, programSha256: cpu2Sha256, manifestSha256: cpu2ManifestSha256, marker: { matched: true } }
+        ]
+      }
+    });
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+
+    await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
+      boardId: "board-a",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: cpu1Path,
+      cpu2OutPath: cpu2Path,
+      residentImageManifests: [
+        { coreId: 0, manifestUri: cpu1ManifestPath },
+        { coreId: 2, manifestUri: cpu2ManifestPath }
+      ]
+    })).resolves.toEqual(expect.objectContaining({ success: true, workflow: "c2000_launchResidentIpcDebug" }));
+    expect(fixture.registry.targetIdentity("board-a")).toEqual(expect.objectContaining({
+      status: "KNOWN",
+      reason: "resident-image-verification",
+      programs: {
+        "0": expect.objectContaining({ coreId: 0, sha256: cpu1Sha256 }),
+        "2": expect.objectContaining({ coreId: 2, sha256: cpu2Sha256 })
+      }
     }));
     fixture.store.close();
   });
