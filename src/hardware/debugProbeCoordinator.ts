@@ -42,7 +42,7 @@ export class DebugProbePoolCoordinator implements DebugProbeCoordinator {
     const serials = new Set<string>();
     for (const probe of probes) {
       if (ids.has(probe.probeId)) throw new DebugMcpError("DuplicateProbeId", `Duplicate probeId: ${probe.probeId}`);
-      if (serials.has(probe.serialNumber)) throw new DebugMcpError("DuplicateProbeId", `Duplicate XDS110 serialNumber: ${probe.serialNumber}`);
+      if (serials.has(probe.serialNumber)) throw new DebugMcpError("DuplicateProbeId", `Duplicate debug-probe serialNumber: ${probe.serialNumber}`);
       ids.add(probe.probeId);
       serials.add(probe.serialNumber);
     }
@@ -130,7 +130,7 @@ export class FileDebugProbeCoordinator implements DebugProbeCoordinator {
     }
     process.removeListener("exit", cleanupWaitingTicket);
     await rm(ticketPath, { force: true });
-    throw new DebugMcpError("ProbeQueueTimeout", `Timed out waiting for the shared XDS110 lease`, { label, timeoutMs: this.timeoutMs, queuePositionAtEntry });
+    throw new DebugMcpError("ProbeQueueTimeout", `Timed out waiting for the shared debug-probe lease`, { label, timeoutMs: this.timeoutMs, queuePositionAtEntry });
   }
 }
 

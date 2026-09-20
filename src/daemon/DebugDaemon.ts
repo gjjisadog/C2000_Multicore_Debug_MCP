@@ -733,7 +733,7 @@ export class DebugDaemon {
       board.probeSerial === input.probeSerial && board.boardId !== input.boardId
     );
     if (conflicting) {
-      throw new DebugMcpError("DuplicateProbeAllocation", `XDS110 ${input.probeSerial} is already registered`, {
+      throw new DebugMcpError("DuplicateProbeAllocation", `Debug probe ${input.probeSerial} is already registered`, {
         requestedBoardId: input.boardId,
         existingBoardId: conflicting.boardId,
         probeSerial: input.probeSerial

@@ -1,16 +1,17 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
+import path from "node:path";
+import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
 import { resolveTiEnvironment } from "../config/tiPaths.js";
 
-export { defaultCcsInstallPath, resolveXdsdfuPath } from "../ccs/paths.js";
+export { defaultCcsInstallPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
 
 export interface CommandOutput {
   stdout: string;
   stderr: string;
 }
 
-export type ExecFileLike = (command: string, args: string[], options: { timeout: number }) => Promise<CommandOutput>;
+export type ExecFileLike = (command: string, args: string[], options: { timeout: number; cwd?: string }) => Promise<CommandOutput>;
 
 export interface Xds110Device {
   serialNumber?: string;
@@ -20,8 +21,30 @@ export interface Xds110Device {
   name?: string;
 }
 
+export interface Xds2xxDevice {
+  serialNumber?: string;
+  productName?: string;
+  productClass?: string;
+  version?: string;
+  portUSB?: string;
+  name?: string;
+}
+
+export interface Xds2xxPreflight {
+  ok: boolean;
+  commandOk?: boolean;
+  probeReady?: boolean;
+  attempts?: number;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  devices?: Xds2xxDevice[];
+}
+
 export interface HardwarePreflightResult {
   xdsdfuPath: string;
+  /** XDS2xx support is optional on non-Windows hosts and older CCS installs. */
+  xds2xxConfPath?: string;
   xdsdfu: {
     ok: boolean;
     commandOk?: boolean;
@@ -32,6 +55,8 @@ export interface HardwarePreflightResult {
     error?: string;
     devices?: Xds110Device[];
   };
+  /** Read-only XDS2xx enumeration through CCS's xds2xx_conf utility. */
+  xds2xx?: Xds2xxPreflight;
   debugProcesses: string[];
   debugProcessDetails: DebugProcessInfo[];
   processInspection?: { ok: boolean; platform: NodeJS.Platform; error?: string };
@@ -71,12 +96,15 @@ export async function runHardwarePreflight(options: {
     ?? (await resolveTiEnvironment()).ccs.path;
   const ccsRoot = resolveCcsInstallPath(detectedCcsPath, platform);
   const xdsdfuPath = resolveXdsdfuPath(ccsRoot, platform);
+  const xds2xxConfPath = resolveXds2xxConfPath(ccsRoot, platform);
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const preflight: HardwarePreflightResult = {
     xdsdfuPath,
+    xds2xxConfPath,
     xdsdfu: { ok: false, commandOk: false, probeReady: false, attempts: 0 },
+    xds2xx: { ok: false, commandOk: false, probeReady: false, attempts: 0, devices: [] },
     debugProcesses: [],
     debugProcessDetails: [],
     processInspection: { ok: false, platform }
@@ -108,6 +136,40 @@ export async function runHardwarePreflight(options: {
         error: error instanceof Error ? error.message : String(error)
       };
       break;
+    }
+  }
+
+  // xdsdfu only enumerates XDS110 devices. XDS2xx probes expose their
+  // identity through the CCS xds2xx_conf utility instead, so a successful
+  // XDS110 enumeration remains the fast path while XDS2xx is probed when
+  // no XDS110 was found. The command is host-only and never touches a target.
+  if (platform === "win32" && (preflight.xdsdfu.devices?.length ?? 0) === 0) {
+    try {
+      const platformPath = path.win32;
+      const { stdout, stderr } = await run(
+        xds2xxConfPath,
+        ["get", "xds2xxu", "0", "serialNum", "productName", "productClass", "swRev", "portUSB"],
+        { timeout: 10000, cwd: platformPath.dirname(xds2xxConfPath) }
+      );
+      const devices = parseXds2xxDevices(stdout);
+      preflight.xds2xx = {
+        ok: true,
+        commandOk: true,
+        probeReady: devices.length > 0,
+        attempts: 1,
+        stdout,
+        stderr,
+        devices
+      };
+    } catch (error) {
+      preflight.xds2xx = {
+        ok: false,
+        commandOk: false,
+        probeReady: false,
+        attempts: 1,
+        error: error instanceof Error ? error.message : String(error),
+        devices: []
+      };
     }
   }
 
@@ -232,6 +294,39 @@ export function parseXds110Devices(output: string): Xds110Device[] {
       mode: readField(section, "Mode"),
       configuration: readField(section, "Configuration")
     }));
+}
+
+export function parseXds2xxDevices(output: string): Xds2xxDevice[] {
+  const fields = new Map<string, string>();
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (match?.[1] && match[2] !== undefined) fields.set(match[1], match[2]);
+  }
+  const serialNumber = fields.get("serialNum")?.trim();
+  if (!serialNumber) return [];
+  const productName = fields.get("productName")?.trim();
+  const productClass = fields.get("productClass")?.trim();
+  const version = fields.get("swRev")?.trim();
+  const portUSB = fields.get("portUSB")?.trim();
+  return [{
+    serialNumber,
+    ...(productName ? { productName, name: productName } : {}),
+    ...(productClass ? { productClass } : {}),
+    ...(version ? { version } : {}),
+    ...(portUSB ? { portUSB } : {})
+  }];
+}
+
+export function getConnectedProbeSerials(preflight: {
+  xdsdfu?: { devices?: Array<{ serialNumber?: string }> };
+  xds2xx?: { devices?: Array<{ serialNumber?: string }> };
+}): string[] {
+  return [...new Set([
+    ...(preflight.xdsdfu?.devices ?? []),
+    ...(preflight.xds2xx?.devices ?? [])
+  ]
+    .map(device => device.serialNumber?.trim())
+    .filter((serial): serial is string => Boolean(serial)))];
 }
 
 function readField(section: string, fieldName: string): string | undefined {

@@ -10,7 +10,7 @@ import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBound
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
 import { resolveSymbolAddressFromMap } from "../hardware/mapSymbols.js";
-import { formatDebugProcessOwners, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
+import { formatDebugProcessOwners, getConnectedProbeSerials, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
@@ -884,11 +884,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         readinessStage = "board-route";
         const boardListing = daemonRoutingConfigured ? await Promise.resolve(listBoards({})) : undefined;
         const registeredBoards = Array.isArray(boardListing?.boards) ? boardListing.boards as ToolResult[] : [];
-        const enumeratedProbeSerials = new Set(
-          (Array.isArray(preflight.xdsdfu.devices) ? preflight.xdsdfu.devices : [])
-            .map((device: ToolResult) => device.serialNumber)
-            .filter((serialNumber: unknown): serialNumber is string => typeof serialNumber === "string" && serialNumber.length > 0)
-        );
+        const enumeratedProbeSerials = new Set(getConnectedProbeSerials(preflight));
         const selectedBoards = registeredBoards.filter(board =>
           typeof board.probeSerial === "string" && enumeratedProbeSerials.has(board.probeSerial)
         );
@@ -935,6 +931,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             ok: artifactPair.compatible,
             ...artifactPair
           },
+          probe: {
+            ok: getConnectedProbeSerials(preflight).length > 0,
+            probeReady: getConnectedProbeSerials(preflight).length > 0,
+            serials: getConnectedProbeSerials(preflight),
+            xds2xx: preflight.xds2xx ?? null,
+          },
+          // Kept for compatibility with existing readiness consumers.
           xds110: {
             ok: preflight.xdsdfu.probeReady ?? (preflight.xdsdfu.ok === true && Array.isArray(preflight.xdsdfu.devices) && preflight.xdsdfu.devices.length > 0),
             commandOk: preflight.xdsdfu.commandOk ?? preflight.xdsdfu.ok,
@@ -1617,9 +1620,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const parsed = launchMultiBoardDebugSchema.parse(input);
         rollbackOnFailure = parsed.rollbackOnFailure;
         const preflight = await hardwarePreflight({ ccsInstallPath: parsed.ccsInstallPath });
-        const connectedProbeSerials = (preflight.xdsdfu.devices ?? [])
-          .map(device => device.serialNumber?.trim())
-          .filter((serial): serial is string => Boolean(serial));
+        const connectedProbeSerials = getConnectedProbeSerials(preflight);
         const connectedProbeSet = new Set(connectedProbeSerials);
         const requestedBoardIds = new Set<string>();
         const requestedProbeSerials = new Set<string>();
@@ -1636,13 +1637,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             });
           }
           if (!connectedProbeSet.has(board.probeSerial)) {
-            throw new DebugMcpError("ProbeNotConnected", `Requested XDS110 probe ${board.probeSerial} is not connected`, {
+            throw new DebugMcpError("ProbeNotConnected", `Requested debug probe ${board.probeSerial} is not connected`, {
               probeSerial: board.probeSerial,
               connectedProbeSerials
             });
           }
           const ccxml = await readFile(board.ccxmlPath, "utf8");
-          const probeBinding = inspectXds110SerialBinding(ccxml, board.probeSerial);
+          const probeBinding = inspectProbeSerialBinding(ccxml, board.probeSerial);
           if (!probeBinding.valid) {
             throw new DebugMcpError(probeBinding.code, probeBinding.message, {
               boardId,
@@ -2407,7 +2408,7 @@ function orderCoresCpu1First<T extends { coreId: number }>(cores: T[]): T[] {
   });
 }
 
-function inspectXds110SerialBinding(ccxml: string, expectedSerial: string): {
+function inspectProbeSerialBinding(ccxml: string, expectedSerial: string): {
   valid: boolean;
   code: "ProbeBindingMissing" | "ProbeBindingInvalid";
   message: string;
@@ -2418,35 +2419,39 @@ function inspectXds110SerialBinding(ccxml: string, expectedSerial: string): {
     return {
       valid: false,
       code: "ProbeBindingMissing",
-      message: `Target configuration does not declare XDS110 Debug Probe Selection for ${expectedSerial}`,
+      message: `Target configuration does not declare Debug Probe Selection for ${expectedSerial}`,
       details: { expectedSerial }
     };
   }
-  if (selection.Value !== "0") {
-    return {
-      valid: false,
-      code: "ProbeBindingInvalid",
-      message: `Target configuration does not select XDS110 by serial number for ${expectedSerial}`,
-      details: { expectedSerial, actualDebugProbeSelection: selection.Value ?? null, expectedDebugProbeSelection: "0" }
-    };
-  }
-
   const serialChoice = findXmlElementAttributes(ccxml, "choice", attributes => attributes.Name === "Select by serial number");
-  if (!serialChoice || serialChoice.value !== "0") {
+  if (!serialChoice) {
     return {
       valid: false,
       code: "ProbeBindingInvalid",
       message: `Target configuration has no valid Select by serial number choice for ${expectedSerial}`,
-      details: { expectedSerial, actualSerialChoice: serialChoice?.value ?? null, expectedSerialChoice: "0" }
+      details: { expectedSerial }
+    };
+  }
+  if (selection.Value !== serialChoice.value) {
+    return {
+      valid: false,
+      code: "ProbeBindingInvalid",
+      message: `Target configuration does not select the probe by serial number for ${expectedSerial}`,
+      details: { expectedSerial, actualDebugProbeSelection: selection.Value ?? null, expectedDebugProbeSelection: serialChoice.value ?? null }
     };
   }
 
-  const serialField = findXmlElementAttributes(ccxml, "property", attributes => attributes.id === "-- Enter the serial number");
+  const serialField = findXmlElementAttributes(ccxml, "property", attributes =>
+    attributes.id === "-- Enter the serial number"
+      || attributes.ID === "USCIF.ECOM_SERIAL"
+      || attributes.id === "USCIF.ECOM_SERIAL"
+      || attributes.Name === "-- Enter the serial number"
+  );
   if (!serialField) {
     return {
       valid: false,
       code: "ProbeBindingMissing",
-      message: `Target configuration does not provide an XDS110 serial number for ${expectedSerial}`,
+      message: `Target configuration does not provide a debug-probe serial number for ${expectedSerial}`,
       details: { expectedSerial }
     };
   }
@@ -2454,7 +2459,7 @@ function inspectXds110SerialBinding(ccxml: string, expectedSerial: string): {
     return {
       valid: false,
       code: "ProbeBindingInvalid",
-      message: `Target configuration binds XDS110 serial ${serialField.Value ?? "<missing>"}, not ${expectedSerial}`,
+      message: `Target configuration binds probe serial ${serialField.Value ?? "<missing>"}, not ${expectedSerial}`,
       details: { expectedSerial, configuredSerial: serialField.Value ?? null }
     };
   }
@@ -2524,8 +2529,8 @@ function acceptanceBlockers(checks: ToolResult): string[] {
   if (!checks.artifactPair?.ok) {
     blockers.push(`CPU1/CPU2 artifacts are incompatible: ${(checks.artifactPair?.issues ?? []).join("; ")}`);
   }
-  if (!checks.xds110?.ok) {
-    blockers.push("XDS110 probe is not enumerated by xdsdfu");
+  if (!checks.probe?.ok && !checks.xds110?.ok) {
+    blockers.push("No supported debug probe (XDS110/XDS2xx) is enumerated");
   }
   if (!checks.debugProcessOwnership?.ok) {
     blockers.push(checks.debugProcessOwnership?.inspection?.ok === false
@@ -2544,9 +2549,7 @@ function acceptanceBlockers(checks: ToolResult): string[] {
 }
 
 function preflightReady(preflight: ToolResult, allowExistingDebugProcesses: boolean): boolean {
-  const xdsReady = preflight.xdsdfu?.ok === true
-    && Array.isArray(preflight.xdsdfu.devices)
-    && preflight.xdsdfu.devices.length > 0;
+  const xdsReady = getConnectedProbeSerials(preflight).length > 0;
   const hasOwners = hasBlockingDebugProcesses(preflight);
   return preflight.processInspection?.ok !== false && xdsReady && (!hasOwners || allowExistingDebugProcesses);
 }

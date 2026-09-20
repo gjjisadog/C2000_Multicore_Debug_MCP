@@ -21,7 +21,7 @@ async function main(): Promise<void> {
       result.codexConfigPath ? `Codex config: ${result.codexConfigPath}` : undefined,
       result.skillDirectory ? `Skill: ${result.skillDirectory}` : undefined,
       result.doctorPassed ? "Doctor: passed" : "Doctor: skipped",
-      "Restart Codex (or its MCP servers) to load the new server."
+      "Existing Codex MCP sessions remain on their current runtime; the next MCP launch uses this installed slot."
     ].filter(Boolean).join("\n") + "\n");
   } catch (error) {
     if (error instanceof SetupHelpRequested) {

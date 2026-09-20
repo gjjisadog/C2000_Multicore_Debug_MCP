@@ -1,7 +1,7 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { access, copyFile, cp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -288,20 +288,18 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     `${manifest.version}-${platform}-${arch}`
   );
   const baseDirectoryExists = await exists(baseInstallDirectory);
-  let installDirectory = options.force && baseDirectoryExists
-    ? await nextRuntimeSlot(baseInstallDirectory, manifest)
-    : baseInstallDirectory;
-  if (!options.force && baseDirectoryExists) {
-    const existingManifestPath = path.join(baseInstallDirectory, "dist", "src", "runtime-manifest.json");
-    try {
-      const existingManifest = JSON.parse(await readFile(existingManifestPath, "utf8")) as RuntimeManifest;
-      if (!runtimeManifestsCanBeReused(existingManifest, manifest, bundledNodeRequired)) {
-        installDirectory = await nextRuntimeSlot(baseInstallDirectory, manifest);
-      }
-    } catch {
-      // Preserve the immutable-slot guard below for a directory that exists
-      // but is not a complete runtime installation.
-    }
+  const reusableDirectory = options.force
+    ? undefined
+    : await findReusableRuntimeSlot(installRoot, baseInstallDirectory, manifest, bundledNodeRequired);
+  let installDirectory: string;
+  if (reusableDirectory) {
+    installDirectory = reusableDirectory;
+  } else if (options.force && baseDirectoryExists) {
+    installDirectory = await nextRuntimeSlot(baseInstallDirectory, manifest);
+  } else if (!options.force && baseDirectoryExists) {
+    installDirectory = await nextRuntimeSlot(baseInstallDirectory, manifest);
+  } else {
+    installDirectory = baseInstallDirectory;
   }
   const installedManifestPath = path.join(installDirectory, "dist", "src", "runtime-manifest.json");
   const alreadyInstalled = await exists(installedManifestPath);
@@ -531,6 +529,59 @@ function removeServerTables(content: string, serverName: string): string {
   return kept.join("\n");
 }
 
+async function findReusableRuntimeSlot(
+  installRoot: string,
+  baseInstallDirectory: string,
+  manifest: RuntimeManifest,
+  bundledNodeRequired: boolean
+): Promise<string | undefined> {
+  const parent = path.dirname(baseInstallDirectory);
+  const baseName = path.basename(baseInstallDirectory);
+  const candidates: string[] = [];
+  const currentPointerPath = path.join(installRoot, "current.json");
+
+  try {
+    const pointer = JSON.parse(await readFile(currentPointerPath, "utf8")) as { installDirectory?: unknown };
+    if (typeof pointer.installDirectory === "string") {
+      const pointedDirectory = path.resolve(pointer.installDirectory);
+      const pointedName = path.basename(pointedDirectory);
+      if (isPathInside(pointedDirectory, parent)
+        && (pointedDirectory === baseInstallDirectory || pointedName.startsWith(`${baseName}-build`))) {
+        candidates.push(pointedDirectory);
+      }
+    }
+  } catch {
+    // A missing or stale pointer is normal during the first install.
+  }
+
+  candidates.push(baseInstallDirectory);
+  try {
+    const entries = await readdir(parent, { withFileTypes: true });
+    candidates.push(...entries
+      .filter(entry => entry.isDirectory() && entry.name.startsWith(`${baseName}-build`))
+      .map(entry => path.join(parent, entry.name))
+      .sort()
+      .reverse());
+  } catch {
+    // The parent is created by the caller when a new slot is published.
+  }
+
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const resolvedCandidate = path.resolve(candidate);
+    if (seen.has(resolvedCandidate)) continue;
+    seen.add(resolvedCandidate);
+    const existingManifestPath = path.join(resolvedCandidate, "dist", "src", "runtime-manifest.json");
+    try {
+      const existingManifest = JSON.parse(await readFile(existingManifestPath, "utf8")) as RuntimeManifest;
+      if (runtimeManifestsCanBeReused(existingManifest, manifest, bundledNodeRequired)) return resolvedCandidate;
+    } catch {
+      // Ignore incomplete or concurrently cleaned slots and continue searching.
+    }
+  }
+  return undefined;
+}
+
 async function installRuntimeAtomically(
   packageRoot: string,
   installDirectory: string
@@ -700,11 +751,27 @@ function runtimeManifestsCanBeReused(
     || installed.nodeModulesAbi !== incoming.nodeModulesAbi) {
     return false;
   }
-  if (!bundledNodeRequired) return true;
-  if (installed.runtime?.bundledNode !== true
+
+  const installedRevision = installed.sourceRevision?.trim();
+  const incomingRevision = incoming.sourceRevision?.trim();
+  const usableSourceRevision = Boolean(
+    installedRevision
+    && incomingRevision
+    && installedRevision !== "unknown"
+    && incomingRevision !== "unknown"
+  );
+  if (usableSourceRevision) {
+    if (installedRevision !== incomingRevision || installed.sourceDirty !== incoming.sourceDirty) return false;
+    if ((installed.sourceDirty === true || incoming.sourceDirty === true)
+      && installed.builtAt !== incoming.builtAt) return false;
+  } else if (installed.builtAt !== incoming.builtAt) {
+    return false;
+  }
+
+  if (bundledNodeRequired && (installed.runtime?.bundledNode !== true
     || installed.runtime.nodeVersion !== incoming.runtime?.nodeVersion
     || installed.runtime.modulesAbi !== incoming.runtime?.modulesAbi
-    || installed.runtime.executableSha256 !== incoming.runtime?.executableSha256) {
+    || installed.runtime.executableSha256 !== incoming.runtime?.executableSha256)) {
     return false;
   }
   const incomingBindings = new Map((incoming.nativeBindings ?? []).map(binding => [binding.name, binding.sha256.toLowerCase()]));

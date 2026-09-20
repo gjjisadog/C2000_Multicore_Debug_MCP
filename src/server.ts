@@ -14,7 +14,7 @@ import type { C2000McpConfig } from "./config/config.schema.js";
 import { DebugSessionManager } from "./debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "./debug/LoadedProgramRegistry.js";
 import { DebugProbePoolCoordinator, FileDebugProbeCoordinator } from "./hardware/debugProbeCoordinator.js";
-import { recoverDebugProbe, runHardwarePreflight, type HardwarePreflightResult } from "./hardware/preflight.js";
+import { getConnectedProbeSerials, recoverDebugProbe, runHardwarePreflight, type HardwarePreflightResult } from "./hardware/preflight.js";
 import type { StartupStageRunner } from "./debug/startupStageDiagnostics.js";
 import {
   getToolExposureSummary,
@@ -323,18 +323,16 @@ function createProbePreparer(config: C2000McpConfig, ccsInstallPath?: string) {
     let initialPreflight: HardwarePreflightResult | undefined;
     if (lease?.probe) {
       initialPreflight = await runStage("probe-preflight", () => runHardwarePreflight({ ccsInstallPath }));
-      const detectedSerials = initialPreflight.xdsdfu.devices
-        ?.map(device => device.serialNumber)
-        .filter((serial): serial is string => Boolean(serial)) ?? [];
+      const detectedSerials = getConnectedProbeSerials(initialPreflight);
       if (!detectedSerials.includes(lease.probe.serialNumber)) {
-        throw new DebugMcpError("ProbeIdentityMismatch", `Configured XDS110 is not connected: ${lease.probe.probeId}`, {
+        throw new DebugMcpError("ProbeIdentityMismatch", `Configured debug probe is not connected: ${lease.probe.probeId}`, {
           expectedSerialNumber: lease.probe.serialNumber,
           detectedSerialNumbers: detectedSerials
         });
       }
       const ccxml = await readFile(lease.probe.ccxmlPath, "utf8");
       if (!ccxml.includes(lease.probe.serialNumber)) {
-        throw new DebugMcpError("ProbeIdentityMismatch", "The board ccxml is not bound to its configured XDS110 serial number", {
+        throw new DebugMcpError("ProbeIdentityMismatch", "The board ccxml is not bound to its configured debug-probe serial number", {
           probeId: lease.probe.probeId,
           serialNumber: lease.probe.serialNumber,
           ccxmlPath: lease.probe.ccxmlPath
@@ -348,7 +346,7 @@ function createProbePreparer(config: C2000McpConfig, ccsInstallPath?: string) {
       initialPreflight
     }));
     if (!recovery.recovered) {
-      throw new DebugMcpError("ProbeRecoveryBlocked", "XDS110 recovery blocked by an existing debug owner", {
+      throw new DebugMcpError("ProbeRecoveryBlocked", "Debug-probe recovery blocked by an existing debug owner", {
         policy: recovery.policy,
         remainingOwners: recovery.remainingOwners
       });

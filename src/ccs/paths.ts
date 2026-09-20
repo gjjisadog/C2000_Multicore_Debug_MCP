@@ -49,6 +49,19 @@ export function resolveXdsdfuPath(ccsInstallPath: string, platform: NodeJS.Platf
   );
 }
 
+/** Resolve the CCS utility used to enumerate and identify XDS2xx probes. */
+export function resolveXds2xxConfPath(ccsInstallPath: string, platform: NodeJS.Platform = process.platform): string {
+  const platformPath = platform === "win32" ? path.win32 : path.posix;
+  return platformPath.join(
+    ccsInstallPath,
+    "ccs_base",
+    "common",
+    "uscif",
+    "xds2xx",
+    platform === "win32" ? "xds2xx_conf.exe" : "xds2xx_conf"
+  );
+}
+
 function discoverWindowsCcsInstallPath(): string | undefined {
   for (const root of windowsSearchRoots()) {
     for (const base of [root, path.win32.join(root, "ti")]) {
