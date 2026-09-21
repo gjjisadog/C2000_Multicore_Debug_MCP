@@ -56,6 +56,23 @@ describe("FileDebugProbeCoordinator", () => {
     expect(lease.queuePositionAtEntry).toBe(1);
     await lease.release();
   });
+
+  test("honors a per-request queue bound and removes the cancelled ticket", async () => {
+    const root = await tempRoot();
+    const first = await new FileDebugProbeCoordinator(root, 1000, 5).acquire("holder");
+    const waiting = new FileDebugProbeCoordinator(root, 1000, 5).acquire("resident", { queueTimeoutMs: 20 });
+
+    await expect(waiting).rejects.toMatchObject({
+      code: "ProbeQueueTimeout",
+      details: expect.objectContaining({
+        timeoutMs: 20,
+        queueTicketCancelled: true,
+        targetAccessAttempted: false
+      })
+    });
+    await expect(readFile(path.join(root, "queue"), "utf8")).rejects.toBeDefined();
+    await first.release();
+  });
 });
 
 describe("DebugProbePoolCoordinator", () => {

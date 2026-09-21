@@ -9,6 +9,7 @@ import type { BoardWorkerClient, BoardWorkerFactory } from "./BoardWorkerClient.
 import { BoardWorkerProcess } from "./BoardWorkerProcess.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import type { BoardLeaseContext } from "./types.js";
+import { INTERNAL_CLOSE_STALE_RESIDENT_SESSION } from "../worker/internalTools.js";
 
 interface ManagedWorker {
   client: BoardWorkerClient;
@@ -89,12 +90,10 @@ export class BoardWorkerSupervisor {
     if (this.requiresCcxmlProbeValidation) {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
     }
-    // A daemon restart can publish a new worker without going through
-    // restartBoard().  Invalidate any persisted resident-image belief before
-    // that worker can service a new target command.
-    if (this.options.registry.targetIdentity(boardId).status !== "UNKNOWN") {
-      this.options.registry.markTargetIdentityUnknown(boardId, "worker-start");
-    }
+    // Starting a worker is a control-plane transition. It does not read,
+    // reset, run, or program the target, so preserve durable resident-image
+    // evidence across a daemon/MCP frontend reconnect. Target-side uncertainty
+    // is handled at the actual worker-restart and target-operation boundaries.
     this.options.registry.transition(boardId, "STARTING");
     const workerGeneration = this.options.workers.nextGeneration(boardId);
     const client = this.factory({
@@ -139,6 +138,48 @@ export class BoardWorkerSupervisor {
 
   async invokeBoardLowPriority(boardId: string, toolName: string, input: unknown, timeoutMs?: number): Promise<Record<string, unknown>> {
     return this.invokeBoardInternal(boardId, toolName, input, timeoutMs);
+  }
+
+  /**
+   * Close a resident session whose normal board lease has expired. The caller
+   * must prove that the persisted session belongs to the current worker; the
+   * supervisor also rechecks that no replacement board lease is active. The
+   * worker-local command only disposes the adapter session and probe lease.
+   */
+  async closeStaleResidentSession(
+    boardId: string,
+    sessionId: string,
+    workerInstanceId: string,
+    timeoutMs = 15_000
+  ): Promise<Record<string, unknown>> {
+    const worker = await this.startBoard(boardId);
+    if (worker.workerInstanceId !== workerInstanceId) {
+      throw new DebugMcpError("WorkerIdentityMismatch", "Cannot recover a resident session from a different worker generation", {
+        boardId,
+        sessionId,
+        expectedWorkerInstanceId: workerInstanceId,
+        receivedWorkerInstanceId: worker.workerInstanceId,
+        targetAccessAttempted: false
+      });
+    }
+    const activeLease = this.options.registry.leases.active(boardId);
+    if (activeLease) {
+      throw new DebugMcpError("BoardLeased", "Refusing stale resident cleanup while a replacement board lease is active", {
+        boardId,
+        sessionId,
+        leaseId: activeLease.leaseId,
+        ownerJobId: activeLease.ownerJobId,
+        targetAccessAttempted: false
+      });
+    }
+    const boundedTimeoutMs = Math.max(1, Math.min(Math.floor(timeoutMs), 15_000));
+    const result = await worker.invokeTool(INTERNAL_CLOSE_STALE_RESIDENT_SESSION, {
+      boardId,
+      sessionId,
+      workerInstanceId
+    }, boundedTimeoutMs);
+    this.assertResponseIdentity(boardId, worker, result);
+    return result;
   }
 
   setLowPriorityPreemptor(preemptor: (boardId: string, toolName: string) => Promise<void>): void {

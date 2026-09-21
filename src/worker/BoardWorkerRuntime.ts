@@ -11,6 +11,7 @@ import {
   MockEradBackend,
   type EradBackend
 } from "../observability/EradBackend.js";
+import { INTERNAL_CLOSE_STALE_RESIDENT_SESSION } from "./internalTools.js";
 
 export interface BoardWorkerLaunchOptions {
   boardId: string;
@@ -60,11 +61,15 @@ export class BoardWorkerRuntime {
   async invoke(commandId: string, toolName: string, input: unknown): Promise<Record<string, unknown>> {
     if (!this.runtime) throw new Error("Board worker is not ready");
     const { leaseContext, toolInput } = splitLeaseContext(input);
-    this.validateLeaseContext(leaseContext, toolName);
+    if (toolName !== INTERNAL_CLOSE_STALE_RESIDENT_SESSION) {
+      this.validateLeaseContext(leaseContext, toolName);
+    }
     this.status = "RUNNING";
     this.currentCommandId = commandId;
     try {
-      const result = toolName === VARIABLE_STREAM_INTERNAL_TOOL
+      const result = toolName === INTERNAL_CLOSE_STALE_RESIDENT_SESSION
+        ? await this.closeStaleResidentSession(toolInput)
+        : toolName === VARIABLE_STREAM_INTERNAL_TOOL
         ? await this.readVariableBatch(toolInput)
         : toolName === DLOG_EXPRESSION_BATCH_TOOL
           ? await this.readDlogExpressionBatch(toolInput)
@@ -89,6 +94,42 @@ export class BoardWorkerRuntime {
       this.currentCommandId = undefined;
       this.status = "READY";
     }
+  }
+
+  /**
+   * Release only a daemon-owned logical session and its probe lease after the
+   * board lease has expired. This path is reachable only over the worker's
+   * authenticated IPC channel and is intentionally limited to session close;
+   * it cannot reset, run, halt, program, or write target memory.
+   */
+  private async closeStaleResidentSession(input: unknown): Promise<Record<string, unknown>> {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new DebugMcpError("DaemonProtocolError", "Stale resident cleanup requires an object input");
+    }
+    const values = input as Record<string, unknown>;
+    if (values.boardId !== this.options.boardId || values.workerInstanceId !== this.options.workerInstanceId) {
+      throw new DebugMcpError("WorkerIdentityMismatch", "Stale resident cleanup identity does not match this worker", {
+        boardId: this.options.boardId,
+        workerInstanceId: this.options.workerInstanceId,
+        receivedBoardId: values.boardId,
+        receivedWorkerInstanceId: values.workerInstanceId,
+        targetAccessAttempted: false
+      });
+    }
+    if (typeof values.sessionId !== "string" || values.sessionId.length === 0) {
+      throw new DebugMcpError("SessionNotFound", "Stale resident cleanup requires a sessionId", { targetAccessAttempted: false });
+    }
+    const result = await this.runtime!.manager.closeDebugSession(values.sessionId);
+    return {
+      success: true,
+      ...result,
+      recovery: {
+        mode: "expired-board-lease-resident-close",
+        targetAccessAttempted: false,
+        targetMemoryWritten: false,
+        executionControlIssued: false
+      }
+    };
   }
 
   private async adapterNameForSession(sessionId: string): Promise<string | undefined> {

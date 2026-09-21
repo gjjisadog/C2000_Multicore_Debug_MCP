@@ -91,6 +91,7 @@ interface LogicalDebugSession {
     flashBanks: number[];
     openedAt: string;
   };
+  adapterDisposed?: boolean;
   probeLease?: DebugProbeLease;
 }
 
@@ -155,7 +156,8 @@ export class DebugSessionManager {
         probeLease = await runStartupStage("probe-lease", () => this.probeCoordinator!.acquire(sessionName, {
           probeId: options.probeId,
           preferredProbeIds: options.preferredProbeIds,
-          allowAutoProbeAllocation: options.allowAutoProbeAllocation
+          allowAutoProbeAllocation: options.allowAutoProbeAllocation,
+          ...(options.probeQueueTimeoutMs !== undefined ? { queueTimeoutMs: options.probeQueueTimeoutMs } : {})
         }));
       }
       if (this.prepareProbe) {
@@ -264,22 +266,31 @@ export class DebugSessionManager {
       this.cancelIdleAutoClose(session);
       let adapterDisposeError: unknown;
       let probeLeaseReleaseError: unknown;
-      try {
-        await this.adapter.disposeSession?.(session.adapterSession);
-      } catch (error) {
-        adapterDisposeError = error;
+      if (!session.adapterDisposed) {
+        try {
+          await this.adapter.disposeSession?.(session.adapterSession);
+          session.adapterDisposed = true;
+        } catch (error) {
+          adapterDisposeError = error;
+        }
       }
-      try {
-        await session.probeLease?.release();
-      } catch (error) {
-        probeLeaseReleaseError = error;
+      if (session.probeLease) {
+        try {
+          await session.probeLease.release();
+          session.probeLease = undefined;
+        } catch (error) {
+          probeLeaseReleaseError = error;
+        }
       }
-      // Logical cleanup is unconditional.  A failed adapter dispose must not
-      // leave the in-process session map, loaded-image registry, or queue tail
-      // holding the next recovery attempt hostage.
-      this.sessions.delete(sessionId);
-      this.loadedPrograms.deleteSession(sessionId);
-      this.queue.clearWhenIdle(sessionId);
+      // A failed probe release is a live resource. Keep the session object so
+      // a later normal close can retry the same owned lease; deleting it here
+      // would strand the active probe directory until process exit.
+      const logicalSessionRemoved = !probeLeaseReleaseError;
+      if (logicalSessionRemoved) {
+        this.sessions.delete(sessionId);
+        this.loadedPrograms.deleteSession(sessionId);
+        this.queue.clearWhenIdle(sessionId);
+      }
       this.logger.info("debug session closed", {
         sessionId,
         adapterDisposed: !adapterDisposeError,
@@ -292,7 +303,7 @@ export class DebugSessionManager {
         durationMs: finishedAtMs - startedAtMs,
         adapterDisposed: !adapterDisposeError,
         probeLeaseReleased: !probeLeaseReleaseError,
-        logicalSessionRemoved: true as const
+        logicalSessionRemoved
       };
       if (adapterDisposeError || probeLeaseReleaseError) {
         const failures = [
@@ -308,7 +319,7 @@ export class DebugSessionManager {
           {
             sessionId,
             cleanup,
-            logicalSessionRemoved: true,
+            logicalSessionRemoved,
             probeLeaseReleased: cleanup.probeLeaseReleased,
             failures
           }

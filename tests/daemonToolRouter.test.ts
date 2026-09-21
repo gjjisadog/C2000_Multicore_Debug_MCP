@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 describe("daemon tool router interactive session lifecycle", () => {
-  test("fails closed when a lease handoff invalidates resident image identity", async () => {
+  test("preserves resident image identity across a new MCP lease", async () => {
     const fixture = await makeFixture();
     const programPath = path.join(fixture.directory, "cpu1.out");
     await writeFile(programPath, "cpu1-image-v1");
@@ -49,14 +49,22 @@ describe("daemon tool router interactive session lifecycle", () => {
       workerInstanceId: "worker-1",
       ttlMs: 60_000
     });
-    expect(fixture.registry.targetIdentity("board-a").status).toBe("UNKNOWN");
+    expect(fixture.registry.targetIdentity("board-a")).toEqual(expect.objectContaining({
+      status: "KNOWN",
+      programs: { "0": expect.objectContaining({ coreId: 0, sha256: programSha256 }) }
+    }));
 
     const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    fixture.workers.invokeBoard = async () => ({ success: true, sessionId: "dbg-image", coreId: 0 });
     await expect(router.invokeTool("c2000_loadSymbols", {
       sessionId: "dbg-image",
       coreId: 0,
       programUri: programPath
-    })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
+    })).resolves.toEqual(expect.objectContaining({ success: true, coreId: 0 }));
+
+    // A real target-side uncertainty event still fails closed under the
+    // require-known policy; the lease itself is not such an event.
+    fixture.registry.markTargetIdentityUnknown("board-a", "external-target-access");
     await expect(router.invokeTool("c2000_runResidentIpcDebug", {
       sessionId: "dbg-image",
       cpu1CoreId: 0,
@@ -64,7 +72,8 @@ describe("daemon tool router interactive session lifecycle", () => {
       cpu1OutPath: programPath,
       cpu2OutPath: programPath,
       cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
-      cpu2MapPath: path.join(fixture.directory, "cpu2.map")
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map"),
+      residentIdentityPolicy: "require-known"
     })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
     await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
       boardId: "board-a",
@@ -74,7 +83,8 @@ describe("daemon tool router interactive session lifecycle", () => {
       cpu1OutPath: programPath,
       cpu2OutPath: programPath,
       cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
-      cpu2MapPath: path.join(fixture.directory, "cpu2.map")
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map"),
+      residentIdentityPolicy: "require-known"
     })).rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
     fixture.workers.invokeBoard = async () => ({ success: true, sessionId: "dbg-image", workflow: "c2000_launchResidentIpcDebug" });
     await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
@@ -85,8 +95,7 @@ describe("daemon tool router interactive session lifecycle", () => {
       cpu1OutPath: programPath,
       cpu2OutPath: programPath,
       cpu1MapPath: path.join(fixture.directory, "cpu1.map"),
-      cpu2MapPath: path.join(fixture.directory, "cpu2.map"),
-      residentIdentityPolicy: "operator-confirmed"
+      cpu2MapPath: path.join(fixture.directory, "cpu2.map")
     })).resolves.toEqual(expect.objectContaining({ success: true, workflow: "c2000_launchResidentIpcDebug" }));
 
     fixture.registry.recordTargetPrograms("board-a", [{
@@ -358,6 +367,86 @@ describe("daemon tool router interactive session lifecycle", () => {
     expect(fixture.sessions.get("dbg-failed")).toEqual(expect.objectContaining({ status: "OPEN" }));
     expect(fixture.sessions.get("dbg-failed")?.closedAt).toBeUndefined();
     expect(fixture.registry.leases.active("board-a")).toBeDefined();
+    fixture.store.close();
+  });
+
+  test("closes an older resident session before taking the next board lease", async () => {
+    const fixture = await makeFixture();
+    const calls: string[] = [];
+    fixture.workers.invokeBoard = async (_boardId: string, toolName: string, input: unknown) => {
+      calls.push(toolName);
+      if (toolName === "c2000_closeDebugSession") {
+        const sessionId = (input as { sessionId?: string }).sessionId;
+        return { success: true, sessionId, closed: true };
+      }
+      return { success: true, sessionId: calls.filter(call => call === "c2000_launchResidentIpcDebug").length === 1 ? "dbg-resident-1" : "dbg-resident-2", workflow: "c2000_launchResidentIpcDebug" };
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    const input = {
+      boardId: "board-a",
+      sessionName: "launch-resident-ipc-debug",
+      sessionMode: "interactive",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "cpu1.out",
+      cpu2OutPath: "cpu2.out"
+    };
+
+    await router.invokeTool("c2000_launchResidentIpcDebug", input);
+    await router.invokeTool("c2000_launchResidentIpcDebug", input);
+
+    expect(calls).toEqual([
+      "c2000_launchResidentIpcDebug",
+      "c2000_closeDebugSession",
+      "c2000_launchResidentIpcDebug"
+    ]);
+    expect(fixture.sessions.get("dbg-resident-1")).toEqual(expect.objectContaining({ status: "CLOSED" }));
+    expect(fixture.sessions.get("dbg-resident-2")).toEqual(expect.objectContaining({ status: "OPEN" }));
+    fixture.store.close();
+  });
+
+  test("recovers an expired resident lease through the current worker before queueing a new request", async () => {
+    const fixture = await makeFixture();
+    const calls: string[] = [];
+    fixture.sessions.upsert({
+      sessionId: "dbg-stale-resident",
+      boardId: "board-a",
+      workerInstanceId: "worker-1",
+      sessionName: "launch-resident-ipc-debug",
+      coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "C28xx_CPU2" }],
+      status: "OPEN",
+      createdAt: new Date().toISOString()
+    });
+    fixture.workers.invokeBoard = async (_boardId: string, toolName: string) => {
+      calls.push(toolName);
+      return { success: true, sessionId: "dbg-new-resident", workflow: "c2000_launchResidentIpcDebug" };
+    };
+    (fixture.workers as unknown as {
+      closeStaleResidentSession: (boardId: string, sessionId: string, workerInstanceId: string, timeoutMs: number) => Promise<Record<string, unknown>>;
+    }).closeStaleResidentSession = async (_boardId, sessionId, workerInstanceId, timeoutMs) => {
+      calls.push(`stale:${sessionId}:${workerInstanceId}:${timeoutMs}`);
+      return {
+        success: true,
+        sessionId,
+        closed: true,
+        recovery: { targetAccessAttempted: false, targetMemoryWritten: false, executionControlIssued: false }
+      };
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+
+    await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
+      boardId: "board-a",
+      sessionName: "launch-resident-ipc-debug",
+      sessionMode: "interactive",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      cpu1OutPath: "cpu1.out",
+      cpu2OutPath: "cpu2.out"
+    })).resolves.toEqual(expect.objectContaining({ success: true, sessionId: "dbg-new-resident" }));
+
+    expect(calls[0]).toMatch(/^stale:dbg-stale-resident:worker-1:/);
+    expect(calls[1]).toBe("c2000_launchResidentIpcDebug");
+    expect(fixture.sessions.get("dbg-stale-resident")).toEqual(expect.objectContaining({ status: "CLOSED" }));
     fixture.store.close();
   });
 });

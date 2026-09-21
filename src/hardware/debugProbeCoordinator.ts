@@ -26,6 +26,8 @@ export interface DebugProbeSelection {
   probeId?: string;
   preferredProbeIds?: string[];
   allowAutoProbeAllocation?: boolean;
+  /** Optional per-request bound for waiting on the shared probe. */
+  queueTimeoutMs?: number;
 }
 
 export class DebugProbePoolCoordinator implements DebugProbeCoordinator {
@@ -57,7 +59,7 @@ export class DebugProbePoolCoordinator implements DebugProbeCoordinator {
     const minimum = Math.min(...loads.map(item => item.load));
     const leastLoaded = loads.filter(item => item.load === minimum);
     const chosen = leastLoaded[this.nextTieBreak++ % leastLoaded.length].probe;
-    const lease = await new FileDebugProbeCoordinator(path.join(this.rootDir, "probes", safeId(chosen.probeId)), this.timeoutMs, this.pollMs).acquire(label);
+    const lease = await new FileDebugProbeCoordinator(path.join(this.rootDir, "probes", safeId(chosen.probeId)), this.timeoutMs, this.pollMs).acquire(label, selection);
     return { ...lease, probe: chosen };
   }
 
@@ -82,7 +84,7 @@ export class FileDebugProbeCoordinator implements DebugProbeCoordinator {
     private readonly pollMs = 250
   ) {}
 
-  async acquire(label: string): Promise<DebugProbeLease> {
+  async acquire(label: string, selection: DebugProbeSelection = {}): Promise<DebugProbeLease> {
     const queueDir = path.join(this.rootDir, "queue");
     const activeDir = path.join(this.rootDir, "active");
     await mkdir(queueDir, { recursive: true });
@@ -95,7 +97,8 @@ export class FileDebugProbeCoordinator implements DebugProbeCoordinator {
     const initialTickets = await tickets(queueDir);
     const queuePositionAtEntry = initialTickets.indexOf(path.basename(ticketPath)) + 1;
 
-    while (Date.now() - startedAt < this.timeoutMs) {
+    const queueTimeoutMs = boundedQueueTimeout(selection.queueTimeoutMs, this.timeoutMs);
+    while (Date.now() - startedAt < queueTimeoutMs) {
       const currentTickets = await tickets(queueDir);
       if (currentTickets[0] === path.basename(ticketPath)) {
         await clearStaleActiveLease(activeDir);
@@ -116,10 +119,23 @@ export class FileDebugProbeCoordinator implements DebugProbeCoordinator {
             waitedMs: Date.now() - startedAt,
             release: async () => {
               if (released) return;
-              released = true;
-              process.removeListener("exit", cleanupOnExit);
-              await rm(activeDir, { recursive: true, force: true });
-              await rm(ticketPath, { force: true });
+              let lastError: unknown;
+              for (let attempt = 0; attempt < 3; attempt += 1) {
+                try {
+                  // Verify ownership before removing the active directory.
+                  // A delayed retry must never delete a newer owner's lease.
+                  await removeActiveLeaseIfOwnedAsync(activeDir, leaseId);
+                  await rm(ticketPath, { force: true });
+                  released = true;
+                  process.removeListener("exit", cleanupOnExit);
+                  return;
+                } catch (error) {
+                  lastError = error;
+                  if (!isRetryableCleanupError(error) || attempt === 2) throw error;
+                  await delay(25 * (attempt + 1));
+                }
+              }
+              throw lastError instanceof Error ? lastError : new Error(String(lastError));
             }
           };
         } catch (error) {
@@ -130,7 +146,14 @@ export class FileDebugProbeCoordinator implements DebugProbeCoordinator {
     }
     process.removeListener("exit", cleanupWaitingTicket);
     await rm(ticketPath, { force: true });
-    throw new DebugMcpError("ProbeQueueTimeout", `Timed out waiting for the shared debug-probe lease`, { label, timeoutMs: this.timeoutMs, queuePositionAtEntry });
+    throw new DebugMcpError("ProbeQueueTimeout", `Timed out waiting for the shared debug-probe lease`, {
+      label,
+      timeoutMs: queueTimeoutMs,
+      queuePositionAtEntry,
+      queueTicketCancelled: true,
+      targetAccessAttempted: false,
+      nextAction: "The queued probe request was cancelled. Close or recover the existing resident session, then retry; no delayed target command will execute from this request."
+    });
   }
 }
 
@@ -170,6 +193,22 @@ async function clearStaleActiveLease(activeDir: string): Promise<void> {
   }
 }
 
+async function removeActiveLeaseIfOwnedAsync(activeDir: string, leaseId: string): Promise<void> {
+  try {
+    const owner = JSON.parse(await readFile(path.join(activeDir, "owner.json"), "utf8")) as { leaseId?: unknown };
+    if (owner.leaseId !== leaseId) {
+      throw new DebugMcpError("ProbeIdentityMismatch", "The active probe lease belongs to another owner; refusing to remove it", {
+        expectedLeaseId: leaseId,
+        actualLeaseId: owner.leaseId
+      });
+    }
+    await rm(activeDir, { recursive: true, force: true });
+  } catch (error) {
+    if (isMissing(error)) return;
+    throw error;
+  }
+}
+
 function processExists(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
@@ -178,11 +217,21 @@ function isAlreadyExists(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST";
 }
 
+function isRetryableCleanupError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error
+    && ["EBUSY", "EPERM", "ENOTEMPTY"].includes(String((error as { code?: unknown }).code));
+}
+
 function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT";
 }
 
 function delay(ms: number): Promise<void> { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+function boundedQueueTimeout(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) return fallback;
+  return Math.max(1, Math.floor(value));
+}
 
 async function probeLoad(rootDir: string): Promise<number> {
   let queued = 0;

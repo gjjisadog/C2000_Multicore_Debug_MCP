@@ -53,6 +53,8 @@ export interface CreateDebugSessionOptions {
   probeId?: string;
   preferredProbeIds?: string[];
   allowAutoProbeAllocation?: boolean;
+  /** Bound only the host-side wait for a shared probe; does not limit DSS startup. */
+  probeQueueTimeoutMs?: number;
 }
 
 /**

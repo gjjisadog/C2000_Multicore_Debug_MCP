@@ -193,7 +193,7 @@ function buildRuntime(
   // Keep the server usable in that supported test/embedding path.
   const debugProbe = config.debugProbe ?? {
     queueDir: "runtime/debug-probe-queue",
-    queueTimeoutMs: 600_000,
+    queueTimeoutMs: 30_000,
     startupPreparationMs: 90_000,
     recoveryPolicy: "owned-and-stale" as const,
     multiBoardEnabled: false

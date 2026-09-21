@@ -18,8 +18,7 @@ export class BoardRegistry {
     this.leases = new BoardLeaseManager(
       store,
       boards,
-      leaseRepository,
-      (boardId, reason) => this.markTargetIdentityUnknown(boardId, reason)
+      leaseRepository
     );
   }
 

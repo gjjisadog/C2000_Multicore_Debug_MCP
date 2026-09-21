@@ -16,8 +16,7 @@ export class BoardLeaseManager {
   constructor(
     private readonly store: SqliteStore,
     private readonly boards: BoardRepository,
-    private readonly leases: LeaseRepository,
-    private readonly onTargetIdentityUnknown?: (boardId: string, reason: string) => void
+    private readonly leases: LeaseRepository
   ) {}
 
   acquire(options: { boardId: string; ownerJobId?: string; workerInstanceId: string; ttlMs: number }): LeasedBoard {
@@ -221,7 +220,9 @@ export class BoardLeaseManager {
     };
     this.leases.insert(lease, hashToken(leaseToken));
     this.boards.setLease(prepared.board.boardId, lease.leaseId);
-    this.onTargetIdentityUnknown?.(prepared.board.boardId, "new-board-lease");
+    // A lease is control-plane fencing only. Acquiring a new MCP lease does
+    // not read, reset, run, or program the target, so it must not invalidate
+    // durable image evidence by itself.
     return { lease, leaseToken, context: toContext(lease, leaseToken) };
   }
 }

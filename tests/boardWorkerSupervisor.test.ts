@@ -88,6 +88,39 @@ describe("board worker supervisor", () => {
     }
   });
 
+  test("preserves resident image identity when a new worker starts", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-identity-start-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.recordTargetPrograms("board-a", [{
+      coreId: 0,
+      programUri: "cpu1.out",
+      sha256: "a".repeat(64)
+    }]);
+    const supervisor = new BoardWorkerSupervisor({
+      config: configFor(directory),
+      daemonInstanceId: "daemon-test",
+      registry,
+      workers: new WorkerRepository(store),
+      events,
+      factory: options => new FakeWorker(options, false)
+    });
+    try {
+      await supervisor.startBoard("board-a");
+      expect(registry.targetIdentity("board-a")).toEqual(expect.objectContaining({
+        status: "KNOWN",
+        reason: "mcp-program-load",
+        programs: { "0": expect.objectContaining({ sha256: "a".repeat(64) }) }
+      }));
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("command timeout restarts only the affected board worker", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-supervisor-"));
     directories.push(directory);

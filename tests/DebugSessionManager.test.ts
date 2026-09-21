@@ -1377,6 +1377,38 @@ MEMORY CONFIGURATION
     await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
   });
 
+  test("retains a session when probe release fails so normal close can retry it", async () => {
+    let releaseCalls = 0;
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry(), undefined, {
+      probeCoordinator: {
+        async acquire() {
+          return {
+            leaseId: "probe-retry",
+            queuePositionAtEntry: 1,
+            waitedMs: 0,
+            async release() {
+              releaseCalls += 1;
+              if (releaseCalls === 1) throw new Error("probe busy");
+            }
+          };
+        }
+      }
+    });
+    const session = await manager.createDebugSession({ sessionName: "probe-retry", coreMap });
+
+    await expect(manager.closeDebugSession(session.sessionId)).rejects.toMatchObject({
+      code: "WorkflowCleanupFailed",
+      details: { cleanup: { logicalSessionRemoved: false, probeLeaseReleased: false } }
+    });
+    await expect(manager.listCores(session.sessionId)).resolves.toHaveLength(2);
+    await expect(manager.closeDebugSession(session.sessionId)).resolves.toEqual(expect.objectContaining({
+      closed: true,
+      cleanup: expect.objectContaining({ probeLeaseReleased: true, logicalSessionRemoved: true })
+    }));
+    expect(releaseCalls).toBe(2);
+    await expect(manager.listCores(session.sessionId)).rejects.toMatchObject({ code: "SessionNotFound" });
+  });
+
   test("auto-closes an armed debug session only after it remains idle", async () => {
     class RecordingDisposeAdapter extends MockDebugAdapter {
       readonly disposed: string[] = [];

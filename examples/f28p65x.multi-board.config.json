@@ -15,7 +15,7 @@
   "debugProbe": {
     "multiBoardEnabled": true,
     "queueDir": "/absolute/shared/path/c2000-probe-queue",
-    "queueTimeoutMs": 600000,
+    "queueTimeoutMs": 30000,
     "recoveryPolicy": "terminate-external",
     "probes": [
       {
