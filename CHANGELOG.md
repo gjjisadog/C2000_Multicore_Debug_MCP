@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### MCP transport startup resilience
+
+- Add a supervised MCP stdio entrypoint that retries child startup failures,
+  replays the initialize handshake after an early restart, coalesces concurrent
+  daemon startups, and preserves live daemon metadata across transient health
+  check failures.
+
 ### Read-only resident-image verification
 
 - Add `c2000_verifyResidentImage`: under the current board lease it can attach
