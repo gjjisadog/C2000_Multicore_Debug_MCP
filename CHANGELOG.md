@@ -8,6 +8,9 @@
   replays the initialize handshake after an early restart, coalesces concurrent
   daemon startups, and preserves live daemon metadata across transient health
   check failures.
+- Make offline acceptance follow the version-slot runtime recorded in
+  `current.json`, keeping the release verification path aligned with atomic
+  side-by-side installs.
 
 ### Read-only resident-image verification
 

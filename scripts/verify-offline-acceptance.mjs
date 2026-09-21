@@ -7,7 +7,9 @@ import { pathToFileURL } from "node:url";
 const installRoot = parseInstallRoot(process.argv.slice(2));
 const pointerPath = path.join(installRoot, "current.json");
 const pointer = JSON.parse(await readFile(pointerPath, "utf8"));
-const nodePath = path.join(installRoot, "runtime", "node.exe");
+const nodePath = typeof pointer.runtimeExecutable === "string"
+  ? path.resolve(pointer.runtimeExecutable)
+  : undefined;
 const slot = path.resolve(pointer.installDirectory);
 const runtimeCheck = path.join(slot, "dist", "src", "installer", "runtime-check.js");
 const doctor = path.join(slot, "scripts", "c2000-mcp-doctor.mjs");
@@ -24,13 +26,12 @@ const commandChecks = {
   python: assertUnavailable("python", env)
 };
 
+if (!nodePath || !isInside(installRoot, nodePath)) {
+  throw new Error("current.json does not point to a private Node runtime inside the install root.");
+}
 await access(nodePath);
 await access(runtimeCheck);
 await access(doctor);
-if (path.resolve(pointer.runtimeExecutable).toLowerCase() !== path.resolve(nodePath).toLowerCase()) {
-  throw new Error("current.json does not point to the installed private Node runtime.");
-}
-
 const nodeProbe = run(nodePath, ["-p", "JSON.stringify({nodeVersion:process.version,nodeModulesAbi:process.versions.modules,platform:process.platform,arch:process.arch})"], installRoot, env);
 const runtimeManifest = JSON.parse(await readFile(path.join(slot, "dist", "src", "runtime-manifest.json"), "utf8"));
 if (nodeProbe.nodeVersion !== runtimeManifest.runtime.nodeVersion
@@ -101,6 +102,12 @@ function parseInstallRoot(args) {
     return path.resolve(value);
   }
   return path.resolve(process.env.C2000_MCP_HOME ?? path.join(os.homedir(), ".c2000-multicore-mcp"));
+}
+
+function isInside(root, candidate) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === ""
+    || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
 }
 
 function run(command, args, cwd, env) {

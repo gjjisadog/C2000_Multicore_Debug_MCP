@@ -86,7 +86,11 @@ jobs:
             & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $bundle "install.ps1") `
               --install-root $installRoot --workspace $env:RUNNER_TEMP
             if ($LASTEXITCODE -ne 0) { throw "Offline installer failed with exit code $LASTEXITCODE." }
-            $privateNode = Join-Path $installRoot "runtime\node.exe"
+            $pointer = Get-Content -Raw (Join-Path $installRoot "current.json") | ConvertFrom-Json
+            $privateNode = $pointer.runtimeExecutable
+            if (-not $privateNode -or -not (Test-Path -LiteralPath $privateNode -PathType Leaf)) {
+              throw "Offline installer did not publish a usable private Node runtime pointer."
+            }
             & $privateNode (Join-Path $bundle "mcp\scripts\verify-offline-acceptance.mjs") --install-root $installRoot
             if ($LASTEXITCODE -ne 0) { throw "Offline acceptance failed with exit code $LASTEXITCODE." }
           } finally {
