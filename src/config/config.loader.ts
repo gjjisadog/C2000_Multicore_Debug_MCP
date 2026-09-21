@@ -20,7 +20,7 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     toolProfile: "safe",
     toolSurfaceProfile: "agent",
     filesystem: { allowedReadRoots: [process.cwd()], allowedWriteRoots: [path.join(process.cwd(), "runtime")] },
-    debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 600000, startupPreparationMs: 90000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
+    debugProbe: { queueDir: path.join(process.cwd(), "runtime", "debug-probe-queue"), queueTimeoutMs: 30000, startupPreparationMs: 90000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false },
     daemon: {
       enabled: true,
       host: "127.0.0.1",

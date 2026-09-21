@@ -1494,16 +1494,21 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           }
         });
         assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
-        const result = await workflows.runIpcAcceptance(parsed);
+        const result = resident.mode === "attach-only"
+          ? await workflows.attachResidentIpcDebug(parsed)
+          : await workflows.runIpcAcceptance(parsed);
         return ok({
           ...result,
           workflow: "c2000_runResidentIpcDebug",
           residentDebug: {
             programPreparation: "symbols-only",
+            mode: resident.mode,
+            attachOnly: resident.mode === "attach-only",
             targetMemoryWritten: false,
-            targetFlashVerified: false,
+            targetFlashVerified: result.targetFlashVerified === true,
             flashProgramming: false,
-            defaultRunMode: "cpu1_boots_cpu2"
+            defaultRunMode: "cpu1_boots_cpu2",
+            residentIdentityPolicy: resident.residentIdentityPolicy
           }
         });
       } catch (error) {
@@ -1530,14 +1535,18 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           }
         });
         assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
-        const result = await workflows.launchAndRunIpcAcceptance(parsed);
+        const result = resident.mode === "attach-only"
+          ? await workflows.launchResidentIpcDebugAttach(parsed)
+          : await workflows.launchAndRunIpcAcceptance(parsed);
         return ok({
           ...result,
           workflow: "c2000_launchResidentIpcDebug",
           residentDebug: {
             programPreparation: "symbols-only",
+            mode: resident.mode,
+            attachOnly: resident.mode === "attach-only",
             targetMemoryWritten: false,
-            targetFlashVerified: false,
+            targetFlashVerified: result.targetFlashVerified === true,
             flashProgramming: false,
             defaultRunMode: "cpu1_boots_cpu2",
             residentIdentityPolicy: resident.residentIdentityPolicy,

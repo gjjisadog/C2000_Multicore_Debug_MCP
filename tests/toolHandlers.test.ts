@@ -320,6 +320,20 @@ async function createIpcWorkflowArtifacts(tempDir: string) {
   return files;
 }
 
+async function createIpcWorkflowArtifactsWithoutGs(tempDir: string) {
+  const files = {
+    cpu1OutPath: path.join(tempDir, "cpu1.out"),
+    cpu2OutPath: path.join(tempDir, "cpu2.out"),
+    cpu1MapPath: path.join(tempDir, "cpu1.map"),
+    cpu2MapPath: path.join(tempDir, "cpu2.map")
+  };
+  await writeFile(files.cpu1OutPath, "cpu1-image");
+  await writeFile(files.cpu2OutPath, "cpu2-image");
+  await writeFile(files.cpu1MapPath, "MEMORY CONFIGURATION\n  RAMLS0  00008000 00000800 00000010 000007f0 RWIX\n");
+  await writeFile(files.cpu2MapPath, "MEMORY CONFIGURATION\n  RAMLS1  00008800 00000800 00000010 000007f0 RWIX\n");
+  return files;
+}
+
 describe("tool handlers", () => {
   test("getEnvironment returns validated TI paths and discovery evidence", async () => {
     const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
@@ -1004,6 +1018,47 @@ describe("tool handlers", () => {
     expect(adapter.events.indexOf("readMemory:16")).toBeGreaterThan(lastReadyEvaluation);
     expect(result.performedSteps.indexOf("waitForIpcReady")).toBeLessThan(result.performedSteps.indexOf("verifyRuntimeRamOwnership"));
     expect(result.performedSteps.indexOf("verifyRuntimeRamOwnership")).toBeLessThan(result.performedSteps.indexOf("diagnoseBootHandoff"));
+  });
+
+  test("does not fail IPC acceptance when requested runtime ownership is not applicable to the maps", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-ipc-runtime-ownership-not-applicable-"));
+    const files = await createIpcWorkflowArtifactsWithoutGs(tempDir);
+    const adapter = new PhaseChangingOwnershipAdapter([0x10], {
+      expressionValues: { "ipc.responsePass": { value: "1" } }
+    });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const created = await handlers.createDebugSession({ sessionName: "ipc-runtime-ownership-not-applicable", coreMap });
+    await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
+
+    const result = await handlers.runIpcAcceptance({
+      sessionId: created.sessionId,
+      device: "F28P65x",
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      ...files,
+      resetType: "cpu",
+      runSequence: { runMode: "debugger_runs_both", runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.responsePass", expected: 1 }],
+      timeoutMs: 20,
+      intervalMs: 1,
+      verifyRuntimeRamOwnership: true
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      ipcReady: expect.objectContaining({ matched: true }),
+      ramOwnership: expect.objectContaining({ ownershipActions: [] }),
+      runtimeRamOwnership: expect.objectContaining({
+        requested: true,
+        applicable: false,
+        supported: true,
+        skipped: true,
+        reason: "No ownership actions to verify."
+      })
+    }));
+    expect(result.runtimeRamOwnership).not.toHaveProperty("matched");
+    expect(adapter.ownershipReads).toEqual([]);
   });
 
   test.each(["pc", "diagnosis", "fenced"] as const)(

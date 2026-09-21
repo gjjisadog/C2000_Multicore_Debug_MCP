@@ -1,4 +1,12 @@
-import type { BoardRecord, BoardRegistration, BoardStatus, TargetProgramMutation } from "./types.js";
+import type {
+  BoardLeaseReconciliationBlockers,
+  BoardLeaseReconciliationResult,
+  BoardLeaseState,
+  BoardRecord,
+  BoardRegistration,
+  BoardStatus,
+  TargetProgramMutation
+} from "./types.js";
 import { BoardRepository } from "../storage/repositories/BoardRepository.js";
 import { EventRepository } from "../storage/repositories/EventRepository.js";
 import { LeaseRepository } from "../storage/repositories/LeaseRepository.js";
@@ -8,6 +16,7 @@ import { DebugMcpError } from "../utils/errors.js";
 
 export class BoardRegistry {
   readonly leases: BoardLeaseManager;
+  private readonly reconciliationStates = new Map<string, BoardLeaseReconciliationResult>();
 
   constructor(
     private readonly boards: BoardRepository,
@@ -18,8 +27,7 @@ export class BoardRegistry {
     this.leases = new BoardLeaseManager(
       store,
       boards,
-      leaseRepository,
-      (boardId, reason) => this.markTargetIdentityUnknown(boardId, reason)
+      leaseRepository
     );
   }
 
@@ -45,11 +53,65 @@ export class BoardRegistry {
     this.boards.heartbeat(boardId, timestamp);
   }
 
-  list(filters: { status?: BoardStatus[]; tags?: string[] } = {}): Array<BoardRecord & { leaseOwner?: string }> {
+  list(filters: { status?: BoardStatus[]; tags?: string[] } = {}): Array<BoardRecord & {
+    leaseOwner?: string;
+    leaseStatus: BoardLeaseState["status"];
+    leaseState: BoardLeaseState;
+    leaseReason?: string;
+  }> {
     return this.boards.list(filters).map(board => {
-      const lease = this.leases.active(board.boardId);
-      return { ...board, ...(lease?.ownerJobId ? { leaseOwner: lease.ownerJobId } : {}) };
+      const described = this.leases.describe(board.boardId, board.currentWorkerInstanceId);
+      const reconciled = this.reconciliationStates.get(board.boardId);
+      const leaseState = reconciled && reconciled.leaseId === described.leaseId && reconciled.status === described.status
+        ? { ...described, ...(reconciled.reason ? { reason: reconciled.reason } : {}), ...(reconciled.blockers ? { blockers: reconciled.blockers } : {}) }
+        : described;
+      return {
+        ...board,
+        leaseStatus: leaseState.status,
+        leaseState,
+        ...(leaseState.ownerJobId ? { leaseOwner: leaseState.ownerJobId } : {}),
+        ...(leaseState.reason ? { leaseReason: leaseState.reason } : {})
+      };
     });
+  }
+
+  leaseState(boardId: string): BoardLeaseState {
+    const board = this.boards.require(boardId);
+    const described = this.leases.describe(boardId, board.currentWorkerInstanceId);
+    const reconciled = this.reconciliationStates.get(boardId);
+    return reconciled && reconciled.leaseId === described.leaseId && reconciled.status === described.status
+      ? { ...described, ...(reconciled.reason ? { reason: reconciled.reason } : {}), ...(reconciled.blockers ? { blockers: reconciled.blockers } : {}) }
+      : described;
+  }
+
+  reconcileWorkerChange(
+    boardId: string,
+    currentWorkerInstanceId: string,
+    blockers: BoardLeaseReconciliationBlockers = {}
+  ): BoardLeaseReconciliationResult {
+    const result = this.leases.reconcileWorkerChange(boardId, currentWorkerInstanceId, blockers);
+    this.reconciliationStates.set(boardId, result);
+    if (result.action !== "UNCHANGED") {
+      this.events.append({
+        level: result.action === "BLOCKED" ? "warn" : "info",
+        sourceType: "board",
+        sourceId: boardId,
+        boardId,
+        workerInstanceId: currentWorkerInstanceId,
+        eventType: "BOARD_LEASE_RECONCILED",
+        payload: {
+          action: result.action,
+          status: result.status,
+          leaseId: result.leaseId,
+          ownerJobId: result.ownerJobId,
+          previousWorkerInstanceId: result.workerInstanceId,
+          currentWorkerInstanceId,
+          reason: result.reason,
+          blockers: result.blockers ?? []
+        }
+      });
+    }
+    return result;
   }
 
   transition(boardId: string, status: BoardStatus, error?: Record<string, unknown>): BoardRecord {

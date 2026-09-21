@@ -1077,7 +1077,7 @@ Environment overrides:
 - `C2000_MCP_DSS_TIMEOUT_MS` (default hardware acceptance value: `300000`)
 - `C2000_MCP_REQUEST_TIMEOUT_MS` (end-to-end MCP/daemon long-operation response timeout; default: `600000`)
 - `C2000_MCP_PROBE_QUEUE_DIR` (shared FIFO lease directory; every MCP instance must use the same absolute path)
-- `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `600000`)
+- `C2000_MCP_PROBE_QUEUE_TIMEOUT_MS` (default: `30000`; a resident launch can use its per-request `probeQueueTimeoutMs`, default `15000`)
 - `C2000_MCP_PROBE_STARTUP_PREPARATION_MS` (default: `90000`; CCS host-side XDS110 preflight/recovery envelope included in the outer worker command timeout)
 - `C2000_MCP_PROBE_RECOVERY_POLICY=block|owned-and-stale|terminate-external` (default: `owned-and-stale`)
 - `C2000_MCP_PROBES_JSON` (optional JSON array defining the multi-board pool)
@@ -2054,7 +2054,7 @@ For multiple boards, configure `debugProbe.probes` in the config file (or `C2000
   "debugProbe": {
     "multiBoardEnabled": true,
     "queueDir": "/shared/c2000-probe-queue",
-    "queueTimeoutMs": 600000,
+    "queueTimeoutMs": 30000,
     "startupPreparationMs": 90000,
     "recoveryPolicy": "terminate-external",
     "probes": [

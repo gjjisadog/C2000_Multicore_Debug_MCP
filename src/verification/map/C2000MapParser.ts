@@ -98,7 +98,12 @@ function parseSectionLine(line: string, page: number | null): MapSection | undef
     .map(token => parseNumber(token))
     .filter((value): value is number => value !== undefined);
   if (values.length === 0) return undefined;
-  const hasPageColumn = values.length >= 4 && /^(?:0x)?[0-3]$/i.test(tokens[0] ?? "");
+  // A section row may contain either `page origin size` or
+  // `page origin size runAddress`.  The previous four-value requirement
+  // misread the common three-value form as an unpaged row, shifting every
+  // address and causing downstream PC/function resolution to select the
+  // wrong symbol.
+  const hasPageColumn = values.length >= 3 && /^(?:0x)?[0-3]$/i.test(tokens[0] ?? "");
   const sectionPage = hasPageColumn ? values[0]! : page;
   const offset = hasPageColumn ? 1 : 0;
   const loadAddress = values[offset] ?? null;
