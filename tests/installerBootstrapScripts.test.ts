@@ -80,6 +80,7 @@ describe("installer bootstrap scripts", () => {
     expect(source.indexOf("await writeFile(mcpManifestPath")).toBeLessThan(
       source.indexOf("await copyBundleFiles(")
     );
+    expect(source).toContain('"mcp-supervisor.mjs"');
   });
 
   test("source installation builds outside the repository dist directory", async () => {

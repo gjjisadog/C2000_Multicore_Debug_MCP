@@ -70,6 +70,7 @@ export interface SetupResult {
   arch: string;
   installDirectory: string;
   entrypoint: string;
+  supervisorEntrypoint: string;
   runtimeExecutable: string;
   configPath: string;
   registration: "codex-cli" | "config-file" | "skipped";
@@ -190,7 +191,8 @@ export function buildCodexMcpAddArgs(
   serverName: string,
   entrypoint: string,
   configPath: string,
-  nodeExecutable: string
+  nodeExecutable: string,
+  supervisorEntrypoint?: string
 ): string[] {
   return [
     "mcp",
@@ -198,6 +200,19 @@ export function buildCodexMcpAddArgs(
     serverName,
     "--env",
     `C2000_MCP_CONFIG=${configPath}`,
+    "--",
+    ...buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint)
+  ];
+}
+
+function buildMcpLaunchArgs(entrypoint: string, nodeExecutable: string, supervisorEntrypoint?: string): string[] {
+  if (!supervisorEntrypoint) return [nodeExecutable, entrypoint];
+  return [
+    nodeExecutable,
+    supervisorEntrypoint,
+    "--initial-delay-ms", "1000",
+    "--max-delay-ms", "10000",
+    "--max-restarts", "5",
     "--",
     nodeExecutable,
     entrypoint
@@ -350,6 +365,8 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
 
   const entrypoint = path.join(installDirectory, "dist", "src", installedManifest.entrypoints.proxy);
   await access(entrypoint);
+  const supervisorEntrypoint = path.join(installDirectory, "scripts", "mcp-supervisor.mjs");
+  await access(supervisorEntrypoint);
 
   let skillDirectory: string | undefined;
   const skillDirectories: string[] = [];
@@ -395,6 +412,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     version: installedManifest.version,
     installDirectory,
     entrypoint,
+    supervisorEntrypoint,
     runtimeExecutable: installedNodeExecutable,
     configPath: installedConfigPath,
     runtimeManifest: installedManifestPath
@@ -406,6 +424,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     const registrationResult = registerCodexServer({
       serverName: options.serverName,
       entrypoint,
+      supervisorEntrypoint,
       nodeExecutable: installedNodeExecutable,
       configPath: installedConfigPath,
       scope: options.scope,
@@ -429,6 +448,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
     arch,
     installDirectory,
     entrypoint,
+    supervisorEntrypoint,
     runtimeExecutable: installedNodeExecutable,
     configPath: installedConfigPath,
     registration,
@@ -442,6 +462,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
 interface RegisterOptions {
   serverName: string;
   entrypoint: string;
+  supervisorEntrypoint: string;
   nodeExecutable: string;
   configPath: string;
   scope: "user" | "project";
@@ -458,7 +479,13 @@ function registerCodexServer(options: RegisterOptions): {
 } {
   let lastResult: SpawnSyncReturns<string> | undefined;
   if (options.scope === "user") {
-    const args = buildCodexMcpAddArgs(options.serverName, options.entrypoint, options.configPath, options.nodeExecutable);
+    const args = buildCodexMcpAddArgs(
+      options.serverName,
+      options.entrypoint,
+      options.configPath,
+      options.nodeExecutable,
+      options.supervisorEntrypoint
+    );
     const commands = options.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
     for (const command of commands) {
       const result = options.spawn(command, args, {
@@ -479,7 +506,15 @@ function registerCodexServer(options: RegisterOptions): {
   const codexConfigPath = options.scope === "project"
     ? path.join(options.cwd, ".codex", "config.toml")
     : path.join(path.resolve(options.env.CODEX_HOME ?? path.join(options.homeDirectory, ".codex")), "config.toml");
-  writeManagedCodexConfigSync(codexConfigPath, options.serverName, options.entrypoint, options.nodeExecutable, options.configPath, reason);
+  writeManagedCodexConfigSync(
+    codexConfigPath,
+    options.serverName,
+    options.entrypoint,
+    options.supervisorEntrypoint,
+    options.nodeExecutable,
+    options.configPath,
+    reason
+  );
   return { method: "config-file", codexConfigPath };
 }
 
@@ -487,6 +522,7 @@ function writeManagedCodexConfigSync(
   configFile: string,
   serverName: string,
   entrypoint: string,
+  supervisorEntrypoint: string,
   nodeExecutable: string,
   configPath: string,
   cliFailure: string
@@ -499,7 +535,7 @@ function writeManagedCodexConfigSync(
     `# Codex CLI fallback reason: ${cliFailure.replace(/[\r\n]+/g, " ").slice(0, 240)}`,
     `[mcp_servers.${tomlKey(serverName)}]`,
     `command = ${tomlString(nodeExecutable)}`,
-    `args = [${tomlString(entrypoint)}]`,
+    `args = [${buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint).map(tomlString).join(", ")}]`,
     "",
     `[mcp_servers.${tomlKey(serverName)}.env]`,
     `C2000_MCP_CONFIG = ${tomlString(configPath)}`,

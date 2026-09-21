@@ -5,12 +5,32 @@ import path from "node:path";
 import type { C2000McpConfig } from "../config/config.schema.js";
 import { resolveDaemonConfig } from "./DaemonConfig.js";
 import { discoverDaemon, type DiscoveredDaemon } from "../proxy/DaemonDiscovery.js";
+import { daemonRuntimePaths, isDaemonProcessAlive, readDaemonInstance } from "./DaemonInstanceFile.js";
 import { restartOwnedDaemon } from "./DaemonMaintenance.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { runtimeEntrypointCandidates } from "../runtimePaths.js";
 import { isDevelopmentMode } from "../runtimeInfo.js";
 
-export async function ensureDaemon(config: C2000McpConfig): Promise<DiscoveredDaemon> {
+const ensureFlights = new Map<string, Promise<DiscoveredDaemon>>();
+
+/**
+ * Coalesce concurrent proxy startup attempts for one runtime directory. MCP
+ * hosts may reconnect several frontends at once; they must all observe the
+ * same daemon startup rather than each spawning a detached candidate.
+ */
+export function ensureDaemon(config: C2000McpConfig): Promise<DiscoveredDaemon> {
+  const runtimeDir = daemonRuntimePaths(resolveDaemonConfig(config).runtimeDir).runtimeDir;
+  const existing = ensureFlights.get(runtimeDir);
+  if (existing) return existing;
+
+  const flight = ensureDaemonOnce(config).finally(() => {
+    if (ensureFlights.get(runtimeDir) === flight) ensureFlights.delete(runtimeDir);
+  });
+  ensureFlights.set(runtimeDir, flight);
+  return flight;
+}
+
+async function ensureDaemonOnce(config: C2000McpConfig): Promise<DiscoveredDaemon> {
   const daemon = resolveDaemonConfig(config);
   const developmentMode = isDevelopmentMode();
   if (!daemon.enabled) {
@@ -31,21 +51,42 @@ export async function ensureDaemon(config: C2000McpConfig): Promise<DiscoveredDa
     if (error instanceof DebugMcpError && ["DaemonContractMismatch", "DaemonMaintenanceRequired"].includes(error.code)) throw error;
     if (!daemon.autoStart) throw error;
   }
+
+  // A live daemon may only be finishing startup or briefly unable to answer a
+  // health request. Give that owner a chance to become ready before launching
+  // another detached candidate. Discovery removes metadata only after it has
+  // confirmed that the recorded PID is no longer alive.
+  if (await hasLiveDaemonInstance(daemon.runtimeDir)) {
+    return await waitForDaemon(config, daemon.startupTimeoutMs);
+  }
+
   await launchDetachedDaemon({ preferSource: developmentMode });
-  const deadline = Date.now() + daemon.startupTimeoutMs;
+  return await waitForDaemon(config, daemon.startupTimeoutMs);
+}
+
+async function waitForDaemon(config: C2000McpConfig, timeoutMs: number): Promise<DiscoveredDaemon> {
+  const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
       return await discoverDaemon(config);
     } catch (error) {
+      if (error instanceof DebugMcpError && ["DaemonContractMismatch", "DaemonMaintenanceRequired"].includes(error.code)) {
+        throw error;
+      }
       lastError = error;
       await delay(100);
     }
   }
   throw new DebugMcpError("DaemonStarting", "c2000-debugd did not become ready before the startup timeout", {
-    timeoutMs: daemon.startupTimeoutMs,
+    timeoutMs,
     cause: lastError instanceof Error ? lastError.message : String(lastError)
   });
+}
+
+async function hasLiveDaemonInstance(runtimeDir: string): Promise<boolean> {
+  const instance = await readDaemonInstance(daemonRuntimePaths(runtimeDir));
+  return Boolean(instance && isDaemonProcessAlive(instance.pid));
 }
 
 export async function launchDetachedDaemon(options: { cwd?: string; env?: NodeJS.ProcessEnv; preferSource?: boolean } = {}): Promise<void> {

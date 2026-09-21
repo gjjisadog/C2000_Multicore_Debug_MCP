@@ -65,6 +65,37 @@ describe("frontend / daemon contract compatibility", () => {
     }
   });
 
+  test("preserves a live daemon instance file when its health endpoint is temporarily unavailable", async () => {
+    const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "c2000-debugd-health-transient-"));
+    runtimeDirs.push(runtimeDir);
+    const instanceId = randomUUID();
+    const authToken = randomBytes(32).toString("base64url");
+    const rpc = new DaemonRpcServer({
+      authToken,
+      port: 0,
+      toolInvoker: { async invokeTool() { return { success: true }; } },
+      health: () => ({ daemon: { instanceId, pid: process.pid } })
+    });
+    const endpoint = await rpc.listen();
+    const paths = daemonRuntimePaths(runtimeDir);
+    await writeDaemonInstance(paths, {
+      instanceId,
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      host: "127.0.0.1",
+      port: endpoint.port,
+      authTokenFile: path.join(runtimeDir, "token.txt"),
+      databasePath: path.join(runtimeDir, "debugd.sqlite"),
+      version: "0.7.1"
+    }, authToken);
+    await rpc.close();
+
+    await expect(discoverDaemonInstance(configFor(runtimeDir))).rejects.toMatchObject({
+      code: "DaemonUnavailable"
+    });
+    await expect(access(paths.instanceFile)).resolves.toBeUndefined();
+  });
+
   test.each([
     ["omitted", undefined],
     ["explicit false", false]

@@ -867,6 +867,12 @@ the installed Windows offline server with an absolute private runtime path:
     "c2000-multicore": {
       "command": "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/runtime/node.exe",
       "args": [
+        "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/scripts/mcp-supervisor.mjs",
+        "--initial-delay-ms", "1000",
+        "--max-delay-ms", "10000",
+        "--max-restarts", "5",
+        "--",
+        "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/runtime/node.exe",
         "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/dist/src/index.js"
       ],
       "env": {
@@ -886,8 +892,8 @@ $env:C2000_MCP_CONFIG = "C:\absolute\path\to\c2000-multicore-mcp\examples\f28p65
 npm run register:dev
 ```
 
-`register:dev` is a one-time, idempotent registration. It points Codex at
-`node.exe scripts/codex-dev-launcher.mjs`; the launcher resolves the checkout
+`register:dev` is a one-time, idempotent registration. It points Codex at the
+MCP supervisor wrapping `node.exe scripts/codex-dev-launcher.mjs`; the launcher resolves the checkout
 from its own path, fingerprints the current source, sets `C2000_MCP_DEV_MODE=1`,
 and starts `src/index.ts` through the repository's `tsx`. If
 `C2000_MCP_CONFIG` is omitted, the example mock configuration is used.

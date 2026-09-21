@@ -1,4 +1,3 @@
-import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { C2000McpConfig } from "../config/config.schema.js";
 import { resolveDaemonConfig } from "../daemon/DaemonConfig.js";
@@ -43,7 +42,6 @@ export async function discoverDaemonInstance(
   const paths = daemonRuntimePaths(daemon.runtimeDir);
   const instance = await readDaemonInstance(paths);
   if (!instance) {
-    await rm(paths.instanceFile, { force: true }).catch(() => undefined);
     throw new DebugMcpError("DaemonUnavailable", "c2000-debugd instance file is missing, stale, or invalid", {
       instanceFile: paths.instanceFile
     });
@@ -57,10 +55,11 @@ export async function discoverDaemonInstance(
   }
   const authToken = await readDaemonAuthToken(instance);
   if (!authToken) {
-    await removeDaemonInstance(paths, instance.instanceId);
+    await removeInstanceIfProcessStopped(paths, instance);
     throw new DebugMcpError("DaemonUnavailable", "c2000-debugd authentication token is unavailable", {
       instanceId: instance.instanceId,
-      authTokenFile: instance.authTokenFile
+      authTokenFile: instance.authTokenFile,
+      metadataPreserved: isDaemonProcessAlive(instance.pid)
     });
   }
   const requestTimeoutMs = positiveInteger(process.env.C2000_MCP_REQUEST_TIMEOUT_MS, 600_000);
@@ -74,10 +73,11 @@ export async function discoverDaemonInstance(
     const health = asRecord(await client.request("health", {}, 5_000));
     const reportedId = asRecord(health.daemon).instanceId;
     if (reportedId !== instance.instanceId) {
-      await removeDaemonInstance(paths, instance.instanceId);
+      await removeInstanceIfProcessStopped(paths, instance);
       throw new DebugMcpError("DaemonInstanceInvalid", "c2000-debugd instance file does not match the running daemon", {
         expectedInstanceId: instance.instanceId,
-        reportedInstanceId: reportedId
+        reportedInstanceId: reportedId,
+        metadataPreserved: isDaemonProcessAlive(instance.pid)
       });
     }
     return {
@@ -89,12 +89,17 @@ export async function discoverDaemonInstance(
       })
     };
   } catch (error) {
-    await removeDaemonInstance(paths, instance.instanceId);
+    // A health timeout or transient connection refusal is not proof that the
+    // owner is dead. Keep the instance metadata while its PID is alive so
+    // concurrent frontends can wait for the same daemon instead of racing to
+    // start another one.
+    await removeInstanceIfProcessStopped(paths, instance);
     if (error instanceof DebugMcpError) throw error;
     throw new DebugMcpError("DaemonUnavailable", "c2000-debugd did not answer its health check", {
       instanceId: instance.instanceId,
       host: instance.host,
-      port: instance.port
+      port: instance.port,
+      metadataPreserved: isDaemonProcessAlive(instance.pid)
     });
   }
 }
@@ -186,4 +191,13 @@ function asRecordOrEmpty(value: unknown): Record<string, unknown> {
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = value === undefined ? NaN : Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function removeInstanceIfProcessStopped(
+  paths: ReturnType<typeof daemonRuntimePaths>,
+  instance: DebugDaemonInstance
+): Promise<void> {
+  if (!isDaemonProcessAlive(instance.pid)) {
+    await removeDaemonInstance(paths, instance.instanceId);
+  }
 }

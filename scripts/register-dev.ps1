@@ -10,6 +10,7 @@ function Write-ManagedCodexConfig {
     [Parameter(Mandatory = $true)][string]$ServerName,
     [Parameter(Mandatory = $true)][string]$NodeExecutable,
     [Parameter(Mandatory = $true)][string]$LauncherPath,
+    [Parameter(Mandatory = $true)][string]$SupervisorPath,
     [Parameter(Mandatory = $true)][string]$ConfigPath
   )
 
@@ -23,7 +24,7 @@ function Write-ManagedCodexConfig {
     "# Registered by scripts/register-dev.ps1",
     "[mcp_servers.$ServerName]",
     "command = $(ConvertTo-TomlString $NodeExecutable)",
-    "args = [$(ConvertTo-TomlString $LauncherPath)]",
+    "args = [$(ConvertTo-TomlString $SupervisorPath), $(ConvertTo-TomlString '--initial-delay-ms'), $(ConvertTo-TomlString '1000'), $(ConvertTo-TomlString '--max-delay-ms'), $(ConvertTo-TomlString '10000'), $(ConvertTo-TomlString '--max-restarts'), $(ConvertTo-TomlString '5'), $(ConvertTo-TomlString '--'), $(ConvertTo-TomlString $NodeExecutable), $(ConvertTo-TomlString $LauncherPath)]",
     "",
     "[mcp_servers.$ServerName.env]",
     "C2000_MCP_CONFIG = $(ConvertTo-TomlString $ConfigPath)",
@@ -72,6 +73,7 @@ function ConvertTo-TomlString([string]$Value) {
 
 $repositoryRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 $launcherPath = (Resolve-Path -LiteralPath (Join-Path $repositoryRoot "scripts\codex-dev-launcher.mjs")).Path
+$supervisorPath = (Resolve-Path -LiteralPath (Join-Path $repositoryRoot "scripts\mcp-supervisor.mjs")).Path
 $nodeCommand = Get-Command node.exe,node -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $nodeCommand) {
   throw "Node.js was not found. Run npm ci with a supported developer Node.js release first."
@@ -87,7 +89,9 @@ $addArguments = @(
   "mcp", "add", $serverName,
   "--env", "C2000_MCP_CONFIG=$ConfigPath",
   "--env", "C2000_MCP_DEV_MODE=1",
-  "--", $nodeExecutable, $launcherPath
+  "--", $nodeExecutable, $supervisorPath,
+  "--initial-delay-ms", "1000", "--max-delay-ms", "10000", "--max-restarts", "5", "--",
+  $nodeExecutable, $launcherPath
 )
 
 $codexCommand = Get-Command codex.exe,codex.cmd,codex -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -110,5 +114,5 @@ if ($codexCommand) {
 
 $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
 $codexConfigPath = Join-Path $codexHome "config.toml"
-Write-ManagedCodexConfig -ConfigFile $codexConfigPath -ServerName $serverName -NodeExecutable $nodeExecutable -LauncherPath $launcherPath -ConfigPath $ConfigPath
+Write-ManagedCodexConfig -ConfigFile $codexConfigPath -ServerName $serverName -NodeExecutable $nodeExecutable -LauncherPath $launcherPath -SupervisorPath $supervisorPath -ConfigPath $ConfigPath
 Write-Host "Registered $serverName in $codexConfigPath (managed config fallback)."

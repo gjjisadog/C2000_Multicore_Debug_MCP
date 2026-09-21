@@ -95,6 +95,7 @@
   "files": [
     "dist/src/**",
     "scripts/c2000-mcp-doctor.mjs",
+    "scripts/mcp-supervisor.mjs",
     "scripts/verify-offline-acceptance.mjs",
     "scripts/install-release.sh",
     "scripts/install-release.ps1",

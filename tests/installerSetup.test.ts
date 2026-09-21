@@ -84,6 +84,28 @@ describe("one-command installer", () => {
     ]);
   });
 
+  test("wraps the installed MCP entrypoint with the restart-safe stdio supervisor", () => {
+    expect(buildCodexMcpAddArgs(
+      "c2000-multicore",
+      "C:\\Program Files\\c2000\\dist\\src\\index.js",
+      "C:\\Users\\me\\c2000.json",
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Program Files\\c2000\\scripts\\mcp-supervisor.mjs"
+    )).toEqual([
+      "mcp", "add", "c2000-multicore",
+      "--env", "C2000_MCP_CONFIG=C:\\Users\\me\\c2000.json",
+      "--",
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Program Files\\c2000\\scripts\\mcp-supervisor.mjs",
+      "--initial-delay-ms", "1000",
+      "--max-delay-ms", "10000",
+      "--max-restarts", "5",
+      "--",
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Program Files\\c2000\\dist\\src\\index.js"
+    ]);
+  });
+
   test("generates an absolute durable runtime configuration", () => {
     const workspace = path.resolve("firmware");
     const runtime = path.resolve("runtime");
@@ -127,6 +149,7 @@ describe("one-command installer", () => {
       await writeFile(path.join(packageRoot, "dist", "src", "index.js"), "new-runtime");
       await writeFile(path.join(packageRoot, "dist", "src", "runtime-manifest.json"), JSON.stringify(newManifest));
       await writeFile(path.join(packageRoot, "scripts", "c2000-mcp-doctor.mjs"), "");
+      await writeFile(path.join(packageRoot, "scripts", "mcp-supervisor.mjs"), "");
       await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "c2000-multicore-mcp" }));
       await mkdir(path.join(installDirectory, "dist", "src"), { recursive: true });
       await writeFile(path.join(installDirectory, "dist", "src", "index.js"), "old-runtime");
@@ -143,6 +166,7 @@ describe("one-command installer", () => {
       expect(upgraded.installDirectory).toContain(`${installDirectory}-build`);
       expect(upgraded.sourceRevision).toBe("new-revision");
       expect(await readFile(upgraded.entrypoint, "utf8")).toBe("new-runtime");
+      expect(await readFile(upgraded.supervisorEntrypoint, "utf8")).toBe("");
       expect(await readFile(path.join(installDirectory, "dist", "src", "index.js"), "utf8")).toBe("old-runtime");
 
       const reused = await runSetup(parseSetupArgs(baseArgs), dependencies);
@@ -226,6 +250,7 @@ describe("one-command installer", () => {
       await writeFile(path.join(packageRoot, "dist", "src", "index.js"), "");
       await writeFile(path.join(packageRoot, "dist", "src", "installer", "index.js"), "");
       await writeFile(path.join(packageRoot, "scripts", "c2000-mcp-doctor.mjs"), "");
+      await writeFile(path.join(packageRoot, "scripts", "mcp-supervisor.mjs"), "");
       await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "c2000-multicore-mcp" }));
       await writeFile(path.join(packageRoot, "dist", "src", "runtime-manifest.json"), JSON.stringify({
         version: "9.9.9",
@@ -278,6 +303,8 @@ describe("one-command installer", () => {
       expect(configToml).toContain("# BEGIN c2000-multicore-mcp managed block");
       expect(configToml).toContain("[mcp_servers.c2000-multicore]");
       expect(configToml).toContain("C2000_MCP_CONFIG");
+      expect(configToml).toContain("mcp-supervisor.mjs");
+      expect(configToml).toContain("--initial-delay-ms");
       expect(configToml).not.toContain("old-node");
       expect(configToml).toContain("[mcp_servers.keep-me]");
       expect(configToml).toContain("model = \"gpt-test\"");

@@ -260,7 +260,7 @@ async function copyBundleFiles(outputDirectory, nodePath, licensePath, nodeRoot,
   await cp(path.join(projectRoot, "README.md"), path.join(mcpRoot, "README.md"));
   await cp(path.join(projectRoot, "CHANGELOG.md"), path.join(mcpRoot, "CHANGELOG.md"));
   await mkdir(path.join(mcpRoot, "scripts"), { recursive: true });
-  for (const file of ["c2000-mcp-doctor.mjs", "verify-offline-acceptance.mjs"]) {
+  for (const file of ["c2000-mcp-doctor.mjs", "mcp-supervisor.mjs", "verify-offline-acceptance.mjs"]) {
     await cp(path.join(projectRoot, "scripts", file), path.join(mcpRoot, "scripts", file));
   }
   await cp(path.join(projectRoot, "skills"), path.join(mcpRoot, "skills"), { recursive: true });

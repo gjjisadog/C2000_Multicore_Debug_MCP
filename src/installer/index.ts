@@ -16,6 +16,7 @@ async function main(): Promise<void> {
       result.sourceRevision ? `Source revision: ${result.sourceRevision}${result.sourceDirty ? " (dirty)" : ""}` : undefined,
       `Node runtime: ${result.runtimeExecutable}`,
       `MCP entrypoint: ${result.entrypoint}`,
+      `MCP supervisor: ${result.supervisorEntrypoint}`,
       `Config: ${result.configPath}`,
       `Codex registration: ${result.registration}`,
       result.codexConfigPath ? `Codex config: ${result.codexConfigPath}` : undefined,

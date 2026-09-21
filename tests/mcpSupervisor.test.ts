@@ -116,4 +116,46 @@ describe("MCP stdio supervisor", () => {
     expect((stdout.match(/"id":2/g) ?? []).length).toBe(1);
     expect(await readFile(counterPath, "utf8")).toBe("2");
   });
+
+  test("recovers when the child exits before returning the initialize response", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "c2000-mcp-supervisor-pre-handshake-"));
+    const counterPath = path.join(directory, "count.txt");
+    const childPath = path.join(directory, "child.mjs");
+    await writeFile(childPath, [
+      'import { createInterface } from "node:readline";',
+      'import { readFile, writeFile } from "node:fs/promises";',
+      `const counterPath = ${JSON.stringify(counterPath)};`,
+      'const count = Number.parseInt(await readFile(counterPath, "utf8").catch(() => "0"), 10) + 1;',
+      'await writeFile(counterPath, String(count));',
+      'const send = message => process.stdout.write(`${JSON.stringify(message)}\\n`);',
+      'if (count === 1) setTimeout(() => process.exit(1), 20);',
+      'createInterface({ input: process.stdin }).on("line", line => {',
+      '  const message = JSON.parse(line);',
+      '  if (count === 2 && message.method === "initialize") {',
+      '    send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fixture", version: "1" } } });',
+      '  } else if (count === 2 && message.method === "notifications/initialized") {',
+      '    setTimeout(() => process.exit(0), 10);',
+      '  }',
+      '});'
+    ].join("\n"));
+
+    const child = spawn(process.execPath, [
+      supervisorPath, "--initial-delay-ms", "1", "--max-delay-ms", "1", "--max-restarts", "2", "--",
+      process.execPath, childPath
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+
+    child.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n');
+    await waitFor(() => stdout.includes('"id":1'));
+    child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}\n');
+    const [code, signal] = await once(child, "close") as [number | null, NodeJS.Signals | null];
+
+    expect({ code, signal }).toEqual({ code: 0, signal: null });
+    expect(stderr).toContain("resuming handshake");
+    expect((stdout.match(/"id":1/g) ?? []).length).toBe(1);
+    expect(await readFile(counterPath, "utf8")).toBe("2");
+  });
 });
