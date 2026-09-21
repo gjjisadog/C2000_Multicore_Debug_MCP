@@ -561,7 +561,7 @@ function testConfig(adapter: "mock" | "ccs"): C2000McpConfig {
     diagnostics: {},
     logging: { level: "info" },
     filesystem: { allowedReadRoots: [], allowedWriteRoots: [] },
-    debugProbe: { queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 600000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false }
+    debugProbe: { queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 30000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false }
   };
 }
 

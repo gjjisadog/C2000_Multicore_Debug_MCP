@@ -66,10 +66,11 @@ export interface BoardRecord extends BoardRegistration {
 
 /**
  * Host-side identity evidence for the image currently believed to be on the
- * physical target.  UNKNOWN is deliberate: a new lease, worker restart, or
- * external target access invalidates the previous belief until MCP performs a
- * controlled program load or a manifest-bound resident-image verification
- * again under the current lease.
+ * physical target. UNKNOWN is deliberate only when target-side state may have
+ * changed or become ambiguous: a real worker restart, external target access,
+ * or a failed/partial target mutation. Control-plane transitions such as a
+ * new MCP lease or worker startup do not touch the target and preserve this
+ * evidence.
  */
 export interface BoardTargetIdentity {
   status: "UNKNOWN" | "KNOWN";
@@ -77,6 +78,14 @@ export interface BoardTargetIdentity {
   updatedAt: string;
   reason?: string;
   programs: Record<string, TargetProgramIdentity>;
+  /**
+   * The last host-side image evidence is retained when a target-side event
+   * invalidates the current identity. It is never treated as proof that the
+   * target is unchanged; it only lets an explicit
+   * operator-confirmed resident attach reject an obviously different .out
+   * pair without forcing a reprogram.
+   */
+  lastKnownPrograms?: Record<string, TargetProgramIdentity>;
 }
 
 export interface TargetProgramIdentity {

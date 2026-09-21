@@ -78,6 +78,7 @@ export class DebugWorkflowService {
         probeId: input.probeId,
         preferredProbeIds: input.preferredProbeIds,
         allowAutoProbeAllocation: input.allowAutoProbeAllocation,
+        probeQueueTimeoutMs: input.probeQueueTimeoutMs,
         coreMap: [
           { coreId: input.cpu1CoreId, coreName: input.cpu1CoreName, corePattern: input.cpu1CorePattern },
           { coreId: input.cpu2CoreId, coreName: input.cpu2CoreName, corePattern: input.cpu2CorePattern }
@@ -199,6 +200,186 @@ export class DebugWorkflowService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Attach to an already-running resident image without changing execution.
+   * This is deliberately separate from runIpcAcceptance: the latter owns a
+   * startup contract and is allowed to halt/reset/run, while this path is for
+   * loading Flash symbols after a power cycle and preserving the observed
+   * CPU1/CPU2 state.
+   */
+  async attachResidentIpcDebug(input: z.infer<typeof runIpcAcceptanceSchema>): Promise<ToolResult> {
+    const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    const residentVerification = input.residentImageManifests?.length
+      ? await this.verifyResidentImage(input.sessionId, input.residentImageManifests)
+      : undefined;
+    return this.attachResidentIpcDebugInternal(input, artifactPreflight, residentVerification);
+  }
+
+  /** No-session attach variant used by the resident launch shortcut. */
+  async launchResidentIpcDebugAttach(input: z.infer<typeof launchAndRunIpcAcceptanceSchema>): Promise<ToolResult> {
+    const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    const sessionName = input.sessionName ?? "launch-resident-ipc-debug";
+    const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
+    let sessionId: string | undefined;
+    const workflowStartedAt = performance.now();
+    const cleanup: ToolResult = { sessionClosed: false, probeLeaseReleased: false, cleanupErrors: [], cleanupDurationMs: 0 };
+    let cleanupAttempted = false;
+    const cleanupSession = async () => {
+      if (!sessionId || cleanupAttempted) return;
+      cleanupAttempted = true;
+      const cleanupStartedAt = performance.now();
+      try {
+        await this.manager.closeDebugSession(sessionId);
+        cleanup.sessionClosed = true;
+        cleanup.probeLeaseReleased = true;
+      } catch (cleanupError) {
+        cleanup.cleanupErrors.push(toStructuredError(cleanupError));
+      } finally {
+        cleanup.cleanupDurationMs = performance.now() - cleanupStartedAt;
+      }
+    };
+
+    try {
+      const created = await this.manager.createDebugSession({
+        sessionName,
+        ccxmlPath: input.ccxmlPath,
+        probeId: input.probeId,
+        preferredProbeIds: input.preferredProbeIds,
+        allowAutoProbeAllocation: input.allowAutoProbeAllocation,
+        probeQueueTimeoutMs: input.probeQueueTimeoutMs,
+        coreMap: [
+          { coreId: input.cpu1CoreId, coreName: input.cpu1CoreName, corePattern: input.cpu1CorePattern },
+          { coreId: input.cpu2CoreId, coreName: input.cpu2CoreName, corePattern: input.cpu2CorePattern }
+        ]
+      });
+      sessionId = created.sessionId;
+      const connected = await this.manager.connectCores(sessionId, coreIds);
+      const residentVerification = input.residentImageManifests?.length
+        ? await this.verifyResidentImage(sessionId, input.residentImageManifests)
+        : undefined;
+      const acceptance = await this.attachResidentIpcDebugInternal(
+        { ...input, sessionId } as z.infer<typeof runIpcAcceptanceSchema>,
+        artifactPreflight,
+        residentVerification
+      );
+      const result = {
+        ...acceptance,
+        workflow: "c2000_launchResidentIpcDebug",
+        autoCloseOnComplete: input.autoCloseOnComplete,
+        orchestration: "server-internal",
+        mcpToolCalls: [],
+        approvalClass: "workflow-confirmation",
+        sessionMode: input.sessionMode,
+        cleanup,
+        performance: { ...acceptance.performance, totalMs: performance.now() - workflowStartedAt },
+        launch: {
+          sessionName,
+          ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
+          coreMap: created.cores.map(core => ({
+            coreId: core.coreId,
+            coreName: core.coreName,
+            corePattern: core.corePattern
+          })),
+          connectedCoreIds: coreIds,
+          created,
+          connected
+        }
+      };
+      if (!input.autoCloseOnComplete) return result;
+      return {
+        ...result,
+        autoClose: this.manager.armIdleAutoClose(sessionId, input.autoCloseIdleTimeoutMs)
+      };
+    } catch (error) {
+      const launch: ToolResult = { sessionName, coreIds };
+      if (sessionId) {
+        launch.sessionId = sessionId;
+        const shouldCleanup = input.sessionMode === "ephemeral" || input.cleanupOnFailure;
+        if (shouldCleanup) {
+          await cleanupSession();
+          launch.cleanedUp = cleanup.sessionClosed && cleanup.probeLeaseReleased && cleanup.cleanupErrors.length === 0;
+          if (cleanup.cleanupErrors.length > 0) launch.cleanupError = cleanup.cleanupErrors[0];
+        } else {
+          launch.cleanedUp = false;
+          launch.preservedForRecovery = true;
+        }
+      }
+      const cause = toStructuredError(error);
+      throw new DebugMcpError("PostLaunchCheckFailed", "Resident attach workflow failed", {
+        launch,
+        cause,
+        cleanup,
+        optimization: classifyDebugFailure(cause)
+      });
+    } finally {
+      if (sessionId && input.sessionMode === "ephemeral") await cleanupSession();
+    }
+  }
+
+  private async attachResidentIpcDebugInternal(
+    input: z.infer<typeof runIpcAcceptanceSchema>,
+    artifactPreflight: ToolResult,
+    residentVerification?: ToolResult
+  ): Promise<ToolResult> {
+    const workflowStartedAt = performance.now();
+    const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
+    const performedSteps = ["artifactPreflight"];
+    const symbolLoadResults: ToolResult[] = [];
+    const cpu1Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu1CoreId, input.cpu1OutPath, input.cpu1MapPath);
+    symbolLoadResults.push({ ...cpu1Symbols, success: true, loaded: false, skipped: false, targetMemoryWritten: false, targetFlashVerified: false });
+    performedSteps.push("loadCpu1Symbols");
+    const cpu2Symbols = await this.manager.loadSymbols(input.sessionId, input.cpu2CoreId, input.cpu2OutPath, input.cpu2MapPath);
+    symbolLoadResults.push({ ...cpu2Symbols, success: true, loaded: false, skipped: false, targetMemoryWritten: false, targetFlashVerified: false });
+    performedSteps.push("loadCpu2Symbols");
+
+    const snapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
+    performedSteps.push("readMulticoreSnapshot");
+    const observations: ToolResult = {};
+    if (input.ipcReadyExpressions?.length) {
+      observations.ipcReady = {
+        conditions: await evaluateResidentConditions(this.manager, input.sessionId, input.ipcReadyExpressions)
+      };
+      performedSteps.push("readIpcReadyExpressions");
+    }
+    if (input.preStartupSafetyGuard?.conditions.length) {
+      observations.safetyGuard = {
+        mode: "read-only-no-halt",
+        conditions: await evaluateResidentConditions(this.manager, input.sessionId, input.preStartupSafetyGuard.conditions)
+      };
+      performedSteps.push("readSafetyGuardExpressions");
+    }
+
+    const result: ToolResult = {
+      success: true,
+      sessionId: input.sessionId,
+      mode: "attach-only",
+      workflow: "c2000_runResidentIpcDebug",
+      programPreparation: "symbols-only",
+      artifactPreflight,
+      residentVerification,
+      load: {
+        sessionId: input.sessionId,
+        mode: "symbols-only",
+        results: symbolLoadResults,
+        targetMemoryWritten: false,
+        targetFlashVerified: false,
+        note: "Symbols were loaded without reset, halt, run, or target-memory writes."
+      },
+      snapshot,
+      ...(Object.keys(observations).length > 0 ? { observations } : {}),
+      performedSteps,
+      targetMemoryWritten: false,
+      targetFlashVerified: residentVerification?.verified === true,
+      flashProgramming: false,
+      performance: { totalMs: performance.now() - workflowStartedAt }
+    };
+    if (input.collectDebugBundle) {
+      const outputDir = await this.resolveBundleOutputDir(input.outputDir, "resident-attach");
+      result.debugBundle = await this.writeDebugBundle(outputDir, result);
+    }
+    return result;
   }
 
   private async runIpcAcceptanceCore(input: z.infer<typeof runIpcAcceptanceSchema>, setStage: (stage: string) => void): Promise<ToolResult> {
@@ -2524,6 +2705,18 @@ function groupConditionsByCore(conditions: ExpressionCondition[]) {
     conditions: coreConditions,
     expressions: [...new Set(coreConditions.map(condition => condition.expression))]
   }));
+}
+
+async function evaluateResidentConditions(
+  manager: DebugSessionManager,
+  sessionId: string,
+  conditions: ExpressionCondition[]
+): Promise<ToolResult[]> {
+  return Promise.all(groupConditionsByCore(conditions).map(async group => ({
+    coreId: group.coreId,
+    conditions: group.conditions,
+    results: await manager.evaluateMany(sessionId, group.coreId, group.expressions)
+  })));
 }
 
 function adaptiveInterval(elapsedMs: number, schedule?: Array<{ untilMs?: number; intervalMs: number }>) {

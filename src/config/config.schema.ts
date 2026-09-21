@@ -78,7 +78,7 @@ export const c2000McpConfigSchema = z.object({
   improvement: improvementConfigSchema.optional(),
   debugProbe: z.object({
     queueDir: z.string().min(1).default("runtime/debug-probe-queue"),
-    queueTimeoutMs: z.number().int().positive().default(600000),
+    queueTimeoutMs: z.number().int().positive().default(30000),
     /** Host-side preflight/recovery envelope included in the outer worker timeout. */
     startupPreparationMs: z.number().int().positive().default(90000),
     recoveryPolicy: z.enum(["block", "owned-and-stale", "terminate-external"]).default("owned-and-stale"),
@@ -93,7 +93,7 @@ export const c2000McpConfigSchema = z.object({
     if (value.multiBoardEnabled && (value.probes?.filter(probe => probe.enabled).length ?? 0) < 2) {
       context.addIssue({ code: z.ZodIssueCode.custom, message: "multiBoardEnabled requires at least two enabled probes", path: ["probes"] });
     }
-  }).default({ queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 600000, startupPreparationMs: 90000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false }),
+  }).default({ queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 30000, startupPreparationMs: 90000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false }),
   /** Optional in the output type so existing programmatic configs remain valid. loadConfig supplies safe defaults. */
   daemon: z.object({
     enabled: z.boolean().default(true),

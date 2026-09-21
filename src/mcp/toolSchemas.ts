@@ -823,7 +823,9 @@ const runIpcAcceptanceObjectSchema = z.object({
   pollingSchedule: z.array(pollingScheduleItemSchema).min(1).optional(),
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(false),
-  outputDir: z.string().min(1).optional()
+  outputDir: z.string().min(1).optional(),
+  probeQueueTimeoutMs: z.number().int().positive().max(600_000).optional()
+    .describe("Bound only the host-side wait for a shared XDS2xx/XDS110 probe; a timed-out request removes its queue ticket and will not execute later.")
 });
 
 export const runIpcAcceptanceSchema = runIpcAcceptanceObjectSchema;
@@ -850,7 +852,11 @@ export const runResidentIpcDebugSchema = z.object({
   bootModeExpression: z.string().min(1).optional(),
   cpu1ResetStateExpression: z.string().min(1).optional(),
   bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(64).optional(),
+  mode: z.enum(["attach-only", "restart-and-diagnose"]).default("attach-only")
+    .describe("attach-only preserves the running target and only connects/loads symbols/reads evidence; restart-and-diagnose retains the legacy bounded CPU1/CPU2 handoff workflow."),
   runMode: workflowRunModeSchema.default("cpu1_boots_cpu2"),
+  residentIdentityPolicy: z.enum(["require-known", "operator-confirmed"]).default("operator-confirmed")
+    .describe("Use the known target identity when available. The default operator-confirmed mode is a one-call acknowledgement that resident Flash was not changed outside MCP; it does not claim read-back proof."),
   settleMs: z.number().int().nonnegative().default(0),
   preStartupSafetyGuard: z.object({
     conditions: z.array(expressionConditionSchema).min(1).max(128),
@@ -867,7 +873,7 @@ export const runResidentIpcDebugSchema = z.object({
   verifyRuntimeRamOwnership: z.boolean().default(false),
   collectDebugBundle: z.boolean().default(false),
   outputDir: z.string().min(1).optional()
-}).describe("One-call resident-Flash IPC debug: load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory.");
+}).describe("One-call resident-Flash IPC debug: verify the requested image pair against MCP evidence, load symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory. A fresh MCP lease uses operator-confirmed resident identity by default; a manifest is still required for read-back proof.");
 
 /**
  * No-session variant of the resident debug shortcut. The daemon selects the
@@ -878,18 +884,22 @@ export const launchResidentIpcDebugSchema = runResidentIpcDebugSchema.omit({ ses
   cpu1OutPath: z.string().min(1),
   cpu2OutPath: z.string().min(1),
   boardId: z.string().min(1).optional(),
-  residentIdentityPolicy: z.enum(["require-known", "operator-confirmed"]).default("require-known")
-    .describe("Require daemon-verified resident image identity by default. Use operator-confirmed only when the operator explicitly confirms that the programmed Flash image has not changed outside MCP; this still performs symbols-only, no-write debugging."),
+  residentIdentityPolicy: z.enum(["require-known", "operator-confirmed"]).default("operator-confirmed")
+    .describe("Use daemon-verified identity when available. The default operator-confirmed mode is a one-call acknowledgement that the programmed Flash image has not changed outside MCP; it still performs symbols-only, no-write debugging and reports that the identity is unverified unless a manifest is supplied."),
   sessionMode: z.enum(["ephemeral", "interactive"]).default("interactive"),
+  replaceExistingResidentSession: z.boolean().default(true)
+    .describe("Before a new resident launch, normally close an older MCP-created resident session through its existing lease so the probe is released. Set false only when the old session must be preserved."),
   cleanupOnFailure: z.boolean().default(false)
     .describe("Keep the interactive session after a failed diagnosis so CPU1/CPU2 state can be inspected; ephemeral sessions are always cleaned up."),
   sessionName: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
   autoCloseOnComplete: z.boolean().default(false),
   autoCloseIdleTimeoutMs: z.number().int().positive().default(60_000),
+  probeQueueTimeoutMs: z.number().int().positive().max(600_000).default(15_000)
+    .describe("Resident launches fail fast after this many milliseconds if the probe is still occupied; the queued request is cancelled."),
   cpu1CoreId: z.number().int().default(0),
   cpu2CoreId: z.number().int().default(2)
-}).describe("One-call resident-Flash IPC debug: select a registered board, create and connect CPU1/CPU2, load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory.");
+}).describe("One-call resident-Flash IPC debug: select a registered board, create and connect CPU1/CPU2, load matching symbols only, run the selected CPU2 handoff, and capture bounded diagnosis without programming Flash or writing target memory. A fresh MCP lease uses operator-confirmed resident identity by default; a manifest is still required for read-back proof.");
 
 export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit({ sessionId: true, preStartupSafetyGuard: true }).extend({
   boardId: z.string().min(1).optional(),

@@ -79,20 +79,24 @@ export class BoardRepository {
   }
 
   /**
-   * A new lease or worker generation invalidates resident-image evidence. It
-   * is safer to require a fresh controlled load than to assume that an
-   * external debugger did not program the target while the board was idle.
+   * Invalidate resident-image evidence after a target-side uncertainty event.
+   * Control-plane changes (new leases and worker startup) deliberately do not
+   * call this method because they do not touch the physical target.
    */
   markTargetUnknown(boardId: string, reason: string): BoardRecord {
     const current = this.require(boardId);
     const now = new Date().toISOString();
     const generation = current.targetIdentity.generation + 1;
+    const lastKnownPrograms = Object.keys(current.targetIdentity.programs).length > 0
+      ? current.targetIdentity.programs
+      : current.targetIdentity.lastKnownPrograms;
     const identity: BoardTargetIdentity = {
       status: "UNKNOWN",
       generation,
       updatedAt: now,
       reason,
-      programs: {}
+      programs: {},
+      ...(lastKnownPrograms && Object.keys(lastKnownPrograms).length > 0 ? { lastKnownPrograms } : {})
     };
     this.store.run(
       "UPDATE boards SET target_generation = ?, target_identity_json = ?, updated_at = ? WHERE board_id = ?",
@@ -120,7 +124,8 @@ export class BoardRepository {
       generation,
       updatedAt: now,
       reason,
-      programs: nextPrograms
+      programs: nextPrograms,
+      lastKnownPrograms: nextPrograms
     };
     this.store.run(
       "UPDATE boards SET target_generation = ?, target_identity_json = ?, updated_at = ? WHERE board_id = ?",
@@ -162,7 +167,10 @@ function parseTargetIdentity(value: string | null, generation: number): BoardRec
           generation: parsed.generation,
           updatedAt: parsed.updatedAt,
           ...(typeof parsed.reason === "string" ? { reason: parsed.reason } : {}),
-          programs: parsed.programs as BoardRecord["targetIdentity"]["programs"]
+          programs: parsed.programs as BoardRecord["targetIdentity"]["programs"],
+          ...(parsed.lastKnownPrograms && typeof parsed.lastKnownPrograms === "object" && !Array.isArray(parsed.lastKnownPrograms)
+            ? { lastKnownPrograms: parsed.lastKnownPrograms as BoardRecord["targetIdentity"]["programs"] }
+            : {})
         };
       }
     } catch {

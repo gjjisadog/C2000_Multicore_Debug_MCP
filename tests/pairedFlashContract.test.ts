@@ -327,7 +327,7 @@ describe("F28P65x paired Flash programming contract", () => {
         targetMemoryWritten: false,
         targetFlashVerified: false,
         flashProgramming: false,
-        residentIdentityPolicy: "require-known"
+        residentIdentityPolicy: "operator-confirmed"
       },
       launch: {
         connectedCoreIds: [0, 2]

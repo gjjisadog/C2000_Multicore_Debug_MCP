@@ -163,7 +163,9 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       const boardId = this.selectBoard(record(input).boardId);
       const supplied = readLease(input);
       const timeoutMs = this.workers.commandTimeoutMs(toolName, input);
-      const interactive = supplied ? undefined : await this.acquireInteractiveLease(boardId, leaseTtlMs(timeoutMs));
+      const interactive = supplied
+        ? undefined
+        : await this.acquireInteractiveLease(boardId, leaseTtlMs(timeoutMs), toolName, input);
       try {
         await this.assertResidentImageIdentity(boardId, toolName, input);
         let result: Record<string, unknown>;
@@ -214,7 +216,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           if (interactive) this.releaseLease(interactive);
           return result;
         }
-        const sessionPersisted = this.persistCreatedSession(boardId, input, result);
+        const sessionPersisted = this.persistCreatedSession(boardId, input, result, toolName);
         if (interactive && sessionPersisted && typeof result.sessionId === "string") {
           this.interactiveLeases.set(result.sessionId, interactive);
         } else if (interactive) {
@@ -229,14 +231,102 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     return this.local.invokeTool(toolName, input);
   }
 
-  private async acquireInteractiveLease(boardId: string, ttlMs = 60000): Promise<LeasedBoard> {
+  private async acquireInteractiveLease(
+    boardId: string,
+    ttlMs = 60000,
+    replacingToolName?: string,
+    replacingInput?: unknown
+  ): Promise<LeasedBoard> {
     const worker = await this.workers.ensureWorker(boardId);
+    if (replacingToolName === "c2000_launchResidentIpcDebug" &&
+        record(replacingInput).replaceExistingResidentSession !== false) {
+      await this.closeReplaceableResidentSessions(boardId, worker.workerInstanceId, ttlMs);
+    }
     return this.registry.leases.acquire({
       boardId,
       ownerJobId: `interactive-${randomId()}`,
       workerInstanceId: worker.workerInstanceId,
       ttlMs
     });
+  }
+
+  /**
+   * A resident attach is interactive, so its old session can outlive the MCP
+   * frontend that created it. Close only MCP-owned resident sessions through
+   * their existing fenced lease before taking a new board lease. This keeps
+   * probe cleanup on the normal close path and avoids queueing behind a stale
+   * resident ticket.
+   */
+  private async closeReplaceableResidentSessions(boardId: string, workerInstanceId: string, timeoutMs: number): Promise<void> {
+    const candidates = this.sessions.listByBoard(boardId)
+      .filter(session => session.status === "OPEN" && isReplaceableResidentSession(session.sessionName));
+    for (const session of candidates) {
+      const interactive = this.interactiveLeases.get(session.sessionId);
+      const activeLease = this.registry.leases.active(boardId);
+      const canNormalClose = Boolean(
+        interactive
+        && interactive.context.workerInstanceId === workerInstanceId
+        && activeLease?.leaseId === interactive.context.leaseId
+      );
+      let result: Record<string, unknown>;
+      if (canNormalClose) {
+        const closeInput = { sessionId: session.sessionId, __leaseContext: interactive!.context };
+        result = await this.workers.invokeBoard(boardId, "c2000_closeDebugSession", closeInput, timeoutMs);
+      } else {
+        if (activeLease) {
+          throw new DebugMcpError("BoardLeased", "A previous resident session cannot be recovered while another live board lease is active", {
+            boardId,
+            sessionId: session.sessionId,
+            sessionName: session.sessionName,
+            leaseId: activeLease.leaseId,
+            ownerJobId: activeLease.ownerJobId,
+            targetAccessAttempted: false,
+            nextAction: "Release the live board lease through its owning MCP session; no new probe request was queued."
+          });
+        }
+        if (session.workerInstanceId !== workerInstanceId) {
+          throw new DebugMcpError("ProbeRecoveryBlocked", "The resident session belongs to a different or stale worker generation; refusing to guess which process owns the probe", {
+            boardId,
+            sessionId: session.sessionId,
+            sessionName: session.sessionName,
+            expectedWorkerInstanceId: workerInstanceId,
+            persistedWorkerInstanceId: session.workerInstanceId,
+            targetAccessAttempted: false,
+            nextAction: "Use the MCP session that created the resident session, or restart the daemon after confirming no external CCS/DSS owner remains."
+          });
+        }
+        try {
+          result = await this.workers.closeStaleResidentSession(
+            boardId,
+            session.sessionId,
+            workerInstanceId,
+            Math.min(timeoutMs, 15_000)
+          );
+        } catch (error) {
+          throw new DebugMcpError("ProbeRecoveryBlocked", "The expired resident lease was not recoverable within the bounded cleanup window; the new request was not queued", {
+            boardId,
+            sessionId: session.sessionId,
+            sessionName: session.sessionName,
+            targetAccessAttempted: false,
+            nextAction: "Retry the resident launch after the old worker finishes cleanup, or inspect the worker/CCS owner; no lock was force-deleted.",
+            cause: toStructuredError(error)
+          });
+        }
+      }
+      if (!isConfirmedSessionClose(result, session.sessionId)) {
+        const details = record(record(result.error).details);
+        throw new DebugMcpError("WorkflowCleanupFailed", "The previous resident session did not confirm adapter and probe cleanup; the new request was not started", {
+          boardId,
+          sessionId: session.sessionId,
+          sessionName: session.sessionName,
+          closeResult: result,
+          cleanup: record(details.cleanup),
+          nextAction: "Retry c2000_closeDebugSession so the same owned probe lease can be released normally."
+        });
+      }
+      this.sessions.close(session.sessionId);
+      this.releaseInteractiveLease(session.sessionId);
+    }
   }
 
   private withLeaseInput(input: unknown, interactive?: LeasedBoard): unknown {
@@ -272,16 +362,21 @@ export class DaemonToolRouter implements C2000ToolInvoker {
   private persistCreatedSession(
     boardId: string,
     input: unknown,
-    result: Record<string, unknown>
+    result: Record<string, unknown>,
+    toolName?: string
   ): boolean {
     if (typeof result.sessionId !== "string") return false;
     const values = record(input);
     if (values.sessionMode === "ephemeral") return false;
+    const requestedSessionName = typeof values.sessionName === "string" ? values.sessionName : "c2000-debug-session";
+    const sessionName = toolName === "c2000_launchResidentIpcDebug" && !isReplaceableResidentSession(requestedSessionName)
+      ? `launch-resident-ipc-debug:${requestedSessionName}`
+      : requestedSessionName;
     this.sessions.upsert({
       sessionId: result.sessionId,
       boardId,
       ...(typeof result.workerInstanceId === "string" ? { workerInstanceId: result.workerInstanceId } : {}),
-      sessionName: typeof values.sessionName === "string" ? values.sessionName : "c2000-debug-session",
+      sessionName,
       ...(typeof result.adapterSessionId === "string" ? { adapterSessionId: result.adapterSessionId } : {}),
       ...(typeof values.ccxmlPath === "string" ? { ccxmlPath: values.ccxmlPath } : {}),
       coreMap: Array.isArray(values.coreMap) ? values.coreMap : Array.isArray(values.cores) ? values.cores : [],
@@ -413,13 +508,16 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       .map(item => item.coreId)
       .filter(coreId => !existingIdentity.programs[String(coreId)]);
     const manifestVerificationRequested = hasResidentManifestVerification(toolName, input);
-    const operatorConfirmed = toolName === "c2000_launchResidentIpcDebug"
-      && values.residentIdentityPolicy === "operator-confirmed";
+    const operatorConfirmed = (toolName === "c2000_launchResidentIpcDebug" || toolName === "c2000_runResidentIpcDebug")
+      && values.residentIdentityPolicy !== "require-known";
     if ((existingIdentity.status !== "KNOWN" || missingCoreIds.length > 0) &&
         !operatorConfirmed && !manifestVerificationRequested) {
       this.registry.requireKnownTargetIdentity(boardId, requirements.map(item => item.coreId));
     }
     if (existingIdentity.status !== "KNOWN" || missingCoreIds.length > 0) {
+      if (operatorConfirmed) {
+        await this.assertLastKnownResidentArtifacts(boardId, requirements, existingIdentity);
+      }
       // The resident workflow will establish identity through its read-only
       // manifest marker before symbols are loaded. Do not force a separate
       // verifyResidentImage round trip when that evidence was supplied.
@@ -447,6 +545,43 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       } catch (error) {
         if (error instanceof DebugMcpError) throw error;
         throw new DebugMcpError("TargetImageMismatch", "The requested resident-image artifact could not be hashed for identity verification", {
+          boardId,
+          coreId: requirement.coreId,
+          programUri: requestedProgramUri,
+          targetGeneration: identity.generation,
+          cause: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  }
+
+  private async assertLastKnownResidentArtifacts(
+    boardId: string,
+    requirements: ImageRequirement[],
+    identity: ReturnType<BoardRegistry["targetIdentity"]>
+  ): Promise<void> {
+    const lastKnown = identity.lastKnownPrograms ?? {};
+    for (const requirement of requirements) {
+      const expected = lastKnown[String(requirement.coreId)];
+      const requestedProgramUri = requirement.programUri ?? expected?.programUri;
+      if (!expected || !requestedProgramUri) continue;
+      try {
+        const normalizedRequestedUri = normalizeProgramUri(requestedProgramUri, this.workspacePath);
+        const metadata = await fileMetadata(normalizedRequestedUri);
+        if (metadata.sha256 !== expected.sha256) {
+          throw new DebugMcpError("TargetImageMismatch", "Requested symbols do not match the last image recorded for this board; operator confirmation cannot override an artifact mismatch", {
+            boardId,
+            coreId: requirement.coreId,
+            targetGeneration: identity.generation,
+            expectedSha256: expected.sha256,
+            requestedSha256: metadata.sha256,
+            requestedProgramUri: normalizedRequestedUri,
+            nextAction: "Use the exact CPU1/CPU2 image pair that was programmed, or intentionally program and record the new pair through MCP."
+          });
+        }
+      } catch (error) {
+        if (error instanceof DebugMcpError) throw error;
+        throw new DebugMcpError("TargetImageMismatch", "The requested resident-image artifact could not be checked against the last MCP image evidence", {
           boardId,
           coreId: requirement.coreId,
           programUri: requestedProgramUri,
@@ -729,6 +864,13 @@ function leaseTtlMs(commandTimeoutMs: number): number {
 
 function isConfirmedSessionClose(result: Record<string, unknown>, expectedSessionId: string): boolean {
   return result.success === true && result.closed === true && result.sessionId === expectedSessionId;
+}
+
+function isReplaceableResidentSession(sessionName: string): boolean {
+  const normalized = sessionName.trim().toLowerCase();
+  return normalized.startsWith("launch-resident-ipc-debug")
+    || normalized.startsWith("resident-attach")
+    || normalized.startsWith("c2000-resident-attach");
 }
 
 function logicalCleanupEvidence(result: Record<string, unknown>, expectedSessionId: string): {
