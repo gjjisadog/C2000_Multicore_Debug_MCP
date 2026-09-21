@@ -8,7 +8,7 @@ import { BoardRegistry } from "./BoardRegistry.js";
 import type { BoardWorkerClient, BoardWorkerFactory } from "./BoardWorkerClient.js";
 import { BoardWorkerProcess } from "./BoardWorkerProcess.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
-import type { BoardLeaseContext } from "./types.js";
+import type { BoardLeaseContext, BoardLeaseReconciliationResult } from "./types.js";
 import { INTERNAL_CLOSE_STALE_RESIDENT_SESSION } from "../worker/internalTools.js";
 
 interface ManagedWorker {
@@ -38,6 +38,7 @@ export class BoardWorkerSupervisor {
       workers: WorkerRepository;
       events: EventRepository;
       factory?: BoardWorkerFactory;
+      reconcileWorkerLease?: (boardId: string, workerInstanceId: string) => BoardLeaseReconciliationResult;
     }
   ) {
     this.factory = options.factory ?? ((launch, config) => new BoardWorkerProcess(launch, config));
@@ -120,9 +121,23 @@ export class BoardWorkerSupervisor {
         startedAt: client.processStartTime,
         ownedDssProcesses: []
       });
+      const leaseReconciliation = this.options.reconcileWorkerLease?.(boardId, client.workerInstanceId);
       this.options.registry.setWorker(boardId, client.workerInstanceId);
       this.options.registry.transition(boardId, "READY");
-      this.options.events.append({ level: "info", sourceType: "worker", sourceId: client.workerInstanceId, boardId, workerInstanceId: client.workerInstanceId, workerGeneration, eventType: "WORKER_STARTED", payload: { pid: client.pid, probeSerial: board.probeSerial } });
+      this.options.events.append({
+        level: "info",
+        sourceType: "worker",
+        sourceId: client.workerInstanceId,
+        boardId,
+        workerInstanceId: client.workerInstanceId,
+        workerGeneration,
+        eventType: "WORKER_STARTED",
+        payload: {
+          pid: client.pid,
+          probeSerial: board.probeSerial,
+          ...(leaseReconciliation ? { leaseReconciliation } : {})
+        }
+      });
       return client;
     } catch (error) {
       this.workers.delete(boardId);

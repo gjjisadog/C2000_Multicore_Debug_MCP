@@ -121,6 +121,44 @@ describe("board worker supervisor", () => {
     }
   });
 
+  test("reconciles a persisted lease before publishing a replacement worker route", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-stale-lease-reconcile-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "test.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: "a.ccxml", tags: [] });
+    registry.setWorker("board-a", "worker-old");
+    const oldLease = registry.leases.acquire({ boardId: "board-a", ownerJobId: "job-old", workerInstanceId: "worker-old", ttlMs: 60_000 });
+    const supervisor = new BoardWorkerSupervisor({
+      config: configFor(directory),
+      daemonInstanceId: "daemon-test",
+      registry,
+      workers: new WorkerRepository(store),
+      events,
+      reconcileWorkerLease: (boardId, workerInstanceId) => registry.reconcileWorkerChange(boardId, workerInstanceId),
+      factory: options => new FakeWorker(options, false)
+    });
+
+    try {
+      const worker = await supervisor.startBoard("board-a");
+      expect(worker.workerInstanceId).not.toBe("worker-old");
+      expect(registry.get("board-a").currentWorkerInstanceId).toBe(worker.workerInstanceId);
+      expect(registry.leases.active("board-a")).toBeUndefined();
+      expect(registry.get("board-a").currentLeaseId).toBeUndefined();
+      expect(() => registry.leases.validate(oldLease.context)).toThrowError(expect.objectContaining({ code: "LeaseInvalidated" }));
+      expect(events.list({ boardId: "board-a" })).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "BOARD_LEASE_RECONCILED",
+          payload: expect.objectContaining({ action: "RECLAIMED_STALE", status: "INVALIDATED" })
+        })
+      ]));
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("command timeout restarts only the affected board worker", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-supervisor-"));
     directories.push(directory);
