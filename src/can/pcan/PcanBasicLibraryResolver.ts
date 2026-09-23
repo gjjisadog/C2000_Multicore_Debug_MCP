@@ -1,24 +1,101 @@
-import { access } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import path from "node:path";
 import { DebugMcpError } from "../../utils/errors.js";
 
-export async function resolvePcanBasicLibrary(explicitPath?: string): Promise<string> {
-  if (process.platform !== "win32") {
-    throw new DebugMcpError("PcanPlatformUnsupported", "PCAN-Basic is supported only on Windows", { platform: process.platform, arch: process.arch });
+export interface PcanLibraryResolverOptions {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  env?: NodeJS.ProcessEnv;
+  searchDirectories?: string[];
+}
+
+export function isSupportedPcanBasicPlatform(platform: NodeJS.Platform, arch: string): boolean {
+  return (platform === "win32" && arch === "x64")
+    || (platform === "darwin" && (arch === "x64" || arch === "arm64"));
+}
+
+export async function resolvePcanBasicLibrary(
+  explicitPath?: string,
+  options: PcanLibraryResolverOptions = {}
+): Promise<string> {
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
+  const env = options.env ?? process.env;
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+
+  if (!isSupportedPcanBasicPlatform(platform, arch)) {
+    throw new DebugMcpError("PcanPlatformUnsupported", "PCAN-Basic is supported on Windows x64 and macOS x64/ARM64", { platform, arch });
   }
-  if (process.arch !== "x64") {
-    throw new DebugMcpError("PcanPlatformUnsupported", "This PCAN-Basic backend requires Windows x64", { platform: process.platform, arch: process.arch });
+
+  const pathEntries = (env.PATH ?? "").split(platform === "win32" ? ";" : ":").filter(Boolean);
+  const explicitCandidates = [explicitPath, env.C2000_PCAN_BASIC_LIBRARY].filter((value): value is string => Boolean(value));
+  const directories = [...new Set([
+    ...(options.searchDirectories ?? []),
+    ...pathEntries,
+    ...(platform === "darwin" ? [
+      "/opt/homebrew/lib",
+      "/usr/local/lib",
+      env.HOME ? pathApi.join(env.HOME, "lib") : undefined
+    ].filter((value): value is string => Boolean(value)) : [])
+  ])];
+
+  const candidates = platform === "win32"
+    ? [
+      ...explicitCandidates,
+      "C:\\Windows\\System32\\PCANBasic.dll",
+      env.ProgramFiles ? pathApi.join(env.ProgramFiles, "PEAK-System", "PCAN-Basic API", "x64", "PCANBasic.dll") : undefined,
+      ...directories.map(directory => pathApi.join(directory, "PCANBasic.dll"))
+    ].filter((value): value is string => Boolean(value))
+    : [
+      ...explicitCandidates,
+      ...await macLibraryCandidates(directories)
+    ];
+
+  const normalizedCandidates = [...new Set(candidates.map(value => pathApi.resolve(value)))];
+  for (const candidate of normalizedCandidates) {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      // Keep searching and include every attempted path in the final error.
+    }
   }
-  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  const candidates = [
-    explicitPath,
-    process.env.C2000_PCAN_BASIC_LIBRARY,
-    "C:\\Windows\\System32\\PCANBasic.dll",
-    process.env.ProgramFiles ? path.join(process.env.ProgramFiles, "PEAK-System", "PCAN-Basic API", "x64", "PCANBasic.dll") : undefined,
-    ...pathEntries.map(entry => path.join(entry, "PCANBasic.dll"))
-  ].filter((value): value is string => Boolean(value));
-  for (const candidate of [...new Set(candidates.map(value => path.resolve(value)))]) {
-    try { await access(candidate); return candidate; } catch {}
+
+  if (platform === "darwin") {
+    throw new DebugMcpError(
+      "PcanLibraryNotFound",
+      "MacCAN libPCBUSB was not found; install MacCAN PCBUSB v0.13 or newer for a supported PCAN-USB device, or set C2000_PCAN_BASIC_LIBRARY",
+      { attempts: normalizedCandidates, platform, arch }
+    );
   }
-  throw new DebugMcpError("PcanLibraryNotFound", "PCANBasic.dll was not found; install the official PEAK PCAN-Basic package", { attempts: candidates });
+  throw new DebugMcpError("PcanLibraryNotFound", "PCANBasic.dll was not found; install the official PEAK PCAN-Basic package", { attempts: normalizedCandidates, platform, arch });
+}
+
+async function macLibraryCandidates(directories: string[]): Promise<string[]> {
+  const candidates: string[] = [];
+  for (const directory of directories) {
+    try {
+      const names = await readdir(directory);
+      const matches = names.filter(name => /^libPCBUSB(?:\.[0-9]+(?:\.[0-9]+)*)?\.dylib$/i.test(name));
+      matches.sort((a, b) => compareLibraryVersion(b, a));
+      candidates.push(...matches.map(name => path.posix.join(directory, name)));
+    } catch {
+      // Missing/unreadable search directories are expected on many installations.
+    }
+  }
+  return candidates;
+}
+
+function compareLibraryVersion(left: string, right: string): number {
+  const leftVersion = left.match(/^libPCBUSB(?:\.([0-9]+(?:\.[0-9]+)*))?\.dylib$/i)?.[1];
+  const rightVersion = right.match(/^libPCBUSB(?:\.([0-9]+(?:\.[0-9]+)*))?\.dylib$/i)?.[1];
+  if (!leftVersion) return rightVersion ? -1 : 0;
+  if (!rightVersion) return 1;
+  const leftParts = leftVersion.split(".").map(Number);
+  const rightParts = rightVersion.split(".").map(Number);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference) return difference;
+  }
+  return 0;
 }

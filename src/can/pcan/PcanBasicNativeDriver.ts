@@ -75,7 +75,7 @@ export class PcanBasicNativeDriver implements PcanBasicDriver {
       const dynamicImport = Function("specifier", "return import(specifier)") as (specifier: string) => Promise<any>;
       koffi = await dynamicImport("koffi");
     } catch (error) {
-      throw new DebugMcpError("PcanLibraryNotFound", "PCANBasic.dll exists but optional native binding 'koffi' is unavailable", { libraryPath: this.libraryPath, cause: error instanceof Error ? error.message : String(error) });
+      throw new DebugMcpError("PcanLibraryNotFound", "PCAN native library was found but optional native binding 'koffi' is unavailable", { libraryPath: this.libraryPath, cause: error instanceof Error ? error.message : String(error) });
     }
     const library = koffi.load(this.libraryPath);
     this.messageType = koffi.struct("TPCANMsg", {
@@ -89,15 +89,16 @@ export class PcanBasicNativeDriver implements PcanBasicDriver {
       millis_overflow: "uint16",
       micros: "uint16"
     });
+    const callingConvention = process.platform === "win32" ? "__stdcall " : "";
     this.api = {
-      initialize: library.func("uint32 __stdcall CAN_Initialize(uint16, uint16, uint32, uint32, uint16)"),
-      uninitialize: library.func("uint32 __stdcall CAN_Uninitialize(uint16)"),
-      reset: library.func("uint32 __stdcall CAN_Reset(uint16)"),
-      status: library.func("uint32 __stdcall CAN_GetStatus(uint16)"),
-      write: library.func("uint32 __stdcall CAN_Write(uint16, const TPCANMsg *)"),
-      read: library.func("uint32 __stdcall CAN_Read(uint16, _Out_ TPCANMsg *, _Out_ TPCANTimestamp *)"),
-      errorText: library.func("uint32 __stdcall CAN_GetErrorText(uint32, uint16, _Out_ char *)"),
-      getValue: library.func("uint32 __stdcall CAN_GetValue(uint16, uint8, _Out_ void *, uint32)")
+      initialize: library.func(`uint32 ${callingConvention}CAN_Initialize(uint16, uint16, uint32, uint32, uint16)`),
+      uninitialize: library.func(`uint32 ${callingConvention}CAN_Uninitialize(uint16)`),
+      reset: library.func(`uint32 ${callingConvention}CAN_Reset(uint16)`),
+      status: library.func(`uint32 ${callingConvention}CAN_GetStatus(uint16)`),
+      write: library.func(`uint32 ${callingConvention}CAN_Write(uint16, TPCANMsg *)`),
+      read: library.func(`uint32 ${callingConvention}CAN_Read(uint16, TPCANMsg *, TPCANTimestamp *)`),
+      errorText: library.func(`uint32 ${callingConvention}CAN_GetErrorText(uint32, uint16, char *)`),
+      getValue: library.func(`uint32 ${callingConvention}CAN_GetValue(uint16, uint8, void *, uint32)`)
     };
   }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, test } from "vitest";
-import { dssCommandScriptSource, dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "../src/adapters/CcsScriptingBridge.js";
+import { dssCommandScriptSource, dssLaunchArguments, requiresRosettaForDss, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "../src/adapters/CcsScriptingBridge.js";
 import { persistentServerScriptSource } from "../src/adapters/PersistentDssBridge.js";
 
 const execFileAsync = promisify(execFile);
@@ -45,6 +45,14 @@ describe("DSS generated scripts", () => {
 
     expect(launch.command).toBe("arch");
     expect(launch.args).toEqual(["-x86_64", dssScriptPath]);
+  });
+
+  test("uses Rosetta only when Apple Silicon cannot run the installed DSS architecture natively", () => {
+    expect(requiresRosettaForDss("arm64", ["x86_64"])).toBe(true);
+    expect(requiresRosettaForDss("arm64", ["arm64"])).toBe(false);
+    expect(requiresRosettaForDss("arm64", ["x86_64", "arm64"])).toBe(false);
+    expect(requiresRosettaForDss("arm64")).toBe(true);
+    expect(requiresRosettaForDss("x64", ["x86_64"])).toBe(false);
   });
 
   test("starts a Windows batch launcher with spaced script and config paths", async () => {

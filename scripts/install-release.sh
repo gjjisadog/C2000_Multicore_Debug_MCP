@@ -2,13 +2,7 @@
 set -euo pipefail
 
 repository="gjjisadog/C2000_Multicore_Debug_MCP"
-tag="${C2000_MCP_VERSION:-v0.7.0}"
-
-case "$(uname -m)" in
-  arm64) target="darwin-arm64" ;;
-  x86_64) target="darwin-x64" ;;
-  *) echo "Unsupported macOS architecture: $(uname -m)" >&2; exit 1 ;;
-esac
+tag="${C2000_MCP_VERSION:-}"
 
 command -v gh >/dev/null 2>&1 || {
   echo "GitHub CLI ('gh') was not found. Install it and authenticate before installing this private release." >&2
@@ -16,6 +10,16 @@ command -v gh >/dev/null 2>&1 || {
 }
 if ! gh auth status --hostname github.com; then
   echo "GitHub CLI authentication is invalid. Run 'gh auth login --hostname github.com' and retry." >&2
+  exit 1
+fi
+if [[ -z "$tag" ]]; then
+  if ! tag="$(gh release view --repo "$repository" --json tagName --jq .tagName)"; then
+    echo "Could not resolve the latest C2000 MCP release tag." >&2
+    exit 1
+  fi
+fi
+if [[ -z "$tag" ]]; then
+  echo "Could not resolve the latest C2000 MCP release tag." >&2
   exit 1
 fi
 is_supported_node() {
@@ -58,6 +62,13 @@ if [[ -z "$node_executable" ]]; then
   echo "Install an LTS release (for example 'brew install node@22') and rerun this command." >&2
   exit 1
 fi
+
+node_arch="$("$node_executable" -p "process.arch")"
+case "$node_arch" in
+  arm64) target="darwin-arm64" ;;
+  x64) target="darwin-x64" ;;
+  *) echo "Unsupported Node.js architecture for macOS: $node_arch" >&2; exit 1 ;;
+esac
 
 node_directory="$(dirname "$node_executable")"
 npm_executable="$(PATH="$node_directory:$PATH" command -v npm || true)"

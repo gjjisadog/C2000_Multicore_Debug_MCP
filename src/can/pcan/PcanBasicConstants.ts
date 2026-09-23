@@ -1,5 +1,8 @@
 export const PCAN_CHANNELS: Record<string, number> = Object.fromEntries(
-  Array.from({ length: 16 }, (_, index) => [`PCAN_USBBUS${index + 1}`, 0x51 + index])
+  Array.from({ length: 16 }, (_, index) => {
+    const channel = index + 1;
+    return [`PCAN_USBBUS${channel}`, channel <= 8 ? 0x50 + channel : 0x500 + channel];
+  })
 );
 export const PCAN_BITRATES: Record<number, number> = {
   125000: 0x031c,

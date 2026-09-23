@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repository = "gjjisadog/C2000_Multicore_Debug_MCP"
-$tag = if ($env:C2000_MCP_VERSION) { $env:C2000_MCP_VERSION } else { "v0.7.0" }
+$tag = $env:C2000_MCP_VERSION
 $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 if ($architecture -ne "x64") { throw "Windows online installation supports x64; detected $architecture." }
 
@@ -16,6 +16,12 @@ if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
 & gh auth status --hostname github.com
 if ($LASTEXITCODE -ne 0) {
   throw "GitHub CLI authentication is invalid. Run 'gh auth login --hostname github.com' and retry."
+}
+if ([string]::IsNullOrWhiteSpace($tag)) {
+  $latestTag = & gh release view --repo $repository --json tagName --jq .tagName
+  if ($LASTEXITCODE -ne 0) { throw "Could not resolve the latest C2000 MCP release tag." }
+  $tag = ($latestTag -join "").Trim()
+  if ([string]::IsNullOrWhiteSpace($tag)) { throw "Could not resolve the latest C2000 MCP release tag." }
 }
 
 $version = $tag -replace '^v', ''

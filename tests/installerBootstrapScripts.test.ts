@@ -42,6 +42,8 @@ describe("installer bootstrap scripts", () => {
   test("Windows release bootstrap fails fast and verifies the private release asset", async () => {
     const source = await readFile("scripts/install-release.ps1", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");
+    expect(source).toContain("gh release view --repo $repository --json tagName --jq .tagName");
+    expect(source).toContain("$env:C2000_MCP_VERSION");
     expect(source).toContain("offline-win32-x64.zip");
     expect(source).toContain("install.ps1");
     expect(source).not.toContain("Get-Command node");
@@ -101,11 +103,23 @@ describe("installer bootstrap scripts", () => {
   test("macOS release bootstrap performs the same auth, version, checksum, and cleanup gates", async () => {
     const source = await readFile("scripts/install-release.sh", "utf8");
     expect(source).toContain("gh auth status --hostname github.com");
+    expect(source).toContain("gh release view --repo \"$repository\" --json tagName --jq .tagName");
+    expect(source).toContain("C2000_MCP_VERSION");
+    expect(source).toContain(String.raw`node_arch="$("$node_executable" -p "process.arch")"`);
+    expect(source).not.toContain("uname -m");
+    expect(source).not.toContain("v0.7.0");
     expect(source).toContain("major === 22 && minor >= 12");
     expect(source).toContain("major === 24");
     expect(source).toContain("SHA256SUMS-${target}.json");
     expect(source).toContain("createHash(\"sha256\")");
     expect(source).toContain("trap 'rm -rf \"$download_directory\"' EXIT");
+  });
+
+  test("README online bootstrap commands use the latest release instead of a pinned old version", async () => {
+    const source = await readFile("README.md", "utf8");
+    expect(source).toContain("gh release download -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O -");
+    expect(source).toContain("gh release download -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O -");
+    expect(source).not.toContain("gh release download v0.7.0");
   });
 
   test("release automation publishes one fixed-runtime Windows offline bundle", async () => {

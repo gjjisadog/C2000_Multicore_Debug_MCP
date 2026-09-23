@@ -3,6 +3,7 @@ import { DebugMcpError } from "../../utils/errors.js";
 import type { CanAdapterInfo, CanAdapterSession, CanAdapterState, CanAdapterStatistics, CanBusAdapter, CanCapture, CanCaptureFilter, CanFrame } from "../CanBusAdapter.js";
 import type { PcanBasicDriver } from "./PcanBasicDriver.js";
 import { PCAN_BITRATES, PCAN_CHANNELS } from "./PcanBasicConstants.js";
+import { isSupportedPcanBasicPlatform } from "./PcanBasicLibraryResolver.js";
 import type { PcanBasicConfiguration } from "./PcanBasicTypes.js";
 import { PcanBasicNativeDriver } from "./PcanBasicNativeDriver.js";
 
@@ -31,10 +32,12 @@ export class PcanBasicCanBusAdapter implements CanBusAdapter {
   }
 
   info(): CanAdapterInfo {
+    const platformSupported = isSupportedPcanBasicPlatform(process.platform, process.arch);
+    const macChannelUnsupported = process.platform === "darwin" && this.channel > PCAN_CHANNELS.PCAN_USBBUS8;
     return {
       name: this.name,
       independentBusVerification: true,
-      availability: process.platform === "win32" ? "available" : "unavailable",
+      availability: platformSupported && !macChannelUnsupported ? "available" : "unavailable",
       transport: "hardware",
       channel: this.config.channel,
       bitrate: this.config.bitrate,
@@ -42,9 +45,13 @@ export class PcanBasicCanBusAdapter implements CanBusAdapter {
       ...this.versionInfo,
       platform: process.platform,
       architecture: process.arch,
-      reason: process.platform === "win32"
-        ? `${this.config.channel} at ${this.config.bitrate} bit/s; ${this.driver.libraryPath ?? this.config.libraryPath ?? "library pending resolution"}`
-        : `PCAN-Basic is unsupported on ${process.platform}/${process.arch}`
+      reason: platformSupported && !macChannelUnsupported
+        ? process.platform === "darwin"
+          ? `${this.config.channel} at ${this.config.bitrate} bit/s; requires third-party MacCAN libPCBUSB v0.13+ and a supported PCAN-USB device (channels 1–8); ${this.driver.libraryPath ?? this.config.libraryPath ?? "library pending resolution"}`
+          : `${this.config.channel} at ${this.config.bitrate} bit/s; ${this.driver.libraryPath ?? this.config.libraryPath ?? "library pending resolution"}`
+        : macChannelUnsupported
+          ? `${this.config.channel} is outside the MacCAN PCAN-USB channel range (1–8)`
+          : `PCAN-Basic is unsupported on ${process.platform}/${process.arch}`
     };
   }
 
@@ -57,8 +64,12 @@ export class PcanBasicCanBusAdapter implements CanBusAdapter {
   state(): CanAdapterState { return { opened: this.opened, captureActive: this.opened && !this.cancelled, offlineBoardIds: [], captureCount: this.history.length }; }
 
   async open(input: { jobId: string; boardIds: string[]; faults: unknown[] }): Promise<void> {
-    if (process.platform !== "win32" && !(this.driver.libraryPath?.startsWith("fake:"))) {
-      throw new DebugMcpError("PcanPlatformUnsupported", "PCAN-Basic is supported only on Windows", { platform: process.platform, arch: process.arch });
+    const fakeDriver = this.driver.libraryPath?.startsWith("fake:") === true;
+    if (!fakeDriver && !isSupportedPcanBasicPlatform(process.platform, process.arch)) {
+      throw new DebugMcpError("PcanPlatformUnsupported", "PCAN-Basic is supported on Windows x64 and macOS x64/ARM64", { platform: process.platform, arch: process.arch });
+    }
+    if (!fakeDriver && process.platform === "darwin" && this.channel > PCAN_CHANNELS.PCAN_USBBUS8) {
+      throw new DebugMcpError("PcanPlatformUnsupported", "MacCAN libPCBUSB supports PCAN-USB channels 1–8 only", { channel: this.config.channel, platform: process.platform, arch: process.arch });
     }
     if (input.faults.length) throw new DebugMcpError("CanTestHookUnsupported", "Physical PCAN mode does not simulate bus faults");
     try {

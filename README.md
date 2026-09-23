@@ -255,12 +255,17 @@ invalidated, identity-mismatched, or stale-generation commands. Repeated
 renewal failure records events, invalidates the lease, and stops further target
 commands.
 
-PCAN-Basic support is Windows x64 only and dynamically uses the official
-`PCANBasic.dll` through the optional Koffi binding. PEAK binaries are not
-redistributed, and hardware mode never falls back to Mock CAN. Install the
-official PEAK package; set `C2000_PCAN_BASIC_LIBRARY` only if discovery fails.
-The first backend supports Classical CAN with 11/29-bit IDs, DLC 0–8, and
-125/250/500 kbit/s or 1 Mbit/s. Hardware preflight is explicitly opt-in:
+PCAN hardware uses the optional Koffi native binding. Windows x64 dynamically
+loads the official PEAK `PCANBasic.dll`; install the official PEAK PCAN-Basic
+package. macOS x64 and Apple Silicon can use the third-party
+[MacCAN PCBUSB](https://mac-can.github.io/drivers/libPCBUSB.html) library
+(version 0.13 or newer) with supported PCAN-USB/USB FD devices, for channels
+1–8. PEAK does not provide an official macOS PCAN-Basic library, and MacCAN is
+not compatible with every PEAK adapter. Neither vendor's binaries are
+redistributed; set `C2000_PCAN_BASIC_LIBRARY` when automatic discovery fails.
+Hardware mode never falls back to Mock CAN. The backend supports Classical CAN
+with 11/29-bit IDs, DLC 0–8, and 125/250/500 kbit/s or 1 Mbit/s. Hardware
+preflight is explicitly opt-in:
 
 ```powershell
 $env:C2000_PCAN_HARDWARE_TEST = "1"
@@ -388,19 +393,23 @@ download the offline ZIP. It then invokes the same bundle installer, so online
 and USB/internal-network installation share one installation path:
 
 ```powershell
-gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - |
+gh release download -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.ps1 -O - |
   powershell -NoProfile -ExecutionPolicy Bypass -Command -
 ```
 
 macOS continues to use the existing authenticated release bootstrap:
 
 ```bash
-gh release download v0.7.0 -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
+gh release download -R gjjisadog/C2000_Multicore_Debug_MCP -p install-release.sh -O - | bash
 ```
 
 The macOS bootstrap accepts Node.js 20.19+, 22.12+, or 24.x and can reuse a
 compatible Homebrew `node@20`, `node@22`, or `node@24` installation when the
-system-default Node.js release is unsupported.
+system-default Node.js release is unsupported. It selects the native package
+architecture from the selected Node.js executable, so an x64 Node running under
+Rosetta receives the x64 package and an ARM64 Node receives the ARM64 package.
+Both online bootstrap scripts use the latest GitHub release by default; set
+`C2000_MCP_VERSION` to pin the package version.
 
 The release tag and assets must exist before these download commands can be
 used. Windows end users do not need the GitHub CLI when they already have the

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Cross-platform PCAN hardware support
+
+- Keep official PEAK PCAN-Basic support on Windows x64 and add macOS x64/ARM64
+  support through the separately installed MacCAN libPCBUSB runtime for
+  supported PCAN-USB devices on channels 1–8.
+- Use the platform's native C calling convention when binding the PCAN API.
+
+### macOS and Windows release bootstraps
+
+- Resolve the latest release tag by default in both online installers while
+  preserving `C2000_MCP_VERSION` overrides; choose the macOS native package
+  from the selected Node.js architecture.
+- Select Rosetta for Apple Silicon only when the installed CCS DSS runtime is
+  x86_64 or its architecture cannot be detected; run ARM64 and universal DSS
+  runtimes natively.
+
 ### Firmware-instrumented CLA task timing
 
 - Add `c2000_readClaTaskTiming` for sequence-consistent reads of CLA timing

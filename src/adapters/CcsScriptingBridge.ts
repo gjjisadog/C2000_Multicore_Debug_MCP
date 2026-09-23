@@ -1,7 +1,8 @@
+import { existsSync } from "node:fs";
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { execFile, type ExecFileOptions } from "node:child_process";
+import { execFile, spawnSync, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import { resolveCcsInstallPath } from "../ccs/paths.js";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
@@ -197,6 +198,14 @@ export function resolveDssLaunch(
     env.CCS_WORKSPACE = workspacePath;
   }
 
+  const dssArchitectures = platform === "darwin"
+    && resolvedArchitecture === "arm64"
+    && process.platform === "darwin"
+    ? discoverMacDssArchitectures(ccsRoot, env.JAVA_HOME)
+    : undefined;
+  const useRosetta = platform === "darwin"
+    && requiresRosettaForDss(resolvedArchitecture, dssArchitectures);
+
   const launch: DssLaunch = platform === "win32"
     ? {
         // Node cannot execute .bat files directly without shell:true.  Invoke a
@@ -208,13 +217,53 @@ export function resolveDssLaunch(
         windowsBatch: true,
         windowsBatchScript: assertSafeWindowsCmdPath(dssScriptPath)
       }
-    : platform === "darwin" && resolvedArchitecture === "arm64"
+    : useRosetta
       ? { command: "arch", args: ["-x86_64", dssScriptPath], env }
       : { command: dssScriptPath, args: [], env };
   if (workspacePath && workspacePath.length > 0) {
     launch.cwd = workspacePath;
   }
   return launch;
+}
+
+/**
+ * Keep Apple Silicon on the native path when CCS ships an ARM64 or universal
+ * DSS runtime. Unknown runtimes retain the historical Rosetta default.
+ */
+export function requiresRosettaForDss(
+  hostArchitecture: string,
+  dssArchitectures?: readonly string[]
+): boolean {
+  if (hostArchitecture !== "arm64") return false;
+  if (!dssArchitectures?.length) return true;
+  return !dssArchitectures.includes("arm64");
+}
+
+function discoverMacDssArchitectures(ccsRoot: string, javaHome?: string): string[] | undefined {
+  // dss.sh prefers these CCS-bundled JRE locations in this order. The Java
+  // executable determines the architecture of the DSS runtime process.
+  const dssLauncher = path.join(ccsRoot, "eclipse", "ccstudio");
+  const javaHomes = [
+    path.join(ccsRoot, "ccs_base", "jre"),
+    path.join(ccsRoot, "ccs_base", "eclipse", "jre"),
+    path.join(ccsRoot, "eclipse", "jre"),
+    path.join(ccsRoot, "eclipse", "Ccstudio.app", "jre", "Contents", "Home"),
+    javaHome
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  const javaExecutable = javaHomes
+    .map(candidate => path.join(candidate, "bin", "java"))
+    .find(candidate => existsSync(candidate));
+
+  for (const executable of [javaExecutable, dssLauncher]) {
+    if (!executable || !existsSync(executable)) continue;
+    const result = spawnSync("/usr/bin/lipo", ["-archs", executable], { encoding: "utf8" });
+    if (result.error || result.status !== 0) continue;
+    const architectures = (result.stdout ?? "").trim().split(/\s+/).filter(Boolean);
+    if (architectures.some(architecture => architecture === "arm64" || architecture === "x86_64")) {
+      return architectures;
+    }
+  }
+  return undefined;
 }
 
 /**
