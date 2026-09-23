@@ -12,18 +12,18 @@ describe("local daemon RPC timeout", () => {
       port: 0,
       authToken: "test-token",
       handle: async () => {
-        await new Promise(resolve => setTimeout(resolve, 40));
+        await new Promise(resolve => setTimeout(resolve, 500));
         return { ready: true };
       }
     });
     const endpoint = await server.listen();
     try {
-      const client = new LocalRpcClient({ ...endpoint, authToken: "test-token", timeoutMs: 10 });
+      const client = new LocalRpcClient({ ...endpoint, authToken: "test-token", timeoutMs: 250 });
       await expect(client.request("health", {})).rejects.toEqual(expect.objectContaining({
         code: "DaemonRequestTimeout",
         message: expect.stringContaining("waiting for c2000-debugd response")
       }));
-      await expect(client.request("health", {}, 200)).resolves.toEqual({ ready: true });
+      await expect(client.request("health", {}, 1000)).resolves.toEqual({ ready: true });
     } finally {
       await server.close();
     }

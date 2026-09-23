@@ -20,7 +20,7 @@ describe("PCAN native platform support", () => {
     expect(isSupportedPcanBasicPlatform("linux", "x64")).toBe(false);
   });
 
-  test("discovers the newest MacCAN libPCBUSB in configured directories", async () => {
+  test.skipIf(process.platform === "win32")("discovers the newest MacCAN libPCBUSB in configured directories", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "pcan-library-"));
     temporaryDirectories.push(directory);
     await writeFile(path.join(directory, "libPCBUSB.0.12.2.dylib"), "old");

@@ -11,7 +11,7 @@ describe("filesystem path policy", () => {
     const file = path.join(root, "image.out");
     await writeFile(file, "image");
     await expect(assertAllowedReadPath(file, { allowedReadRoots: [root], allowedWriteRoots: [root] })).resolves.toBe(await realpath(file));
-    await expect(assertAllowedWritePath(path.join(root, "bundle", "summary.md"), { allowedReadRoots: [root], allowedWriteRoots: [root] })).resolves.toContain(root);
+    await expect(assertAllowedWritePath(path.join(root, "bundle", "summary.md"), { allowedReadRoots: [root], allowedWriteRoots: [root] })).resolves.toContain(await realpath(root));
     await expect(assertAllowedReadPath(path.join(root, "..", path.basename(outside), "secret.out"), { allowedReadRoots: [root], allowedWriteRoots: [root] })).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
   });
 

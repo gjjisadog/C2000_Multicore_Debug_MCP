@@ -234,7 +234,7 @@ describe("one-command installer", () => {
       }));
       await writeFile(path.join(dependencyRoot, "index.js"), "module.exports = {};\n");
 
-      expect(resolveInstalledPackageRoot(packageRoot, "test-hoisted-dependency"))
+      expect(await realpath(resolveInstalledPackageRoot(packageRoot, "test-hoisted-dependency")))
         .toBe(await realpath(dependencyRoot));
     } finally {
       await rm(temporary, { recursive: true, force: true });
