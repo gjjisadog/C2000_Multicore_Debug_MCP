@@ -14,7 +14,8 @@ Independent MCP server for explicit TI C2000 multicore debug control. The first 
 | Python pytest HIL SDK | Mock verified | Fake daemon contract tests; hardware is explicit opt-in |
 | Deterministic metrics/baselines | Mock verified | Raw-linked metric and compatibility/threshold tests |
 | DLOG arm/trigger writes | Unsupported | No write capability is exposed |
-| CLA timing, cross-core ERAD synchronization | Planned | No completion claim |
+| Firmware-instrumented CLA task timing | Implemented but not hardware verified | Read-only record reader and mock response; firmware must publish the documented sequence-protected timing record |
+| Cross-core ERAD synchronization | Planned | No completion claim |
 
 Automated Mock results are never classified as real XDS110, PCAN, DLOG, ERAD,
 or target-timing evidence.

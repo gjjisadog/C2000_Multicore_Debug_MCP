@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { buildServerHealth, isBundledRuntime, runtimeBuildInfo } from "../src/runtimeInfo.js";
+import { buildServerHealth, isBundledRuntime, runtimeBuildInfo, SERVER_VERSION } from "../src/runtimeInfo.js";
 import { loadConfig } from "../src/config/config.loader.js";
 
 describe("server runtime health", () => {
@@ -16,7 +16,7 @@ describe("server runtime health", () => {
 
     expect(health).toEqual(expect.objectContaining({
       status: "ready",
-      server: { name: "c2000-multicore-mcp", version: "0.7.1" },
+      server: { name: "c2000-multicore-mcp", version: SERVER_VERSION },
       tools: expect.objectContaining({ registeredCount: 1, registeredNames: ["c2000_getServerHealth"] })
     }));
     expect(health.runtime.bundled).toBe(isBundledRuntime());

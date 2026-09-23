@@ -250,6 +250,98 @@ export class BoardWorkerRuntime {
         endAddressHex: toHex(addresses[1]!)
       };
     }
+    if (parsed.operation === "cla-timing-read") {
+      if (!parsed.recordSymbol || parsed.taskNumber === undefined || parsed.snapshotAttempts === undefined) {
+        throw new DebugMcpError("ClaTimingRequestInvalid", "CLA timing reads require recordSymbol, taskNumber, and snapshotAttempts");
+      }
+      if (this.effectiveAdapterType === "mock") {
+        return {
+          success: true,
+          ...identity,
+          snapshot: {
+            sequence: 2,
+            taskNumber: parsed.taskNumber,
+            count: 100,
+            lastCycles: 420,
+            totalCyclesLow: 42_000,
+            totalCyclesHigh: 0,
+            minCycles: 398,
+            maxCycles: 451,
+            overflowCount: 0
+          },
+          snapshotAttemptsUsed: 1
+        };
+      }
+      if (!/F28P65/i.test(parsed.device)) {
+        throw new DebugMcpError("ClaTimingDeviceUnsupported", "Firmware-instrumented CLA timing currently supports F28P65x only", {
+          device: parsed.device,
+          supportedDevices: ["F28P65x"]
+        });
+      }
+
+      const fields = [
+        "sequence",
+        "taskNumber",
+        "count",
+        "lastCycles",
+        "totalCyclesLow",
+        "totalCyclesHigh",
+        "minCycles",
+        "maxCycles",
+        "overflowCount"
+      ] as const;
+      const addressResults = await this.runtime.manager.evaluateManyWithTimeout(
+        parsed.sessionId,
+        parsed.coreId,
+        fields.map(field => `&(${parsed.recordSymbol}.${field})`),
+        5000
+      );
+      const addresses = new Map<string, number>();
+      for (const [index, field] of fields.entries()) {
+        const result = addressResults[index];
+        if (!result || result.success !== true || result.value === undefined) {
+          throw new DebugMcpError("ClaTimingRecordSymbolNotFound", "CLA timing record field could not be resolved", {
+            recordSymbol: parsed.recordSymbol,
+            field,
+            result
+          });
+        }
+        addresses.set(field, parseEradAddress(result.value));
+      }
+      const readField = async (field: typeof fields[number]): Promise<number> => {
+        const address = addresses.get(field);
+        if (address === undefined) throw new DebugMcpError("ClaTimingRecordSymbolNotFound", "CLA timing field address is unavailable", { field });
+        const value = await this.runtime!.manager.readMemory(parsed.sessionId, parsed.coreId, "DATA", address, 32);
+        if (!Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff) {
+          throw new DebugMcpError("ClaTimingRecordInvalid", "CLA timing record contains a non-uint32 field", { field, value });
+        }
+        return value;
+      };
+
+      for (let attempt = 1; attempt <= parsed.snapshotAttempts; attempt += 1) {
+        const sequenceBefore = await readField("sequence");
+        if ((sequenceBefore & 1) !== 0) continue;
+        const snapshot = {
+          sequence: sequenceBefore,
+          taskNumber: await readField("taskNumber"),
+          count: await readField("count"),
+          lastCycles: await readField("lastCycles"),
+          totalCyclesLow: await readField("totalCyclesLow"),
+          totalCyclesHigh: await readField("totalCyclesHigh"),
+          minCycles: await readField("minCycles"),
+          maxCycles: await readField("maxCycles"),
+          overflowCount: await readField("overflowCount")
+        };
+        const sequenceAfter = await readField("sequence");
+        if (sequenceBefore === sequenceAfter && (sequenceAfter & 1) === 0) {
+          return { success: true, ...identity, snapshot, snapshotAttemptsUsed: attempt };
+        }
+      }
+      throw new DebugMcpError("ClaTimingSnapshotUnstable", "CLA timing record changed during every bounded snapshot attempt", {
+        recordSymbol: parsed.recordSymbol,
+        snapshotAttempts: parsed.snapshotAttempts
+      });
+    }
     if (!parsed.resources && parsed.operation !== "configure") {
       throw new DebugMcpError("EradResourcesRequired", `ERAD ${parsed.operation} requires frozen resources`);
     }

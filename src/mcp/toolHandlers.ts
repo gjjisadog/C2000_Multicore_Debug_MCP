@@ -35,6 +35,7 @@ import {
   configureEradProfileSchema,
   exportEradProfileSchema,
   getEradCapabilitiesSchema,
+  readClaTaskTimingSchema,
   readEradProfileSchema,
   startEradProfileSchema,
   stopEradProfileSchema
@@ -765,6 +766,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async readDlogBuffer(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
     async exportDlog(input: z.input<typeof dlogBufferRequestSchema>) { try { dlogBufferRequestSchema.parse(input); return ok(await unavailableDlog()); } catch (error) { return fail(error); } },
     async getEradCapabilities(input: z.input<typeof getEradCapabilitiesSchema>) { try { getEradCapabilitiesSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
+    async readClaTaskTiming(input: z.input<typeof readClaTaskTimingSchema>) { try { readClaTaskTimingSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
     async configureEradProfile(input: z.input<typeof configureEradProfileSchema>) { try { configureEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
     async startEradProfile(input: z.input<typeof startEradProfileSchema>) { try { startEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },
     async stopEradProfile(input: z.input<typeof stopEradProfileSchema>) { try { stopEradProfileSchema.parse(input); return ok(await unavailableErad()); } catch (error) { return fail(error); } },

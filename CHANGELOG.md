@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Firmware-instrumented CLA task timing
+
+- Add `c2000_readClaTaskTiming` for sequence-consistent reads of CLA timing
+  records, including exact accumulated cycles, seconds, sample statistics, and
+  completeness metadata; document the shared-memory firmware contract.
+
 ### MCP transport startup resilience
 
 - Add a supervised MCP stdio entrypoint that retries child startup failures,

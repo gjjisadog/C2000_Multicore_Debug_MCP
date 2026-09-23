@@ -135,6 +135,7 @@ describe("C2000 task-aware capability exposure", () => {
       ],
       "observability.erad": [
         "c2000_getEradCapabilities",
+        "c2000_readClaTaskTiming",
         "c2000_configureEradProfile",
         "c2000_startEradProfile",
         "c2000_stopEradProfile",
@@ -368,6 +369,7 @@ describe("C2000 task-aware capability exposure", () => {
       }));
       const names = listedNames(await listTools(safe.server));
       expect(names).toContain("c2000_getEradCapabilities");
+      expect(names).toContain("c2000_readClaTaskTiming");
       expect(names).toContain("c2000_readEradProfile");
       expect(names).not.toContain("c2000_configureEradProfile");
       expect(names).not.toContain("c2000_injectFaults");

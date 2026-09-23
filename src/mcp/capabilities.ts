@@ -50,7 +50,7 @@ export const CAPABILITY_DESCRIPTORS: readonly CapabilityDescriptor[] = [
   },
   {
     name: "observability.erad",
-    description: "Configure and run F28P65x ERAD profiling using fenced hardware resources. It may modify ERAD registers.",
+    description: "Run F28P65x ERAD profiling and read firmware-instrumented CLA task timing records. CLA timing uses a shared firmware record and timer metadata rather than native ERAD CLA PC comparators; ERAD profile configuration may modify ERAD registers.",
     risk: "target-mutation"
   },
   {

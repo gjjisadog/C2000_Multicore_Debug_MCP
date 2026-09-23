@@ -112,9 +112,10 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       }
     }
     if (this.erad) {
-      if (["c2000_getEradCapabilities", "c2000_configureEradProfile", "c2000_startEradProfile", "c2000_stopEradProfile", "c2000_readEradProfile", "c2000_exportEradProfile"].includes(toolName)) {
+      if (["c2000_getEradCapabilities", "c2000_readClaTaskTiming", "c2000_configureEradProfile", "c2000_startEradProfile", "c2000_stopEradProfile", "c2000_readEradProfile", "c2000_exportEradProfile"].includes(toolName)) {
         this.assertObserverTargetIdentity(toolName, input);
         if (toolName === "c2000_getEradCapabilities") return this.erad.capabilities(input);
+        if (toolName === "c2000_readClaTaskTiming") return this.erad.readClaTaskTiming(input);
         if (toolName === "c2000_configureEradProfile") return this.erad.configure(input);
         if (toolName === "c2000_startEradProfile") return this.erad.start(input);
         if (toolName === "c2000_stopEradProfile") return this.erad.stop(input);
@@ -778,6 +779,7 @@ function observerCoreIds(toolName: string, input: Record<string, unknown>): numb
     "c2000_readDlogBuffer",
     "c2000_exportDlog",
     "c2000_getEradCapabilities",
+    "c2000_readClaTaskTiming",
     "c2000_configureEradProfile",
     "c2000_startEradProfile",
     "c2000_stopEradProfile",

@@ -53,6 +53,16 @@ export const stopEradProfileSchema = eradProfileIdentitySchema.extend({
 export const readEradProfileSchema = eradProfileIdentitySchema;
 export const exportEradProfileSchema = eradProfileIdentitySchema;
 
+export const readClaTaskTimingSchema = eradIdentitySchema.extend({
+  taskNumber: z.number().int().min(1).max(8),
+  recordSymbol: z.string().min(1).max(512)
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/),
+  timerSource: z.string().trim().min(1).max(128).default("EPWM1.TBCTR"),
+  timerHz: z.number().int().positive().max(1_000_000_000),
+  timerPeriodCycles: z.number().int().min(2).max(4_294_967_296).default(65_536),
+  snapshotAttempts: z.number().int().min(1).max(10).default(5)
+});
+
 export const eradCapabilitiesSchema = z.object({
   schemaVersion: z.literal(ERAD_SCHEMA_VERSION),
   supported: z.boolean(),
@@ -120,8 +130,44 @@ export const eradProfileResultSchema = z.object({
   evidenceClassification: z.enum(["MOCK", "HARDWARE_TARGET"])
 });
 
+export const claTaskTimingResultSchema = z.object({
+  schemaVersion: z.literal(ERAD_SCHEMA_VERSION),
+  measurementKind: z.literal("cla-task"),
+  measurementSource: z.enum(["firmware-instrumented-timer", "mock-simulation"]),
+  semantics: z.literal("task-entry-to-task-exit"),
+  triggerLatencyIncluded: z.literal(false),
+  profileName: z.string().min(1),
+  recordSymbol: z.string().min(1),
+  taskNumber: z.number().int().min(1).max(8),
+  sequence: z.number().int().min(0).max(4_294_967_295),
+  timerSource: z.string().min(1),
+  timerHz: z.number().int().positive(),
+  timerPeriodCycles: z.number().int().min(2).max(4_294_967_296),
+  count: z.number().int().nonnegative(),
+  lastCycles: z.number().int().nonnegative().nullable(),
+  totalCycles: z.string().regex(/^\d+$/),
+  minCycles: z.number().int().nonnegative().nullable(),
+  maxCycles: z.number().int().nonnegative().nullable(),
+  meanCycles: z.number().nonnegative().nullable(),
+  lastSeconds: z.number().nonnegative().nullable(),
+  totalSeconds: z.number().nonnegative(),
+  minSeconds: z.number().nonnegative().nullable(),
+  maxSeconds: z.number().nonnegative().nullable(),
+  meanSeconds: z.number().nonnegative().nullable(),
+  overflowCount: z.number().int().nonnegative(),
+  completeness: z.enum(["COMPLETE", "INCOMPLETE"]),
+  incompleteReason: z.string().nullable(),
+  capturedAt: z.string().datetime(),
+  firmwareHashes: z.object({
+    outSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+    mapSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+    source: z.enum(["session-snapshot", "unavailable"])
+  }),
+  evidenceClassification: z.enum(["MOCK", "HARDWARE_TARGET"])
+});
+
 export const internalEradCommandSchema = z.object({
-  operation: z.enum(["capabilities", "resolve", "configure", "start", "stop-read-restore", "restore"]),
+  operation: z.enum(["capabilities", "resolve", "configure", "start", "stop-read-restore", "restore", "cla-timing-read"]),
   sessionId: z.string().min(1),
   coreId: z.number().int().nonnegative(),
   device: z.string().min(1),
@@ -130,6 +176,10 @@ export const internalEradCommandSchema = z.object({
   endSymbol: z.string().optional(),
   startAddress: z.number().int().nonnegative().optional(),
   endAddress: z.number().int().nonnegative().optional(),
+  recordSymbol: z.string().min(1).max(512)
+    .regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/).optional(),
+  taskNumber: z.number().int().min(1).max(8).optional(),
+  snapshotAttempts: z.number().int().min(1).max(10).optional(),
   resources: eradResourceSelectionSchema.optional(),
   allowOverwrite: z.boolean().optional(),
   savedConfiguration: z.record(z.unknown()).optional()
@@ -139,3 +189,5 @@ export type EradConfigureRequest = z.infer<typeof configureEradProfileSchema>;
 export type EradResourceSelection = z.infer<typeof eradResourceSelectionSchema>;
 export type EradCapabilities = z.infer<typeof eradCapabilitiesSchema>;
 export type EradProfileResult = z.infer<typeof eradProfileResultSchema>;
+export type ClaTaskTimingRequest = z.infer<typeof readClaTaskTimingSchema>;
+export type ClaTaskTimingResult = z.infer<typeof claTaskTimingResultSchema>;

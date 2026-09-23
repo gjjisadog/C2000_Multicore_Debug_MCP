@@ -37,9 +37,10 @@ afterEach(async () => {
 });
 
 describe("F28P65x ERAD profiling", () => {
-  it("exposes six explicit-core tools and classifies configuration as target mutation", () => {
+  it("exposes seven explicit-core tools and classifies read and configuration effects", () => {
     const names = [
       "c2000_getEradCapabilities",
+      "c2000_readClaTaskTiming",
       "c2000_configureEradProfile",
       "c2000_startEradProfile",
       "c2000_stopEradProfile",
@@ -55,6 +56,66 @@ describe("F28P65x ERAD profiling", () => {
     )).toBe(true);
     expect(definitions.find(item => item.name === "c2000_configureEradProfile")?.effects)
       .toContain("target-memory-write");
+    expect(definitions.find(item => item.name === "c2000_readClaTaskTiming")?.effects)
+      .toContain("target-read");
+  });
+
+  it("reports sequence-consistent CLA timing totals exactly and marks ambiguous data incomplete", async () => {
+    const fixture = await createFixture({ claTiming: {
+      sequence: 4,
+      taskNumber: 1,
+      count: 2,
+      lastCycles: 2_147_483_680,
+      totalCyclesLow: 32,
+      totalCyclesHigh: 1,
+      minCycles: 2_147_483_648,
+      maxCycles: 2_147_483_680,
+      overflowCount: 0
+    } });
+    const request = {
+      boardId: "board-a",
+      sessionId: "session-a",
+      coreId: 0,
+      taskNumber: 1,
+      recordSymbol: "claTask1Timing",
+      timerSource: "CPU_TIMER0",
+      timerHz: 100_000_000,
+      timerPeriodCycles: 4_294_967_296
+    };
+    const response = await fixture.service.readClaTaskTiming(request);
+    expect(response).toMatchObject({ success: true, snapshotAttemptsUsed: 2 });
+    expect(response.measurement).toMatchObject({
+      totalCycles: "4294967328",
+      totalSeconds: 42.94967328,
+      meanCycles: 2_147_483_664,
+      lastCycles: 2_147_483_680,
+      completeness: "COMPLETE",
+      evidenceClassification: "MOCK"
+    });
+    fixture.close();
+
+    const overflow = await createFixture({ claTiming: {
+      sequence: 6,
+      taskNumber: 1,
+      count: 2,
+      lastCycles: 420,
+      totalCyclesLow: 800,
+      totalCyclesHigh: 0,
+      minCycles: 380,
+      maxCycles: 420,
+      overflowCount: 1
+    } });
+    const incomplete = await overflow.service.readClaTaskTiming({
+      ...request,
+      timerHz: 100_000_000,
+      timerPeriodCycles: 65_536
+    });
+    expect(incomplete.measurement).toMatchObject({
+      completeness: "INCOMPLETE",
+      overflowCount: 1,
+      incompleteReason: expect.stringContaining("ambiguous or overflowed")
+    });
+    overflow.close();
   });
 
   it("bounds duration and validates distinct resource roles", () => {
@@ -348,7 +409,12 @@ class FakeWorker {
   leaseExpired = false;
   restoreCalls = 0;
 
-  constructor(private readonly options: { coreMismatch?: boolean; unsupported?: boolean; resolveFailure?: boolean } = {}) {}
+  constructor(private readonly options: {
+    coreMismatch?: boolean;
+    unsupported?: boolean;
+    resolveFailure?: boolean;
+    claTiming?: Record<string, number>;
+  } = {}) {}
 
   currentWorker() {
     return { workerInstanceId: "worker-a", workerGeneration: this.generation };
@@ -417,6 +483,23 @@ class FakeWorker {
       if (this.options.resolveFailure) throw new DebugMcpError("EradSymbolNotFound", "symbols not loaded");
       return { ...base, startAddress: 0x1000, endAddress: 0x1010 };
     }
+    if (values.operation === "cla-timing-read") {
+      return {
+        ...base,
+        snapshot: this.options.claTiming ?? {
+          sequence: 2,
+          taskNumber: Number(values.taskNumber),
+          count: 100,
+          lastCycles: 420,
+          totalCyclesLow: 42_000,
+          totalCyclesHigh: 0,
+          minCycles: 398,
+          maxCycles: 451,
+          overflowCount: 0
+        },
+        snapshotAttemptsUsed: 2
+      };
+    }
     if (values.operation === "configure") {
       return { ...base, resources, savedConfiguration: { required: true }, overwritten: false };
     }
@@ -437,6 +520,7 @@ async function createFixture(options: {
   unsupported?: boolean;
   resolveFailure?: boolean;
   withMap?: boolean;
+  claTiming?: Record<string, number>;
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "c2000-erad-"));
   roots.push(root);

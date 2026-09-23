@@ -28,6 +28,7 @@ import { parseMapSymbols } from "../hardware/mapSymbols.js";
 import {
   ERAD_INTERNAL_TOOL,
   ERAD_SCHEMA_VERSION,
+  claTaskTimingResultSchema,
   configureEradProfileSchema,
   eradCapabilitiesSchema,
   eradProfileIdentitySchema,
@@ -35,9 +36,11 @@ import {
   exportEradProfileSchema,
   getEradCapabilitiesSchema,
   readEradProfileSchema,
+  readClaTaskTimingSchema,
   startEradProfileSchema,
   stopEradProfileSchema,
   type EradConfigureRequest,
+  type ClaTaskTimingResult,
   type EradProfileResult
 } from "./EradSchemas.js";
 
@@ -69,6 +72,96 @@ export class EradService {
     const response = await this.invoke(bound, "capabilities", {}, true);
     const capabilities = eradCapabilitiesSchema.parse(response.capabilities);
     return { success: true, capabilities, ...identity(bound) };
+  }
+
+  async readClaTaskTiming(value: unknown): Promise<Record<string, unknown>> {
+    const input = readClaTaskTimingSchema.parse(value);
+    const bound = await this.bindIdentity(input);
+    if (!/F28P65/i.test(bound.device)) {
+      throw new DebugMcpError("ClaTimingDeviceUnsupported", "Firmware-instrumented CLA timing currently supports F28P65x only", {
+        device: bound.device,
+        supportedDevices: ["F28P65x"]
+      });
+    }
+    const response = await this.invoke(bound, "cla-timing-read", {
+      recordSymbol: input.recordSymbol,
+      taskNumber: input.taskNumber,
+      snapshotAttempts: input.snapshotAttempts
+    }, true);
+    const raw = recordValue(response.snapshot);
+    const sequence = safeCounter(raw.sequence);
+    const taskNumber = safeCounter(raw.taskNumber);
+    if (taskNumber !== input.taskNumber) {
+      throw new DebugMcpError("ClaTimingTaskMismatch", "CLA timing record task number does not match the requested task", {
+        requestedTaskNumber: input.taskNumber,
+        recordTaskNumber: taskNumber,
+        recordSymbol: input.recordSymbol
+      });
+    }
+    if ((sequence & 1) !== 0) {
+      throw new DebugMcpError("ClaTimingSnapshotUnstable", "CLA timing record sequence is odd after snapshot validation", {
+        sequence,
+        recordSymbol: input.recordSymbol
+      });
+    }
+    const count = safeCounter(raw.count);
+    const totalLow = safeCounter(raw.totalCyclesLow);
+    const totalHigh = safeCounter(raw.totalCyclesHigh);
+    const totalCyclesValue = BigInt(totalHigh) * 4_294_967_296n + BigInt(totalLow);
+    const totalCycles = totalCyclesValue.toString();
+    const lastCyclesRaw = safeCounter(raw.lastCycles);
+    const minCyclesRaw = safeCounter(raw.minCycles);
+    const maxCyclesRaw = safeCounter(raw.maxCycles);
+    const overflowCount = safeCounter(raw.overflowCount);
+    const lastCycles = count > 0 ? lastCyclesRaw : null;
+    const minCycles = count > 0 ? minCyclesRaw : null;
+    const maxCycles = count > 0 ? maxCyclesRaw : null;
+    const meanCycles = count > 0 ? Number(totalCyclesValue) / count : null;
+    const outOfRange = [lastCycles, minCycles, maxCycles]
+      .some(cycles => cycles !== null && cycles >= input.timerPeriodCycles);
+    const incompleteReasons = [
+      ...(count === 0 ? ["firmware timing record contains no completed task samples"] : []),
+      ...(overflowCount > 0 ? [`firmware marked ${overflowCount} timing sample(s) as ambiguous or overflowed`] : []),
+      ...(outOfRange ? ["one or more recorded cycle values are not below the declared timer period"] : [])
+    ];
+    const timerHz = input.timerHz;
+    const measurement: ClaTaskTimingResult = claTaskTimingResultSchema.parse({
+      schemaVersion: ERAD_SCHEMA_VERSION,
+      measurementKind: "cla-task",
+      measurementSource: this.isMock ? "mock-simulation" : "firmware-instrumented-timer",
+      semantics: "task-entry-to-task-exit",
+      triggerLatencyIncluded: false,
+      profileName: `CLA Task ${taskNumber}`,
+      recordSymbol: input.recordSymbol,
+      taskNumber,
+      sequence,
+      timerSource: input.timerSource,
+      timerHz,
+      timerPeriodCycles: input.timerPeriodCycles,
+      count,
+      lastCycles,
+      totalCycles,
+      minCycles,
+      maxCycles,
+      meanCycles,
+      lastSeconds: lastCycles === null ? null : lastCycles / timerHz,
+      totalSeconds: Number(totalCyclesValue) / timerHz,
+      minSeconds: minCycles === null ? null : minCycles / timerHz,
+      maxSeconds: maxCycles === null ? null : maxCycles / timerHz,
+      meanSeconds: meanCycles === null ? null : meanCycles / timerHz,
+      overflowCount,
+      completeness: incompleteReasons.length === 0 ? "COMPLETE" : "INCOMPLETE",
+      incompleteReason: incompleteReasons.length === 0 ? null : incompleteReasons.join("; "),
+      capturedAt: new Date().toISOString(),
+      firmwareHashes: await firmwareHashes(this.options.sessions.get(input.sessionId)?.lastSnapshot, input.coreId),
+      evidenceClassification: this.isMock ? "MOCK" : "HARDWARE_TARGET"
+    });
+    return {
+      success: true,
+      measurement,
+      snapshotAttemptsUsed: safeCounter(response.snapshotAttemptsUsed),
+      ...identity(bound)
+    };
   }
 
   async configure(value: unknown): Promise<Record<string, unknown>> {
@@ -251,7 +344,8 @@ export class EradService {
   }
 
   async preemptBoard(boardId: string, toolName: string): Promise<void> {
-    if (toolName === ERAD_INTERNAL_TOOL || toolName.startsWith("c2000_") && toolName.includes("Erad")) return;
+    if (toolName === ERAD_INTERNAL_TOOL || toolName === "c2000_readClaTaskTiming" ||
+        toolName.startsWith("c2000_") && toolName.includes("Erad")) return;
     const record = this.options.profiles.activeForBoard(boardId);
     if (!record) return;
     await this.finalize(record.profileId, "CANCELLED", `PREEMPTED_BY:${toolName}`).catch(() => undefined);
