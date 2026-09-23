@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "c2000": {
+      "command": "npx",
+      "args": [
+        "--yes",
+        "c2000-multicore-mcp@latest"
+      ]
+    }
+  }
+}

@@ -20,6 +20,24 @@ Independent MCP server for explicit TI C2000 multicore debug control. The first 
 Automated Mock results are never classified as real XDS110, PCAN, DLOG, ERAD,
 or target-timing evidence.
 
+## Pi Web / Pi Coding Agent
+
+This package can be installed from Pi Web's **Settings → Pi packages** after it
+is published to npm. Install `pi-mcp-adapter` once, then install
+`npm:c2000-multicore-mcp`; the adapter reads the package's `pi/mcp.json` and
+starts the MCP server when its tools are first used. The same package can be
+installed from a Pi terminal with:
+
+```text
+pi install npm:pi-mcp-adapter
+pi install npm:c2000-multicore-mcp
+```
+
+The host running Pi must have network access for `npx` to fetch the server
+package, plus the CCS/DSS environment and C2000 hardware required by the
+requested debug workflow. This npm package is not published yet; the commands
+will work after its first npm release.
+
 ## Tool Profiles
 
 The MCP uses two independent profile dimensions. `ToolProfile` is the safety

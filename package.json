@@ -2,6 +2,20 @@
   "name": "c2000-multicore-mcp",
   "version": "0.7.5",
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
+  "keywords": [
+    "pi-package",
+    "pi-coding-agent",
+    "mcp",
+    "ti",
+    "c2000",
+    "hardware-debug"
+  ],
+  "pi": {
+    "mcp": "./pi/mcp.json",
+    "skills": [
+      "./skills"
+    ]
+  },
   "type": "module",
   "bin": {
     "c2000-multicore-mcp": "./dist/src/index.js",
@@ -111,6 +125,7 @@
     "skills/c2000-ipc-debug/**",
     "skills/c2000-skill-improver/**",
     "README.md",
+    "pi/mcp.json",
     "CHANGELOG.md"
   ],
   "packageManager": "npm@10"
