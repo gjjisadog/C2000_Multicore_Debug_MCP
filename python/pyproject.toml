@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "c2000-hil"
-version = "0.7.5"
+version = "0.7.6"
 description = "Thin pytest HIL client for the C2000 Multicore Debug MCP daemon"
 readme = "README.md"
 requires-python = ">=3.9"
