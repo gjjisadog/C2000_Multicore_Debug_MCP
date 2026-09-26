@@ -74,6 +74,8 @@ export interface BoardRecord extends BoardRegistration {
  */
 export interface BoardTargetIdentity {
   status: "UNKNOWN" | "KNOWN";
+  /** Power was cycled; operator confirmation alone cannot re-establish target identity. */
+  requiresVerificationAfterPowerCycle?: boolean;
   generation: number;
   updatedAt: string;
   reason?: string;

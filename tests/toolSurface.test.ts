@@ -18,7 +18,7 @@ import {
   registerC2000Tools
 } from "../src/mcp/tools.js";
 
-const MAX_AGENT_TOOL_COUNT = 31;
+const MAX_AGENT_TOOL_COUNT = 33;
 
 function names(profile: "readonly" | "safe" | "full", surface: "agent" | "advanced" | "compatibility") {
   return new Set(definitionsForExposure(profile, surface).map(tool => tool.name));
@@ -119,6 +119,8 @@ describe("MCP tool surface profiles", () => {
       "c2000_getEscalationRecommendations",
       "c2000_getEnvironment",
       "c2000_getHardwarePreflight",
+      "c2000_cycleBoardPower",
+      "c2000_confirmManualPowerCycle",
       "c2000_getMulticoreSnapshot",
       "c2000_verifyResidentImage",
       "c2000_evaluateMany",
@@ -290,7 +292,7 @@ describe("MCP tool surface profiles", () => {
     expect(summary).toEqual(expect.objectContaining({
       profile: "safe",
       surface: "agent",
-      registeredToolCount: 31,
+      registeredToolCount: 33,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 95,
       advancedOnlyCount: 93,
@@ -329,13 +331,13 @@ describe("MCP tool surface profiles", () => {
       activeToolProfile: "safe",
       activeToolSurfaceProfile: "agent",
       surface: "agent",
-      registeredToolCount: 31,
+      registeredToolCount: 33,
       hiddenBySafetyCount: 8,
       hiddenBySurfaceCount: 95,
       advancedOnlyCount: 93,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
-        registered: 31,
+        registered: 33,
         hiddenBySafety: 8,
         hiddenBySurface: 95,
         advancedOnly: 93,
@@ -416,8 +418,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(126);
-    expect(fullCompatibility.count).toBe(134);
+    expect(safeCompatibility.count).toBe(128);
+    expect(fullCompatibility.count).toBe(136);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

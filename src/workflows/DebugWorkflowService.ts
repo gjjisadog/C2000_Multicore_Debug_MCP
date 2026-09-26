@@ -464,6 +464,11 @@ export class DebugWorkflowService {
         .filter(action => action.targetCoreId === input.cpu2CoreId)
         .flatMap(action => action.flashBanks)
     });
+    if (input.stopAfterFlashPreparation && (input.programPreparation === "symbols-only" || !pairedFlash.required)) {
+      throw new DebugMcpError("StartupContractInvalid", "stopAfterFlashPreparation requires the paired Flash programming contract and real program loads", {
+        sessionId: input.sessionId, targetMemoryWritten: false
+      });
+    }
     performedSteps.push("artifactPreflight", "analyzeRamOwnership");
     const applicationEntryPlan = runPlan.releaseCpu2BeforeCpu1
       ? createApplicationEntryPlan({
@@ -669,6 +674,21 @@ export class DebugWorkflowService {
         reason: input.programPreparation === "symbols-only"
           ? "symbols-only preparation does not program Flash"
           : "no CPU2 Flash image was found in the CPU2 linker map"
+      };
+    }
+    if (input.stopAfterFlashPreparation) {
+      const written = Array.isArray(load.results) ? load.results.filter((item: ToolResult) => item.success === true && item.loaded === true && item.targetMemoryWritten === true) : [];
+      if (written.length !== 2 || !coreIds.every(coreId => written.some((item: ToolResult) => item.coreId === coreId))) {
+        throw new DebugMcpError("PowerCycleFlashIncomplete", "Both CPU1/CPU2 images must be written in this session before the Flash preparation boundary can stop", {
+          sessionId: input.sessionId, load, powerActionAttempted: false
+        });
+      }
+      setStage("flash-prepared");
+      return {
+        success: true, status: "flash_prepared", sessionId: input.sessionId,
+        flashProgramming, load, artifactPreflight, performedSteps,
+        ipcAcceptance: "NOT_RUN", coldStartVerified: false,
+        nextAction: "Call c2000_cycleBoardPower with CPU1/CPU2 flashChecks, then reconnect and verify both resident images before Flash startup or IPC conclusions."
       };
     }
     let cpu2Release: ToolResult | undefined;

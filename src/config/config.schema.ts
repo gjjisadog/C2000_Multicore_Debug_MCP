@@ -31,6 +31,13 @@ export const improvementConfigSchema = z.object({
   review: reviewPolicyConfigSchema.default({})
 });
 
+const labPowerMcpConfigSchema = z.object({
+  /** The already installed ble-lab-power stdio MCP server. No shell is used. */
+  command: z.string().trim().min(1),
+  args: z.array(z.string().min(1)).min(1).max(8),
+  cwd: z.string().trim().min(1).optional()
+});
+
 export const c2000McpConfigSchema = z.object({
   toolProfile: z.enum(["readonly", "safe", "full"]).default("safe"),
   toolSurfaceProfile: z.enum(["agent", "advanced", "compatibility"]).default("agent"),
@@ -76,6 +83,11 @@ export const c2000McpConfigSchema = z.object({
   verification: verificationConfigSchema.default({}),
   skillEvolution: skillEvolutionConfigSchema.default({}),
   improvement: improvementConfigSchema.optional(),
+  /** Optional board power control. Each cycle still requires an explicit tool call. */
+  powerCycle: z.object({
+    enabled: z.boolean().default(false),
+    bleLabPowerMcp: labPowerMcpConfigSchema.optional()
+  }).optional(),
   debugProbe: z.object({
     queueDir: z.string().min(1).default("runtime/debug-probe-queue"),
     queueTimeoutMs: z.number().int().positive().default(30000),

@@ -10,6 +10,7 @@ import { BoardRepository } from "../src/storage/repositories/BoardRepository.js"
 import { EventRepository } from "../src/storage/repositories/EventRepository.js";
 import { LeaseRepository } from "../src/storage/repositories/LeaseRepository.js";
 import { SessionRepository } from "../src/storage/repositories/SessionRepository.js";
+import { TestRunRepository } from "../src/storage/repositories/TestRunRepository.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { sha256File } from "../src/utils/fileHash.js";
 
@@ -21,6 +22,126 @@ afterEach(async () => {
       rm(directory, { recursive: true, force: true })
     )
   );
+});
+
+describe("optional board power-cycle coordination", () => {
+  test("persists the first connection failure, closes the old lease, and pauses for manual confirmation", async () => {
+    const fixture = await makeFixture();
+    const calls: string[] = [];
+    fixture.workers.invokeBoard = async (_boardId, toolName) => {
+      calls.push(toolName);
+      if (toolName === "c2000_createDebugSession") return { success: true, sessionId: "dbg-power", cores: [{ coreId: 0 }, { coreId: 2 }] };
+      if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-power", closed: true };
+      throw new Error(`unexpected worker tool ${toolName}`);
+    };
+    const events = new EventRepository(fixture.store);
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions, undefined, undefined, {
+      runs: new TestRunRepository(fixture.store), events, enabled: true, safetyProfile: "safe",
+      client: { async powercycle(request) {
+        calls.push(`ble:${request.reason}:${request.mode}`);
+        return { device: "lab_power", status: "manual_required", trigger: request.reason, protocol_verified: false, physical_state: null };
+      } }
+    });
+    await router.invokeTool("c2000_createDebugSession", { boardId: "board-a", sessionName: "power-recovery", coreMap: [{ coreId: 0 }, { coreId: 2 }] });
+    const result = await router.invokeTool("c2000_cycleBoardPower", {
+      boardId: "board-a", sessionId: "dbg-power", reason: "connection_recovery", mode: "manual",
+      firstFailure: { operation: "connectCores", code: "TargetConnectFailed", message: "first failure", observedAt: new Date().toISOString() }
+    });
+
+    expect(result).toMatchObject({ status: "manual_required", success: false, oldSessionClosed: true, oldLeaseReleased: true, coldStartVerified: false });
+    expect(calls).toEqual(["c2000_createDebugSession", "c2000_closeDebugSession", "ble:connection_recovery:manual"]);
+    expect(events.list({ boardId: "board-a" }).map(event => event.eventType)).toContain("POWER_CYCLE_FIRST_FAILURE");
+    expect(fixture.sessions.get("dbg-power")?.status).toBe("CLOSED");
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    expect(fixture.registry.get("board-a").status).toBe("QUARANTINED");
+    expect(fixture.registry.targetIdentity("board-a")).toMatchObject({ status: "UNKNOWN", requiresVerificationAfterPowerCycle: true });
+
+    const confirmed = await router.invokeTool("c2000_confirmManualPowerCycle", {
+      boardId: "board-a", requestId: result.requestId, powerRemovedAndRestored: true, observedOffSeconds: 5
+    });
+    expect(confirmed).toMatchObject({ status: "operator_confirmed", coldStartVerified: false, identityVerificationRequired: true });
+    expect(fixture.registry.get("board-a").status).toBe("READY");
+    await expect(router.invokeTool("c2000_launchResidentIpcDebug", { boardId: "board-a" }))
+      .rejects.toMatchObject({ code: "TargetImageIdentityUnknown" });
+    fixture.store.close();
+  });
+
+  test("refuses after_flash before both current-session writes are verified", async () => {
+    const fixture = await makeFixture();
+    const programPaths = [path.join(fixture.directory, "cpu1.out"), path.join(fixture.directory, "cpu2.out")];
+    await Promise.all(programPaths.map((file, index) => writeFile(file, `cpu${index + 1}`)));
+    const calls: string[] = [];
+    fixture.workers.invokeBoard = async (_boardId, toolName, input) => {
+      calls.push(toolName);
+      if (toolName === "c2000_createDebugSession") return { success: true, sessionId: "dbg-flash", cores: [{ coreId: 0 }, { coreId: 2 }] };
+      if (toolName === "c2000_getLoadedProgramInfo") return {
+        success: true, sessionId: "dbg-flash", coreId: (input as { coreId: number }).coreId,
+        programUri: programPaths[0], targetMemoryWritten: false
+      };
+      throw new Error(`unexpected worker tool ${toolName}`);
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions, undefined, undefined, {
+      runs: new TestRunRepository(fixture.store), events: new EventRepository(fixture.store), enabled: true, safetyProfile: "safe",
+      client: { async powercycle() { throw new Error("BLE must not be called"); } }
+    });
+    await router.invokeTool("c2000_createDebugSession", { boardId: "board-a", coreMap: [{ coreId: 0 }, { coreId: 2 }] });
+    await expect(router.invokeTool("c2000_cycleBoardPower", {
+      boardId: "board-a", sessionId: "dbg-flash", reason: "after_flash",
+      flashChecks: [
+        { coreId: 0, programUri: programPaths[0], manifestUri: path.join(fixture.directory, "cpu1.json") },
+        { coreId: 2, programUri: programPaths[1], manifestUri: path.join(fixture.directory, "cpu2.json") }
+      ]
+    })).rejects.toMatchObject({ code: "PowerCycleFlashIncomplete" });
+    expect(calls).toEqual(["c2000_createDebugSession", "c2000_getLoadedProgramInfo"]);
+    expect(fixture.sessions.get("dbg-flash")?.status).toBe("OPEN");
+    expect(fixture.registry.leases.active("board-a")).toBeDefined();
+    fixture.store.close();
+  });
+
+  test("calls the BLE MCP only after both manifest checks and confirmed session cleanup", async () => {
+    const fixture = await makeFixture();
+    const checks = await Promise.all([0, 2].map(async coreId => {
+      const programUri = path.join(fixture.directory, `cpu${coreId}.out`);
+      const manifestUri = path.join(fixture.directory, `cpu${coreId}.json`);
+      await writeFile(programUri, `cpu${coreId}-flash-image`);
+      await writeFile(manifestUri, JSON.stringify({ format: "c2000-resident-image-manifest", version: 1 }));
+      return { coreId, programUri, manifestUri, programSha256: await sha256File(programUri), manifestSha256: await sha256File(manifestUri) };
+    }));
+    const calls: string[] = [];
+    fixture.workers.invokeBoard = async (_boardId, toolName, input) => {
+      calls.push(toolName);
+      if (toolName === "c2000_createDebugSession") return { success: true, sessionId: "dbg-verified", cores: [{ coreId: 0 }, { coreId: 2 }] };
+      if (toolName === "c2000_getLoadedProgramInfo") {
+        const check = checks.find(item => item.coreId === (input as { coreId: number }).coreId)!;
+        return { success: true, sessionId: "dbg-verified", coreId: check.coreId, programUri: check.programUri, sha256: check.programSha256, targetMemoryWritten: true };
+      }
+      if (toolName === "c2000_verifyResidentImage") return {
+        success: true, verified: true, verificationMethod: "resident-image-manifest-raw-memory",
+        targetAccess: { programming: false, symbolLoad: false, reset: false, run: false, targetMemoryWrite: false },
+        checks: checks.map(check => ({ ...check, marker: { matched: true } }))
+      };
+      if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-verified", closed: true };
+      throw new Error(`unexpected worker tool ${toolName}`);
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions, undefined, undefined, {
+      runs: new TestRunRepository(fixture.store), events: new EventRepository(fixture.store), enabled: true, safetyProfile: "safe",
+      client: { async powercycle(request) {
+        calls.push("ble-powercycle");
+        expect(request).toMatchObject({ device: "lab_power", off_seconds: 5, reason: "after_flash", mode: "auto_or_manual" });
+        expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+        return { device: "lab_power", status: "completed", trigger: "after_flash", mode_used: "auto", off_hold_seconds: 5.1, protocol_verified: true, physical_state: null };
+      } }
+    });
+    await router.invokeTool("c2000_createDebugSession", { boardId: "board-a", coreMap: [{ coreId: 0 }, { coreId: 2 }] });
+    const result = await router.invokeTool("c2000_cycleBoardPower", {
+      boardId: "board-a", sessionId: "dbg-verified", reason: "after_flash",
+      flashChecks: checks.map(({ coreId, programUri, manifestUri }) => ({ coreId, programUri, manifestUri }))
+    });
+    expect(calls).toEqual(["c2000_createDebugSession", "c2000_getLoadedProgramInfo", "c2000_getLoadedProgramInfo", "c2000_verifyResidentImage", "c2000_closeDebugSession", "ble-powercycle"]);
+    expect(result).toMatchObject({ status: "completed", success: true, protocolVerified: true, physicalState: null, coldStartVerified: false, targetImageIdentity: "UNKNOWN" });
+    expect(fixture.registry.targetIdentity("board-a")).toMatchObject({ status: "UNKNOWN", requiresVerificationAfterPowerCycle: true });
+    fixture.store.close();
+  });
 });
 
 describe("daemon tool router interactive session lifecycle", () => {

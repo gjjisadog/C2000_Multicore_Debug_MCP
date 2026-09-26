@@ -69,6 +69,8 @@ import {
   loadSymbolsSchema,
   multicoreSnapshotSchema,
   verifyResidentImageSchema,
+  cycleBoardPowerSchema,
+  confirmManualPowerCycleSchema,
   diagnoseBootHandoffSchema,
   ramOwnershipAnalysisSchema,
   registerBoardSchema,
@@ -159,7 +161,8 @@ type ToolTargetEffect =
   | "job-control"
   | "observation-control"
   | "capability-control"
-  | "repository-control";
+  | "repository-control"
+  | "power-control";
 
 type ToolRole = "primary" | "alias" | "workflow" | "host" | "diagnostic";
 type ToolFamily =
@@ -179,7 +182,7 @@ type ToolFamily =
   | "improvement"
   | "verification";
 
-export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write" | "repository-write" | "repository-commit";
+export type ToolEffect = "host-read" | "host-write" | "host-process-terminate" | "session-create" | "session-dispose" | "target-read" | "target-connect" | "target-disconnect" | "target-run" | "target-halt" | "target-reset" | "power-cycle" | "program-load" | "symbol-load" | "target-memory-write" | "ram-ownership-change" | "fault-injection" | "bundle-write" | "repository-write" | "repository-commit";
 export type ToolProfile = "readonly" | "safe" | "full";
 export type ToolSurfaceProfile = "agent" | "advanced" | "compatibility";
 export type AgentExposure = "default" | "advanced" | "compatibility";
@@ -402,6 +405,8 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", capability: "debug.manual" },
   { name: "c2000_getSessionTopology", title: "Get C2000 Session Topology", description: "Return the logical session coreId to core target mapping without touching target state.", schema: sessionSchema, handlerName: "getSessionTopology", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", exposure: "advanced" },
   { name: "c2000_closeDebugSession", title: "Close C2000 Debug Session", description: "Close a logical debug session and dispose its adapter resources.", schema: sessionSchema, handlerName: "closeDebugSession", inputScope: "session", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
+  { name: "c2000_cycleBoardPower", title: "Cycle C2000 Board Power", description: "Explicit optional power cycle through the configured ble-lab-power MCP. For after_flash, require both current-session Flash writes and two manifest-backed target marker checks. For connection_recovery, persist first-failure evidence. Refuse concurrent board work, close the old debug session and lease, then request the plug cycle. Automatic protocol acknowledgement is not physical power evidence; manual_required pauses the board until operator confirmation.", schema: cycleBoardPowerSchema, handlerName: "cycleBoardPower", inputScope: "session", targetEffect: "power-control", role: "workflow", family: "workflow", exposure: "default", coreIdentityFields: ["flashChecks[].coreId"], responseCoreIdentityFields: ["flashVerification.checks[].coreId"] },
+  { name: "c2000_confirmManualPowerCycle", title: "Confirm Manual C2000 Power Cycle", description: "Record operator confirmation that a pending manual board power cycle held power off for the requested interval and restored it. This clears the board quarantine but leaves old sessions closed and target image identity UNKNOWN; reconnect and verify the image before Flash startup or IPC conclusions.", schema: confirmManualPowerCycleSchema, handlerName: "confirmManualPowerCycle", inputScope: "host", targetEffect: "job-control", role: "workflow", family: "workflow", exposure: "default" },
   { name: "c2000_connectTarget", title: "Connect C2000 Target", description: "Connect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "connectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_disconnectTarget", title: "Disconnect C2000 Target", description: "Disconnect a specific core by sessionId and coreId using the c2000 adapter path.", schema: sessionCoreSchema, handlerName: "disconnectTarget", inputScope: "core", targetEffect: "connectivity-control", role: "primary", family: "connectivity", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
   { name: "c2000_runCore", title: "Run C2000 Core", description: "Primary run control: run a specific core by sessionId and coreId. Prefer this over c2000_continue for new clients.", schema: sessionCoreSchema, handlerName: "runCore", inputScope: "core", targetEffect: "execution-control", role: "primary", family: "execution", capability: "debug.manual", coreIdentityFields: ["coreId"], responseCoreIdentityFields: [...singleCoreResponseIdentity] },
@@ -1201,7 +1206,7 @@ export function toolSurfaceProfileFromEnv(): ToolSurfaceProfile {
 function decorateDefinition(definition: BaseToolDefinition): ToolDefinition {
   const effects = effectsFor(definition.name, definition.targetEffect);
   const readOnlyHint = effects.every(effect => ["host-read", "target-read"].includes(effect));
-  const destructiveHint = effects.some(effect => ["host-process-terminate", "target-reset", "target-memory-write", "ram-ownership-change", "fault-injection"].includes(effect));
+  const destructiveHint = effects.some(effect => ["host-process-terminate", "target-reset", "target-memory-write", "ram-ownership-change", "fault-injection", "power-cycle"].includes(effect));
   const residentWorkflowConfirmation = definition.targetEffect === "launch-workflow"
     && !effects.includes("program-load")
     && !effects.includes("target-memory-write")
@@ -1263,6 +1268,7 @@ function descriptionForExposure(definition: BaseToolDefinition, exposure: AgentE
 }
 
 function effectsFor(name: string, targetEffect: ToolTargetEffect): ToolEffect[] {
+  if (targetEffect === "power-control") return ["session-dispose", "power-cycle"];
   if (targetEffect === "capability-control") return ["host-read"];
   if (targetEffect === "repository-control") {
     return name === "c2000_startImprovementImplementation"

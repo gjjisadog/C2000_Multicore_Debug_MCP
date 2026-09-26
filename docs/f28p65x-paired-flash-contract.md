@@ -68,6 +68,12 @@ controlled-debugger evidence and does not substitute for this boundary. If the
 boundary is not performed, classify the startup/IPC stage as `blocked/not-run`
 rather than as a pass or a target-side failure.
 
+For the optional `lab_power` USB plug flow, use
+[`stopAfterFlashPreparation` and `c2000_cycleBoardPower`](optional-board-power-cycle.md).
+That path verifies both written image identities, closes the old session and
+lease, and records the BLE protocol result or a paused manual step. It never
+upgrades a protocol acknowledgement into physical cold-start evidence.
+
 ## Invariants
 
 | Point in time | CPU1 | CPU2 | Enforced by |

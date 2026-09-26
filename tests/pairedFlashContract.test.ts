@@ -118,6 +118,22 @@ async function fixture(options: { cpu2Map?: string; cpu1Map?: string } = {}) {
 }
 
 describe("F28P65x paired Flash programming contract", () => {
+  test("stops after both Flash writes when product power cycling is selected", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({ ...input, stopAfterFlashPreparation: true });
+
+    expect(result).toMatchObject({
+      success: true,
+      status: "flash_prepared",
+      ipcAcceptance: "NOT_RUN",
+      coldStartVerified: false,
+      flashProgramming: { performed: true }
+    });
+    expect(adapter.events).toContain("load:0");
+    expect(adapter.events).toContain("load:2");
+    expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
+  });
+
   test("programs both images with every application core halted, then starts them", async () => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance(input);

@@ -92,6 +92,9 @@ export class BoardRepository {
       : current.targetIdentity.lastKnownPrograms;
     const identity: BoardTargetIdentity = {
       status: "UNKNOWN",
+      ...(reason.startsWith("power-cycle:") || current.targetIdentity.requiresVerificationAfterPowerCycle
+        ? { requiresVerificationAfterPowerCycle: true }
+        : {}),
       generation,
       updatedAt: now,
       reason,
@@ -121,6 +124,9 @@ export class BoardRepository {
     }
     const identity: BoardTargetIdentity = {
       status: "KNOWN",
+      ...(current.targetIdentity.requiresVerificationAfterPowerCycle && (!nextPrograms["0"] || !nextPrograms["2"])
+        ? { requiresVerificationAfterPowerCycle: true }
+        : {}),
       generation,
       updatedAt: now,
       reason,
@@ -164,6 +170,7 @@ function parseTargetIdentity(value: string | null, generation: number): BoardRec
           parsed.programs && typeof parsed.programs === "object" && !Array.isArray(parsed.programs)) {
         return {
           status: parsed.status,
+          ...(parsed.requiresVerificationAfterPowerCycle === true ? { requiresVerificationAfterPowerCycle: true } : {}),
           generation: parsed.generation,
           updatedAt: parsed.updatedAt,
           ...(typeof parsed.reason === "string" ? { reason: parsed.reason } : {}),

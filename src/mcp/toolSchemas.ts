@@ -574,6 +574,40 @@ export const verifyResidentImageSchema = z.object({
   }
 });
 
+export const cycleBoardPowerSchema = z.object({
+  boardId: z.string().min(1),
+  sessionId: z.string().min(1),
+  reason: z.enum(["after_flash", "connection_recovery"]),
+  mode: z.enum(["auto", "manual", "auto_or_manual"]).default("auto_or_manual"),
+  offSeconds: z.number().min(5).max(60).default(5),
+  /** Both freshly programmed Flash images must also match read-only resident markers. */
+  flashChecks: z.array(residentImageManifestCheckSchema).min(2).max(2).optional(),
+  /** Caller-reported first failure, persisted before any recovery action. */
+  firstFailure: z.object({
+    operation: z.string().min(1).max(128),
+    code: z.string().min(1).max(128),
+    message: z.string().min(1).max(2048),
+    observedAt: z.string().datetime(),
+    artifactPath: z.string().min(1).optional()
+  }).strict().optional()
+}).superRefine((value, context) => {
+  if (value.reason === "after_flash") {
+    const ids = value.flashChecks?.map(check => check.coreId).sort((a, b) => a - b);
+    if (!ids || ids.length !== 2 || ids[0] !== 0 || ids[1] !== 2) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["flashChecks"], message: "after_flash requires CPU1/CPU2 (coreIds 0 and 2) resident-image manifest checks" });
+    }
+  } else if (!value.firstFailure) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["firstFailure"], message: "connection_recovery requires the first failure evidence" });
+  }
+});
+
+export const confirmManualPowerCycleSchema = z.object({
+  boardId: z.string().min(1),
+  requestId: z.string().uuid(),
+  powerRemovedAndRestored: z.literal(true),
+  observedOffSeconds: z.number().min(5).max(3600)
+});
+
 export const resetCoreSchema = sessionCoreSchema.extend({
   resetType: z.enum(["cpu", "system", "restart", "default"]).default("default")
 });
@@ -805,6 +839,8 @@ const runIpcAcceptanceObjectSchema = z.object({
   bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(64).optional()
     .describe("Optional CPU1 read-only boot diagnostics captured on entry failure and alongside IPC polling; observations do not change readiness conditions"),
   programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
+  stopAfterFlashPreparation: z.boolean().default(false)
+    .describe("Opt in to stop after the paired CPU1/CPU2 Flash writes, before application startup or IPC polling. Retain the session for c2000_cycleBoardPower."),
   ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
@@ -918,6 +954,10 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
   allowAutoProbeAllocation: z.boolean().default(false)
+}).superRefine((value, context) => {
+  if (value.stopAfterFlashPreparation && (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["stopAfterFlashPreparation"], message: "Flash preparation must retain an interactive session without auto-close for the explicit power-cycle step" });
+  }
 });
 
 export const runBootHandoffDiagnosisSchema = z.object({
