@@ -90,7 +90,8 @@ describe("one-command installer", () => {
       "C:\\Program Files\\c2000\\dist\\src\\index.js",
       "C:\\Users\\me\\c2000.json",
       "C:\\Program Files\\nodejs\\node.exe",
-      "C:\\Program Files\\c2000\\scripts\\mcp-supervisor.mjs"
+      "C:\\Program Files\\c2000\\scripts\\mcp-supervisor.mjs",
+      "C:\\Program Files\\c2000\\current.json"
     )).toEqual([
       "mcp", "add", "c2000-multicore",
       "--env", "C2000_MCP_CONFIG=C:\\Users\\me\\c2000.json",
@@ -100,6 +101,7 @@ describe("one-command installer", () => {
       "--initial-delay-ms", "1000",
       "--max-delay-ms", "10000",
       "--max-restarts", "5",
+      "--current-pointer", "C:\\Program Files\\c2000\\current.json",
       "--",
       "C:\\Program Files\\nodejs\\node.exe",
       "C:\\Program Files\\c2000\\dist\\src\\index.js"
@@ -304,6 +306,7 @@ describe("one-command installer", () => {
       expect(configToml).toContain("[mcp_servers.c2000-multicore]");
       expect(configToml).toContain("C2000_MCP_CONFIG");
       expect(configToml).toContain("mcp-supervisor.mjs");
+      expect(configToml).toContain("--current-pointer");
       expect(configToml).toContain("--initial-delay-ms");
       expect(configToml).not.toContain("old-node");
       expect(configToml).toContain("[mcp_servers.keep-me]");

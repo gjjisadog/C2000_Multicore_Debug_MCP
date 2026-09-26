@@ -136,6 +136,7 @@ try {
   New-Item -ItemType Directory -Path (Join-Path $stagingPackage "scripts") | Out-Null
   Copy-Item -LiteralPath (Join-Path $stagingSource "package.json") -Destination $stagingPackage -Force
   Copy-Item -LiteralPath (Join-Path $repositoryRoot "scripts\c2000-mcp-doctor.mjs") -Destination (Join-Path $stagingPackage "scripts") -Force
+  Copy-Item -LiteralPath (Join-Path $repositoryRoot "scripts\mcp-supervisor.mjs") -Destination (Join-Path $stagingPackage "scripts") -Force
   Copy-Item -LiteralPath (Join-Path $repositoryRoot "skills") -Destination $stagingPackage -Recurse -Force
 
   $setupEntrypoint = Join-Path $runtimeOut "installer\index.js"

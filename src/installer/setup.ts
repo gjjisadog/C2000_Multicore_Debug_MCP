@@ -192,7 +192,8 @@ export function buildCodexMcpAddArgs(
   entrypoint: string,
   configPath: string,
   nodeExecutable: string,
-  supervisorEntrypoint?: string
+  supervisorEntrypoint?: string,
+  currentPointer?: string
 ): string[] {
   return [
     "mcp",
@@ -201,11 +202,11 @@ export function buildCodexMcpAddArgs(
     "--env",
     `C2000_MCP_CONFIG=${configPath}`,
     "--",
-    ...buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint)
+    ...buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint, currentPointer)
   ];
 }
 
-function buildMcpLaunchArgs(entrypoint: string, nodeExecutable: string, supervisorEntrypoint?: string): string[] {
+function buildMcpLaunchArgs(entrypoint: string, nodeExecutable: string, supervisorEntrypoint?: string, currentPointer?: string): string[] {
   if (!supervisorEntrypoint) return [nodeExecutable, entrypoint];
   return [
     nodeExecutable,
@@ -213,6 +214,7 @@ function buildMcpLaunchArgs(entrypoint: string, nodeExecutable: string, supervis
     "--initial-delay-ms", "1000",
     "--max-delay-ms", "10000",
     "--max-restarts", "5",
+    ...(currentPointer ? ["--current-pointer", currentPointer] : []),
     "--",
     nodeExecutable,
     entrypoint
@@ -426,6 +428,7 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
       entrypoint,
       supervisorEntrypoint,
       nodeExecutable: installedNodeExecutable,
+      currentPointer: path.join(installRoot, "current.json"),
       configPath: installedConfigPath,
       scope: options.scope,
       cwd,
@@ -464,6 +467,7 @@ interface RegisterOptions {
   entrypoint: string;
   supervisorEntrypoint: string;
   nodeExecutable: string;
+  currentPointer: string;
   configPath: string;
   scope: "user" | "project";
   cwd: string;
@@ -484,7 +488,8 @@ function registerCodexServer(options: RegisterOptions): {
       options.entrypoint,
       options.configPath,
       options.nodeExecutable,
-      options.supervisorEntrypoint
+      options.supervisorEntrypoint,
+      options.currentPointer
     );
     const commands = options.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
     for (const command of commands) {
@@ -513,6 +518,7 @@ function registerCodexServer(options: RegisterOptions): {
     options.supervisorEntrypoint,
     options.nodeExecutable,
     options.configPath,
+    options.currentPointer,
     reason
   );
   return { method: "config-file", codexConfigPath };
@@ -525,6 +531,7 @@ function writeManagedCodexConfigSync(
   supervisorEntrypoint: string,
   nodeExecutable: string,
   configPath: string,
+  currentPointer: string,
   cliFailure: string
 ): void {
   fs.mkdirSync(path.dirname(configFile), { recursive: true });
@@ -535,7 +542,7 @@ function writeManagedCodexConfigSync(
     `# Codex CLI fallback reason: ${cliFailure.replace(/[\r\n]+/g, " ").slice(0, 240)}`,
     `[mcp_servers.${tomlKey(serverName)}]`,
     `command = ${tomlString(nodeExecutable)}`,
-    `args = [${buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint).map(tomlString).join(", ")}]`,
+    `args = [${buildMcpLaunchArgs(entrypoint, nodeExecutable, supervisorEntrypoint, currentPointer).map(tomlString).join(", ")}]`,
     "",
     `[mcp_servers.${tomlKey(serverName)}.env]`,
     `C2000_MCP_CONFIG = ${tomlString(configPath)}`,

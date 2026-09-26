@@ -95,6 +95,7 @@ describe("installer bootstrap scripts", () => {
     expect(source).toContain("c2000-source-install-");
     expect(source).toContain("using the checkout dependencies read-only");
     expect(source).toContain("C2000_BUILD_SOURCE_REVISION");
+    expect(source).toContain('"scripts\\mcp-supervisor.mjs"');
     expect(source).toContain("Remove-Item -LiteralPath $stagingRoot");
     expect(source).not.toContain("daemon:stop");
     expect(source).not.toContain("Stop-Process");

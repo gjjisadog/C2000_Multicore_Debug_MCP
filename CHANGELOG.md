@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### MCP runtime handoff without client restart
+
+- Let installed stdio supervisors watch the atomic `current.json` pointer,
+  drain active requests, and switch to a new immutable runtime when the actual
+  tool catalog is unchanged. Restore the old runtime when startup or catalog
+  verification fails, without replaying an in-flight tool call.
+- Include the supervisor in isolated source installation and register the
+  pointer watcher for future installs.
+
 ### Cross-platform PCAN hardware support
 
 - Keep official PEAK PCAN-Basic support on Windows x64 and add macOS x64/ARM64

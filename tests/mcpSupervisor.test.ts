@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -26,6 +26,60 @@ async function waitFor(condition: () => boolean, timeoutMs = 2_000) {
 }
 
 describe("MCP stdio supervisor", () => {
+  test("switches to an installed compatible runtime after the active request completes", async () => {
+    const fixture = await hotSwapFixture(false);
+    try {
+      fixture.send(1, "initialize");
+      await fixture.response(1);
+      fixture.notify("notifications/initialized");
+      fixture.send(2, "tools/call", { name: "echo", arguments: { delayMs: 300 } });
+      await writeFile(fixture.pointerPath, JSON.stringify(fixture.pointerFor(2)));
+      expect((await fixture.response(2)).result.version).toBe(1);
+      await waitFor(() => fixture.stderr().includes("runtime switched with the existing MCP tool catalog"), 5000);
+      fixture.send(3, "tools/call", { name: "echo", arguments: {} });
+      expect((await fixture.response(3)).result.version).toBe(2);
+      expect(fixture.stderr()).not.toContain("request outcome is unknown");
+    } finally {
+      await fixture.close();
+    }
+  }, 15000);
+
+  test("keeps the old runtime when the installed tool catalog changes", async () => {
+    const fixture = await hotSwapFixture(true);
+    try {
+      fixture.send(1, "initialize");
+      await fixture.response(1);
+      fixture.notify("notifications/initialized");
+      fixture.send(2, "tools/list");
+      await fixture.response(2);
+      await writeFile(fixture.pointerPath, JSON.stringify(fixture.pointerFor(2)));
+      await waitFor(() => fixture.stderr().includes("tool catalog changed"), 5000);
+      await waitFor(() => fixture.stderr().includes("replaying MCP initialize handshake"), 5000);
+      fixture.send(3, "tools/call", { name: "echo", arguments: {} });
+      expect((await fixture.response(3)).result.version).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  }, 15000);
+
+  test("restores the old runtime when the new process fails during startup", async () => {
+    const fixture = await hotSwapFixture(false);
+    try {
+      fixture.send(1, "initialize");
+      await fixture.response(1);
+      fixture.notify("notifications/initialized");
+      fixture.send(2, "tools/list");
+      await fixture.response(2);
+      await writeFile(fixture.entrypoints[1]!, "process.exit(1);\n");
+      await writeFile(fixture.pointerPath, JSON.stringify(fixture.pointerFor(2)));
+      await waitFor(() => fixture.stderr().includes("new runtime exited before its tool catalog was verified"), 5000);
+      fixture.send(3, "tools/call", { name: "echo", arguments: {} });
+      expect((await fixture.response(3)).result.version).toBe(1);
+    } finally {
+      await fixture.close();
+    }
+  }, 15000);
+
   test("restarts an unexpectedly failing child and keeps stdout free of diagnostics", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "c2000-mcp-supervisor-restart-"));
     const counterPath = path.join(directory, "count.txt");
@@ -159,3 +213,67 @@ describe("MCP stdio supervisor", () => {
     expect(await readFile(counterPath, "utf8")).toBe("2");
   });
 });
+
+async function hotSwapFixture(changedCatalog: boolean) {
+  const directory = await mkdtemp(path.join(tmpdir(), "c2000-mcp-supervisor-switch-"));
+  const pointerPath = path.join(directory, "current.json");
+  const entrypoints = [1, 2].map(version => path.join(directory, "versions", `v${version}`, "dist", "src", "index.mjs"));
+  for (const [index, entrypoint] of entrypoints.entries()) {
+    const version = index + 1;
+    await mkdir(path.dirname(entrypoint), { recursive: true });
+    await writeFile(entrypoint, [
+      'import { createInterface } from "node:readline";',
+      `const version = ${version};`,
+      `const tools = [{ name: "echo", inputSchema: { type: "object" } }${changedCatalog && version === 2 ? ', { name: "new-tool", inputSchema: { type: "object" } }' : ''}];`,
+      'const send = message => process.stdout.write(`${JSON.stringify(message)}\\n`);',
+      'createInterface({ input: process.stdin }).on("line", async line => {',
+      '  const message = JSON.parse(line);',
+      '  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-03-26", capabilities: {}, serverInfo: { name: "fixture", version: String(version) } } });',
+      '  if (message.method === "tools/list") send({ jsonrpc: "2.0", id: message.id, result: { tools } });',
+      '  if (message.method === "tools/call") {',
+      '    await new Promise(resolve => setTimeout(resolve, message.params.arguments?.delayMs ?? 0));',
+      '    send({ jsonrpc: "2.0", id: message.id, result: { version } });',
+      '  }',
+      '});'
+    ].join("\n"));
+  }
+  const pointerFor = (version: number) => ({
+    installDirectory: path.dirname(path.dirname(path.dirname(entrypoints[version - 1]!))),
+    entrypoint: entrypoints[version - 1],
+    runtimeExecutable: process.execPath
+  });
+  await writeFile(pointerPath, JSON.stringify(pointerFor(1)));
+  const child = spawn(process.execPath, [
+    supervisorPath, "--current-pointer", pointerPath, "--pointer-poll-ms", "100",
+    "--initial-delay-ms", "1", "--max-delay-ms", "1", "--",
+    process.execPath, entrypoints[0]!
+  ], { stdio: ["pipe", "pipe", "pipe"] });
+  const messages: any[] = [];
+  let output = "";
+  let errors = "";
+  child.stdout.on("data", chunk => {
+    output += chunk;
+    const lines = output.split("\n");
+    output = lines.pop() ?? "";
+    for (const line of lines) if (line) messages.push(JSON.parse(line));
+  });
+  child.stderr.on("data", chunk => { errors += chunk; });
+  return {
+    pointerPath,
+    entrypoints,
+    pointerFor,
+    stderr: () => errors,
+    send: (id: number, method: string, params = {}) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`),
+    notify: (method: string) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params: {} })}\n`),
+    response: async (id: number) => {
+      await waitFor(() => messages.some(message => message.id === id), 5000);
+      return messages.find(message => message.id === id);
+    },
+    close: async () => {
+      child.stdin.end();
+      await Promise.race([once(child, "close"), new Promise(resolve => setTimeout(resolve, 3000))]);
+      if (child.exitCode === null) child.kill();
+      await rm(directory, { recursive: true, force: true });
+    }
+  };
+}

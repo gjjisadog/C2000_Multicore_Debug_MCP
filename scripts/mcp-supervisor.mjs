@@ -7,12 +7,16 @@
  * output is written only to stderr so stdout remains an MCP JSON-RPC stream.
  */
 import { spawn } from "node:child_process";
+import { readFile, access } from "node:fs/promises";
+import path from "node:path";
 
 const defaults = {
   initialDelayMs: 500,
   maxDelayMs: 10_000,
   maxRestarts: 5,
-  restartWindowMs: 60_000
+  restartWindowMs: 60_000,
+  pointerPollMs: 1000,
+  currentPointer: undefined
 };
 
 function fail(message) {
@@ -55,12 +59,21 @@ function parseArguments(argv) {
       case "--restart-window-ms":
         options.restartWindowMs = parsePositiveInteger(option, value);
         break;
+      case "--pointer-poll-ms":
+        options.pointerPollMs = parsePositiveInteger(option, value);
+        break;
+      case "--current-pointer":
+        options.currentPointer = path.resolve(value);
+        break;
       default:
         throw new Error(`unknown supervisor option ${JSON.stringify(option)}`);
     }
   }
   if (options.maxDelayMs < options.initialDelayMs) {
     throw new Error("--max-delay-ms must be greater than or equal to --initial-delay-ms");
+  }
+  if (options.currentPointer && options.pointerPollMs < 100) {
+    throw new Error("--pointer-poll-ms must be at least 100 when --current-pointer is used");
   }
   return { options, command: argv.slice(separator + 1) };
 }
@@ -86,6 +99,17 @@ class McpSupervisor {
     this.restartTimes = [];
     this.childOutputBuffer = "";
     this.clientInputBuffer = "";
+    this.inFlight = new Map();
+    this.toolCatalog = undefined;
+    this.catalogRequestId = undefined;
+    this.pendingCommand = undefined;
+    this.previousCommand = undefined;
+    this.switching = false;
+    this.verifyingSwitch = false;
+    this.rejectedPointerKey = undefined;
+    this.activeCommandKey = JSON.stringify(command);
+    this.pointerReadInProgress = false;
+    this.internalRequestSequence = 0;
   }
 
   log(message) {
@@ -101,6 +125,11 @@ class McpSupervisor {
       process.once(signal, () => this.stop(signal, signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143));
     }
     this.launchChild();
+    if (this.options.currentPointer) {
+      const poll = setInterval(() => { void this.checkCurrentPointer(); }, this.options.pointerPollMs);
+      poll.unref();
+      void this.checkCurrentPointer();
+    }
   }
 
   receiveClientChunk(chunk) {
@@ -123,16 +152,18 @@ class McpSupervisor {
       if (this.awaitingReplayInitialized) {
         this.awaitingReplayInitialized = false;
         this.forwardToChild(line);
+        this.requestToolCatalog();
         this.flushClientQueue();
         return;
       }
     }
 
-    if (this.replayingInitialization || this.awaitingReplayInitialized || !this.child?.stdin.writable) {
+    if (this.switching || this.verifyingSwitch || this.replayingInitialization || this.awaitingReplayInitialized || !this.child?.stdin.writable) {
       this.pendingClientLines.push(line);
       return;
     }
     this.forwardToChild(line);
+    if (message?.method === "notifications/initialized") this.requestToolCatalog();
   }
 
   parseMessage(line) {
@@ -147,6 +178,10 @@ class McpSupervisor {
     if (!this.child?.stdin.writable) {
       this.pendingClientLines.push(line);
       return;
+    }
+    const message = this.parseMessage(line);
+    if (message?.method && Object.hasOwn(message, "id") && message.method !== "initialize") {
+      this.inFlight.set(JSON.stringify(message.id), message.method);
     }
     this.child.stdin.write(line);
   }
@@ -203,6 +238,7 @@ class McpSupervisor {
       this.replayingInitialization = false;
       if (this.initializedNotification) {
         this.forwardToChild(this.initializedNotification);
+        this.requestToolCatalog();
         this.flushClientQueue();
       } else {
         this.awaitingReplayInitialized = true;
@@ -211,22 +247,174 @@ class McpSupervisor {
     }
 
     if (isInitializeResponse) this.initializeResponseDelivered = true;
+    if (message && Object.hasOwn(message, "id") && sameJsonRpcId(message.id, this.catalogRequestId)) {
+      this.catalogRequestId = undefined;
+      if (Array.isArray(message.result?.tools)) {
+        if (this.verifyingSwitch) {
+          this.completeSwitch(message.result.tools);
+        } else {
+          this.toolCatalog = canonicalJson(message.result.tools);
+          this.maybeSwitch();
+        }
+      } else if (this.verifyingSwitch) {
+        this.rejectSwitch("new runtime did not return a tool catalog");
+      }
+      return;
+    }
+    if (this.verifyingSwitch) return;
+    if (message && Object.hasOwn(message, "id")) {
+      const method = this.inFlight.get(JSON.stringify(message.id));
+      this.inFlight.delete(JSON.stringify(message.id));
+      if (method === "tools/list" && Array.isArray(message.result?.tools)) {
+        this.toolCatalog = canonicalJson(message.result.tools);
+      }
+    }
+    if (message?.method === "notifications/tools/list_changed") {
+      this.toolCatalog = undefined;
+      this.requestToolCatalog();
+    }
     process.stdout.write(line);
+    this.maybeSwitch();
   }
 
   flushClientQueue() {
-    if (!this.child?.stdin.writable || this.replayingInitialization || this.awaitingReplayInitialized) return;
+    if (!this.child?.stdin.writable || this.switching || this.verifyingSwitch || this.replayingInitialization || this.awaitingReplayInitialized) return;
     const queued = this.pendingClientLines;
     this.pendingClientLines = [];
     for (const line of queued) this.forwardToChild(line);
   }
 
+  requestToolCatalog() {
+    if (!this.options.currentPointer || !this.initializedNotification || !this.child?.stdin.writable || this.catalogRequestId !== undefined) return;
+    this.catalogRequestId = `c2000-supervisor-tools-${process.pid}-${++this.internalRequestSequence}`;
+    this.child.stdin.write(`${JSON.stringify({
+      jsonrpc: "2.0", id: this.catalogRequestId, method: "tools/list", params: {}
+    })}\n`);
+  }
+
+  async checkCurrentPointer() {
+    if (this.stopping || this.pointerReadInProgress) return;
+    this.pointerReadInProgress = true;
+    try {
+      const pointer = JSON.parse(await readFile(this.options.currentPointer, "utf8"));
+      const versionsRoot = path.resolve(path.dirname(this.options.currentPointer), "versions");
+      const installDirectory = path.resolve(pointer.installDirectory);
+      const entrypoint = path.resolve(pointer.entrypoint);
+      const runtimeExecutable = path.resolve(pointer.runtimeExecutable);
+      if (!isWithin(installDirectory, versionsRoot)
+        || !isWithin(entrypoint, path.join(installDirectory, "dist", "src"))
+        || ![".js", ".mjs"].includes(path.extname(entrypoint).toLowerCase())) {
+        throw new Error("current.json contains a runtime path outside its immutable version slot");
+      }
+      await Promise.all([access(entrypoint), access(runtimeExecutable)]);
+      const command = [runtimeExecutable, entrypoint];
+      const key = JSON.stringify(command);
+      if (key === this.activeCommandKey || key === this.rejectedPointerKey) return;
+      this.pendingCommand = command;
+      this.pendingCommandKey = key;
+      this.maybeSwitch();
+    } catch (error) {
+      // An install may be publishing a pointer, or this supervisor may have
+      // started before the first installation. Keep the current child alive.
+      if (this.lastPointerError !== String(error)) {
+        this.lastPointerError = String(error);
+        this.log(`current pointer unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    } finally {
+      this.pointerReadInProgress = false;
+    }
+  }
+
+  maybeSwitch() {
+    if (!this.pendingCommand || this.switching || this.verifyingSwitch || this.stopping
+      || this.inFlight.size > 0 || !this.initializeResponseDelivered || !this.initializedNotification) return;
+    if (this.toolCatalog === undefined) {
+      this.requestToolCatalog();
+      return;
+    }
+    this.previousCommand = this.command;
+    this.switchCommand = this.pendingCommand;
+    this.switchTargetKey = this.pendingCommandKey;
+    this.switching = true;
+    this.log("current.json changed; draining MCP requests before runtime switch");
+    this.child?.stdin.end();
+    this.switchKillTimer = setTimeout(() => this.child?.kill(), 5000);
+    this.switchKillTimer.unref();
+  }
+
+  completeSwitch(tools) {
+    if (canonicalJson(tools) !== this.toolCatalog) {
+      this.rejectSwitch("tool catalog changed; a new Codex session is required to discover the new tools");
+      return;
+    }
+    this.command = this.switchCommand;
+    this.activeCommandKey = this.switchTargetKey;
+    this.previousCommand = undefined;
+    this.pendingCommand = undefined;
+    this.verifyingSwitch = false;
+    clearTimeout(this.switchStartupTimer);
+    this.log("runtime switched with the existing MCP tool catalog");
+    this.flushClientQueue();
+  }
+
+  rejectSwitch(reason) {
+    this.log(`runtime switch rejected: ${reason}; restoring previous runtime`);
+    this.rejectedPointerKey = this.switchTargetKey;
+    this.pendingCommand = undefined;
+    this.verifyingSwitch = false;
+    clearTimeout(this.switchStartupTimer);
+    this.switching = true;
+    this.child?.stdin.end();
+    this.switchKillTimer = setTimeout(() => this.child?.kill(), 5000);
+    this.switchKillTimer.unref();
+  }
+
   handleChildClose(code, signal) {
     this.child = undefined;
+    this.catalogRequestId = undefined;
     if (this.stopping) {
       this.finish();
       return;
     }
+    if (this.switching) {
+      clearTimeout(this.switchKillTimer);
+      this.switching = false;
+      if (this.previousCommand && this.rejectedPointerKey === this.switchTargetKey) {
+        this.command = this.previousCommand;
+        this.previousCommand = undefined;
+        this.verifyingSwitch = false;
+      } else {
+        this.command = this.switchCommand;
+        this.verifyingSwitch = true;
+      }
+      this.launchChild();
+      if (this.verifyingSwitch) {
+        this.switchStartupTimer = setTimeout(() => {
+          this.log("new runtime did not complete MCP startup within 30 seconds; restoring previous runtime");
+          this.child?.kill();
+        }, 30_000);
+        this.switchStartupTimer.unref();
+      }
+      return;
+    }
+    if (this.verifyingSwitch) {
+      clearTimeout(this.switchStartupTimer);
+      this.log("runtime switch rejected: new runtime exited before its tool catalog was verified; restoring previous runtime");
+      this.rejectedPointerKey = this.switchTargetKey;
+      this.pendingCommand = undefined;
+      this.verifyingSwitch = false;
+      this.command = this.previousCommand;
+      this.previousCommand = undefined;
+      this.launchChild();
+      return;
+    }
+    for (const [id] of this.inFlight) {
+      process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: JSON.parse(id), error: {
+        code: -32000,
+        message: "MCP runtime stopped; request outcome is unknown and was not retried"
+      } })}\n`);
+    }
+    this.inFlight.clear();
     if (code === 0 && signal === null) {
       this.log("child exited cleanly; supervisor is stopping");
       process.exitCode = 0;
@@ -268,6 +456,19 @@ class McpSupervisor {
     }
     process.exit(process.exitCode ?? 0);
   }
+}
+
+function isWithin(child, parent) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 try {

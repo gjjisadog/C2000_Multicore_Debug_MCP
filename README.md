@@ -472,6 +472,19 @@ an immutable build-fingerprinted sibling slot and leaves the old slot intact;
 `--force` is only needed when an intentionally identical artifact must be
 installed again.
 
+Installed Codex registrations now pass `current.json` to the MCP supervisor.
+After a later install passes its doctor check, each connected supervisor waits
+for its current requests to finish, starts the new immutable runtime, and
+checks its actual `tools/list` response against the previous runtime. If the
+catalog is unchanged, existing Codex and other MCP clients can continue using
+the new implementation on the same stdio connection. A startup failure or
+changed catalog restores the old runtime and reports the reason on stderr;
+the new runtime remains installed for a fresh client session. In-flight tool
+requests are never replayed. An MCP client that was connected before this
+supervisor option was installed needs one reconnect to acquire it. Codex does
+not guarantee that a running agent will discover new tool names or schemas
+without a new session.
+
 The lower-level cross-platform development sequence remains:
 
 ```bash

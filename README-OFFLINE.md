@@ -52,8 +52,17 @@ The managed Codex block is updated to the absolute private runtime path:
 
 ```toml
 command = "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/runtime/node.exe"
-args = ["C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/dist/src/index.js"]
+args = ["C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/scripts/mcp-supervisor.mjs", "--initial-delay-ms", "1000", "--max-delay-ms", "10000", "--max-restarts", "5", "--current-pointer", "C:/Users/<user>/.c2000-multicore-mcp/current.json", "--", "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/runtime/node.exe", "C:/Users/<user>/.c2000-multicore-mcp/versions/<slot>/dist/src/index.js"]
 ```
+
+The actual registered command runs the slot's `mcp-supervisor.mjs` with
+`--current-pointer` pointing to `current.json`. Once a client has connected
+through that supervisor, later installs can switch its backend after active
+requests finish when the old and new `tools/list` catalogs match. If startup
+fails or the catalog differs, the supervisor keeps or restores the old runtime;
+use a new client session to pick up changed tool definitions. Existing clients
+that started with an older registration need one reconnect to gain this
+behavior. The installer does not close the Codex app or other MCP hosts.
 
 To remove the installed MCP and only its managed Codex block:
 
@@ -63,9 +72,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall.ps1
 
 The installer cleans temporary download, extraction, and `.installing-*`
 staging paths on success or failure. It never runs npm, node-gyp, a package
-manager, or a network repair step. An already connected Codex process may
-continue using its old immutable slot; the upgrade itself does not require
-disconnecting Codex, and the next MCP launch uses the new slot.
+manager, or a network repair step. Installation does not require disconnecting
+Codex. The supervisor decides whether a live connection can adopt the new slot.
 
 ## What remains external
 
