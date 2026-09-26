@@ -16,6 +16,7 @@ import { BoardRegistry } from "../boards/BoardRegistry.js";
 import { BoardWorkerSupervisor } from "../boards/BoardWorkerSupervisor.js";
 import { SessionRepository } from "../storage/repositories/SessionRepository.js";
 import { DaemonToolRouter } from "./DaemonToolRouter.js";
+import { BleLabPowerMcpClient } from "../power/BleLabPowerMcpClient.js";
 import { ArtifactRepository } from "../storage/repositories/ArtifactRepository.js";
 import { TestJobEngine } from "../jobs/TestJobEngine.js";
 import { BoardGroupRepository } from "../storage/repositories/BoardGroupRepository.js";
@@ -516,7 +517,16 @@ export class DebugDaemon {
       workerSupervisor,
       this.sessions,
       analytics,
-      this.config.ccs.workspacePath
+      this.config.ccs.workspacePath,
+      {
+        runs: this.testRuns!,
+        events,
+        enabled: this.config.powerCycle?.enabled === true,
+        safetyProfile: this.config.toolProfile,
+        ...(this.config.powerCycle?.bleLabPowerMcp
+          ? { client: new BleLabPowerMcpClient(this.config.powerCycle.bleLabPowerMcp) }
+          : {})
+      }
     );
     const variableStreams = new VariableStreamService({
       rootDirectory: path.join(path.dirname(databasePath), "artifacts"),

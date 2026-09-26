@@ -1098,6 +1098,11 @@ Hybrid30K DK9 **RAM** acceptance can use `startupPreset: "hybrid30k-dk9-owner-fi
 
 `startupPreset: "f28p65x-paired-flash"` is the official F28P65x dual-core Flash programming contract: `resetType=cpu`, CPU1-then-CPU2 load while both application cores stay halted. The post-program startup owner is selected independently with `runSequence.runMode` and defaults to debugger-owned; use `cpu1_boots_cpu2` when CPU1 firmware owns the release. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
 
+For an explicit product-level power boundary after verified paired Flash writes,
+see [Optional board power cycle](docs/optional-board-power-cycle.md). It calls
+the configured `ble-lab-power` MCP `powercycle` tool or pauses for manual
+power removal, then requires a fresh debug session and target-image check.
+
 Environment overrides:
 
 - `C2000_MCP_CONFIG`

@@ -88,6 +88,7 @@ export class BoardWorkerSupervisor {
 
   private async startBoardInternal(boardId: string): Promise<BoardWorkerClient> {
     const board = this.options.registry.get(boardId);
+    const powerCycleQuarantine = board.status === "QUARANTINED" && String(board.lastError?.code ?? "").startsWith("PowerCycle");
     if (this.requiresCcxmlProbeValidation) {
       await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
     }
@@ -95,7 +96,7 @@ export class BoardWorkerSupervisor {
     // reset, run, or program the target, so preserve durable resident-image
     // evidence across a daemon/MCP frontend reconnect. Target-side uncertainty
     // is handled at the actual worker-restart and target-operation boundaries.
-    this.options.registry.transition(boardId, "STARTING");
+    if (!powerCycleQuarantine) this.options.registry.transition(boardId, "STARTING");
     const workerGeneration = this.options.workers.nextGeneration(boardId);
     const client = this.factory({
       boardId,
@@ -123,7 +124,7 @@ export class BoardWorkerSupervisor {
       });
       const leaseReconciliation = this.options.reconcileWorkerLease?.(boardId, client.workerInstanceId);
       this.options.registry.setWorker(boardId, client.workerInstanceId);
-      this.options.registry.transition(boardId, "READY");
+      if (!powerCycleQuarantine) this.options.registry.transition(boardId, "READY");
       this.options.events.append({
         level: "info",
         sourceType: "worker",
@@ -141,7 +142,10 @@ export class BoardWorkerSupervisor {
       return client;
     } catch (error) {
       this.workers.delete(boardId);
-      this.options.registry.transition(boardId, "FAILED", { error: error instanceof Error ? error.message : String(error) });
+      this.options.registry.transition(boardId, powerCycleQuarantine ? "QUARANTINED" : "FAILED",
+        powerCycleQuarantine
+          ? { ...board.lastError, workerStartError: error instanceof Error ? error.message : String(error) }
+          : { error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
   }

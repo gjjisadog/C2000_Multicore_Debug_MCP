@@ -12,10 +12,33 @@ import type { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsServi
 import { fileMetadata } from "../utils/fileHash.js";
 import { normalizeProgramUri } from "../utils/pathUtils.js";
 import type { TargetProgramMutation } from "../boards/types.js";
+import { randomUUID } from "node:crypto";
+import type { z } from "zod";
+import { cycleBoardPowerSchema, confirmManualPowerCycleSchema } from "../mcp/toolSchemas.js";
+import type { TestRunRepository } from "../storage/repositories/TestRunRepository.js";
+import type { EventRepository } from "../storage/repositories/EventRepository.js";
+import type { LabPowerCycleClient } from "../power/BleLabPowerMcpClient.js";
+
+interface PowerCycleDependencies {
+  runs: Pick<TestRunRepository, "listActiveForBoard">;
+  events: Pick<EventRepository, "append">;
+  client?: LabPowerCycleClient;
+  enabled: boolean;
+  safetyProfile: "readonly" | "safe" | "full";
+}
+
+const POST_CYCLE_STARTUP_TOOLS = new Set([
+  "c2000_runCore", "c2000_continue", "c2000_runCores", "c2000_reset", "c2000_resetCores",
+  "c2000_reloadResetRunToMain", "c2000_runBootHandoffDiagnosis", "c2000_runReloadAndDiagnose",
+  "c2000_launchMulticoreDebug", "c2000_launchMulticoreDebugSafe", "c2000_launchMulticoreDebugWithActions",
+  "c2000_waitForIpcReady"
+]);
 
 /** Routes board-bound tools to a single worker without changing sessionId/coreId semantics. */
 export class DaemonToolRouter implements C2000ToolInvoker {
   private readonly interactiveLeases = new Map<string, LeasedBoard>();
+  private readonly activeBoardCommands = new Map<string, number>();
+  private readonly powerCycleInProgress = new Set<string>();
   private variableStreams?: VariableStreamService;
   private dlog?: DlogService;
   private erad?: EradService;
@@ -25,7 +48,8 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     private readonly workers: BoardWorkerSupervisor,
     private readonly sessions: SessionRepository,
     private readonly analytics?: OutcomeAnalyticsService,
-    private readonly workspacePath?: string
+    private readonly workspacePath?: string,
+    private readonly powerCycle?: PowerCycleDependencies
   ) {}
 
   setVariableStreamService(service: VariableStreamService): void {
@@ -73,6 +97,37 @@ export class DaemonToolRouter implements C2000ToolInvoker {
 
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
     const startedAt = Date.now();
+    if (toolName === "c2000_cycleBoardPower" || toolName === "c2000_confirmManualPowerCycle") {
+      try {
+        const result = toolName === "c2000_cycleBoardPower"
+          ? await this.cycleBoardPower(cycleBoardPowerSchema.parse(input))
+          : this.confirmManualPowerCycle(confirmManualPowerCycleSchema.parse(input));
+        this.recordAnalytics({ toolName, input, result, durationMs: Date.now() - startedAt });
+        return result;
+      } catch (error) {
+        this.recordAnalytics({ toolName, input, error, durationMs: Date.now() - startedAt });
+        throw error;
+      }
+    }
+    const boardIds = this.boardIdsForInvocation(toolName, input);
+    for (const boardId of boardIds) {
+      const board = this.registry.get(boardId);
+      if (this.powerCycleInProgress.has(boardId) ||
+          (board.status === "QUARANTINED" && String(board.lastError?.code ?? "").startsWith("PowerCycle"))) {
+        throw new DebugMcpError("PowerCyclePending", "Board power transition is pending; no target operation was started", {
+          boardId, status: board.status, powerCycle: board.lastError, targetAccessAttempted: false
+        });
+      }
+      const symbolsOnlyIpc = (toolName === "c2000_runIpcAcceptance" || toolName === "c2000_launchAndRunIpcAcceptance")
+        && record(input).programPreparation === "symbols-only";
+      if (board.targetIdentity.requiresVerificationAfterPowerCycle && (POST_CYCLE_STARTUP_TOOLS.has(toolName) || symbolsOnlyIpc)) {
+        throw new DebugMcpError("TargetImageIdentityUnknown", "Power cycling requires fresh CPU1/CPU2 image verification before target startup or IPC conclusions", {
+          boardId, toolName, targetGeneration: board.targetIdentity.generation, targetAccessAttempted: false,
+          nextAction: "Create a new session, connect both cores, and verify both resident images from manifests before starting either core."
+        });
+      }
+    }
+    for (const boardId of boardIds) this.activeBoardCommands.set(boardId, (this.activeBoardCommands.get(boardId) ?? 0) + 1);
     try {
       const result = await this.invokeToolInternal(toolName, input);
       this.recordAnalytics({ toolName, input, result, durationMs: Date.now() - startedAt });
@@ -80,7 +135,33 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     } catch (error) {
       this.recordAnalytics({ toolName, input, error, durationMs: Date.now() - startedAt });
       throw error;
+    } finally {
+      for (const boardId of boardIds) {
+        const remaining = (this.activeBoardCommands.get(boardId) ?? 1) - 1;
+        if (remaining > 0) this.activeBoardCommands.set(boardId, remaining);
+        else this.activeBoardCommands.delete(boardId);
+      }
     }
+  }
+
+  private boardIdsForInvocation(toolName: string, input: unknown): string[] {
+    if (toolName === "c2000_registerBoard") return [];
+    const values = record(input);
+    const leaseBoardId = record(values.__leaseContext).boardId;
+    if (typeof leaseBoardId === "string") return [leaseBoardId];
+    if (typeof values.sessionId === "string") {
+      const session = this.sessions.get(values.sessionId);
+      return session ? [session.boardId] : [];
+    }
+    if (typeof values.boardId === "string") return [values.boardId];
+    if (toolName === "c2000_launchMultiBoardDebug" && Array.isArray(values.boards)) {
+      return [...new Set(values.boards.map(item => record(item).boardId).filter((id): id is string => typeof id === "string"))];
+    }
+    if (["c2000_createDebugSession", "c2000_launchMulticoreDebug", "c2000_launchMulticoreDebugSafe", "c2000_launchMulticoreDebugWithActions", "c2000_launchAndRunIpcAcceptance", "c2000_launchResidentIpcDebug"].includes(toolName)) {
+      const boards = this.registry.list();
+      return boards.length === 1 ? [boards[0]!.boardId] : [];
+    }
+    return [];
   }
 
   private recordAnalytics(input: { toolName: string; input?: unknown; result?: Record<string, unknown>; error?: unknown; durationMs: number }): void {
@@ -230,6 +311,214 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       }
     }
     return this.local.invokeTool(toolName, input);
+  }
+
+  private async cycleBoardPower(input: z.infer<typeof cycleBoardPowerSchema>): Promise<Record<string, unknown>> {
+    const { boardId, sessionId } = input;
+    if (this.powerCycle?.safetyProfile === "readonly") {
+      throw new DebugMcpError("PowerCycleUnavailable", "Board power control is disabled by the readonly safety profile", { boardId, targetAccessAttempted: false });
+    }
+    const board = this.registry.get(boardId);
+    if (this.powerCycleInProgress.has(boardId) ||
+        (board.status === "QUARANTINED" && String(board.lastError?.code ?? "").startsWith("PowerCycle"))) {
+      throw new DebugMcpError("PowerCyclePending", "A board power transition is already pending", { boardId, powerCycle: board.lastError });
+    }
+    if (input.mode === "auto" && (!this.powerCycle?.enabled || !this.powerCycle.client)) {
+      throw new DebugMcpError("PowerCycleUnavailable", "Automatic ble-lab-power MCP control is not configured", { boardId, targetAccessAttempted: false });
+    }
+    this.powerCycleInProgress.add(boardId);
+    const requestId = randomUUID();
+    let quarantined = false;
+    try {
+      // The first failed operation is durable before any cleanup or power action.
+      if (input.reason === "connection_recovery") {
+        this.powerCycle?.events.append({
+          level: "warn", sourceType: "board", sourceId: boardId, boardId,
+          eventType: "POWER_CYCLE_FIRST_FAILURE",
+          payload: { requestId, sessionId, evidenceSource: "caller-reported", firstFailure: input.firstFailure }
+        });
+      }
+      if (!this.powerCycle?.runs || !this.powerCycle.events) {
+        throw new DebugMcpError("PowerCycleRequiresDaemon", "Power-cycle coordination requires daemon job and event repositories");
+      }
+      const activeJobs = this.powerCycle.runs.listActiveForBoard(boardId);
+      const activeCommands = this.activeBoardCommands.get(boardId) ?? 0;
+      if (activeJobs.length > 0 || activeCommands > 0) {
+        throw new DebugMcpError("PowerCycleBusy", "Board has an active job or target command; Flash may still be in progress", {
+          boardId, activeJobs, activeCommands, targetAccessAttempted: false
+        });
+      }
+      const session = this.sessions.get(sessionId);
+      const lease = this.interactiveLeases.get(sessionId);
+      const activeLease = this.registry.leases.active(boardId);
+      if (!session || session.boardId !== boardId || session.closedAt || !lease ||
+          activeLease?.leaseId !== lease.lease.leaseId ||
+          this.workers.currentWorker(boardId)?.workerInstanceId !== lease.context.workerInstanceId) {
+        throw new DebugMcpError("PowerCycleSessionUnsafe", "The old session cannot be closed through its current fenced board lease", {
+          boardId, sessionId, leaseId: activeLease?.leaseId, targetAccessAttempted: false
+        });
+      }
+      const otherSessions = this.sessions.listByBoard(boardId).filter(item => !item.closedAt && item.sessionId !== sessionId);
+      if (otherSessions.length > 0) {
+        throw new DebugMcpError("PowerCycleBusy", "Another debug session still owns this board", {
+          boardId, sessionIds: otherSessions.map(item => item.sessionId), targetAccessAttempted: false
+        });
+      }
+
+      let flashVerification: Record<string, unknown> | undefined;
+      if (input.reason === "after_flash") {
+        const checks = input.flashChecks ?? [];
+        for (const check of checks) {
+          const loaded = await this.invokeToolInternal("c2000_getLoadedProgramInfo", { sessionId, coreId: check.coreId });
+          const programUri = normalizeProgramUri(check.programUri, this.workspacePath);
+          const metadata = await fileMetadata(programUri);
+          if (loaded.success !== true || loaded.sessionId !== sessionId || loaded.coreId !== check.coreId ||
+              loaded.targetMemoryWritten !== true || loaded.programUri !== programUri || loaded.sha256 !== metadata.sha256) {
+            throw new DebugMcpError("PowerCycleFlashIncomplete", "Both current-session images must be successfully written and match their unchanged host artifacts", {
+              boardId, sessionId, coreId: check.coreId, loaded, expectedSha256: metadata.sha256, powerActionAttempted: false
+            });
+          }
+        }
+        flashVerification = await this.invokeToolInternal("c2000_verifyResidentImage", {
+          sessionId, checks, connectIfNeeded: false
+        });
+        if (flashVerification.success !== true || flashVerification.verified !== true ||
+            flashVerification.verificationMethod !== "resident-image-manifest-raw-memory" ||
+            !Array.isArray(flashVerification.checks) || flashVerification.checks.length !== checks.length) {
+          throw new DebugMcpError("PowerCycleFlashUnverified", "Both programmed images must pass manifest-bound target readback before power cycling", {
+            boardId, sessionId, flashVerification, powerActionAttempted: false
+          });
+        }
+      }
+
+      // Marker reads can take time; a durable job may have been submitted meanwhile.
+      const jobsBeforeQuarantine = this.powerCycle.runs.listActiveForBoard(boardId);
+      if (jobsBeforeQuarantine.length > 0) {
+        throw new DebugMcpError("PowerCycleBusy", "A board job started while Flash verification was in progress", {
+          boardId, activeJobs: jobsBeforeQuarantine, targetAccessAttempted: false, powerActionAttempted: false
+        });
+      }
+
+      this.registry.transition(boardId, "QUARANTINED", {
+        code: "PowerCycleInProgress", requestId, reason: input.reason, sessionId, requestedOffSeconds: input.offSeconds
+      });
+      quarantined = true;
+      this.powerCycle.events.append({
+        level: "info", sourceType: "board", sourceId: boardId, boardId,
+        eventType: "POWER_CYCLE_PREPARED",
+        payload: { requestId, sessionId, reason: input.reason, mode: input.mode, flashVerification }
+      });
+      const close = await this.invokeToolInternal("c2000_closeDebugSession", { sessionId });
+      const leaseAfterClose = this.registry.leases.describe(boardId, this.workers.currentWorker(boardId)?.workerInstanceId);
+      if (!isConfirmedSessionClose(close, sessionId) || leaseAfterClose.status !== "NONE") {
+        throw new DebugMcpError("PowerCycleSessionCloseFailed", "Old debug session and board lease were not both confirmed closed; board remains quarantined", {
+          boardId, sessionId, close, leaseAfterClose, powerActionAttempted: false
+        });
+      }
+      this.registry.markTargetIdentityUnknown(boardId, `power-cycle:pending:${requestId}`);
+
+      let response: Record<string, unknown>;
+      try {
+        response = this.powerCycle.enabled && this.powerCycle.client
+          ? await this.powerCycle.client.powercycle({
+              device: "lab_power", off_seconds: input.offSeconds, mode: input.mode, reason: input.reason
+            })
+          : { status: "manual_required", reason: "ble_lab_power_mcp_not_configured", protocol_verified: false, physical_state: null };
+      } catch (error) {
+        response = {
+          status: "manual_required", reason: "automatic_cycle_failed", protocol_verified: false,
+          physical_state: null, may_remain_off: true, error: toStructuredError(error)
+        };
+      }
+      const automaticComplete = response.status === "completed" && response.protocol_verified === true &&
+        response.device === "lab_power" && response.trigger === input.reason && response.mode_used === "auto" &&
+        typeof response.off_hold_seconds === "number" && response.off_hold_seconds >= input.offSeconds;
+      if (automaticComplete) {
+        this.registry.transition(boardId, this.workers.currentWorker(boardId) ? "READY" : "AVAILABLE");
+        this.powerCycle.events.append({
+          level: "info", sourceType: "board", sourceId: boardId, boardId,
+          eventType: "POWER_CYCLE_PROTOCOL_COMPLETED",
+          payload: { requestId, sessionId, reason: input.reason, response, physicalStateVerified: false }
+        });
+        return {
+          success: true, status: "completed", boardId, requestId, reason: input.reason,
+          oldSessionId: sessionId, oldSessionClosed: true, oldLeaseReleased: true,
+          protocolVerified: true, physicalState: null, coldStartVerified: false,
+          targetImageIdentity: "UNKNOWN", reconnectRequired: true, identityVerificationRequired: true,
+          ...(flashVerification ? { flashVerification } : {}), powerCycle: response
+        };
+      }
+
+      this.registry.transition(boardId, "QUARANTINED", {
+        code: "PowerCycleManualRequired", requestId, reason: input.reason,
+        requestedOffSeconds: input.offSeconds, powerCycle: response
+      });
+      this.powerCycle.events.append({
+        level: "warn", sourceType: "board", sourceId: boardId, boardId,
+        eventType: "POWER_CYCLE_MANUAL_REQUIRED",
+        payload: { requestId, sessionId, reason: input.reason, response }
+      });
+      return {
+        success: false, status: "manual_required", boardId, requestId, reason: input.reason,
+        oldSessionId: sessionId, oldSessionClosed: true, oldLeaseReleased: true,
+        protocolVerified: false, physicalState: null, coldStartVerified: false,
+        targetImageIdentity: "UNKNOWN", reconnectRequired: true, identityVerificationRequired: true,
+        instruction: `Remove board power for at least ${input.offSeconds} seconds, restore it, then call c2000_confirmManualPowerCycle with this requestId.`,
+        ...(flashVerification ? { flashVerification } : {}), powerCycle: response
+      };
+    } catch (error) {
+      if (!quarantined) throw error;
+      this.powerCycle?.events.append({
+        level: "error", sourceType: "board", sourceId: boardId, boardId,
+        eventType: "POWER_CYCLE_BLOCKED",
+        payload: { requestId, sessionId, reason: input.reason, cause: toStructuredError(error), powerActionMayHaveStarted: this.registry.targetIdentity(boardId).requiresVerificationAfterPowerCycle === true }
+      });
+      throw new DebugMcpError("PowerCycleSessionCloseFailed", "Power transition is blocked and the board remains quarantined; inspect the old session and complete a supervised manual cycle", {
+        boardId, sessionId, requestId, cause: toStructuredError(error), boardQuarantined: true,
+        nextAction: "Confirm the old debug session and lease are closed. Manually remove power for the requested interval, restore it, then call c2000_confirmManualPowerCycle."
+      });
+    } finally {
+      this.powerCycleInProgress.delete(boardId);
+    }
+  }
+
+  private confirmManualPowerCycle(input: z.infer<typeof confirmManualPowerCycleSchema>): Record<string, unknown> {
+    if (this.powerCycle?.safetyProfile === "readonly") {
+      throw new DebugMcpError("PowerCycleUnavailable", "Board power control is disabled by the readonly safety profile", { boardId: input.boardId });
+    }
+    const board = this.registry.get(input.boardId);
+    const pending = record(board.lastError);
+    if (board.status !== "QUARANTINED" || !["PowerCycleManualRequired", "PowerCycleInProgress"].includes(String(pending.code)) || pending.requestId !== input.requestId) {
+      throw new DebugMcpError("PowerCycleConfirmationInvalid", "No matching manual power-cycle request is pending", {
+        boardId: input.boardId, requestId: input.requestId
+      });
+    }
+    const required = Number(pending.requestedOffSeconds);
+    if (!Number.isFinite(required) || input.observedOffSeconds < required) {
+      throw new DebugMcpError("PowerCycleConfirmationInvalid", "Operator-observed power-off interval is shorter than requested", {
+        boardId: input.boardId, requiredOffSeconds: required, observedOffSeconds: input.observedOffSeconds
+      });
+    }
+    if (this.powerCycleInProgress.has(input.boardId) || (this.activeBoardCommands.get(input.boardId) ?? 0) > 0 ||
+        this.registry.leases.describe(input.boardId, this.workers.currentWorker(input.boardId)?.workerInstanceId).status !== "NONE" ||
+        this.powerCycle?.runs.listActiveForBoard(input.boardId).length ||
+        this.sessions.listByBoard(input.boardId).some(session => !session.closedAt)) {
+      throw new DebugMcpError("PowerCycleBusy", "Board is not idle for manual power-cycle confirmation", { boardId: input.boardId });
+    }
+    if (!this.registry.targetIdentity(input.boardId).requiresVerificationAfterPowerCycle) {
+      this.registry.markTargetIdentityUnknown(input.boardId, `power-cycle:manual-confirmed:${input.requestId}`);
+    }
+    this.registry.transition(input.boardId, this.workers.currentWorker(input.boardId) ? "READY" : "AVAILABLE");
+    this.powerCycle?.events.append({
+      level: "info", sourceType: "board", sourceId: input.boardId, boardId: input.boardId,
+      eventType: "POWER_CYCLE_MANUAL_CONFIRMED",
+      payload: { requestId: input.requestId, observedOffSeconds: input.observedOffSeconds, evidenceSource: "operator-attested", physicalStateVerified: false }
+    });
+    return {
+      success: true, status: "operator_confirmed", boardId: input.boardId, requestId: input.requestId,
+      protocolVerified: false, physicalState: null, coldStartVerified: false,
+      targetImageIdentity: "UNKNOWN", reconnectRequired: true, identityVerificationRequired: true
+    };
   }
 
   private async acquireInteractiveLease(
@@ -511,6 +800,17 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     const manifestVerificationRequested = hasResidentManifestVerification(toolName, input);
     const operatorConfirmed = (toolName === "c2000_launchResidentIpcDebug" || toolName === "c2000_runResidentIpcDebug")
       && values.residentIdentityPolicy !== "require-known";
+    const manifestChecks = Array.isArray(values.residentImageManifests) ? values.residentImageManifests.map(record) : [];
+    const completePostCycleManifest = manifestChecks.length === requirements.length &&
+      requirements.every(requirement => manifestChecks.some(check => check.coreId === requirement.coreId));
+    if (existingIdentity.requiresVerificationAfterPowerCycle &&
+        (toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug") &&
+        !completePostCycleManifest) {
+      throw new DebugMcpError("TargetImageIdentityUnknown", "Power cycling requires a fresh manifest-backed target image verification before resident Flash startup or IPC conclusions", {
+        boardId, targetGeneration: existingIdentity.generation, targetAccessAttempted: false,
+        nextAction: "Reconnect with a fresh session and provide CPU1/CPU2 residentImageManifests, or intentionally reprogram the exact pair through MCP."
+      });
+    }
     if ((existingIdentity.status !== "KNOWN" || missingCoreIds.length > 0) &&
         !operatorConfirmed && !manifestVerificationRequested) {
       this.registry.requireKnownTargetIdentity(boardId, requirements.map(item => item.coreId));

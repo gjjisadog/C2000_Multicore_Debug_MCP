@@ -425,6 +425,7 @@ describe("MCP tool registration contract", () => {
     const byName = new Map(getToolContracts().map(contract => [contract.name, contract]));
 
     const expectedCoreIdentityFields = new Map<string, string[]>([
+      ["c2000_cycleBoardPower", ["flashChecks[].coreId"]],
       ["c2000_submitMultiBoardIpcAcceptance", ["ipcReadyExpressions[].coreId"]],
       ["c2000_connectTarget", ["coreId"]],
       ["c2000_disconnectTarget", ["coreId"]],
@@ -492,6 +493,7 @@ describe("MCP tool registration contract", () => {
     const byName = new Map(getToolContracts().map(contract => [contract.name, contract]));
 
     const expectedResponseCoreIdentityFields = new Map<string, string[]>([
+      ["c2000_cycleBoardPower", ["flashVerification.checks[].coreId"]],
       ["c2000_connectTarget", ["coreId", "coreName"]],
       ["c2000_disconnectTarget", ["coreId", "coreName"]],
       ["c2000_runCore", ["coreId", "coreName"]],

@@ -113,6 +113,8 @@ import {
   verifyRegressionSchema,
   verifyReviewSchema,
   verifyResidentImageSchema,
+  cycleBoardPowerSchema,
+  confirmManualPowerCycleSchema,
   runEngineeringVerificationSchema,
   getVerificationResultSchema,
   listCapabilitiesSchema,
@@ -1041,6 +1043,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
       }
+    },
+
+    async cycleBoardPower(_input: z.infer<typeof cycleBoardPowerSchema>) {
+      return fail(new DebugMcpError("PowerCycleRequiresDaemon", "Board power-cycle coordination requires the daemon board and lease authority"));
+    },
+
+    async confirmManualPowerCycle(_input: z.infer<typeof confirmManualPowerCycleSchema>) {
+      return fail(new DebugMcpError("PowerCycleRequiresDaemon", "Manual power-cycle confirmation requires the daemon board authority"));
     },
 
     async connectTarget(input: z.infer<typeof sessionCoreSchema>) {
