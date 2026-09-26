@@ -1096,12 +1096,12 @@ Prefer one workflow (`c2000_launchResidentIpcDebug`, `c2000_launchAndRunIpcAccep
 
 Hybrid30K DK9 **RAM** acceptance can use `startupPreset: "hybrid30k-dk9-owner-first"`. The validated preset is `resetType=cpu`, CPU1-run-before-CPU2 load with `cpu1SettleMs=250`, then debugger-runs-both with CPU1 first and `settleMs=500`. It is not a paired Flash programming preset: a CPU2 Flash image combined with CPU1-run-before-CPU2 is rejected before target access, so use `startupPreset: "f28p65x-paired-flash"` when both images are programmed into Flash.
 
-`startupPreset: "f28p65x-paired-flash"` is the official F28P65x dual-core Flash programming contract: `resetType=cpu`, CPU1-then-CPU2 load while both application cores stay halted. The post-program startup owner is selected independently with `runSequence.runMode` and defaults to debugger-owned; use `cpu1_boots_cpu2` when CPU1 firmware owns the release. Durable and multi-board submission materialize these values into the stored test plan. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
+`startupPreset: "f28p65x-paired-flash"` is the F28P65x dual-core Flash programming contract: `resetType=cpu`, CPU1-then-CPU2 load while both application cores stay halted. A real program load stops at `flash_prepared` with IPC marked `NOT_RUN`; it does not release either core. After verifying both image markers, call `c2000_cycleBoardPower` for an OFF interval of at least five seconds, then attach in a fresh session to observe the cold start. For controlled debugger startup after that observation, select `runMode="cpu2_pre_running"` to run CPU2 and confirm it is `Running` before releasing CPU1. Firmware-owned CPU2 release may instead use `cpu1_boots_cpu2`. Durable plans cannot treat the Flash preparation stage as IPC acceptance. Conflicting preset parameters and waits exceeding 10,000 polling iterations fail before target access; workflow failures include the actual `effectiveStartup` and `workflowStage`.
 
-For an explicit product-level power boundary after verified paired Flash writes,
-see [Optional board power cycle](docs/optional-board-power-cycle.md). It calls
-the configured `ble-lab-power` MCP `powercycle` tool or pauses for manual
-power removal, then requires a fresh debug session and target-image check.
+For the post-Flash power boundary and its identity checks, see
+[Board power cycle](docs/optional-board-power-cycle.md). It calls the configured
+`ble-lab-power` MCP `powercycle` tool or pauses for manual power removal, then
+requires a fresh debug session and target-image check.
 
 Environment overrides:
 
@@ -1444,7 +1444,7 @@ Select the pair contract explicitly:
 }
 ```
 
-`f28p65x-paired-flash` resolves to `resetType=cpu` and `loadSequence.mode=cpu1-then-cpu2`. Its post-program `runSequence` defaults to `debugger-runs-both` (CPU1 first, `settleMs=500`) but may be selected as `cpu1_boots_cpu2` when the firmware owns CPU2 release; explicit contradictory reset/load parameters are rejected before any target access.
+`f28p65x-paired-flash` resolves to `resetType=cpu` and `loadSequence.mode=cpu1-then-cpu2`. A real Flash load defaults to `stopAfterFlashPreparation=true` and `sessionMode=interactive`; `stopAfterFlashPreparation=false` is rejected before programming. The result is `flash_prepared`, with `ipcAcceptance=NOT_RUN`, and directs the caller to verify both resident markers and perform the five-second power cycle. A fresh attach observes cold-start state. A separate controlled-debug run can use `cpu2_pre_running` (CPU2 must be confirmed `Running` before CPU1 runs) or `cpu1_boots_cpu2` when firmware owns CPU2 release; explicit contradictory reset/load parameters are rejected before any target access.
 
 If the CPU2 linker map contains Flash banks, `loadSequence.mode = cpu1-run-before-cpu2` is rejected before the first target access with `StartupContractInvalid` / `diagnosisCode=PAIRED_FLASH_REQUIRES_HALTED_OWNER`. The historical `hybrid30k-dk9-owner-first` preset still exists and is still valid for CPU2 **RAM** images (owner-side initialization, old bring-up), but it is not a paired Flash programming preset: it starts CPU1 before the CPU2 image is loaded.
 

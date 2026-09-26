@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.7 - 2026-09-26
+
+### Paired Flash programming and dual-core debug
+
+- Stop paired F28P65x Flash programming at `flash_prepared` by default, with
+  IPC acceptance marked `NOT_RUN`; reject attempts to run directly after a real
+  Flash load, including map-derived paired Flash requests and durable plans.
+- Direct callers to verify both resident image markers, power off the USB board
+  for at least five seconds, power on, and attach in a fresh session before
+  drawing cold-start conclusions.
+- For controlled CPU2-first debug, confirm CPU2 is `Running` before releasing
+  CPU1; leave CPU1 halted and report the skipped release if CPU2 stops.
+
 ## 0.7.6 - 2026-09-26
 
 ### Optional board power cycling
