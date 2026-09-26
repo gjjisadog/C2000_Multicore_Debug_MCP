@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { sharedFileMetadataCache } from "./FileMetadataCache.js";
+import { stat } from "node:fs/promises";
 
 export async function fileMetadata(programUri: string) {
-  const cached = await sharedFileMetadataCache.getOrCreate(programUri, () => sha256File(programUri));
+  // Artifact identity must be based on current bytes: size and mtime can stay
+  // unchanged when a file is rewritten quickly, especially on Windows.
+  const sha256 = await sha256File(programUri);
+  const stats = await stat(programUri);
   return {
-    fileMTime: cached.fileMTime,
-    fileSize: cached.fileSize,
-    sha256: cached.value
+    fileMTime: stats.mtime.toISOString(),
+    fileSize: stats.size,
+    sha256
   };
 }
 
