@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.7.6 - 2026-09-26
+
+### Optional board power cycling
+
+- Add a guarded BLE lab power-cycle workflow with run and command checks,
+  audit events, and fresh target-image verification requirements after a cycle.
+- Preserve the board-registration error contract when a startup request names
+  an unregistered board.
 
 ### MCP runtime handoff without client restart
 

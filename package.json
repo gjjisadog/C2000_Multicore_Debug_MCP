@@ -1,6 +1,6 @@
 {
   "name": "c2000-multicore-mcp",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "description": "Explicit multicore MCP debug server for TI C2000 CCS Debug Server workflows.",
   "keywords": [
     "pi-package",

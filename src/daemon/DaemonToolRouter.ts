@@ -111,7 +111,8 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     }
     const boardIds = this.boardIdsForInvocation(toolName, input);
     for (const boardId of boardIds) {
-      const board = this.registry.get(boardId);
+      const board = this.registry.list().find(candidate => candidate.boardId === boardId);
+      if (!board) continue;
       if (this.powerCycleInProgress.has(boardId) ||
           (board.status === "QUARANTINED" && String(board.lastError?.code ?? "").startsWith("PowerCycle"))) {
         throw new DebugMcpError("PowerCyclePending", "Board power transition is pending; no target operation was started", {
