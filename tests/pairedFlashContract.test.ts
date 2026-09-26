@@ -20,6 +20,7 @@ const coreMap = [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "
 class PairedFlashAdapter extends MockDebugAdapter {
   events: string[] = [];
   resetRequests: Array<{ coreId: CoreId; resetType: ResetType }> = [];
+  cpu2StopsAfterRun = false;
 
   override async connect(session: AdapterSession, coreId: CoreId) {
     this.events.push(`connect:${coreId}`);
@@ -32,6 +33,7 @@ class PairedFlashAdapter extends MockDebugAdapter {
   override async run(session: AdapterSession, coreId: CoreId) {
     this.events.push(`run:${coreId}`);
     await super.run(session, coreId);
+    if (coreId === 2 && this.cpu2StopsAfterRun) await super.halt(session, coreId);
   }
   override async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetTargetState> {
     this.events.push(`reset:${coreId}:${resetType}`);
@@ -127,6 +129,9 @@ describe("F28P65x paired Flash programming contract", () => {
       status: "flash_prepared",
       ipcAcceptance: "NOT_RUN",
       coldStartVerified: false,
+      startupSequenceExecuted: false,
+      targetMemoryWritten: true,
+      targetFlashVerified: false,
       flashProgramming: { performed: true }
     });
     expect(adapter.events).toContain("load:0");
@@ -134,20 +139,31 @@ describe("F28P65x paired Flash programming contract", () => {
     expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
   });
 
-  test("programs both images with every application core halted, then starts them", async () => {
+  test("one-shot paired Flash preset retains its session for the power-cycle step", async () => {
+    const { adapter, handlers, manager, input } = await fixture();
+    const { sessionId: _sessionId, ...launchInput } = input;
+    const result = await handlers.launchAndRunIpcAcceptance(launchInput);
+    expect(result).toMatchObject({
+      success: true, status: "flash_prepared", sessionMode: "interactive",
+      ipcAcceptance: "NOT_RUN", cleanup: { sessionClosed: false }
+    });
+    expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
+    await expect(manager.listCores(result.sessionId)).resolves.toHaveLength(2);
+    await manager.closeDebugSession(result.sessionId);
+  });
+
+  test("programs both images with every application core halted and stops before startup", async () => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance(input);
 
-    expect(result.success).toBe(true);
+    expect(result).toMatchObject({ success: true, status: "flash_prepared", ipcAcceptance: "NOT_RUN" });
     expect(adapter.events).toEqual([
       "halt:0", "halt:2",
       "reset:0:cpu", "reset:2:cpu",
       "load:0",
       "halt:0",
       "prepareFlashLoad:0->2:[3]",
-      "load:2",
-      "halt:0", "halt:2",
-      "run:0", "run:2"
+      "load:2"
     ]);
     expect(result.flashProgramming).toMatchObject({
       stage: "paired-flash",
@@ -189,11 +205,50 @@ describe("F28P65x paired Flash programming contract", () => {
       { coreId: 0, resetType: "cpu" },
       { coreId: 2, resetType: "cpu" }
     ]);
-    expect(result.reset.results).toEqual([
-      expect.objectContaining({ coreId: 0, success: true, state: "Halted" }),
-      expect.objectContaining({ coreId: 2, success: true, state: "Halted" })
-    ]);
-    expect(result.startupContract.loadMode).toBe("cpu1-then-cpu2");
+    expect(result.performedSteps).toContain("completePairedFlashProgramming");
+    expect(result.status).toBe("flash_prepared");
+  });
+
+  test("rejects an explicit request to run freshly programmed Flash before a power cycle", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({ ...input, stopAfterFlashPreparation: false });
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.objectContaining({ code: "StartupContractInvalid", details: expect.objectContaining({
+        targetMemoryWritten: false, coldStartVerified: false
+      }) })
+    });
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("starts CPU2 and verifies it is running before releasing CPU1 in resident debug", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({
+      ...input, programPreparation: "symbols-only",
+      runSequence: { runMode: "cpu2_pre_running", settleMs: 0 }
+    });
+    expect(result.success).toBe(true);
+    expect(adapter.events.indexOf("run:2")).toBeLessThan(adapter.events.indexOf("run:0"));
+    expect(result.cpu2PreRunEvidence).toMatchObject({ coreId: 2, connected: true, state: "Running" });
+    expect(result.performedSteps).toEqual(expect.arrayContaining([
+      "runCpu2", "verifyCpu2RunningBeforeCpu1", "runCpu1"
+    ]));
+  });
+
+  test("does not release CPU1 when CPU2 stops during the pre-run window", async () => {
+    const { adapter, handlers, input } = await fixture();
+    adapter.cpu2StopsAfterRun = true;
+    const result = await handlers.runIpcAcceptance({
+      ...input, programPreparation: "symbols-only",
+      runSequence: { runMode: "cpu2_pre_running", settleMs: 0 }
+    });
+    expect(result).toMatchObject({ success: false, error: expect.objectContaining({
+      code: "StartupContractInvalid",
+      details: expect.objectContaining({ cpu1RunSkipped: true,
+        cpu2PreRunEvidence: expect.objectContaining({ coreId: 2, state: "Halted" }) })
+    }) });
+    expect(adapter.events).toContain("run:2");
+    expect(adapter.events).not.toContain("run:0");
   });
 
   test("rejects the historical CPU1-pre-run load sequence for a CPU2 Flash image before any target access", async () => {

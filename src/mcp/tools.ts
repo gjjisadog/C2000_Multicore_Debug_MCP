@@ -1063,6 +1063,8 @@ export function getToolSurfaceGuide(
       "Use F28P65x coreId 0 for C28xx_CPU1 and coreId 2 for C28xx_CPU2.",
       "Use exact CCS corePattern selectors C28xx_CPU1 and C28xx_CPU2; do not send regular expressions.",
       "For a CPU2 RAM image that requires CPU1 ownership initialization, explicitly use loadSequence.mode=cpu1-run-before-cpu2.",
+      "For paired Flash, the f28p65x-paired-flash preset stops after both writes; verify both markers, call c2000_cycleBoardPower with reason=after_flash and offSeconds>=5, then open a new session and attach read-only before drawing a cold-start conclusion.",
+      "When controlled debugger startup requires CPU2 first, use resident mode=restart-and-diagnose with runMode=cpu2_pre_running after the cold-start observation; MCP checks CPU2 Running before releasing CPU1.",
       "When CPU1 firmware owns the CPU2 boot handoff, use runSequence.runMode=cpu1_boots_cpu2; MCP disconnects CPU2 while CPU1 runs and reconnects it before diagnosis.",
       "Set runSequence.runMode (or durable runIpcAcceptance.runMode) explicitly; when present it is authoritative and contradictory legacy runCpu1First/runCpu2 values are rejected.",
       "The workflow result reports cpu2StartAuthority: firmware-owned, debugger-owned, pre-running, or unspecified; unspecified means legacy flags were used and CPU2 startup ownership is not proven.",

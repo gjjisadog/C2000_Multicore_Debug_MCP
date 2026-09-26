@@ -2,7 +2,8 @@
 
 The C2000 daemon can call the installed `ble-lab-power` stdio MCP server's
 `powercycle` tool for the registered `lab_power` USB plug. This is an explicit
-step. Existing Flash and IPC tools do not cycle power by default. The C2000
+step. Paired Flash workflows stop after programming; they do not cycle power
+by default. The C2000
 daemon starts its own MCP client for the call; it cannot reuse the Codex
 client's stdio connection. It never exposes a general command or shell tool.
 
@@ -36,13 +37,15 @@ closing the debug session.
 ## After paired Flash programming
 
 Use `c2000_launchAndRunIpcAcceptance` with
-`startupPreset="f28p65x-paired-flash"`, `programPreparation="load"`,
-`stopAfterFlashPreparation=true`, `sessionMode="interactive"`, and
-`autoCloseOnComplete=false`. This stops after both application images are
+`startupPreset="f28p65x-paired-flash"` and `programPreparation="load"`.
+The preset supplies `stopAfterFlashPreparation=true` and an interactive
+session by default. This stops after both application images are
 written while the cores remain halted. The result has
 `status="flash_prepared"` and `ipcAcceptance="NOT_RUN"`. A failed or skipped
 load cannot reach this result. An existing interactive session can use the
-same stop option in `c2000_runIpcAcceptance`.
+same preset in `c2000_runIpcAcceptance`. If CPU2 Flash is detected from the
+linker map without a preset, specify `stopAfterFlashPreparation=true`.
+`stopAfterFlashPreparation=false` is rejected before program loading.
 
 If product power cycling is selected, call `c2000_cycleBoardPower` explicitly
 with that `sessionId`, `boardId`, `reason="after_flash"`, and `flashChecks` for
@@ -95,3 +98,20 @@ session must establish both core identities through manifest-backed resident
 verification or a new controlled MCP program load. Resident IPC workflows
 cannot use operator-only identity confirmation after a power cycle. Symbols-only
 IPC acceptance is blocked until both identities are re-established.
+
+## Resume after the five-second cycle
+
+1. Use a **new** session with `c2000_launchResidentIpcDebug`,
+   `mode="attach-only"`, `residentIdentityPolicy="require-known"`, and both
+   image manifests. This verifies resident images and reads cold-start state
+   without halting, resetting, or running either core.
+2. If the firmware's debugger startup contract calls for CPU2 first, use
+   `c2000_runResidentIpcDebug` on that session with
+   `mode="restart-and-diagnose"` and `runMode="cpu2_pre_running"`.
+   The workflow halts and resets both cores, runs CPU2, confirms CPU2 remains
+   `Running`, and only then releases CPU1. If CPU2 stops, CPU1 stays halted
+   and the failure reports `cpu1RunSkipped=true`.
+
+The second step is controlled-debugger evidence. Keep it separate from the
+attach-only cold-start observation. `loadSequence.mode` controls Flash
+programming order; `runMode` controls debug startup order.

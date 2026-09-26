@@ -154,6 +154,12 @@ export function resolveIpcStartupPreset(input: Record<string, unknown>): Record<
 
   return {
     ...input,
+    // A paired Flash write is only preparation. Keep the current session for
+    // manifest verification and the explicit five-second power-cycle boundary.
+    ...(name === "f28p65x-paired-flash" && input.programPreparation !== "symbols-only" ? {
+      stopAfterFlashPreparation: input.stopAfterFlashPreparation ?? true,
+      sessionMode: input.sessionMode ?? "interactive"
+    } : {}),
     // Normalize the generic adapter default to the preset's explicit reset
     // contract before the Zod schema materializes the remaining defaults.
     resetType: input.resetType === undefined || input.resetType === "default"

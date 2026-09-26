@@ -245,6 +245,9 @@ personal rankings or causal claims from cross-improvement correlations.
   the product-level restart path, or (c) trigger the board's hardware reset
   circuit (for example XRSn). A debugger-only reconnect, reset, or run is
   controlled-debugger evidence and does not substitute for that boundary.
+  The `f28p65x-paired-flash` preset stops at `flash_prepared`; for the USB plug
+  flow, verify both markers and use `c2000_cycleBoardPower` with at least five
+  seconds OFF, then attach in a fresh session before any debugger restart.
 - Do not assign PWM, contactor, power-stage, or HV control variables as part of
   generic verification. Target writes and fault injection remain in existing
   safe/full and durable-job boundaries.

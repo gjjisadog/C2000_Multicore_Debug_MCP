@@ -159,6 +159,18 @@ describe("StepRegistry", () => {
     expect(testPlanSchema.safeParse(plan("cpu1_boots_cpu2", "restart")).success).toBe(true);
   });
 
+  test("does not treat paired Flash preparation as a durable IPC acceptance pass", () => {
+    const base = { planVersion: 1, name: "paired-flash", boardIds: ["board-a"],
+      steps: [{ type: "launchMulticore", loadPrograms: false }, {
+        type: "runIpcAcceptance", startupPreset: "f28p65x-paired-flash",
+        loadSequence: { mode: "cpu1-then-cpu2" }, programPreparation: "load"
+      }] };
+    expect(testPlanSchema.safeParse(base).success).toBe(false);
+    expect(testPlanSchema.safeParse({ ...base, steps: [base.steps[0], {
+      ...base.steps[1], programPreparation: "symbols-only"
+    }] }).success).toBe(true);
+  });
+
   test("durable step schema fails closed on unknown fields and missing or unsupported core identity", () => {
     const base = { planVersion: 1, name: "strict", boardIds: ["board-a"], steps: [] as unknown[] };
     expect(testPlanSchema.safeParse({ ...base, steps: [{ type: "assignExpressions", assignments: [{ expression: "g_x", value: 1 }] }] }).success).toBe(false);

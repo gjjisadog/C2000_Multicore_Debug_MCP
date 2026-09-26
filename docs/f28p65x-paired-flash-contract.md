@@ -81,7 +81,7 @@ upgrades a protocol acknowledgement into physical cold-start evidence.
 | Before CPU2 `prepareFlashLoad` | connected + `Halted` | connected + `Halted` | `FlashOwnerCoreNotHalted` (host) and the DSS owner-state precondition |
 | Before CPU2 `loadProgram` | not `Running` | `Halted` | owner-halt confirmation plus the owner-state precondition |
 | Between the two Flash loads | no `runCore` for any core | no `runCore` for any core | `FlashProgrammingWindowActive` on `runCoreUnlocked` |
-| After both Flash loads | may run | may run | boundary closed by the workflow |
+| After both Flash loads | halted | halted | IPC workflow returns `flash_prepared`; product power cycle is next |
 
 Invariants are enforced in two layers on purpose: the workflow chooses the
 correct sequence, and the manager/DSS layers fail closed if they are asked to
@@ -153,12 +153,13 @@ bank failure.
 
 | Preset | Programming contract | Post-program startup |
 | --- | --- | --- |
-| `f28p65x-paired-flash` | CPU reset + `cpu1-then-cpu2` | Select independently with `runSequence.runMode`; defaults to debugger-owned |
+| `f28p65x-paired-flash` | CPU reset + `cpu1-then-cpu2` | Stops at `flash_prepared`; cycle board power before resident debug |
 | `hybrid30k-dk9-owner-first` | `cpu1-run-before-cpu2` | Historical Hybrid30K DK9 RAM bring-up contract |
 
 The paired Flash preset describes the programming phase only. After the Flash
-boundary closes, `runSequence.runMode` may be `debugger_runs_both` or
-`cpu1_boots_cpu2`, depending on who owns the product CPU2 handoff. An explicit
+boundary closes, the workflow stops without running either core. A fresh
+resident session may later select `cpu2_pre_running`, `debugger_runs_both`, or
+`cpu1_boots_cpu2` according to the firmware's debug startup contract. An explicit
 `resetType: "default"` is normalized to the paired contract's required CPU
 reset. A contradictory reset or load mode is still rejected before target
 access; repeated CPU2 Flash programming remains separately fail-closed.
@@ -178,7 +179,8 @@ safe common path in one call:
    before loading either symbol table; this read-only check can establish a
    previously `UNKNOWN` board identity without a separate verification call;
 3. load both `.out` symbol tables only;
-4. default to the CPU1-owned CPU2 handoff, with bounded entry/IPC evidence;
+4. default to attach-only observation; an explicit restart-and-diagnose mode
+   selects a bounded CPU1/CPU2 debug startup contract;
 5. return boot diagnosis without opening the paired Flash programming boundary.
 
 This shortcut never programs Flash, writes target memory, or assumes a Flash

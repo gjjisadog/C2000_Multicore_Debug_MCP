@@ -840,7 +840,7 @@ const runIpcAcceptanceObjectSchema = z.object({
     .describe("Optional CPU1 read-only boot diagnostics captured on entry failure and alongside IPC polling; observations do not change readiness conditions"),
   programPreparation: programPreparationSchema.describe("Use symbols-only for an image already resident in Flash; this loads symbols but does not verify resident Flash contents."),
   stopAfterFlashPreparation: z.boolean().default(false)
-    .describe("Opt in to stop after the paired CPU1/CPU2 Flash writes, before application startup or IPC polling. Retain the session for c2000_cycleBoardPower."),
+    .describe("Required for real paired Flash writes; f28p65x-paired-flash supplies true by default. Stop before startup or IPC polling and retain the session for c2000_cycleBoardPower."),
   ...ipcArtifactHashShape,
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
@@ -890,7 +890,8 @@ export const runResidentIpcDebugSchema = z.object({
   bootSyncExpressions: z.array(bootObservationExpressionSchema).min(1).max(64).optional(),
   mode: z.enum(["attach-only", "restart-and-diagnose"]).default("attach-only")
     .describe("attach-only preserves the running target and only connects/loads symbols/reads evidence; restart-and-diagnose retains the legacy bounded CPU1/CPU2 handoff workflow."),
-  runMode: workflowRunModeSchema.default("cpu1_boots_cpu2"),
+  runMode: workflowRunModeSchema.default("cpu1_boots_cpu2")
+    .describe("For a controlled CPU2-first debug startup, explicitly select cpu2_pre_running; MCP verifies CPU2 remains Running before releasing CPU1. This is separate from cold-start attach-only evidence."),
   residentIdentityPolicy: z.enum(["require-known", "operator-confirmed"]).default("operator-confirmed")
     .describe("Use the known target identity when available. The default operator-confirmed mode is a one-call acknowledgement that resident Flash was not changed outside MCP; it does not claim read-back proof."),
   settleMs: z.number().int().nonnegative().default(0),

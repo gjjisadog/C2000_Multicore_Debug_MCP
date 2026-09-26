@@ -99,7 +99,10 @@ must not be substituted for one another.
 
 - Use `startupPreset: "f28p65x-paired-flash"` when both images are programmed
   into Flash. Both images are programmed while every application core stays
-  halted, and no application core is started inside that boundary.
+  halted. The preset stops with `status=flash_prepared`; do not run either core
+  from the just-programmed session. Verify both resident markers, call
+  `c2000_cycleBoardPower` with `reason=after_flash` and `offSeconds>=5`, then
+  open a new session for resident-image verification and cold-start observation.
 - The CPU1 on-chip Flash Plugin prepares the shared Flash clock and bank mapping
   with CPU1 held. Do not start CPU1 to give the Flash Plugin a clock, and do not
   expect the server to halt a running CPU1 for you: it reports
@@ -143,8 +146,10 @@ must not be substituted for one another.
 Use `runSequence.runMode: "cpu2_pre_running"` only when the firmware contract
 explicitly requires CPU2 to be running before CPU1. It is not a generic
 recovery tactic and must not be combined with the CPU1 owner-first RAM load
-sequence. A CPU2-first manual experiment is not evidence for a CPU1-owned
-product handoff.
+sequence. The workflow confirms CPU2 is still `Running` before releasing CPU1;
+otherwise it skips CPU1. For freshly programmed Flash, first perform the
+five-second product power cycle and attach read-only to observe cold start.
+A later CPU2-first debug run is separate controlled-debugger evidence.
 
 ## What counts as ready
 

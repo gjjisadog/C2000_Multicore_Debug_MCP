@@ -410,6 +410,11 @@ export const testPlanSchema = z.object({
       context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "postLoadResetType"],
         message: "postLoadResetType requires firmware-owned CPU2 boot" });
     }
+    if (step.type === "runIpcAcceptance" && step.startupPreset === "f28p65x-paired-flash"
+      && step.programPreparation !== "symbols-only") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["steps", stepIndex, "startupPreset"],
+        message: "Paired Flash preparation requires an interactive session, five-second board power cycle, and fresh resident-image verification; a durable IPC acceptance step cannot report it as a pass" });
+    }
     if (step.type === "runIpcAcceptance" && step.systemResetBeforeHandoff) {
       if ((step.runMode ?? step.runSequence.runMode) !== "cpu1_boots_cpu2"
         || step.postLoadResetType !== undefined || step.programPreparation !== "symbols-only"

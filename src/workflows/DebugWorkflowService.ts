@@ -464,6 +464,14 @@ export class DebugWorkflowService {
         .filter(action => action.targetCoreId === input.cpu2CoreId)
         .flatMap(action => action.flashBanks)
     });
+    if (pairedFlash.required && input.programPreparation !== "symbols-only" && !input.stopAfterFlashPreparation) {
+      throw new DebugMcpError("StartupContractInvalid", "Fresh paired Flash images require a product power cycle before startup or IPC acceptance", {
+        sessionId: input.sessionId,
+        targetMemoryWritten: false,
+        coldStartVerified: false,
+        nextAction: "Set stopAfterFlashPreparation=true, verify both resident markers, call c2000_cycleBoardPower with offSeconds>=5, then use a fresh session for resident-image verification and startup."
+      });
+    }
     if (input.stopAfterFlashPreparation && (input.programPreparation === "symbols-only" || !pairedFlash.required)) {
       throw new DebugMcpError("StartupContractInvalid", "stopAfterFlashPreparation requires the paired Flash programming contract and real program loads", {
         sessionId: input.sessionId, targetMemoryWritten: false
@@ -686,8 +694,10 @@ export class DebugWorkflowService {
       setStage("flash-prepared");
       return {
         success: true, status: "flash_prepared", sessionId: input.sessionId,
-        flashProgramming, load, artifactPreflight, performedSteps,
-        ipcAcceptance: "NOT_RUN", coldStartVerified: false,
+        cpu1CoreId: input.cpu1CoreId, cpu2CoreId: input.cpu2CoreId,
+        initialHalt, reset, flashProgramming, load, artifactPreflight, performedSteps,
+        targetMemoryWritten: true, targetFlashVerified: false,
+        startupSequenceExecuted: false, ipcAcceptance: "NOT_RUN", coldStartVerified: false,
         nextAction: "Call c2000_cycleBoardPower with CPU1/CPU2 flashChecks, then reconnect and verify both resident images before Flash startup or IPC conclusions."
       };
     }
@@ -787,6 +797,7 @@ export class DebugWorkflowService {
       performedSteps.push("resetCpu1AfterLoad");
     }
     let applicationEntry: ApplicationEntryCheck | undefined;
+    let cpu2PreRunEvidence: ToolResult | undefined;
     setStage("run-sequence");
     if (runPlan.releaseCpu2BeforeCpu1) {
       await this.manager.runCore(input.sessionId, input.cpu1CoreId);
@@ -828,6 +839,16 @@ export class DebugWorkflowService {
         await this.manager.runCore(input.sessionId, coreId);
         performedSteps.push(coreId === input.cpu1CoreId ? "runCpu1" : "runCpu2");
         await sleep(input.runSequence.settleMs);
+        if (runPlan.mode === "cpu2_pre_running" && coreId === input.cpu2CoreId) {
+          cpu2PreRunEvidence = await this.manager.getTargetState(input.sessionId, input.cpu2CoreId);
+          performedSteps.push("verifyCpu2RunningBeforeCpu1");
+          if (!cpu2PreRunEvidence.connected || cpu2PreRunEvidence.state !== "Running") {
+            throw new DebugMcpError("StartupContractInvalid", "CPU2 did not remain running before CPU1 release", {
+              sessionId: input.sessionId, cpu2PreRunEvidence, cpu1RunSkipped: true,
+              performedSteps: [...performedSteps]
+            });
+          }
+        }
       }
     }
     if (cpu2BootGate) {
@@ -903,6 +924,7 @@ export class DebugWorkflowService {
       safetyGuardChecks: [...safetyGuardChecks],
       ...(cpu2BootGate ? { cpu2BootGate: cpu2BootGate.evidence } : {}),
       ...(cpu2Release ? { cpu2Release } : {}),
+      ...(cpu2PreRunEvidence ? { cpu2PreRunEvidence } : {}),
       performedSteps: [...performedSteps]
     };
     const timeoutRecovery: ToolResult | undefined = ipcReady.timedOut ? { pc: [] } : undefined;
@@ -996,6 +1018,7 @@ export class DebugWorkflowService {
         runtimeRamOwnership,
         runPlan,
         ...(cpu2Release ? { cpu2Release } : {}),
+        ...(cpu2PreRunEvidence ? { cpu2PreRunEvidence } : {}),
         loadSequence: input.loadSequence,
         startupContract: describeWorkflowStartupContract({
           loadMode: input.loadSequence.mode,
