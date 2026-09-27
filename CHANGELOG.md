@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.13 - 2026-09-27
+
+### One-call Flash session lifecycle
+
+- Keep the paired Flash preparation session interactive through both resident
+  marker checks, then require confirmed closure before board power cycling.
+- Let one-call requests omit session lifecycle settings; reject conflicting
+  settings before target access with field-specific guidance. Clean up failed
+  preparations and preserve the existing power-cycle safety gates.
+
 ## 0.7.11 - 2026-09-27
 
 ### Expired lease recovery after board power cycling

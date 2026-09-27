@@ -53,6 +53,7 @@ describe("MCP stdio smoke script contract", () => {
     expect(source).toContain('name: "c2000_runResidentIpcDebug"');
     expect(source).toContain('name: "c2000_launchResidentIpcDebug"');
     expect(source).toContain('coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]');
+    expect(source).toContain('launchIpcAcceptanceWorkflowContract.coreIdentityFields, ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId", "afterFlashPowerCycle.flashChecks[].coreId"]');
     expect(source).toContain('responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]');
     expect(source).toContain("runToMainSupported");
     expect(source).toContain("runToMainAchieved");

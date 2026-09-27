@@ -238,8 +238,8 @@ async function main() {
     assert(launchIpcAcceptanceWorkflowContract, "c2000_launchAndRunIpcAcceptance contract must be exposed");
     assert.equal(launchIpcAcceptanceWorkflowContract.inputScope, "launch");
     assert.equal(launchIpcAcceptanceWorkflowContract.targetEffect, "launch-workflow");
-    assert.deepEqual(launchIpcAcceptanceWorkflowContract.coreIdentityFields, ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
-    assert.deepEqual(launchIpcAcceptanceWorkflowContract.responseCoreIdentityFields, ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"]);
+    assert.deepEqual(launchIpcAcceptanceWorkflowContract.coreIdentityFields, ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId", "afterFlashPowerCycle.flashChecks[].coreId"]);
+    assert.deepEqual(launchIpcAcceptanceWorkflowContract.responseCoreIdentityFields, ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId", "flash.launch.coreMap[].coreId", "powerCycle.flashVerification.checks[].coreId", "resident.residentVerification.checks[].coreId", "resident.snapshot.cores[].coreId"]);
     const ipcAcceptanceWorkflowContract = (contracts.tools as Array<Record<string, any>>).find(tool => tool.name === "c2000_runIpcAcceptance");
     assert(ipcAcceptanceWorkflowContract, "c2000_runIpcAcceptance contract must be exposed");
     assert.equal(ipcAcceptanceWorkflowContract.inputScope, "launch");

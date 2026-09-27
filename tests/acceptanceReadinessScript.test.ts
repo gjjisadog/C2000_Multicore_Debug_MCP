@@ -82,6 +82,7 @@ describe("Hardware acceptance readiness script contract", () => {
     expect(source).toContain('"c2000_runResidentIpcDebug", "launch", "launch-workflow", ["sessionId", "cpu1CoreId", "cpu2CoreId"]');
     expect(source).toContain('"c2000_launchResidentIpcDebug", "launch", "launch-workflow", ["cpu1OutPath", "cpu2OutPath"]');
     expect(source).toContain('assertCoreIdentityFields(contracts, "c2000_launchResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"])');
+    expect(source).toContain('assertCoreIdentityFields(contracts, "c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId", "afterFlashPowerCycle.flashChecks[].coreId"])');
     expect(source).toContain('assertCoreIdentityFields(contracts, "c2000_runIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"])');
     expect(source).toContain('"postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"');
     expect(source).toContain('"postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreName"');

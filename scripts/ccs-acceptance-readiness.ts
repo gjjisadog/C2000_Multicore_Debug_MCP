@@ -92,7 +92,7 @@ try {
   assertCoreIdentityFields(contracts, "c2000_compareExpressions", ["comparisons[].left.coreId", "comparisons[].right.coreId"]);
   assertCoreIdentityFields(contracts, "c2000_waitForExpressionSet", ["conditions[].coreId"]);
   assertCoreIdentityFields(contracts, "c2000_diagnoseCpu2Boot", ["cpu1CoreId", "cpu2CoreId"]);
-  assertCoreIdentityFields(contracts, "c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
+  assertCoreIdentityFields(contracts, "c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId", "afterFlashPowerCycle.flashChecks[].coreId"]);
   assertCoreIdentityFields(contracts, "c2000_runIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
   assertCoreIdentityFields(contracts, "c2000_runResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);
   assertCoreIdentityFields(contracts, "c2000_launchResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]);

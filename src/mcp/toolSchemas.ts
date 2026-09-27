@@ -964,15 +964,25 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
       .describe("Manifest-backed CPU1/CPU2 marker checks for the exact images in this request")
   }).strict().optional().describe("Complete paired Flash programming, verified five-second USB power cycle, and read-only fresh-session attach in this single MCP call. Manual power intervention still pauses the flow.")
 }).superRefine((value, context) => {
-  if (value.stopAfterFlashPreparation && (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
+  if (value.stopAfterFlashPreparation && !value.afterFlashPowerCycle &&
+      (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["stopAfterFlashPreparation"], message: "Flash preparation must retain an interactive session without auto-close for the explicit power-cycle step" });
   }
   if (value.afterFlashPowerCycle) {
+    if (value.sessionMode !== "interactive") {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["sessionMode"], message: "Remove sessionMode from the one-call Flash request; the server retains and closes the preparation session before power cycling" });
+    }
+    if (value.autoCloseOnComplete) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["autoCloseOnComplete"], message: "Remove autoCloseOnComplete from the one-call Flash request; the server closes the preparation session after marker verification" });
+    }
+    if (!value.cleanupOnFailure) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["cleanupOnFailure"], message: "One-call Flash requires cleanupOnFailure=true so a failed preparation does not retain a session or probe lease" });
+    }
     if (value.startupPreset !== "f28p65x-paired-flash" || value.programPreparation !== "load" ||
-        !value.stopAfterFlashPreparation || value.sessionMode !== "interactive" || value.autoCloseOnComplete ||
+        !value.stopAfterFlashPreparation ||
         value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.loadPolicy !== "always" ||
         value.residentImageManifests !== undefined) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle"], message: "One-call Flash cycle requires the paired Flash preset, real CPU1/CPU2 loads, and a retained interactive preparation session" });
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle"], message: "One-call Flash cycle requires the paired Flash preset and real CPU1/CPU2 loads" });
     }
     const ids = value.afterFlashPowerCycle.flashChecks.map(check => check.coreId).sort((a, b) => a - b);
     if (ids[0] !== 0 || ids[1] !== 2) {

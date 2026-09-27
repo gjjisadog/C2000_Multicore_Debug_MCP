@@ -184,7 +184,13 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         boardId, targetAccessAttempted: false, powerActionAttempted: false
       });
     }
-    const flash = await this.invokeTool("c2000_launchAndRunIpcAcceptance", { ...flashInput, boardId });
+    // The composite owns this session until marker verification and confirmed
+    // closure. Do not let generic launch defaults or caller lifecycle options
+    // shorten the interval before the power-cycle safety gate.
+    const flash = await this.invokeTool("c2000_launchAndRunIpcAcceptance", {
+      ...flashInput, boardId, sessionMode: "interactive",
+      autoCloseOnComplete: false, cleanupOnFailure: true
+    });
     if (flash.success !== true || flash.status !== "flash_prepared" || typeof flash.sessionId !== "string") {
       return { success: false, status: "flash_not_prepared", boardId, flash,
         powerActionAttempted: false, residentAttachAttempted: false };

@@ -47,6 +47,11 @@ an intentional repeat of CPU2 Flash programming. The daemon finishes the
 paired write, verifies both current-session writes and target markers, closes
 the old session and lease, requests the five-second OFF/ON cycle, then opens a
 fresh session with `mode="attach-only"` and re-verifies both resident images.
+Omit `sessionMode`, `autoCloseOnComplete`, and `cleanupOnFailure` from this
+one-call request. The daemon retains the preparation session through marker
+verification, closes it before power control, and cleans up a failed
+preparation. An explicit conflicting lifecycle setting is rejected before
+target access with a field-specific error.
 The resulting `flash`, `powerCycle`, and `resident` evidence remain separate.
 The composite reports `ipcAcceptance="NOT_EVALUATED"` because a read-only
 attach is an observation, not active startup acceptance. With caller-supplied

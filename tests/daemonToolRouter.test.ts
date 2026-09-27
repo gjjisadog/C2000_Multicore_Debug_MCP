@@ -44,7 +44,10 @@ describe("optional board power-cycle coordination", () => {
     fixture.workers.invokeBoard = async (_boardId, toolName, input) => {
       calls.push(toolName);
       if (toolName === "c2000_launchAndRunIpcAcceptance") {
-        expect(input).toMatchObject({ allowDestructiveFlashReload: true, startupPreset: "f28p65x-paired-flash" });
+        expect(input).toMatchObject({
+          allowDestructiveFlashReload: true, startupPreset: "f28p65x-paired-flash",
+          sessionMode: "interactive", autoCloseOnComplete: false, cleanupOnFailure: true
+        });
         expect(input).not.toHaveProperty("afterFlashPowerCycle");
         return { success: true, sessionId: "dbg-flash", status: "flash_prepared" };
       }
@@ -124,6 +127,26 @@ describe("optional board power-cycle coordination", () => {
       ] }
     })).rejects.toMatchObject({ code: "PowerCycleFlashIncomplete",
       details: { targetAccessAttempted: false, powerActionAttempted: false } });
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    fixture.store.close();
+  });
+
+  test("one-call Flash rejects conflicting session lifecycle settings before target access", async () => {
+    const fixture = await makeFixture();
+    fixture.workers.invokeBoard = async () => { throw new Error("worker must not be called"); };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    const base = {
+      boardId: "board-a", startupPreset: "f28p65x-paired-flash", programPreparation: "load",
+      cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: "cpu1.out", cpu2OutPath: "cpu2.out", timeoutMs: 5000,
+      afterFlashPowerCycle: { flashChecks: [
+        { coreId: 0, programUri: "cpu1.out", manifestUri: "cpu1.json" },
+        { coreId: 2, programUri: "cpu2.out", manifestUri: "cpu2.json" }
+      ] }
+    };
+    for (const [field, value] of [["sessionMode", "ephemeral"], ["autoCloseOnComplete", true], ["cleanupOnFailure", false]] as const) {
+      await expect(router.invokeTool("c2000_launchAndRunIpcAcceptance", { ...base, [field]: value }))
+        .rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ path: [field] })]) });
+    }
     expect(fixture.registry.leases.active("board-a")).toBeUndefined();
     fixture.store.close();
   });

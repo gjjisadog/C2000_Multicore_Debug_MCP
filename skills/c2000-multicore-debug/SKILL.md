@@ -254,7 +254,10 @@ personal rankings or causal claims from cross-improvement correlations.
   `afterFlashPowerCycle` containing both image manifests for one client-visible
   call that writes, verifies markers, cycles power for at least five seconds,
   and attaches in a fresh session for read-only verification. If power control
-  returns `manual_required`, pause for the physical operator step.
+  returns `manual_required`, pause for the physical operator step. Omit
+  `sessionMode`, `autoCloseOnComplete`, and `cleanupOnFailure` for this one-call
+  plan; the daemon owns the preparation session through verification and closes
+  it before operating the plug.
 - Flash programming completion is not a cold-start result. Before making a
   Flash-boot or IPC conclusion, perform and record one product-level startup
   boundary after programming: (a) power off and power on the board, (b) use
