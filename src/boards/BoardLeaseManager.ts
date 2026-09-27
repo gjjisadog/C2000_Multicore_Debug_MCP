@@ -110,6 +110,21 @@ export class BoardLeaseManager {
     return publicLease;
   }
 
+  /** Release only an expired lease after the caller has ruled out live work. */
+  releaseExpiredIfUnowned(boardId: string): boolean {
+    return this.store.transaction(() => {
+      const lease = this.leases.activeForBoard(boardId);
+      if (lease) {
+        if (Date.parse(lease.expiresAt) > Date.now()) return false;
+        this.leases.release(lease.leaseId, new Date().toISOString());
+      } else if (this.describe(boardId).status !== "EXPIRED") {
+        return false;
+      }
+      this.boards.setLease(boardId, undefined);
+      return true;
+    });
+  }
+
   /**
    * Describe the durable lease route without treating an expired or terminal
    * row as an active owner. This is intentionally read-only so listBoards can

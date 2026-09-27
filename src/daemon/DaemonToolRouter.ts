@@ -506,7 +506,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       });
       const close = await this.invokeToolInternal("c2000_closeDebugSession", { sessionId });
       const leaseAfterClose = this.registry.leases.describe(boardId, this.workers.currentWorker(boardId)?.workerInstanceId);
-      if (!isConfirmedSessionClose(close, sessionId) || leaseAfterClose.status !== "NONE") {
+      if (!isConfirmedSessionClose(close, sessionId) || !this.clearExpiredPowerCycleLease(boardId)) {
         throw new DebugMcpError("PowerCycleSessionCloseFailed", "Old debug session and board lease were not both confirmed closed; board remains quarantined", {
           boardId, sessionId, close, leaseAfterClose, powerActionAttempted: false
         });
@@ -596,9 +596,9 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       });
     }
     if (this.powerCycleInProgress.has(input.boardId) || (this.activeBoardCommands.get(input.boardId) ?? 0) > 0 ||
-        this.registry.leases.describe(input.boardId, this.workers.currentWorker(input.boardId)?.workerInstanceId).status !== "NONE" ||
         this.powerCycle?.runs.listActiveForBoard(input.boardId).length ||
-        this.sessions.listByBoard(input.boardId).some(session => !session.closedAt)) {
+        this.sessions.listByBoard(input.boardId).some(session => !session.closedAt) ||
+        !this.clearExpiredPowerCycleLease(input.boardId)) {
       throw new DebugMcpError("PowerCycleBusy", "Board is not idle for manual power-cycle confirmation", { boardId: input.boardId });
     }
     if (!this.registry.targetIdentity(input.boardId).requiresVerificationAfterPowerCycle) {
@@ -615,6 +615,12 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       protocolVerified: false, physicalState: null, coldStartVerified: false,
       targetImageIdentity: "UNKNOWN", reconnectRequired: true, identityVerificationRequired: true
     };
+  }
+
+  private clearExpiredPowerCycleLease(boardId: string): boolean {
+    const state = this.registry.leases.describe(boardId, this.workers.currentWorker(boardId)?.workerInstanceId);
+    if (state.status === "NONE") return true;
+    return state.status === "EXPIRED" && this.registry.leases.releaseExpiredIfUnowned(boardId);
   }
 
   private async acquireInteractiveLease(

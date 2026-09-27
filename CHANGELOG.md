@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.11 - 2026-09-27
+
+### Expired lease recovery after board power cycling
+
+- Release an expired, unowned board lease during the guarded power-cycle close
+  and manual-confirmation paths. Active jobs, commands, sessions, and leases
+  still block confirmation; target-image identity remains unknown afterward.
+
 ## 0.7.10 - 2026-09-27
 
 ### Conversation-scoped Flash authorization
