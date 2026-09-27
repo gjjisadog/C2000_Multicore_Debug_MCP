@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.7.10 - 2026-09-27
+
+### Conversation-scoped Flash authorization
+
+- Carry explicit user Flash authorization forward within the same conversation
+  for ongoing work on the authorized board, including rebuilt images and
+  intentional reloads. The agent no longer requests approval for each session,
+  call, or CPU2 rewrite; the MCP destructive-reload flag and safety checks remain.
+
+## 0.7.9 - 2026-09-27
+
+### One-approval paired Flash and cold-start observation
+
+- Add an optional `afterFlashPowerCycle` plan to the existing launch workflow.
+  One MCP call writes the CPU1/CPU2 pair, verifies both resident markers,
+  cycles the USB power for at least five seconds, and attaches in a fresh
+  session for read-only observation. Failures stop before the next stage.
+- Clarify that one explicit task-scoped authorization can cover the same-board,
+  same-image reflash, power cycle, and read-only verification; the existing
+  destructive-reload flag still records intentional CPU2 Flash reprogramming.
+
+## 0.7.8 - 2026-09-27
+
+### Stale-session reconciliation and optional IPC criteria
+
+- Reconcile abandoned debug sessions only after fenced worker and board checks.
+- Remove implicit firmware-specific IPC symbols; report `NOT_EVALUATED` when
+  the caller omits IPC readiness expressions.
+
 ## 0.7.7 - 2026-09-26
 
 ### Paired Flash programming and dual-core debug

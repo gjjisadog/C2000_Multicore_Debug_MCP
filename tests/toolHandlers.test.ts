@@ -1975,6 +1975,19 @@ describe("tool handlers", () => {
     expect(adapter.events).toEqual([]);
   });
 
+  test("one-call Flash power plan fails before target access without daemon authority", async () => {
+    const result = await createHandlers().launchAndRunIpcAcceptance({
+      startupPreset: "f28p65x-paired-flash", programPreparation: "load",
+      cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: "cpu1.out", cpu2OutPath: "cpu2.out", timeoutMs: 5000,
+      afterFlashPowerCycle: { flashChecks: [
+        { coreId: 0, programUri: "cpu1.out", manifestUri: "cpu1.json" },
+        { coreId: 2, programUri: "cpu2.out", manifestUri: "cpu2.json" }
+      ] }
+    });
+    expect(result).toMatchObject({ success: false, error: { code: "PowerCycleRequiresDaemon",
+      details: { targetAccessAttempted: false, powerActionAttempted: false } } });
+  });
+
   test("launchAndRunIpcAcceptance can run CPU1 initialization before loading a CPU2 RAM image", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-launch-ipc-workflow-"));
     const cpu1OutPath = path.join(tempDir, "cpu1.out");

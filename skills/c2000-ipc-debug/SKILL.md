@@ -137,9 +137,15 @@ must not be substituted for one another.
   image matches the requested `.out`. `symbols-only` does not independently
   prove Flash contents. If identity is unknown or mismatched, stop and perform
   a controlled exact-pair load or `c2000_verifyResidentImage` with a valid
-  resident-image manifest. Do
-  not repeat CPU2 Flash programming without the explicit destructive reload
-  authorization required by the server.
+  resident-image manifest. An explicit Flash authorization persists within the
+  current conversation for the ongoing work on the authorized board, including
+  updated CPU1/CPU2 builds, an intentional repeat after a marker mismatch, the
+  five-second product power cycle, and read-only verification. Do not request
+  approval again for each write, session, or MCP call. Pass
+  `allowDestructiveFlashReload=true` for a repeated CPU2 write, and record the
+  current artifact hashes. Never retry a failed load in its quarantined session.
+  Respect a narrower user limit and ask only when the planned operation is
+  outside the authorization already given.
 
 ### CPU2-pre-running mode
 

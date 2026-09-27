@@ -1583,6 +1583,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async launchAndRunIpcAcceptance(input: z.input<typeof launchAndRunIpcAcceptanceSchema>) {
       try {
         const parsed = launchAndRunIpcAcceptanceSchema.parse(resolveIpcStartupPreset(input as Record<string, unknown>));
+        if (parsed.afterFlashPowerCycle) {
+          throw new DebugMcpError("PowerCycleRequiresDaemon", "The one-call Flash, power-cycle, and resident-attach plan requires daemon board and lease authority", {
+            targetAccessAttempted: false, powerActionAttempted: false
+          });
+        }
         assertBoundedWorkflowPolling(parsed.timeoutMs, parsed.intervalMs);
         return ok(await workflows.launchAndRunIpcAcceptance(parsed));
       } catch (error) {

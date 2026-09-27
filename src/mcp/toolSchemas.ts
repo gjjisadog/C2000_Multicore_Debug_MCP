@@ -437,7 +437,7 @@ export const submitMultiBoardIpcAcceptanceSchema = z.object({
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize repeated CPU2 Flash programming in each durable board session"),
+    .describe("Set true in each board session when explicit user authorization in this conversation already covers intentional CPU2 Flash reprogramming"),
   loadSequence: ipcLoadSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.loadSequence),
   runSequence: ipcRunSequenceSchema.default(HYBRID30K_DK9_OWNER_FIRST_STARTUP.runSequence),
   runMode: workflowRunModeSchema.default("debugger_runs_both"),
@@ -622,7 +622,7 @@ export const loadProgramSchema = sessionCoreSchema.extend({
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image")
+    .describe("Set true when an intentional repeated CPU2 Flash load is already authorized in this conversation; otherwise MCP blocks before erase")
 });
 
 export const loadSymbolsSchema = sessionCoreSchema.extend({
@@ -782,7 +782,7 @@ export const reloadResetRunToMainSchema = sessionCoreSchema.extend({
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
+    .describe("Set true when an intentional repeated CPU2 Flash load is already authorized in this conversation; otherwise MCP blocks before erase"),
   settleMs: z.number().int().nonnegative().default(250)
 });
 
@@ -847,7 +847,7 @@ const runIpcAcceptanceObjectSchema = z.object({
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
+    .describe("Set true for an intentional repeated CPU2 Flash load covered by existing authorization in this conversation"),
   loadSequence: ipcLoadSequenceSchema.default({ mode: "cpu1-then-cpu2", cpu1SettleMs: 250 }),
   runSequence: ipcRunSequenceSchema.default({ runCpu1First: true, runCpu2: false, settleMs: 0 }),
   preStartupSafetyGuard: preStartupSafetyGuardSchema.optional(),
@@ -956,10 +956,28 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   cpu2CorePattern: z.string().min(1).optional().describe("Exact CCS selector for CPU2; normally C28xx_CPU2"),
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
-  allowAutoProbeAllocation: z.boolean().default(false)
+  allowAutoProbeAllocation: z.boolean().default(false),
+  afterFlashPowerCycle: z.object({
+    mode: z.enum(["auto", "manual", "auto_or_manual"]).default("auto_or_manual"),
+    offSeconds: z.number().min(5).max(60).default(5),
+    flashChecks: z.array(residentImageManifestCheckSchema).length(2)
+      .describe("Manifest-backed CPU1/CPU2 marker checks for the exact images in this request")
+  }).strict().optional().describe("Complete paired Flash programming, verified five-second USB power cycle, and read-only fresh-session attach in this single MCP call. Manual power intervention still pauses the flow.")
 }).superRefine((value, context) => {
   if (value.stopAfterFlashPreparation && (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["stopAfterFlashPreparation"], message: "Flash preparation must retain an interactive session without auto-close for the explicit power-cycle step" });
+  }
+  if (value.afterFlashPowerCycle) {
+    if (value.startupPreset !== "f28p65x-paired-flash" || value.programPreparation !== "load" ||
+        !value.stopAfterFlashPreparation || value.sessionMode !== "interactive" || value.autoCloseOnComplete ||
+        value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.loadPolicy !== "always" ||
+        value.residentImageManifests !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle"], message: "One-call Flash cycle requires the paired Flash preset, real CPU1/CPU2 loads, and a retained interactive preparation session" });
+    }
+    const ids = value.afterFlashPowerCycle.flashChecks.map(check => check.coreId).sort((a, b) => a - b);
+    if (ids[0] !== 0 || ids[1] !== 2) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle", "flashChecks"], message: "Both CPU1 and CPU2 resident-image manifests are required" });
+    }
   }
 });
 
@@ -993,7 +1011,7 @@ export const runReloadAndDiagnoseSchema = z.object({
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")
     .describe("verify-mcp-registry only checks artifacts previously loaded through the same MCP session; verify-only is a deprecated alias"),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize repeated CPU2 Flash programming in this session"),
+    .describe("Set true for an intentional repeated CPU2 Flash load covered by existing authorization in this conversation"),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   cpu1EntryAddress: addressValueSchema.optional()
     .describe("CPU1 application entry address; if omitted, codestart/executable sections are taken from cpu1MapPath"),
@@ -1056,7 +1074,7 @@ export const launchCoreSchema = z.object({
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   allowDestructiveFlashReload: allowDestructiveFlashReloadSchema
-    .describe("Explicitly authorize a repeated CPU2 Flash load; otherwise MCP fails closed before CCS can erase a resident image"),
+    .describe("Set true when an intentional repeated CPU2 Flash load is already authorized in this conversation; otherwise MCP blocks before erase"),
   connect: z.boolean().default(true),
   load: z.boolean().default(true),
   haltAtEntry: z.boolean().default(true)

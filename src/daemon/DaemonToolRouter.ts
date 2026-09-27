@@ -14,7 +14,8 @@ import { normalizeProgramUri } from "../utils/pathUtils.js";
 import type { TargetProgramMutation } from "../boards/types.js";
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
-import { cycleBoardPowerSchema, confirmManualPowerCycleSchema } from "../mcp/toolSchemas.js";
+import { cycleBoardPowerSchema, confirmManualPowerCycleSchema, launchAndRunIpcAcceptanceSchema } from "../mcp/toolSchemas.js";
+import { resolveIpcStartupPreset } from "../workflows/startupProfiles.js";
 import type { TestRunRepository } from "../storage/repositories/TestRunRepository.js";
 import type { EventRepository } from "../storage/repositories/EventRepository.js";
 import type { LabPowerCycleClient } from "../power/BleLabPowerMcpClient.js";
@@ -97,6 +98,16 @@ export class DaemonToolRouter implements C2000ToolInvoker {
 
   async invokeTool(toolName: string, input: unknown): Promise<Record<string, unknown>> {
     const startedAt = Date.now();
+    if (toolName === "c2000_launchAndRunIpcAcceptance" && record(input).afterFlashPowerCycle !== undefined) {
+      try {
+        const result = await this.launchFlashCycleAndAttach(input);
+        this.recordAnalytics({ toolName, input, result, durationMs: Date.now() - startedAt });
+        return result;
+      } catch (error) {
+        this.recordAnalytics({ toolName, input, error, durationMs: Date.now() - startedAt });
+        throw error;
+      }
+    }
     if (toolName === "c2000_cycleBoardPower" || toolName === "c2000_confirmManualPowerCycle") {
       try {
         const result = toolName === "c2000_cycleBoardPower"
@@ -143,6 +154,90 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         else this.activeBoardCommands.delete(boardId);
       }
     }
+  }
+
+  private async launchFlashCycleAndAttach(input: unknown): Promise<Record<string, unknown>> {
+    const parsed = launchAndRunIpcAcceptanceSchema.parse(resolveIpcStartupPreset(record(input)));
+    const { afterFlashPowerCycle, ...flashInput } = parsed;
+    if (!afterFlashPowerCycle) throw new DebugMcpError("EvidenceLimitExceeded", "Missing after-Flash power cycle plan");
+    const boardId = this.selectBoard(parsed.boardId);
+    for (const [coreId, expectedProgram] of [[0, parsed.cpu1OutPath], [2, parsed.cpu2OutPath]] as const) {
+      const check = afterFlashPowerCycle.flashChecks.find(item => item.coreId === coreId);
+      const actualUri = check ? normalizeProgramUri(check.programUri, this.workspacePath) : undefined;
+      const expectedUri = normalizeProgramUri(expectedProgram, this.workspacePath);
+      const sameFile = process.platform === "win32"
+        ? actualUri?.toLowerCase() === expectedUri.toLowerCase()
+        : actualUri === expectedUri;
+      if (!sameFile) {
+        throw new DebugMcpError("PowerCycleFlashIncomplete", "The after-Flash manifest checks must name the exact CPU1/CPU2 programs being written", {
+          boardId, coreId, targetAccessAttempted: false, powerActionAttempted: false
+        });
+      }
+    }
+    if (this.powerCycle?.safetyProfile === "readonly") {
+      throw new DebugMcpError("PowerCycleUnavailable", "Board power control is disabled by the readonly safety profile", {
+        boardId, targetAccessAttempted: false, powerActionAttempted: false
+      });
+    }
+    if (afterFlashPowerCycle.mode === "auto" && (!this.powerCycle?.enabled || !this.powerCycle.client)) {
+      throw new DebugMcpError("PowerCycleUnavailable", "Automatic board power control must be configured before a one-call Flash cycle starts", {
+        boardId, targetAccessAttempted: false, powerActionAttempted: false
+      });
+    }
+    const flash = await this.invokeTool("c2000_launchAndRunIpcAcceptance", { ...flashInput, boardId });
+    if (flash.success !== true || flash.status !== "flash_prepared" || typeof flash.sessionId !== "string") {
+      return { success: false, status: "flash_not_prepared", boardId, flash,
+        powerActionAttempted: false, residentAttachAttempted: false };
+    }
+
+    let powerCycle: Record<string, unknown>;
+    try {
+      powerCycle = await this.invokeTool("c2000_cycleBoardPower", {
+        boardId, sessionId: flash.sessionId, reason: "after_flash",
+        mode: afterFlashPowerCycle.mode, offSeconds: afterFlashPowerCycle.offSeconds,
+        flashChecks: afterFlashPowerCycle.flashChecks
+      });
+    } catch (error) {
+      return { success: false, status: "power_cycle_blocked", boardId, flash,
+        error: toStructuredError(error), residentAttachAttempted: false };
+    }
+    if (powerCycle.success !== true || powerCycle.status !== "completed") {
+      return { success: false, status: powerCycle.status ?? "power_cycle_incomplete", boardId,
+        flash, powerCycle, residentAttachAttempted: false };
+    }
+
+    let resident: Record<string, unknown>;
+    try {
+      resident = await this.invokeTool("c2000_launchResidentIpcDebug", {
+        boardId, ccxmlPath: parsed.ccxmlPath, probeId: parsed.probeId,
+        preferredProbeIds: parsed.preferredProbeIds,
+        allowAutoProbeAllocation: parsed.allowAutoProbeAllocation,
+        cpu1CoreId: parsed.cpu1CoreId, cpu2CoreId: parsed.cpu2CoreId,
+        cpu1OutPath: parsed.cpu1OutPath, cpu2OutPath: parsed.cpu2OutPath,
+        cpu1MapPath: parsed.cpu1MapPath, cpu2MapPath: parsed.cpu2MapPath,
+        residentImageManifests: afterFlashPowerCycle.flashChecks,
+        residentIdentityPolicy: "require-known", mode: "attach-only",
+        sessionMode: "interactive", cleanupOnFailure: false,
+        autoCloseOnComplete: true, autoCloseIdleTimeoutMs: 180_000,
+        ipcReadyExpressions: parsed.ipcReadyExpressions,
+        timeoutMs: parsed.timeoutMs, intervalMs: parsed.intervalMs
+      });
+    } catch (error) {
+      return { success: false, status: "resident_attach_failed", boardId,
+        flash, powerCycle, error: toStructuredError(error), coldStartVerified: false };
+    }
+    const residentVerification = record(resident.residentVerification);
+    const residentVerified = resident.success === true && resident.mode === "attach-only" &&
+      resident.targetMemoryWritten === false && resident.targetFlashVerified === true &&
+      residentVerification.verified === true;
+    return {
+      success: residentVerified,
+      status: residentVerified ? "completed" : "resident_attach_failed",
+      boardId, flash, powerCycle, resident,
+      ipcAcceptance: "NOT_EVALUATED",
+      readOnlyIpc: resident.readOnlyIpc ?? { status: "NOT_EVALUATED", matched: null },
+      coldStartVerified: false
+    };
   }
 
   private boardIdsForInvocation(toolName: string, input: unknown): string[] {
