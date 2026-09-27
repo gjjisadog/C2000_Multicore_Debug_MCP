@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.15 - 2026-09-27
+
+### CPU2-first debug and power-control onboarding
+
+- Guide compatible controlled dual-core debug starts through
+  `cpu2_pre_running`, verifying CPU2 is running before CPU1 starts.
+- Ask once per new Codex conversation whether an automatic board power switch
+  is installed; MCP health reports whether automatic control is configured.
+- Document a single bounded recovery after CPU2 Bank3 Flash erase reports
+  locked registers: confirm board ownership, cycle product power, and retry
+  the complete image pair in a fresh session.
+
 ## 0.7.14 - 2026-09-27
 
 ### Owner-aware resident Flash verification

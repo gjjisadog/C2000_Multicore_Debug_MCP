@@ -6,8 +6,8 @@ import path from "node:path";
 const packageVersion = JSON.parse(await readFile(path.join(process.cwd(), "package.json"), "utf8")).version;
 
 const root = process.cwd();
-const tarball = (await readdir(root)).find(name => /^c2000-multicore-mcp-.*\.tgz$/.test(name));
-if (!tarball) throw new Error("npm pack tarball not found");
+const tarball = `c2000-multicore-mcp-${packageVersion}.tgz`;
+if (!(await readdir(root)).includes(tarball)) throw new Error(`npm pack tarball not found: ${tarball}`);
 const temporary = await mkdtemp(path.join(os.tmpdir(), "c2000-package-"));
 try {
   const npmCli = process.env.npm_execpath;
