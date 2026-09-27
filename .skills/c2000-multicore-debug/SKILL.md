@@ -48,9 +48,17 @@ verification through `c2000-multicore-mcp`.
 
 ## Workflow priority
 
-1. Inspect environment, server/daemon health, board registration, filesystem
+1. On the first C2000 MCP use in each new Codex conversation, call the read-only
+   `c2000_getServerHealth` tool and ask the user whether an automatic board
+   power switch is installed. Its `powerSwitchSetup.automaticControlConfigured`
+   field reports MCP configuration, not physical installation. Remember the
+   answer for this conversation and ask again in a new conversation. Use
+   automatic power control only when the user confirms installation and MCP
+   configuration is present; otherwise use the supported manual path when a
+   power cycle is needed. This check never operates the switch.
+2. Inspect environment, server/daemon health, board registration, filesystem
    roots, and the applicable tool contract.
-2. For target work, use one server-side workflow or one durable job. Register a
+3. For target work, use one server-side workflow or one durable job. Register a
    serial-bound board and wait for its worker before touching a target.
    Check `c2000_listBoards` before target access; if target identity is
    `UNKNOWN`, a single bounded read-only triage snapshot is allowed under the
@@ -62,7 +70,7 @@ verification through `c2000-multicore-mcp`.
    or acceptance. Never use old symbols for triage conclusions.
    Never continue an old session after a lease release, worker restart, or
    external debugger access.
-3. Route normal tasks through the default `safe` + `agent` surface:
+4. Route normal tasks through the default `safe` + `agent` surface:
    - CPU1/CPU2 IPC startup and acceptance → `c2000_launchAndRunIpcAcceptance`.
    - IPC acceptance with an existing session → `c2000_runIpcAcceptance`.
    - CPU2 not starting or boot handoff diagnosis →
@@ -70,7 +78,7 @@ verification through `c2000-multicore-mcp`.
    - Reload firmware and diagnose → `c2000_runReloadAndDiagnose`.
    - Collect complete failure evidence → `c2000_runFullDebugBundle`.
    - Long-running HIL/test execution → `c2000_submitTestPlan`.
-4. For engineering verification, explicitly select `advanced` and use
+5. For engineering verification, explicitly select `advanced` and use
    `c2000_runEngineeringVerification`; read
    `c2000_getVerificationResult` or the job artifact manifest before
    concluding. A Build PASS is not task completion.
@@ -287,6 +295,19 @@ personal rankings or causal claims from cross-improvement correlations.
   safe/full and durable-job boundaries.
 - A parser failure, missing required evidence, stale `.out`/`.map`, unsupported
   required verifier, or incomplete artifact must not be reported as PASS.
+
+## Controlled dual-core debug run order
+
+When the debugger starts both loaded or verified resident images and the
+firmware supports CPU2 running before CPU1, run CPU2 first and CPU1 second.
+Use `runSequence.runMode="cpu2_pre_running"` with `runCpu1First=false`,
+`runCpu2=true`, and `releaseCpu2BeforeCpu1=false`; use a load sequence that
+loads CPU2 before either application core runs. The workflow confirms CPU2
+remains `Running` before it releases CPU1. If CPU2 cannot run before CPU1 or
+CPU1 firmware owns CPU2 release, report the incompatible startup contract and
+use `cpu1_boots_cpu2` only for that declared firmware-owned path. A controlled
+debug run is separate from a product cold-start observation and must not
+replace the required power boundary after Flash programming.
 
 ## Intent routing
 

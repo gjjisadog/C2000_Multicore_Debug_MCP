@@ -63,7 +63,7 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
     }),
     {},
     {
-      getServerHealth: async () => annotateProxyRuntimeHealth(await client.invokeTool("c2000_getServerHealth", {}))
+      getServerHealth: async () => annotateProxyRuntimeHealth(await client.invokeTool("c2000_getServerHealth", {}), config)
     },
     config.toolSurfaceProfile ?? "agent",
     { capabilitySessions }
@@ -77,7 +77,7 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
   };
 }
 
-function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<string, unknown> {
+function annotateProxyRuntimeHealth(health: Record<string, unknown>, config: C2000McpConfig): Record<string, unknown> {
   const server = asRecord(health.server);
   const runtime = asRecord(health.runtime);
   const build = asRecord(runtime.build);
@@ -97,6 +97,12 @@ function annotateProxyRuntimeHealth(health: Record<string, unknown>): Record<str
   const tools = asRecord(health.tools);
   return {
     ...health,
+    powerSwitchSetup: {
+      question: "Is an automatic board power switch installed for this board?",
+      automaticControlConfigured: config.powerCycle?.enabled === true && config.powerCycle.bleLabPowerMcp !== undefined,
+      answerScope: "current Codex conversation",
+      note: "Configuration does not prove physical installation; ask the user once in each new conversation before choosing automatic power control."
+    },
     runtimeVersionMismatch: mismatch,
     runtimeContractMismatch: !contractCompatibility.compatible,
     configuration: {

@@ -11,6 +11,16 @@ client's stdio connection. It never exposes a general command or shell tool.
 
 ## Configuration
 
+At the first C2000 MCP use in each new Codex conversation, the C2000 Skill
+calls `c2000_getServerHealth` and asks whether an automatic board power switch
+is installed. The response includes `powerSwitchSetup` with the user-facing
+question and `automaticControlConfigured`; this reports configuration only,
+not physical installation. The answer applies to that conversation. Automatic
+power control is selected only when the user confirms installation and the
+MCP configuration is present. The health check does not operate the switch.
+The stdio MCP connection may be reused across conversations, so the Skill
+tracks the conversation boundary rather than the server process.
+
 Add this optional section to the JSON file selected by `C2000_MCP_CONFIG`,
 using the same executable, script, and working directory registered for
 `ble-lab-power` in Codex. These paths are local installation settings; no BLE

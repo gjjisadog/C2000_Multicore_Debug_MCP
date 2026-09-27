@@ -84,9 +84,13 @@ must not be substituted for one another.
   use `loadSequence.mode: "cpu1-run-before-cpu2"` with the declared bounded
   settle time. The workflow performs that sequence; do not reproduce it with
   separate client calls.
-- After both images are loaded, use `runSequence.runMode:
-  "debugger_runs_both"` when the debugger is the declared start authority.
-  Keep CPU1 first when the product contract requires it.
+- After both images are loaded, for a compatible controlled dual-core debug
+  start, run CPU2 before CPU1 with `runSequence.runMode: "cpu2_pre_running"`,
+  `runCpu1First=false`, `runCpu2=true`, and `releaseCpu2BeforeCpu1=false`.
+  The workflow checks that CPU2 remains `Running` before it starts CPU1.
+  `debugger_runs_both` is CPU1-first in the current MCP and must not be used
+  to request CPU2-first order. Keep CPU1 first only when the declared firmware
+  startup contract requires it.
 - Use `c2000_analyzeRamOwnership` as host-side map evidence when needed. It
   does not itself connect, load, run, reset, or prove target state.
 - The repository's `hybrid30k-dk9-owner-first` preset is valid only when the
@@ -157,12 +161,13 @@ must not be substituted for one another.
 
 ### CPU2-pre-running mode
 
-Use `runSequence.runMode: "cpu2_pre_running"` only when the firmware contract
-explicitly requires CPU2 to be running before CPU1. It is not a generic
+Use `runSequence.runMode: "cpu2_pre_running"` for a controlled debugger start
+when the firmware supports CPU2 running before CPU1. It is not a generic
 recovery tactic and must not be combined with the CPU1 owner-first RAM load
 sequence. The workflow confirms CPU2 is still `Running` before releasing CPU1;
-otherwise it skips CPU1. For freshly programmed Flash, first perform the
-five-second product power cycle and attach read-only to observe cold start.
+otherwise it skips CPU1. If CPU1 firmware must release CPU2, use the declared
+`cpu1_boots_cpu2` contract instead. For freshly programmed Flash, first perform
+the five-second product power cycle and attach read-only to observe cold start.
 A later CPU2-first debug run is separate controlled-debugger evidence.
 
 ## What counts as ready
