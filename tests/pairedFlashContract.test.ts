@@ -412,6 +412,8 @@ describe("F28P65x paired Flash programming contract", () => {
         flashProgramming: false,
         residentIdentityPolicy: "operator-confirmed"
       },
+      readOnlyIpc: { status: "MATCHED", matched: true,
+        evaluatedConditions: [{ coreId: 0, expression: "ipc.ready", expected: 1, matched: true }] },
       launch: {
         connectedCoreIds: [0, 2]
       }

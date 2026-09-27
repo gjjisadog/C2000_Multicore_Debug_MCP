@@ -456,7 +456,7 @@ describe("MCP tool registration contract", () => {
       ["c2000_diagnoseBootHandoff", ["cpu1CoreId", "cpu2CoreId"]],
       ["c2000_waitForIpcReady", ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"]],
       ["c2000_reloadResetRunToMain", ["coreId"]],
-      ["c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
+      ["c2000_launchAndRunIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId", "afterFlashPowerCycle.flashChecks[].coreId"]],
       ["c2000_runIpcAcceptance", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
       ["c2000_runResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
       ["c2000_launchResidentIpcDebug", ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"]],
@@ -533,7 +533,11 @@ describe("MCP tool registration contract", () => {
         "diagnosis.cpu1.coreId",
         "diagnosis.cpu2.coreId",
         "diagnosis.snapshot.cores[].coreId",
-        "ramOwnership.maps[].coreId"
+        "ramOwnership.maps[].coreId",
+        "flash.launch.coreMap[].coreId",
+        "powerCycle.flashVerification.checks[].coreId",
+        "resident.residentVerification.checks[].coreId",
+        "resident.snapshot.cores[].coreId"
       ]],
       ["c2000_runIpcAcceptance", [
         "snapshot.cores[].coreId",

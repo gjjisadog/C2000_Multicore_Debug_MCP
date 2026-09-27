@@ -338,8 +338,16 @@ export class DebugWorkflowService {
     performedSteps.push("readMulticoreSnapshot");
     const observations: ToolResult = {};
     if (input.ipcReadyExpressions?.length) {
+      const groups = await evaluateResidentConditions(this.manager, input.sessionId, input.ipcReadyExpressions);
+      const evaluatedConditions = groups.flatMap(group => group.conditions.map((condition: ExpressionCondition, index: number) =>
+        conditionResult(condition, group.results[index])));
+      const matched = evaluatedConditions.every(condition => condition.matched === true);
       observations.ipcReady = {
-        conditions: await evaluateResidentConditions(this.manager, input.sessionId, input.ipcReadyExpressions)
+        mode: "read-only-snapshot",
+        status: matched ? "MATCHED" : "NOT_MATCHED",
+        matched,
+        evaluatedConditions,
+        conditions: groups
       };
       performedSteps.push("readIpcReadyExpressions");
     }
@@ -369,6 +377,7 @@ export class DebugWorkflowService {
       },
       snapshot,
       ...(Object.keys(observations).length > 0 ? { observations } : {}),
+      readOnlyIpc: observations.ipcReady ?? { status: "NOT_EVALUATED", matched: null, evaluatedConditions: [] },
       performedSteps,
       targetMemoryWritten: false,
       targetFlashVerified: residentVerification?.verified === true,

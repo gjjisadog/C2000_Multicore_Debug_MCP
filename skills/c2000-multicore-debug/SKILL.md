@@ -237,17 +237,31 @@ personal rankings or causal claims from cross-improvement correlations.
   against one probe, and do not call `c2000_recoverBoard` while an active lease
   exists. Use its dry-run first; after a session or worker handoff, require a
   fresh lease, fresh session, and fresh target-image identity.
-- Do not repeat CPU2 Flash programming without explicit destructive reload
-  authorization; use symbol loading for resident Flash.
+- For a Flash task, request one explicit authorization for the named board and
+  current CPU1/CPU2 image pair that covers paired programming, an intentional
+  repeat of that same pair if resident-marker evidence requires it, the
+  product-level power cycle, and read-only verification. Reuse that authorization
+  throughout the bounded task; do not ask again per core, MCP call, fresh
+  session, or power-cycle stage. Set `allowDestructiveFlashReload=true` for an
+  authorized repeated CPU2 load and retain the approval and artifact hashes in
+  evidence. This flag does not create authorization by itself. New board/image
+  scope or a new recovery plan requires a new decision. A failed or uncertain
+  CPU2 Flash load is never retried in its quarantined session.
+- Prefer `c2000_launchAndRunIpcAcceptance` with the paired Flash preset and
+  `afterFlashPowerCycle` containing both image manifests for one client-visible
+  call that writes, verifies markers, cycles power for at least five seconds,
+  and attaches in a fresh session for read-only verification. If power control
+  returns `manual_required`, pause for the physical operator step.
 - Flash programming completion is not a cold-start result. Before making a
   Flash-boot or IPC conclusion, perform and record one product-level startup
   boundary after programming: (a) power off and power on the board, (b) use
   the product-level restart path, or (c) trigger the board's hardware reset
   circuit (for example XRSn). A debugger-only reconnect, reset, or run is
   controlled-debugger evidence and does not substitute for that boundary.
-  The `f28p65x-paired-flash` preset stops at `flash_prepared`; for the USB plug
-  flow, verify both markers and use `c2000_cycleBoardPower` with at least five
-  seconds OFF, then attach in a fresh session before any debugger restart.
+  The `f28p65x-paired-flash` preset stops at `flash_prepared`; the optional
+  `afterFlashPowerCycle` plan runs marker checks, `c2000_cycleBoardPower` with
+  at least five seconds OFF, and a fresh read-only attach inside one MCP call.
+  Without that plan, perform these stages explicitly before debugger restart.
 - Do not assign PWM, contactor, power-stage, or HV control variables as part of
   generic verification. Target writes and fault injection remain in existing
   safe/full and durable-job boundaries.

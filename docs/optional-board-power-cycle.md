@@ -2,8 +2,10 @@
 
 The C2000 daemon can call the installed `ble-lab-power` stdio MCP server's
 `powercycle` tool for the registered `lab_power` USB plug. This is an explicit
-step. Paired Flash workflows stop after programming; they do not cycle power
-by default. The C2000
+step. Paired Flash workflows stop after programming by default. Supplying
+`afterFlashPowerCycle` to `c2000_launchAndRunIpcAcceptance` runs marker checks,
+the power cycle, and a new read-only resident attach inside that one MCP call.
+The C2000
 daemon starts its own MCP client for the call; it cannot reuse the Codex
 client's stdio connection. It never exposes a general command or shell tool.
 
@@ -35,6 +37,32 @@ of at least five seconds, and `reason="after_flash"` or
 closing the debug session.
 
 ## After paired Flash programming
+
+For one client-visible approval, call `c2000_launchAndRunIpcAcceptance` with
+`startupPreset="f28p65x-paired-flash"`, `programPreparation="load"`, and
+`afterFlashPowerCycle: { mode: "auto", offSeconds: 5, flashChecks: [...] }`.
+Include exactly one manifest check for core 0 and one for core 2. Set
+`allowDestructiveFlashReload=true` when the task's existing authorization covers
+an intentional repeat of CPU2 Flash programming. The daemon finishes the
+paired write, verifies both current-session writes and target markers, closes
+the old session and lease, requests the five-second OFF/ON cycle, then opens a
+fresh session with `mode="attach-only"` and re-verifies both resident images.
+The resulting `flash`, `powerCycle`, and `resident` evidence remain separate.
+The composite reports `ipcAcceptance="NOT_EVALUATED"` because a read-only
+attach is an observation, not active startup acceptance. With caller-supplied
+`ipcReadyExpressions`, `readOnlyIpc` reports a one-time `MATCHED` or
+`NOT_MATCHED` snapshot; without them it reports `NOT_EVALUATED`. If Flash preparation or
+marker verification fails, the daemon does not request power. If power returns
+`manual_required`, it pauses before the fresh attach. `mode="auto"` fails before
+programming when automatic power control is unavailable.
+
+One explicit user authorization can cover this bounded same-board, same-image
+task. The `allowDestructiveFlashReload` flag records that choice for the
+target load; it is not independent consent. New board/image scope or a new
+recovery plan requires a new decision. MCP clients retain final control of
+approval dialogs.
+
+The existing staged route remains available:
 
 Use `c2000_launchAndRunIpcAcceptance` with
 `startupPreset="f28p65x-paired-flash"` and `programPreparation="load"`.

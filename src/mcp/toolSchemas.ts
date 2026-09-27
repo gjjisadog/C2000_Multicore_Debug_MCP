@@ -956,10 +956,28 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   cpu2CorePattern: z.string().min(1).optional().describe("Exact CCS selector for CPU2; normally C28xx_CPU2"),
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
-  allowAutoProbeAllocation: z.boolean().default(false)
+  allowAutoProbeAllocation: z.boolean().default(false),
+  afterFlashPowerCycle: z.object({
+    mode: z.enum(["auto", "manual", "auto_or_manual"]).default("auto_or_manual"),
+    offSeconds: z.number().min(5).max(60).default(5),
+    flashChecks: z.array(residentImageManifestCheckSchema).length(2)
+      .describe("Manifest-backed CPU1/CPU2 marker checks for the exact images in this request")
+  }).strict().optional().describe("Complete paired Flash programming, verified five-second USB power cycle, and read-only fresh-session attach in this single MCP call. Manual power intervention still pauses the flow.")
 }).superRefine((value, context) => {
   if (value.stopAfterFlashPreparation && (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["stopAfterFlashPreparation"], message: "Flash preparation must retain an interactive session without auto-close for the explicit power-cycle step" });
+  }
+  if (value.afterFlashPowerCycle) {
+    if (value.startupPreset !== "f28p65x-paired-flash" || value.programPreparation !== "load" ||
+        !value.stopAfterFlashPreparation || value.sessionMode !== "interactive" || value.autoCloseOnComplete ||
+        value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.loadPolicy !== "always" ||
+        value.residentImageManifests !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle"], message: "One-call Flash cycle requires the paired Flash preset, real CPU1/CPU2 loads, and a retained interactive preparation session" });
+    }
+    const ids = value.afterFlashPowerCycle.flashChecks.map(check => check.coreId).sort((a, b) => a - b);
+    if (ids[0] !== 0 || ids[1] !== 2) {
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["afterFlashPowerCycle", "flashChecks"], message: "Both CPU1 and CPU2 resident-image manifests are required" });
+    }
   }
 });
 

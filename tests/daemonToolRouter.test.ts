@@ -25,6 +25,109 @@ afterEach(async () => {
 });
 
 describe("optional board power-cycle coordination", () => {
+  test("one paired-Flash call verifies both markers, cycles power, and attaches read-only with a fresh lease", async () => {
+    const fixture = await makeFixture();
+    const checks = await Promise.all([0, 2].map(async coreId => {
+      const programUri = path.join(fixture.directory, `cpu${coreId}.out`);
+      const manifestUri = path.join(fixture.directory, `cpu${coreId}.json`);
+      await writeFile(programUri, `cpu${coreId}-image`);
+      await writeFile(manifestUri, JSON.stringify({ format: "c2000-resident-image-manifest", version: 1 }));
+      return { coreId, programUri, manifestUri,
+        programSha256: await sha256File(programUri), manifestSha256: await sha256File(manifestUri) };
+    }));
+    const calls: string[] = [];
+    const verification = {
+      success: true, verified: true, verificationMethod: "resident-image-manifest-raw-memory",
+      targetAccess: { programming: false, symbolLoad: false, reset: false, run: false, targetMemoryWrite: false },
+      checks: checks.map(check => ({ ...check, marker: { matched: true } }))
+    };
+    fixture.workers.invokeBoard = async (_boardId, toolName, input) => {
+      calls.push(toolName);
+      if (toolName === "c2000_launchAndRunIpcAcceptance") {
+        expect(input).toMatchObject({ allowDestructiveFlashReload: true, startupPreset: "f28p65x-paired-flash" });
+        expect(input).not.toHaveProperty("afterFlashPowerCycle");
+        return { success: true, sessionId: "dbg-flash", status: "flash_prepared" };
+      }
+      if (toolName === "c2000_getLoadedProgramInfo") {
+        const check = checks.find(item => item.coreId === (input as { coreId: number }).coreId)!;
+        return { success: true, sessionId: "dbg-flash", coreId: check.coreId,
+          programUri: check.programUri, sha256: check.programSha256, targetMemoryWritten: true };
+      }
+      if (toolName === "c2000_verifyResidentImage") return verification;
+      if (toolName === "c2000_closeDebugSession") return { success: true, sessionId: "dbg-flash", closed: true };
+      if (toolName === "c2000_launchResidentIpcDebug") {
+        expect(input).toMatchObject({ mode: "attach-only", residentIdentityPolicy: "require-known" });
+        expect(fixture.sessions.get("dbg-flash")?.status).toBe("CLOSED");
+        return { success: true, sessionId: "dbg-resident", mode: "attach-only",
+          targetMemoryWritten: false, targetFlashVerified: true, residentVerification: verification };
+      }
+      throw new Error(`unexpected worker tool ${toolName}`);
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions, undefined, undefined, {
+      runs: new TestRunRepository(fixture.store), events: new EventRepository(fixture.store), enabled: true, safetyProfile: "safe",
+      client: { async powercycle(request) {
+        calls.push("ble-powercycle");
+        expect(request.off_seconds).toBeGreaterThanOrEqual(5);
+        expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+        return { device: "lab_power", status: "completed", trigger: "after_flash", mode_used: "auto",
+          off_hold_seconds: 5, protocol_verified: true, physical_state: null };
+      } }
+    });
+    const result = await router.invokeTool("c2000_launchAndRunIpcAcceptance", {
+      boardId: "board-a", startupPreset: "f28p65x-paired-flash", programPreparation: "load",
+      allowDestructiveFlashReload: true, cpu1CoreId: 0, cpu2CoreId: 2,
+      cpu1OutPath: checks[0]!.programUri, cpu2OutPath: checks[1]!.programUri,
+      timeoutMs: 5000, afterFlashPowerCycle: { mode: "auto", flashChecks: checks.map(({ coreId, programUri, manifestUri }) => ({ coreId, programUri, manifestUri })) }
+    });
+    expect(result).toMatchObject({ success: true, status: "completed", ipcAcceptance: "NOT_EVALUATED", coldStartVerified: false });
+    expect(calls).toEqual(["c2000_launchAndRunIpcAcceptance", "c2000_getLoadedProgramInfo", "c2000_getLoadedProgramInfo",
+      "c2000_verifyResidentImage", "c2000_closeDebugSession", "ble-powercycle", "c2000_launchResidentIpcDebug"]);
+    expect(fixture.sessions.get("dbg-resident")?.status).toBe("OPEN");
+    fixture.store.close();
+  });
+
+  test("one-call Flash flow never cycles power after a failed preparation", async () => {
+    const fixture = await makeFixture();
+    const calls: string[] = [];
+    fixture.workers.invokeBoard = async (_boardId, toolName) => {
+      calls.push(toolName);
+      if (toolName === "c2000_launchAndRunIpcAcceptance") return { success: false, status: "load_failed", sessionId: "dbg-failed", cleanedUp: true };
+      throw new Error(`unexpected worker tool ${toolName}`);
+    };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions, undefined, undefined, {
+      runs: new TestRunRepository(fixture.store), events: new EventRepository(fixture.store), enabled: true, safetyProfile: "safe",
+      client: { async powercycle() { throw new Error("power must not be called"); } }
+    });
+    const result = await router.invokeTool("c2000_launchAndRunIpcAcceptance", {
+      boardId: "board-a", startupPreset: "f28p65x-paired-flash", programPreparation: "load",
+      cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: "cpu1.out", cpu2OutPath: "cpu2.out", timeoutMs: 5000,
+      afterFlashPowerCycle: { flashChecks: [
+        { coreId: 0, programUri: "cpu1.out", manifestUri: "cpu1.json" },
+        { coreId: 2, programUri: "cpu2.out", manifestUri: "cpu2.json" }
+      ] }
+    });
+    expect(result).toMatchObject({ success: false, status: "flash_not_prepared", powerActionAttempted: false });
+    expect(calls).toEqual(["c2000_launchAndRunIpcAcceptance"]);
+    fixture.store.close();
+  });
+
+  test("one-call Flash flow rejects a mismatched manifest program before writing", async () => {
+    const fixture = await makeFixture();
+    fixture.workers.invokeBoard = async () => { throw new Error("worker must not be called"); };
+    const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
+    await expect(router.invokeTool("c2000_launchAndRunIpcAcceptance", {
+      boardId: "board-a", startupPreset: "f28p65x-paired-flash", programPreparation: "load",
+      cpu1CoreId: 0, cpu2CoreId: 2, cpu1OutPath: "cpu1.out", cpu2OutPath: "cpu2.out", timeoutMs: 5000,
+      afterFlashPowerCycle: { flashChecks: [
+        { coreId: 0, programUri: "different.out", manifestUri: "cpu1.json" },
+        { coreId: 2, programUri: "cpu2.out", manifestUri: "cpu2.json" }
+      ] }
+    })).rejects.toMatchObject({ code: "PowerCycleFlashIncomplete",
+      details: { targetAccessAttempted: false, powerActionAttempted: false } });
+    expect(fixture.registry.leases.active("board-a")).toBeUndefined();
+    fixture.store.close();
+  });
+
   test("persists the first connection failure, closes the old lease, and pauses for manual confirmation", async () => {
     const fixture = await makeFixture();
     const calls: string[] = [];
