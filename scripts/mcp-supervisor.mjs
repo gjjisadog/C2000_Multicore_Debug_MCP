@@ -107,6 +107,10 @@ class McpSupervisor {
     this.switching = false;
     this.verifyingSwitch = false;
     this.rejectedPointerKey = undefined;
+    this.retryAfterDaemonChange = false;
+    this.rejectedDaemonInstanceId = undefined;
+    this.lastObservedDaemonInstanceId = undefined;
+    this.switchDaemonInstanceId = undefined;
     this.activeCommandKey = JSON.stringify(command);
     this.pointerReadInProgress = false;
     this.internalRequestSequence = 0;
@@ -257,7 +261,7 @@ class McpSupervisor {
           this.maybeSwitch();
         }
       } else if (this.verifyingSwitch) {
-        this.rejectSwitch("new runtime did not return a tool catalog");
+        this.rejectSwitch("new runtime did not return a tool catalog", true);
       }
       return;
     }
@@ -309,7 +313,17 @@ class McpSupervisor {
       await Promise.all([access(entrypoint), access(runtimeExecutable)]);
       const command = [runtimeExecutable, entrypoint];
       const key = JSON.stringify(command);
-      if (key === this.activeCommandKey || key === this.rejectedPointerKey) return;
+      if (key === this.activeCommandKey) return;
+      const daemon = await readDaemonState(pointer.configPath);
+      this.lastObservedDaemonInstanceId = daemon?.instanceId;
+      if (key === this.rejectedPointerKey) {
+        if (!this.retryAfterDaemonChange || !daemon?.instanceId
+          || daemon.instanceId === this.rejectedDaemonInstanceId) return;
+        this.log("daemon instance changed; retrying the pending runtime switch");
+        this.rejectedPointerKey = undefined;
+        this.retryAfterDaemonChange = false;
+      }
+      if (daemon && await daemonRuntimeDiffersFromPointer(daemon, pointer, installDirectory)) return;
       this.pendingCommand = command;
       this.pendingCommandKey = key;
       this.maybeSwitch();
@@ -335,6 +349,7 @@ class McpSupervisor {
     this.previousCommand = this.command;
     this.switchCommand = this.pendingCommand;
     this.switchTargetKey = this.pendingCommandKey;
+    this.switchDaemonInstanceId = this.lastObservedDaemonInstanceId;
     this.switching = true;
     this.log("current.json changed; draining MCP requests before runtime switch");
     this.child?.stdin.end();
@@ -352,14 +367,18 @@ class McpSupervisor {
     this.previousCommand = undefined;
     this.pendingCommand = undefined;
     this.verifyingSwitch = false;
+    this.retryAfterDaemonChange = false;
+    this.rejectedDaemonInstanceId = undefined;
     clearTimeout(this.switchStartupTimer);
     this.log("runtime switched with the existing MCP tool catalog");
     this.flushClientQueue();
   }
 
-  rejectSwitch(reason) {
+  rejectSwitch(reason, retryAfterDaemonChange = false) {
     this.log(`runtime switch rejected: ${reason}; restoring previous runtime`);
     this.rejectedPointerKey = this.switchTargetKey;
+    this.retryAfterDaemonChange = retryAfterDaemonChange;
+    this.rejectedDaemonInstanceId = this.switchDaemonInstanceId;
     this.pendingCommand = undefined;
     this.verifyingSwitch = false;
     clearTimeout(this.switchStartupTimer);
@@ -401,6 +420,8 @@ class McpSupervisor {
       clearTimeout(this.switchStartupTimer);
       this.log("runtime switch rejected: new runtime exited before its tool catalog was verified; restoring previous runtime");
       this.rejectedPointerKey = this.switchTargetKey;
+      this.retryAfterDaemonChange = true;
+      this.rejectedDaemonInstanceId = this.switchDaemonInstanceId;
       this.pendingCommand = undefined;
       this.verifyingSwitch = false;
       this.command = this.previousCommand;
@@ -469,6 +490,33 @@ function canonicalJson(value) {
     return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+async function readDaemonState(configPath) {
+  if (typeof configPath !== "string" || !configPath.trim()) return undefined;
+  try {
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    const runtimeDir = path.resolve(process.env.C2000_MCP_DAEMON_RUNTIME_DIR
+      || config.daemon?.runtimeDir || "runtime");
+    const instance = JSON.parse(await readFile(path.join(runtimeDir, "debugd-instance.json"), "utf8"));
+    return typeof instance.instanceId === "string" ? instance : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function daemonRuntimeDiffersFromPointer(daemon, pointer, installDirectory) {
+  const identity = daemon.runtimeIdentity;
+  if (!identity || typeof identity !== "object") return false;
+  if (typeof pointer.version === "string" && identity.version !== pointer.version) return true;
+  if (typeof pointer.runtimeManifest !== "string") return false;
+  const manifestPath = path.resolve(pointer.runtimeManifest);
+  if (!isWithin(manifestPath, path.join(installDirectory, "dist", "src"))) {
+    throw new Error("current.json contains a runtime manifest outside its immutable version slot");
+  }
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  return (typeof manifest.sourceRevision === "string" && identity.sourceRevision !== manifest.sourceRevision)
+    || (typeof manifest.sourceDirty === "boolean" && identity.sourceDirty !== manifest.sourceDirty);
 }
 
 try {

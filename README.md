@@ -474,12 +474,14 @@ installed again.
 
 Installed Codex registrations now pass `current.json` to the MCP supervisor.
 After a later install passes its doctor check, each connected supervisor waits
-for its current requests to finish, starts the new immutable runtime, and
+for a running daemon to report the installed runtime identity and for its
+current requests to finish, then starts the new immutable runtime and
 checks its actual `tools/list` response against the previous runtime. If the
 catalog is unchanged, existing Codex and other MCP clients can continue using
-the new implementation on the same stdio connection. A startup failure or
-changed catalog restores the old runtime and reports the reason on stderr;
-the new runtime remains installed for a fresh client session. In-flight tool
+the new implementation on the same stdio connection. A startup failure
+restores the old runtime and is retried when the daemon instance changes. A
+changed catalog restores the old runtime and requires a fresh client session.
+Both reasons are reported on stderr. In-flight tool
 requests are never replayed. An MCP client that was connected before this
 supervisor option was installed needs one reconnect to acquire it. Codex does
 not guarantee that a running agent will discover new tool names or schemas
