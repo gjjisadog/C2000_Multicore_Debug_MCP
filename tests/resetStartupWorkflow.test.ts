@@ -152,6 +152,16 @@ async function systemResetFixture() {
 }
 
 describe("post-load reset and firmware-owned handoff", () => {
+  test("runtime startup without IPC conditions leaves readiness unevaluated", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const { ipcReadyExpressions: _unused, ...withoutConditions } = input;
+    const result = await handlers.runIpcAcceptance(withoutConditions);
+    expect(result).toMatchObject({ success: true, status: "startup_complete", ipcAcceptance: "NOT_EVALUATED",
+      ipcReady: { skipped: true, matched: null } });
+    expect(adapter.events).toContain("run:0");
+    expect(result.performedSteps).not.toContain("waitForIpcReady");
+  });
+
   const bootContract = { abiExpression: "c2.abi", abiVersion: 48, roleExpression: "c2.role", roleValue: 2,
     epochExpression: "c2.epoch", statusExpression: "c2.status", appInitMask: 32,
     logicAliveExpression: "c2.logic", timeoutMs: 100, intervalMs: 20 };

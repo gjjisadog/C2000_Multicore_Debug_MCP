@@ -384,7 +384,9 @@ export const registerBoardSchema = z.object({
 /** Restart only the daemon-owned worker for a registered board. This never terminates external CCS/DSS processes. */
 export const recoverBoardSchema = z.object({
   boardId: z.string().min(1),
-  dryRun: z.boolean().default(true)
+  dryRun: z.boolean().default(true),
+  reconcileStaleSessions: z.boolean().default(false).describe("Also retire open session records from stopped, earlier worker generations."),
+  confirmNoExternalDebugOwner: z.boolean().default(false).describe("Required to retire stale records: the operator has verified that no external CCS/DSS process owns this probe.")
 });
 
 export const submitTestPlanSchema = z.object({ plan: testPlanSchema });

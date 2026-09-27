@@ -12,6 +12,7 @@ import {
   type EradBackend
 } from "../observability/EradBackend.js";
 import { INTERNAL_CLOSE_STALE_RESIDENT_SESSION } from "./internalTools.js";
+import type { WorkerShutdownResult } from "./WorkerShutdownResult.js";
 
 export interface BoardWorkerLaunchOptions {
   boardId: string;
@@ -416,11 +417,12 @@ export class BoardWorkerRuntime {
     };
   }
 
-  async stop(): Promise<void> {
+  async stop(): Promise<WorkerShutdownResult> {
     this.status = "STOPPING";
-    await this.runtime?.dispose();
+    const result = await this.runtime?.dispose() ?? { closedSessionIds: [], failures: [] };
     this.runtime = undefined;
     this.eradBackend = undefined;
+    return result;
   }
 }
 

@@ -532,6 +532,12 @@ Use the daemon/job surface for multi-board work:
   `boards.registrationRequired: true`; no daemon restart is required.
 - `c2000_recoverBoard` defaults to a dry run and can restart only the daemon-owned
   worker for one board. It deliberately never terminates an external CCS/DSS owner.
+  For an `OPEN` session left by an earlier stopped worker, dry-run with
+  `reconcileStaleSessions: true`. After verifying that no external CCS/DSS
+  process owns the probe, repeat with `dryRun: false`,
+  `reconcileStaleSessions: true`, and `confirmNoExternalDebugOwner: true`.
+  The old row becomes `ABANDONED` with an audit record; only worker-confirmed
+  adapter and probe cleanup becomes `CLOSED`.
 - `c2000_submitTestPlan` returns a stable `jobId` immediately; use
   `c2000_getTestRun`, `c2000_listTestRuns`, `c2000_cancelTestRun`, and
   `c2000_getTestArtifacts` afterwards.
@@ -1274,7 +1280,7 @@ Batch tools such as `c2000_connectCores`, `c2000_loadPrograms`, `c2000_haltCores
 10. `c2000_diagnoseCpu2Boot` to collect CPU1/CPU2 PC, snapshot, CPU1 IPC stage/ready/error fields, and CPU2 stage.
 11. `c2000_analyzeRamOwnership` for host-side `.map` RAMGS ownership evidence.
 12. `c2000_diagnoseBootHandoff` to combine CPU2 boot diagnosis with RAM ownership evidence.
-13. `c2000_waitForIpcReady` to wait for the default CPU1/CPU2 IPC-ready symbols or supplied explicit conditions.
+13. `c2000_waitForIpcReady` with explicit CPU1/CPU2 conditions matching this firmware's symbols.
 14. `c2000_assignExpression`, `c2000_assignExpressions`, or `c2000_injectFaults` for explicit-core fault injection.
 15. `c2000_compareExpressions` for IPC, MSGRAM, and parameter synchronization checks.
 16. `c2000_waitForExpressionSet` to wait for CPU1/CPU2 bring-up conditions.
@@ -1445,6 +1451,13 @@ Select the pair contract explicitly:
 ```
 
 `f28p65x-paired-flash` resolves to `resetType=cpu` and `loadSequence.mode=cpu1-then-cpu2`. A real Flash load defaults to `stopAfterFlashPreparation=true` and `sessionMode=interactive`; `stopAfterFlashPreparation=false` is rejected before programming. The result is `flash_prepared`, with `ipcAcceptance=NOT_RUN`, and directs the caller to verify both resident markers and perform the five-second power cycle. A fresh attach observes cold-start state. A separate controlled-debug run can use `cpu2_pre_running` (CPU2 must be confirmed `Running` before CPU1 runs) or `cpu1_boots_cpu2` when firmware owns CPU2 release; explicit contradictory reset/load parameters are rejected before any target access.
+
+IPC readiness expressions are firmware-specific and optional. When omitted,
+the workflow can load and start the target but reports `ipcAcceptance:
+"NOT_EVALUATED"`; it does not silently assume that IPC passed. The `.map`
+preflight checks only symbols the caller supplied. For example, an application using
+`stCoreCommCpu1Watch` should name that root in its expressions rather than
+relying on Hybrid30K diagnostic defaults.
 
 If the CPU2 linker map contains Flash banks, `loadSequence.mode = cpu1-run-before-cpu2` is rejected before the first target access with `StartupContractInvalid` / `diagnosisCode=PAIRED_FLASH_REQUIRES_HALTED_OWNER`. The historical `hybrid30k-dk9-owner-first` preset still exists and is still valid for CPU2 **RAM** images (owner-side initialization, old bring-up), but it is not a paired Flash programming preset: it starts CPU1 before the CPU2 image is loaded.
 

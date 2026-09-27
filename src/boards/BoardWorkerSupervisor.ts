@@ -10,6 +10,7 @@ import { BoardWorkerProcess } from "./BoardWorkerProcess.js";
 import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import type { BoardLeaseContext, BoardLeaseReconciliationResult } from "./types.js";
 import { INTERNAL_CLOSE_STALE_RESIDENT_SESSION } from "../worker/internalTools.js";
+import type { WorkerShutdownResult } from "../worker/WorkerShutdownResult.js";
 
 interface ManagedWorker {
   client: BoardWorkerClient;
@@ -39,6 +40,7 @@ export class BoardWorkerSupervisor {
       events: EventRepository;
       factory?: BoardWorkerFactory;
       reconcileWorkerLease?: (boardId: string, workerInstanceId: string) => BoardLeaseReconciliationResult;
+      onWorkerShutdown?: (boardId: string, workerInstanceId: string, cleanup: WorkerShutdownResult) => void;
     }
   ) {
     this.factory = options.factory ?? ((launch, config) => new BoardWorkerProcess(launch, config));
@@ -274,7 +276,7 @@ export class BoardWorkerSupervisor {
       // image. The target may have been touched while the old DSS session was
       // dying, so a later observer must not reuse old symbols silently.
       this.options.registry.markTargetIdentityUnknown(boardId, `worker-restart:${reason}`);
-      await managed.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      await this.stopManagedWorker(managed);
       this.options.workers.markStopped(managed.client.workerInstanceId, `worker-restart:${reason}`);
     }
     this.options.events.append({ level: "warn", sourceType: "worker", sourceId: managed?.client.workerInstanceId ?? boardId, boardId, workerInstanceId: managed?.client.workerInstanceId, workerGeneration: managed?.workerGeneration, eventType: "WORKER_RESTARTING", payload: { reason, ...details } });
@@ -291,9 +293,31 @@ export class BoardWorkerSupervisor {
     this.workers.clear();
     await Promise.allSettled(managed.map(async entry => {
       this.options.registry.setWorker(entry.client.boardId, undefined);
-      await entry.client.stop(this.workerConfig.shutdownTimeoutMs).catch(() => undefined);
+      await this.stopManagedWorker(entry);
       this.options.workers.markStopped(entry.client.workerInstanceId, "supervisor-stop-all");
     }));
+  }
+
+  private async stopManagedWorker(managed: ManagedWorker): Promise<void> {
+    const { client, workerGeneration } = managed;
+    try {
+      const cleanup = await client.stop(this.workerConfig.shutdownTimeoutMs);
+      if (!cleanup) return;
+      this.options.onWorkerShutdown?.(client.boardId, client.workerInstanceId, cleanup);
+      this.options.events.append({
+        level: cleanup.failures.length ? "warn" : "info",
+        sourceType: "worker", sourceId: client.workerInstanceId, boardId: client.boardId,
+        workerInstanceId: client.workerInstanceId, workerGeneration,
+        eventType: "WORKER_SESSION_CLEANUP_CONFIRMED", payload: { ...cleanup }
+      });
+    } catch (error) {
+      this.options.events.append({
+        level: "warn", sourceType: "worker", sourceId: client.workerInstanceId, boardId: client.boardId,
+        workerInstanceId: client.workerInstanceId, workerGeneration,
+        eventType: "WORKER_SESSION_CLEANUP_UNCONFIRMED",
+        payload: { reason: error instanceof Error ? error.message : String(error) }
+      });
+    }
   }
 
   private handleHeartbeat(heartbeat: WorkerHeartbeat): void {

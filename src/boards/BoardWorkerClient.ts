@@ -1,5 +1,6 @@
 import type { BoardWorkerLaunchOptions } from "../worker/BoardWorkerRuntime.js";
 import type { WorkerHeartbeat } from "../worker/WorkerHeartbeat.js";
+import type { WorkerShutdownResult } from "../worker/WorkerShutdownResult.js";
 
 export interface BoardWorkerClient {
   readonly workerInstanceId: string;
@@ -12,7 +13,7 @@ export interface BoardWorkerClient {
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
   start(): Promise<void>;
   invokeTool(toolName: string, input: unknown, timeoutMs: number): Promise<Record<string, unknown>>;
-  stop(timeoutMs?: number): Promise<void>;
+  stop(timeoutMs?: number): Promise<WorkerShutdownResult | void>;
 }
 
 export type BoardWorkerFactory = (options: BoardWorkerLaunchOptions, config: unknown) => BoardWorkerClient;

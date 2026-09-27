@@ -46,6 +46,38 @@ export class SessionRepository {
   close(sessionId: string): void {
     this.store.run("UPDATE debug_sessions SET status = 'CLOSED', closed_at = ? WHERE session_id = ?", [new Date().toISOString(), sessionId]);
   }
+
+  /** A worker shutdown may only close rows that belong to that exact worker. */
+  closeConfirmedForWorker(boardId: string, workerInstanceId: string, sessionIds: string[]): string[] {
+    return this.store.transaction(() => {
+      const closed: string[] = [];
+      for (const sessionId of new Set(sessionIds)) {
+        const session = this.get(sessionId);
+        if (!session || session.boardId !== boardId || session.workerInstanceId !== workerInstanceId || session.closedAt) continue;
+        this.close(sessionId);
+        closed.push(sessionId);
+      }
+      return closed;
+    });
+  }
+
+  /** Preserve an unverified historic cleanup as ABANDONED, never as a confirmed close. */
+  abandonStaleSessions(boardId: string, workerInstanceId: string, sessionIds: string[], evidence: Record<string, unknown>): string[] {
+    return this.store.transaction(() => {
+      const abandoned: string[] = [];
+      const closedAt = new Date().toISOString();
+      for (const sessionId of new Set(sessionIds)) {
+        const session = this.get(sessionId);
+        if (!session || session.boardId !== boardId || session.workerInstanceId !== workerInstanceId || session.closedAt || session.status !== "OPEN") continue;
+        this.store.run(
+          "UPDATE debug_sessions SET status = 'ABANDONED', closed_at = ?, last_snapshot_json = ? WHERE session_id = ? AND board_id = ? AND worker_instance_id = ? AND closed_at IS NULL",
+          [closedAt, JSON.stringify({ ...session.lastSnapshot, staleSessionReconciliation: evidence }), sessionId, boardId, workerInstanceId]
+        );
+        abandoned.push(sessionId);
+      }
+      return abandoned;
+    });
+  }
 }
 
 interface SessionRow {

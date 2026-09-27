@@ -8,6 +8,7 @@ import type { WorkerHeartbeat } from "../worker/WorkerHeartbeat.js";
 import { DebugMcpError } from "../utils/errors.js";
 import type { BoardWorkerClient } from "./BoardWorkerClient.js";
 import { runtimeEntrypointCandidates } from "../runtimePaths.js";
+import { isWorkerShutdownResult, type WorkerShutdownResult } from "../worker/WorkerShutdownResult.js";
 
 interface PendingRequest {
   resolve(value: Record<string, unknown>): void;
@@ -99,19 +100,41 @@ export class BoardWorkerProcess implements BoardWorkerClient {
     });
   }
 
-  async stop(timeoutMs = 10000): Promise<void> {
+  async stop(timeoutMs = 10000): Promise<WorkerShutdownResult | void> {
     const child = this.child;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
-    await new Promise<void>(resolve => {
+    return new Promise<WorkerShutdownResult>((resolve, reject) => {
+      let cleanup: WorkerShutdownResult | undefined;
+      const finish = (error?: unknown) => {
+        clearTimeout(timer);
+        child.off("message", onStopped);
+        child.off("exit", onExit);
+        if (error) reject(error);
+        else if (cleanup) resolve(cleanup);
+        else reject(new DebugMcpError("WorkflowCleanupFailed", "Board worker exited without a confirmed session cleanup report", {
+          boardId: this.boardId, workerInstanceId: this.workerInstanceId
+        }));
+      };
+      const onStopped = (message: unknown) => {
+        if (!isMessage(message) || message.type !== "stopped") return;
+        if (message.workerInstanceId === this.workerInstanceId && isWorkerShutdownResult(message.cleanup)) {
+          cleanup = message.cleanup;
+        }
+      };
+      const onExit = () => finish();
       const timer = setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill();
-        resolve();
+        finish(new DebugMcpError("WorkflowCleanupFailed", "Board worker shutdown did not finish within the cleanup window", {
+          boardId: this.boardId, workerInstanceId: this.workerInstanceId, timeoutMs
+        }));
       }, timeoutMs);
-      child.once("exit", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-      this.send({ type: "shutdown", token: this.options.authToken });
+      child.on("message", onStopped);
+      child.once("exit", onExit);
+      try {
+        this.send({ type: "shutdown", token: this.options.authToken });
+      } catch (error) {
+        finish(error);
+      }
     });
   }
 

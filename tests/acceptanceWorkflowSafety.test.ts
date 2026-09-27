@@ -55,6 +55,7 @@ async function launchInput(directory: string, includeEntrySection = false) {
     ...paths,
     resetType: "cpu" as const,
     runSequence: { runMode: "cpu1_boots_cpu2" as const, runCpu1First: true, runCpu2: false, settleMs: 0 },
+    ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 1 }],
     timeoutMs: 20,
     intervalMs: 1,
     applicationEntryTimeoutMs: 5

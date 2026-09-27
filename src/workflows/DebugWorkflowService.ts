@@ -17,7 +17,7 @@ import type {
 } from "../mcp/toolSchemas.js";
 import { DebugMcpError, toStructuredError, type DebugErrorCode } from "../utils/errors.js";
 import { buildBootHandoffVerdict } from "../debug/bootHandoffVerdict.js";
-import { DEFAULT_CPU1_BOOT_EXPRESSIONS, defaultExpressionReadSets, defaultIpcReadyConditions } from "../debug/defaultDiagnostics.js";
+import { DEFAULT_CPU1_BOOT_EXPRESSIONS, defaultExpressionReadSets } from "../debug/defaultDiagnostics.js";
 import { classifyDebugFailure, classifyIpcAcceptance } from "../debug/DebugFailureClassifier.js";
 import { describeWorkflowStartupContract, workflowStartupContractIssues } from "../debug/startupContract.js";
 import { createApplicationEntryPlan, waitForApplicationEntry, type ApplicationEntryCheck } from "../debug/applicationEntry.js";
@@ -896,6 +896,44 @@ export class DebugWorkflowService {
           safetyGuardChecks: [...safetyGuardChecks], ipcReadySkipped: true });
       }
     }
+    if (!input.ipcReadyExpressions?.length) {
+      if (cpu2BootGate) {
+        await this.verifyPreStartupSafetyGuard(input.sessionId, {
+          conditions: allGuards.filter(condition => condition.coreId === input.cpu1CoreId), haltCoreIds: coreIds
+        }, "cpu2-armed-cpu1-invariants");
+        await cpu2BootGate.verifyRuntime();
+      }
+      setStage("runtime-ram-ownership");
+      const runtimeRamOwnership = await this.runtimeRamOwnershipStatus(
+        input.sessionId, input.verifyRuntimeRamOwnership, ramOwnership.ownershipActions
+      );
+      performedSteps.push("verifyRuntimeRamOwnership");
+      const postStartupSnapshot = await this.manager.getMulticoreSnapshot(input.sessionId, coreIds);
+      performedSteps.push("getPostStartupSnapshot");
+      const result: ToolResult = {
+        workflow: "c2000_runIpcAcceptance", orchestration: "server-internal",
+        approvalClass: "workflow-confirmation", status: "startup_complete",
+        success: load.results.every((item: ToolResult) => item.success === true)
+          && elfFreshness.allFresh === true && runtimeRamOwnershipAccepted(runtimeRamOwnership),
+        ipcAcceptance: "NOT_EVALUATED",
+        ipcReady: { skipped: true, matched: null, reason: "ipcReadyExpressions were not supplied" },
+        sessionId: input.sessionId, device: input.device,
+        cpu1CoreId: input.cpu1CoreId, cpu2CoreId: input.cpu2CoreId,
+        performedSteps, initialHalt, reset, load, postLoadHalt, snapshot,
+        postStartupSnapshot, artifactPreflight, ramOwnership, elfFreshness,
+        runtimeRamOwnership, runPlan, programPreparation: input.programPreparation,
+        ...(postLoadReset ? { postLoadReset } : {}),
+        ...(applicationEntry ? { applicationEntry } : {}),
+        ...(cpu2Release ? { cpu2Release } : {}),
+        ...(cpu2PreRunEvidence ? { cpu2PreRunEvidence } : {}),
+        ...(residentVerification ? { residentVerification } : {}),
+        ...(cpu2BootGate ? { cpu2BootGate: cpu2BootGate.evidence } : {}),
+        ...(safetyGuardChecks.length ? { safetyGuardChecks } : {}),
+        performance: { totalMs: performance.now() - workflowStartedAt }
+      };
+      if (input.collectDebugBundle) result.debugBundle = await this.writeDebugBundle(bundleOutputDir!, result);
+      return result;
+    }
     setStage("ipc-readiness-wait");
     const runtimeSafetyCheck = cpu2BootGate ? async () => {
       await this.verifyPreStartupSafetyGuard(input.sessionId, {
@@ -903,7 +941,7 @@ export class DebugWorkflowService {
       }, "cpu2-armed-cpu1-invariants");
       await cpu2BootGate.verifyRuntime();
     } : undefined;
-    const conditions = input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId);
+    const conditions = input.ipcReadyExpressions!;
     const ipcReady = await this.waitForExpressionSet(input.sessionId, conditions, input.timeoutMs,
       input.intervalMs, input.pollingStrategy, input.pollingSchedule,
       input.bootSyncExpressions?.length ? { coreId: input.cpu1CoreId, expressions: input.bootSyncExpressions } : undefined,
@@ -2020,7 +2058,7 @@ async function assertIpcArtifactSet(input: {
       cpu1MapPath: normalizedInput.cpu1MapPath!,
       cpu2MapPath: normalizedInput.cpu2MapPath!,
       expressions: [
-        ...(input.ipcReadyExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)),
+        ...(input.ipcReadyExpressions ?? []),
         // Symbol validation only: these observations never become readiness gates.
         ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 })),
         ...(input.systemResetBeforeHandoff?.postStartupConditions ?? []),
@@ -2130,7 +2168,7 @@ async function assertReloadArtifactSet(input: {
       cpu2CoreId: input.cpu2CoreId,
       cpu1MapPath: normalized.cpu1MapPath,
       cpu2MapPath: normalized.cpu2MapPath,
-      expressions: input.waitExpressions ?? defaultIpcReadyConditions(input.cpu1CoreId, input.cpu2CoreId)
+      expressions: input.waitExpressions ?? []
     });
     issues.push(...artifactSemantics.issues);
   }

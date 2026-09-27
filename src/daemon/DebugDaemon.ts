@@ -509,6 +509,9 @@ export class DebugDaemon {
             .map(session => ({ sessionId: session.sessionId, ...(session.workerInstanceId ? { workerInstanceId: session.workerInstanceId } : {}) }))
         });
       },
+      onWorkerShutdown: (boardId, workerInstanceId, cleanup) => {
+        this.sessions?.closeConfirmedForWorker(boardId, workerInstanceId, cleanup.closedSessionIds);
+      },
     });
     this.workerSupervisor = workerSupervisor;
     const toolRouter = new DaemonToolRouter(
@@ -789,7 +792,7 @@ export class DebugDaemon {
     };
   }
 
-  private async recoverBoard(input: { boardId: string; dryRun: boolean }): Promise<Record<string, unknown>> {
+  private async recoverBoard(input: { boardId: string; dryRun: boolean; reconcileStaleSessions: boolean; confirmNoExternalDebugOwner: boolean }): Promise<Record<string, unknown>> {
     const board = this.registry?.get(input.boardId);
     const supervisor = this.workerSupervisor;
     if (!board || !supervisor) throw new Error("Board recovery is not ready");
@@ -797,6 +800,19 @@ export class DebugDaemon {
     const leaseState = this.registry?.leaseState(input.boardId);
     const activeJobs = this.testRuns?.listActiveForBoard(input.boardId) ?? [];
     const openSessions = this.sessions?.listByBoard(input.boardId).filter(session => !session.closedAt) ?? [];
+    const currentWorkerInstanceId = supervisor.currentWorker(input.boardId)?.workerInstanceId;
+    const staleSessions = input.reconcileStaleSessions
+      ? openSessions.filter(session => session.workerInstanceId !== currentWorkerInstanceId).map(session => {
+          const oldWorker = session.workerInstanceId ? this.workers?.get(session.workerInstanceId) : undefined;
+          const reason = !oldWorker ? "worker-record-missing"
+            : oldWorker.boardId !== input.boardId ? "worker-board-mismatch"
+            : oldWorker.status !== "STOPPED" ? "worker-not-stopped"
+            : oldWorker.pid <= 0 ? "worker-pid-unknown"
+            : isProcessAlive(oldWorker.pid) ? "old-worker-process-still-running"
+            : undefined;
+          return { sessionId: session.sessionId, workerInstanceId: session.workerInstanceId, eligible: !reason, ...(reason ? { reason } : {}) };
+        })
+      : [];
     const recoveryBlocked = activeLease
       ? {
           code: leaseState?.status === "STALE" ? "StaleBoardLease" : "ActiveBoardLease",
@@ -811,7 +827,10 @@ export class DebugDaemon {
           ],
           remediation: "Close the owning session/job through the daemon first; stale leases are never force-released behind a live owner."
         }
-      : undefined;
+      : activeJobs.length
+        ? { code: "ActiveBoardJob", blockers: activeJobs.map(job => ({ kind: "job", id: job.jobId, status: job.status })), remediation: "Wait for the active board job to reach a terminal state." }
+        : undefined;
+    const staleReconciliationBlocked = input.reconcileStaleSessions && staleSessions.some(session => !session.eligible);
     if (input.dryRun) {
       return {
         success: true,
@@ -819,9 +838,13 @@ export class DebugDaemon {
         boardId: board.boardId,
         probeSerial: board.probeSerial,
         action: recoveryBlocked
-          ? recoveryBlocked.code === "StaleBoardLease" ? "BLOCKED_STALE_BOARD_LEASE" : "BLOCKED_ACTIVE_BOARD_LEASE"
+          ? recoveryBlocked.code === "StaleBoardLease" ? "BLOCKED_STALE_BOARD_LEASE"
+            : recoveryBlocked.code === "ActiveBoardJob" ? "BLOCKED_ACTIVE_BOARD_JOB" : "BLOCKED_ACTIVE_BOARD_LEASE"
+          : staleReconciliationBlocked ? "BLOCKED_STALE_SESSION_RECONCILIATION"
+          : input.reconcileStaleSessions ? "RESTART_WORKER_AND_RECONCILE_STALE_SESSIONS"
           : "RESTART_DAEMON_OWNED_WORKER_ONLY",
         externalProcessTermination: false,
+        ...(input.reconcileStaleSessions ? { staleSessions, requiresConfirmation: "confirmNoExternalDebugOwner" } : {}),
         ...(recoveryBlocked ? { blocked: recoveryBlocked } : {})
       };
     }
@@ -832,16 +855,56 @@ export class DebugDaemon {
         blockedBy: recoveryBlocked
       });
     }
+    if (staleReconciliationBlocked || (staleSessions.length > 0 && !input.confirmNoExternalDebugOwner)) {
+      throw new DebugMcpError("ProbeRecoveryBlocked", "Stale session reconciliation requires a stopped old worker and confirmation that no external debug owner remains", {
+        boardId: board.boardId,
+        staleSessions,
+        confirmNoExternalDebugOwner: input.confirmNoExternalDebugOwner,
+        targetAccessAttempted: false
+      });
+    }
     await supervisor.restartBoard(board.boardId, "operator-requested-recovery", { requestedBy: "c2000_recoverBoard" });
+    const abandonedSessionIds: string[] = [];
+    if (staleSessions.length > 0) {
+      if (this.registry?.leases.active(input.boardId) || this.testRuns?.listActiveForBoard(input.boardId).length) {
+        throw new DebugMcpError("ProbeRecoveryBlocked", "Board ownership changed during stale session reconciliation", {
+          boardId: board.boardId, targetAccessAttempted: false
+        });
+      }
+      const replacementWorkerInstanceId = supervisor.currentWorker(input.boardId)?.workerInstanceId;
+      for (const stale of staleSessions) {
+        if (!stale.workerInstanceId || stale.workerInstanceId === replacementWorkerInstanceId) continue;
+        abandonedSessionIds.push(...(this.sessions?.abandonStaleSessions(board.boardId, stale.workerInstanceId, [stale.sessionId], {
+          reason: "operator-confirmed-no-external-debug-owner",
+          previousWorkerInstanceId: stale.workerInstanceId,
+          replacementWorkerInstanceId,
+          confirmedAt: new Date().toISOString(),
+          adapterCleanupVerified: false
+        }) ?? []));
+      }
+      for (const sessionId of abandonedSessionIds) {
+        this.store && new EventRepository(this.store).append({
+          level: "warn", sourceType: "board", sourceId: board.boardId, boardId: board.boardId,
+          eventType: "STALE_DEBUG_SESSION_ABANDONED",
+          payload: { sessionId, reason: "operator-confirmed-no-external-debug-owner", adapterCleanupVerified: false }
+        });
+      }
+    }
     return {
       success: true,
       dryRun: false,
       boardId: board.boardId,
       probeSerial: board.probeSerial,
-      action: "RESTARTED_DAEMON_OWNED_WORKER_ONLY",
+      action: input.reconcileStaleSessions ? "RESTARTED_WORKER_AND_RECONCILED_STALE_SESSIONS" : "RESTARTED_DAEMON_OWNED_WORKER_ONLY",
+      ...(input.reconcileStaleSessions ? { abandonedSessionIds } : {}),
       externalProcessTermination: false
     };
   }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
 }
 
 function hasCanArtifacts(input: {

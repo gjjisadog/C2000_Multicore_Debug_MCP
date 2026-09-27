@@ -41,8 +41,9 @@ export class WorkerRpcServer {
         return;
       }
       if (message.type === "shutdown") {
-        await this.stop();
-        this.send({ type: "stopped" });
+        const workerInstanceId = this.runtime?.options.workerInstanceId;
+        const cleanup = await this.stop();
+        this.send({ type: "stopped", workerInstanceId, cleanup });
         process.disconnect();
         return;
       }
@@ -77,11 +78,12 @@ export class WorkerRpcServer {
     }
   }
 
-  private async stop(): Promise<void> {
+  private async stop() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = undefined;
-    await this.runtime?.stop();
+    const cleanup = await this.runtime?.stop() ?? { closedSessionIds: [], failures: [] };
     this.runtime = undefined;
+    return cleanup;
   }
 
   private send(message: Record<string, unknown>): void {

@@ -6,6 +6,9 @@ import type { C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { discoverDaemon } from "../src/proxy/DaemonDiscovery.js";
 import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
+import { SqliteStore } from "../src/storage/SqliteStore.js";
+import { SessionRepository } from "../src/storage/repositories/SessionRepository.js";
+import { WorkerRepository } from "../src/storage/repositories/WorkerRepository.js";
 
 const runtimeDirs: string[] = [];
 
@@ -14,6 +17,80 @@ afterEach(async () => {
 });
 
 describe("daemon / proxy lifecycle", () => {
+  test("confirmed worker shutdown closes its persisted debug sessions", async () => {
+    const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "c2000-debugd-shutdown-"));
+    runtimeDirs.push(runtimeDir);
+    const daemon = new DebugDaemon(configFor(runtimeDir));
+    let sessionId: string;
+    try {
+      await daemon.start();
+      const client = new McpDaemonClient((await discoverDaemon(configFor(runtimeDir))).client);
+      const created = await client.invokeTool("c2000_createDebugSession", { sessionName: "shutdown-reconcile" });
+      expect(created.success).toBe(true);
+      sessionId = String(created.sessionId);
+      await client.close();
+    } finally {
+      await daemon.stop();
+    }
+    const store = await SqliteStore.open(path.join(runtimeDir, "debugd.sqlite"));
+    try {
+      expect(new SessionRepository(store).get(sessionId!)).toMatchObject({ status: "CLOSED", closedAt: expect.any(String) });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("explicit recovery retires a stale session only after external ownership confirmation", async () => {
+    const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "c2000-debugd-stale-session-"));
+    runtimeDirs.push(runtimeDir);
+    const daemon = new DebugDaemon(configFor(runtimeDir));
+    try {
+      await daemon.start();
+      const store = await SqliteStore.open(path.join(runtimeDir, "debugd.sqlite"));
+      try {
+        new WorkerRepository(store).upsert({
+          workerInstanceId: "worker-old", boardId: "board-a", pid: 2147483647,
+          processStartTime: "2026-01-01T00:00:00.000Z", daemonInstanceId: "daemon-old",
+          status: "STOPPED", startedAt: "2026-01-01T00:00:00.000Z", ownedDssProcesses: []
+        });
+        new SessionRepository(store).upsert({
+          sessionId: "dbg-old", boardId: "board-a", workerInstanceId: "worker-old",
+          sessionName: "launch-resident-ipc-debug", coreMap: [], status: "OPEN",
+          createdAt: "2026-01-01T00:00:00.000Z"
+        });
+      } finally {
+        store.close();
+      }
+      const client = new McpDaemonClient((await discoverDaemon(configFor(runtimeDir))).client);
+      try {
+        const dryRun = await client.invokeTool("c2000_recoverBoard", { boardId: "board-a", reconcileStaleSessions: true });
+        expect(dryRun).toMatchObject({
+          success: true, action: "RESTART_WORKER_AND_RECONCILE_STALE_SESSIONS",
+          staleSessions: [expect.objectContaining({ sessionId: "dbg-old", eligible: true })]
+        });
+        const denied = await client.invokeTool("c2000_recoverBoard", { boardId: "board-a", dryRun: false, reconcileStaleSessions: true });
+        expect(denied).toMatchObject({ success: false, error: { code: "ProbeRecoveryBlocked" } });
+        const recovered = await client.invokeTool("c2000_recoverBoard", {
+          boardId: "board-a", dryRun: false, reconcileStaleSessions: true, confirmNoExternalDebugOwner: true
+        });
+        expect(recovered).toMatchObject({ success: true, abandonedSessionIds: ["dbg-old"] });
+      } finally {
+        await client.close();
+      }
+      const verify = await SqliteStore.open(path.join(runtimeDir, "debugd.sqlite"));
+      try {
+        expect(new SessionRepository(verify).get("dbg-old")).toMatchObject({
+          status: "ABANDONED", closedAt: expect.any(String),
+          lastSnapshot: { staleSessionReconciliation: expect.objectContaining({ adapterCleanupVerified: false }) }
+        });
+      } finally {
+        verify.close();
+      }
+    } finally {
+      await daemon.stop();
+    }
+  });
+
   test("a proxy client may close and reconnect without disposing daemon-owned sessions", async () => {
     const runtimeDir = await mkdtemp(path.join(os.tmpdir(), "c2000-debugd-test-"));
     runtimeDirs.push(runtimeDir);

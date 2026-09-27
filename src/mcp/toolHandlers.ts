@@ -18,7 +18,6 @@ import { fileMetadata } from "../utils/fileHash.js";
 import { buildBootHandoffVerdict as buildBootHandoffVerdictCore } from "../debug/bootHandoffVerdict.js";
 import { valuesEqual as valuesEqualCore } from "../utils/expressionMatch.js";
 import { sleep as sleepCore } from "../utils/async.js";
-import { defaultIpcReadyConditions as defaultIpcReadyConditionsCore } from "../debug/defaultDiagnostics.js";
 import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
 import type { VerificationService } from "../verification/VerificationService.js";
@@ -1382,11 +1381,15 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
     async waitForIpcReady(input: z.input<typeof waitForIpcReadySchema>) {
       try {
         const parsed = waitForIpcReadySchema.parse(input);
-        const conditions = parsed.conditions ?? defaultIpcReadyConditions(parsed.cpu1CoreId, parsed.cpu2CoreId);
-        const result = await waitForExpressionSetResult(parsed.sessionId, conditions, parsed.timeoutMs, parsed.intervalMs);
+        if (!parsed.conditions?.length) {
+          return ok({ sessionId: parsed.sessionId, cpu1CoreId: parsed.cpu1CoreId,
+            cpu2CoreId: parsed.cpu2CoreId, status: "NOT_EVALUATED", skipped: true,
+            matched: null, conditions: [] });
+        }
+        const result = await waitForExpressionSetResult(parsed.sessionId, parsed.conditions, parsed.timeoutMs, parsed.intervalMs);
         return result.matched
-          ? ok({ ...result, defaultConditionsUsed: parsed.conditions === undefined })
-          : { success: false, timestamp: new Date().toISOString(), ...result, defaultConditionsUsed: parsed.conditions === undefined };
+          ? ok(result)
+          : { success: false, timestamp: new Date().toISOString(), ...result };
       } catch (error) {
         return fail(error, { sessionId: input.sessionId });
       }
@@ -2363,10 +2366,6 @@ async function deriveSiblingMap(programUri: string): Promise<string | undefined>
   } catch {
     return undefined;
   }
-}
-
-function defaultIpcReadyConditions(cpu1CoreId: number, cpu2CoreId: number) {
-  return defaultIpcReadyConditionsCore(cpu1CoreId, cpu2CoreId);
 }
 
 function buildBootHandoffVerdict(boot: ToolResult, ramOwnership?: ToolResult) {

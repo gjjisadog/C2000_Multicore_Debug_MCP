@@ -734,7 +734,7 @@ describe("tool handlers", () => {
     }));
   });
 
-  test("waitForIpcReady uses default explicit CPU1 and CPU2 ready conditions", async () => {
+  test("waitForIpcReady leaves readiness unevaluated without caller-defined conditions", async () => {
     const handlers = createHandlers(new MockDebugAdapter({
       expressionValues: {
         ...hybrid30kReadyExpressionValues,
@@ -744,12 +744,28 @@ describe("tool handlers", () => {
     }));
     const created = await handlers.createDebugSession({ sessionName: "ipc-ready", coreMap });
 
-    const result = await handlers.waitForIpcReady({
+    const missing = await handlers.waitForIpcReady({
       sessionId: created.sessionId,
       cpu1CoreId: 0,
       cpu2CoreId: 2,
       timeoutMs: 10,
       intervalMs: 1
+    } as any);
+    expect(missing).toMatchObject({ success: true, status: "NOT_EVALUATED", skipped: true, matched: null, conditions: [] });
+
+    const result = await handlers.waitForIpcReady({
+      sessionId: created.sessionId,
+      cpu1CoreId: 0,
+      cpu2CoreId: 2,
+      timeoutMs: 10,
+      intervalMs: 1,
+      conditions: [
+        { coreId: 0, expression: "g_stCoreCommCpu1Watch.emStage", expected: 5 },
+        { coreId: 0, expression: "g_stCoreCommCpu1Watch.uiCpu2Ready", expected: 1 },
+        { coreId: 0, expression: "g_stCoreCommCpu1Watch.ulCpu2BootLastError", expected: 0 },
+        { coreId: 2, expression: "g_stCoreCommCpu2Watch.emStage", expected: 5 },
+        { coreId: 2, expression: "g_stCoreCommCpu2Watch.uiInitParamApplied", expected: 1 }
+      ]
     });
 
     expect(result).toEqual(expect.objectContaining({
@@ -1678,6 +1694,7 @@ describe("tool handlers", () => {
       cpu2MapPath,
       resetType: "cpu",
       runSequence: { runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 1 }],
       timeoutMs: 20,
       intervalMs: 1
     });
@@ -1768,6 +1785,7 @@ describe("tool handlers", () => {
       cpu2MapPath,
       resetType: "cpu",
       runSequence: { runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 1 }],
       timeoutMs: 20,
       intervalMs: 1
     });
@@ -1840,6 +1858,7 @@ describe("tool handlers", () => {
       cpu1MapPath: "C:/f28p65x/ipc_ex1_c28x1/CPU1_FLASH/ipc_ex1_c28x1.map",
       cpu2MapPath: "C:/f28p65x/ipc_ex1_c28x2/CPU2_RAM/ipc_ex1_c28x2.map",
       runSequence: { runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "ipc.ready", expected: 1 }],
       timeoutMs: 20
     });
 
@@ -1991,6 +2010,7 @@ describe("tool handlers", () => {
       resetType: "cpu" as const,
       loadSequence: { mode: "cpu1-run-before-cpu2" as const, cpu1SettleMs: 0 },
       runSequence: { runCpu1First: true, runCpu2: true },
+      ipcReadyExpressions: [{ coreId: 0, expression: "g_stCoreCommCpu1Watch.uiCpu2Ready", expected: 1 }],
       timeoutMs: 20,
       intervalMs: 1
     };

@@ -139,6 +139,18 @@ describe("F28P65x paired Flash programming contract", () => {
     expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
   });
 
+  test("paired Flash preparation does not require firmware-specific IPC watch symbols", async () => {
+    const { adapter, handlers, input } = await fixture({
+      cpu1Map: `${FLASH_CPU1_MAP}\nGLOBAL SYMBOLS: SORTED BY Symbol Address\n00008000 stCoreCommCpu1Watch`,
+      cpu2Map: `${FLASH_CPU2_MAP}\nGLOBAL SYMBOLS: SORTED BY Symbol Address\n00018000 stCoreCommCpu2Watch`
+    });
+    const { ipcReadyExpressions: _unused, ...withoutIpcConditions } = input;
+    const result = await handlers.runIpcAcceptance(withoutIpcConditions);
+    expect(result).toMatchObject({ success: true, status: "flash_prepared", ipcAcceptance: "NOT_RUN" });
+    expect(adapter.events).toContain("load:0");
+    expect(adapter.events).toContain("load:2");
+  });
+
   test("one-shot paired Flash preset retains its session for the power-cycle step", async () => {
     const { adapter, handlers, manager, input } = await fixture();
     const { sessionId: _sessionId, ...launchInput } = input;
