@@ -166,6 +166,7 @@ export type DebugErrorCode =
   | "ResidentImageManifestMismatch"
   | "ResidentImageManifestInvalid"
   | "ResidentImageMismatch"
+  | "ResidentImageAccessUnavailable"
   | "ResidentImageVerificationInvalid"
   | "ResidentArtifactsMissing"
   | "ResetCoreScopeInvalid"

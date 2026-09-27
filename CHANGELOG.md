@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.14 - 2026-09-27
+
+### Owner-aware resident Flash verification
+
+- Read F28P65x BANKMUXSEL through CPU1 and verify each Flash marker through
+  the bank's current owner. A CPU2 image in Bank3 can therefore be verified
+  through CPU1 after power cycling without changing bank ownership or running
+  either core.
+- Record the image core, reading core, Flash bank, and bank owner separately.
+  Report unavailable ownership or invalid read values as access failures rather
+  than treating them as resident-image mismatches.
+
 ## 0.7.13 - 2026-09-27
 
 ### One-call Flash session lifecycle

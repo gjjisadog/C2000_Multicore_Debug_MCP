@@ -306,6 +306,18 @@ class ResidentImageVerificationAdapter extends MockDebugAdapter {
   }
 }
 
+class BankOwnerResidentAdapter extends ResidentImageVerificationAdapter {
+  bankMuxSel = 0;
+  cpu1MarkerValue = 0xA5A5A5A5;
+  cpu2MarkerValue = 0;
+  override async readMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number> {
+    this.operations.push(`read:${coreId}:${page}:${address}:${typeSize}`);
+    if (address === 0x5D060) return this.bankMuxSel;
+    if (address === 0xE0100) return coreId === 0 ? this.cpu1MarkerValue : this.cpu2MarkerValue;
+    return 0xA5A5A5A5;
+  }
+}
+
 async function createIpcWorkflowArtifacts(tempDir: string) {
   const files = {
     cpu1OutPath: path.join(tempDir, "cpu1.out"),
@@ -462,6 +474,85 @@ describe("tool handlers", () => {
       error: expect.objectContaining({ code: "ResidentImageMismatch" })
     }));
     expect(adapter.operations).toEqual(["connect:0", "read:0:DATA:4096:32"]);
+  });
+
+  test("verifies the CPU2 Bank3 image through CPU1 after power-on ownership returns to CPU1", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-resident-bank-owner-"));
+    const programUri = path.join(tempDir, "cpu2.out");
+    const manifestUri = path.join(tempDir, "cpu2.resident-image.json");
+    await writeFile(programUri, "cpu2-image-v1");
+    await writeFile(manifestUri, JSON.stringify({
+      format: "c2000-resident-image-manifest", version: 1,
+      programSha256: await sha256File(programUri),
+      identity: { address: "0xE0100", page: "DATA", typeSize: 32, expectedValue: "0xA5A5A5A5" }
+    }));
+    const adapter = new BankOwnerResidentAdapter();
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ coreMap });
+    const result = await createToolHandlers(manager).verifyResidentImage({
+      sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
+    });
+
+    expect(result).toMatchObject({ success: true, verified: true, checks: [{
+      coreId: 2, imageCoreId: 2, readCoreId: 0, flashBank: 3, bankOwner: "CPU1",
+      marker: { matched: true, actualValue: 0xA5A5A5A5 }
+    }] });
+    expect(adapter.operations).toContain("read:0:DATA:917760:32");
+    expect(adapter.operations).not.toContain("read:2:DATA:917760:32");
+    expect(adapter.operations).toContain("read:0:DATA:381024:32");
+
+    adapter.bankMuxSel = 0xC0;
+    adapter.cpu2MarkerValue = 0xA5A5A5A5;
+    const before = adapter.operations.length;
+    const programmedState = await createToolHandlers(manager).verifyResidentImage({
+      sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
+    });
+    expect(programmedState).toMatchObject({ success: true, verified: true, checks: [{
+      imageCoreId: 2, readCoreId: 2, flashBank: 3, bankOwner: "CPU2"
+    }] });
+    expect(adapter.operations.slice(before)).toContain("read:2:DATA:917760:32");
+  });
+
+  test("reports an unavailable route instead of a CPU2 image mismatch for an unknown Bank3 owner", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-resident-owner-unknown-"));
+    const programUri = path.join(tempDir, "cpu2.out");
+    const manifestUri = path.join(tempDir, "cpu2.resident-image.json");
+    await writeFile(programUri, "cpu2-image-v1");
+    await writeFile(manifestUri, JSON.stringify({
+      format: "c2000-resident-image-manifest", version: 1,
+      programSha256: await sha256File(programUri),
+      identity: { address: "0xE0100", page: "DATA", typeSize: 32, expectedValue: "0xA5A5A5A5" }
+    }));
+    const adapter = new BankOwnerResidentAdapter();
+    adapter.bankMuxSel = 0x40; // Bank3 selector 1 has no CPU read owner.
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ coreMap });
+    const result = await createToolHandlers(manager).verifyResidentImage({
+      sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
+    });
+
+    expect(result).toMatchObject({ success: false, error: { code: "ResidentImageAccessUnavailable" } });
+    expect(adapter.operations).not.toContain("read:2:DATA:917760:32");
+  });
+
+  test("does not treat a DSS invalid marker read as Flash content", async () => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-resident-invalid-read-"));
+    const programUri = path.join(tempDir, "cpu2.out");
+    const manifestUri = path.join(tempDir, "cpu2.resident-image.json");
+    await writeFile(programUri, "cpu2-image-v1");
+    await writeFile(manifestUri, JSON.stringify({
+      format: "c2000-resident-image-manifest", version: 1,
+      programSha256: await sha256File(programUri),
+      identity: { address: "0xE0100", page: "DATA", typeSize: 32, expectedValue: "0xA5A5A5A5" }
+    }));
+    const adapter = new BankOwnerResidentAdapter();
+    adapter.cpu1MarkerValue = 0x0BAD0BAD;
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const created = await manager.createDebugSession({ coreMap });
+    const result = await createToolHandlers(manager).verifyResidentImage({
+      sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
+    });
+    expect(result).toMatchObject({ success: false, error: { code: "ResidentImageAccessUnavailable" } });
   });
 
   test("getHardwarePreflight returns read-only XDS110 and debug process status", async () => {
