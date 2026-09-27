@@ -551,18 +551,22 @@ export class DebugWorkflowService {
       }
     }
 
-    setStage("initial-halt");
-    const initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
-    performedSteps.push("haltCores");
-    assertBatchSucceeded("haltCores", initialHalt);
-    setStage("reset");
-    const reset = runPlan.releaseCpu2BeforeCpu1
-      ? skippedResetBatch(input.sessionId, coreIds, input.resetType as ResetType, systemResetRequested
-        ? "Initial reset skipped; explicitly authorized System Reset occurs after identity checks and before CPU2 disconnect."
-        : "Firmware-owned CPU2 boot starts with a post-load CPU1-only restart; CPU2 is not reset before handoff.")
-      : await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
-    performedSteps.push(runPlan.releaseCpu2BeforeCpu1 ? "skipResetBeforeFirmwareHandoff" : "resetCores");
-    assertBatchSucceeded("resetCores", reset);
+    let initialHalt!: ToolResult;
+    let reset!: ToolResult;
+    if (!pairedFlash.required || input.programPreparation === "symbols-only") {
+      setStage("initial-halt");
+      initialHalt = await this.manager.haltCores(input.sessionId, coreIds);
+      performedSteps.push("haltCores");
+      assertBatchSucceeded("haltCores", initialHalt);
+      setStage("reset");
+      reset = runPlan.releaseCpu2BeforeCpu1
+        ? skippedResetBatch(input.sessionId, coreIds, input.resetType as ResetType, systemResetRequested
+          ? "Initial reset skipped; explicitly authorized System Reset occurs after identity checks and before CPU2 disconnect."
+          : "Firmware-owned CPU2 boot starts with a post-load CPU1-only restart; CPU2 is not reset before handoff.")
+        : await this.manager.resetCores(input.sessionId, coreIds, input.resetType as ResetType);
+      performedSteps.push(runPlan.releaseCpu2BeforeCpu1 ? "skipResetBeforeFirmwareHandoff" : "resetCores");
+      assertBatchSucceeded("resetCores", reset);
+    }
     const cpu1Program = {
       coreId: input.cpu1CoreId,
       programUri: input.cpu1OutPath,
@@ -590,48 +594,18 @@ export class DebugWorkflowService {
         load = { sessionId: input.sessionId, results: [...cpu1Load.results, ...cpu2Load.results] };
         performedSteps.push("loadCpu2Program");
       } else if (pairedFlash.required) {
-        // Flash programming boundary. Both images are programmed while every
-        // application core stays halted; the manager refuses to start any core
-        // for as long as this boundary is open. Application startup is a
-        // separate stage that only begins after the boundary closes.
+        // One manager-held transaction owns refresh, halt, reset, Flash Plugin
+        // preparation, and both program loads without an interleaving command.
         setStage("paired-flash");
-        await this.manager.beginPairedFlashProgramming(input.sessionId, {
-          ownerCoreId: input.cpu1CoreId,
-          targetCoreId: input.cpu2CoreId,
-          flashBanks: pairedFlash.flashBanks
+        const paired = await this.manager.loadPairedFlashPrograms(input.sessionId, {
+          cpu1: cpu1Program, cpu2: cpu2Program, resetType: input.resetType as ResetType
         });
-        performedSteps.push("beginPairedFlashProgramming");
-        let cpu1Load: ToolResult | undefined;
-        let ownerHalt: ToolResult | undefined;
-        let cpu2Load: ToolResult | undefined;
-        let loadError: unknown;
-        try {
-          cpu1Load = await this.manager.loadPrograms(input.sessionId, [cpu1Program]);
-          assertBatchSucceeded("loadCpu1Program", cpu1Load);
-          performedSteps.push("loadCpu1Program");
-          setStage("paired-flash-owner-halt");
-          ownerHalt = await this.manager.haltCore(input.sessionId, input.cpu1CoreId);
-          performedSteps.push("confirmHaltedOwnerDuringPairedFlash");
-          cpu2Load = await this.manager.loadPrograms(input.sessionId, [cpu2Program]);
-          assertBatchSucceeded("loadCpu2Program", cpu2Load);
-          performedSteps.push("loadCpu2Program");
-        } catch (error) {
-          loadError = error;
-        } finally {
-          await this.manager.endPairedFlashProgramming(input.sessionId, {
-            success: loadError === undefined,
-            ...(loadError === undefined ? {} : { reason: toStructuredError(loadError).message.slice(0, 256) })
-          });
-        }
-        if (cpu1Load || cpu2Load) {
-          load = {
-            sessionId: input.sessionId,
-            results: [...(cpu1Load?.results ?? []), ...(cpu2Load?.results ?? [])]
-          };
-        }
-        if (loadError !== undefined) {
-          throw loadError;
-        }
+        initialHalt = paired.initialHalt;
+        reset = paired.reset;
+        load = paired.load;
+        performedSteps.push("refreshPairedFlashSession", "haltCores", "resetCores",
+          "preparePairedFlash", "loadCpu1Program", "verifyPairedFlash",
+          "loadCpu2Program", "completePairedFlashProgramming");
         flashProgramming = {
           stage: "paired-flash",
           performed: true,
@@ -641,12 +615,15 @@ export class DebugWorkflowService {
           ownerCoreId: input.cpu1CoreId,
           targetCoreId: input.cpu2CoreId,
           flashBanks: pairedFlash.flashBanks,
-          ownerStateAfterCpu1Load: ownerHalt,
+          cpu1FlashBanks: paired.cpu1Banks,
+          bankOwners: paired.bankOwners,
+          ownerStateAfterCpu1Load: paired.ownerStateAfterCpu1Load,
+          preparation: paired.preparation,
+          beforeCpu2: paired.beforeCpu2,
           cpu1LoadedBeforeCpu2: true,
           applicationCoresStartedDuringFlash: false,
           boundary: "Both Flash images are programmed while every application core stays halted; application startup begins only after this boundary."
         };
-        performedSteps.push("completePairedFlashProgramming");
       } else {
         load = await this.manager.loadPrograms(input.sessionId, [cpu1Program, cpu2Program]);
         performedSteps.push("loadPrograms");
@@ -2431,7 +2408,7 @@ export function resolvePairedFlashContract(input: {
   const source: PairedFlashContract["source"] = presetRequested
     ? "startup-preset"
     : flashBanks.length > 0 ? "cpu2-linker-map" : "none";
-  if (input.loadMode === "cpu1-run-before-cpu2" && flashBanks.length > 0) {
+  if (input.loadMode === "cpu1-run-before-cpu2" && (flashBanks.length > 0 || presetRequested)) {
     throw new DebugMcpError(
       "StartupContractInvalid",
       "A CPU2 Flash image cannot use loadSequence.mode cpu1-run-before-cpu2: CPU1 must stay halted while the CPU1 Flash Plugin prepares the shared Flash clock and bank mapping",

@@ -20,6 +20,8 @@ export type CcsScriptingOperation =
   | "loadProgram"
   | "loadSymbols"
   | "prepareFlashLoad"
+  | "preparePairedFlash"
+  | "verifyPairedFlash"
   | "prepareFirmwareHandoff"
   | "writeMemory"
   | "readMemory"
@@ -54,6 +56,7 @@ export interface CcsScriptingCommand {
   value?: number;
   typeSize?: number;
   flashBanks?: number[];
+  cpu1FlashBanks?: number[];
   timeoutMs?: number;
 }
 
@@ -66,6 +69,7 @@ export interface CcsBridgeCreateSessionOptions {
 
 export interface CcsScriptingBridge {
   readonly supportsFirmwareHandoff?: boolean;
+  readonly supportsPairedFlash?: boolean;
   createSession?(options: CcsBridgeCreateSessionOptions): Promise<void>;
   disposeSession?(adapterSessionId: string): Promise<void>;
   execute(command: CcsScriptingCommand): Promise<Record<string, unknown>>;

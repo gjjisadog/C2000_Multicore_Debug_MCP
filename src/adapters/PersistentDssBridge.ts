@@ -60,6 +60,7 @@ let processCleanupHooksInstalled = false;
 
 export class PersistentDssBridge implements CcsScriptingBridge {
   readonly supportsFirmwareHandoff = true;
+  readonly supportsPairedFlash = true;
   private readonly launcher: DssServerLauncher;
   private readonly sessions = new Map<string, PersistentBridgeSession>();
 
@@ -484,6 +485,10 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
       // the target core travels as an explicit field so the server can never
       // infer it from whichever channel happened to carry the command.
       return { ...base, name: "prepareFlashLoad", targetCoreId: command.targetCoreId, flashBanks: command.flashBanks };
+    case "preparePairedFlash":
+    case "verifyPairedFlash":
+      return { ...base, name: command.operation, targetCoreId: command.targetCoreId,
+        cpu1FlashBanks: command.cpu1FlashBanks, flashBanks: command.flashBanks };
     case "prepareFirmwareHandoff":
       return { ...base, name: "prepareFirmwareHandoff" };
     case "writeMemory":
@@ -1022,10 +1027,62 @@ function captureFlashLoadState(command, evidence, phase) {
       item.success = true;
     } catch (readError) { item.error = String(readError).slice(0, 256); }
   }
+  if (evidence.pairedFlash === true) {
+    snapshot.pluginOptions = capturePairedFlashOptions();
+  }
   snapshot.finishedAtMs = new Date().getTime();
   logDiagnostic("flash-load:snapshot", { coreId: command.coreId,
     targetCoreId: command.targetCoreId, snapshot: snapshot });
   return snapshot;
+}
+
+function capturePairedFlashOptions() {
+  var options = [];
+  for (var coreIndex = 0; coreIndex < 2; coreIndex++) {
+    var coreId = coreIndex === 0 ? 0 : 2;
+    var plugin = sessionsByCoreId[String(coreId)].flash.options;
+    var names = ["FlashCoreSelection", "FlashEraseSelection"];
+    if (coreId === 0) {
+      for (var mappedBank = 0; mappedBank < F28P65X_FLASH_BANK_COUNT; mappedBank++)
+        names.push("FlashMapC28Bank" + mappedBank);
+    }
+    for (var bank = 0; bank < F28P65X_FLASH_BANK_COUNT; bank++) names.push("FlashC28Bank" + bank);
+    for (var index = 0; index < names.length; index++) {
+      var name = names[index];
+      var item = { coreId: coreId, name: name, success: false };
+      options.push(item);
+      try {
+        item.value = name.indexOf("FlashC28Bank") === 0
+          ? Boolean(plugin.getBoolean(name)) : String(plugin.getString(name));
+        item.success = true;
+      } catch (optionError) { item.error = String(optionError).slice(0, 256); }
+    }
+  }
+  return options;
+}
+
+function assertPairedFlashOptions(snapshot, cpu1Banks, cpu2Banks) {
+  var expected = {};
+  expected["0:FlashCoreSelection"] = "CPU1";
+  expected["2:FlashCoreSelection"] = "CPU2";
+  expected["0:FlashEraseSelection"] = "Selected Banks Only";
+  expected["2:FlashEraseSelection"] = "Selected Banks Only";
+  for (var bank = 0; bank < F28P65X_FLASH_BANK_COUNT; bank++) {
+    expected["0:FlashMapC28Bank" + bank] = cpu2Banks.indexOf(bank) >= 0 ? "1" : "0";
+    expected["0:FlashC28Bank" + bank] = cpu1Banks.indexOf(bank) >= 0;
+    expected["2:FlashC28Bank" + bank] = cpu2Banks.indexOf(bank) >= 0;
+  }
+  var actual = snapshot && snapshot.pluginOptions ? snapshot.pluginOptions : [];
+  for (var key in expected) {
+    var found = null;
+    for (var index = 0; index < actual.length; index++) {
+      if (actual[index].coreId + ":" + actual[index].name === key) { found = actual[index]; break; }
+    }
+    if (!found || found.success !== true || found.value !== expected[key]) {
+      throw "F28P65x paired Flash option readback mismatch: " + key +
+        " expected=" + expected[key] + " actual=" + (found ? JSON.stringify(found) : "unavailable");
+    }
+  }
 }
 
 function runFlashLoadWithEvidence(command, evidence, phase, operation) {
@@ -1139,7 +1196,7 @@ function handleCommand(command) {
     // CPU1 OnReset ROM breakpoints/CPU2 release during firmware-owned boot.
     session.expression.evaluate("GEL_UnloadAllGels()");
     return { status: "OK", value: withCoreIdentity(command, { gelInitializationDisabled: true }) };
-  } else if (command.name === "prepareFlashLoad") {
+  } else if (command.name === "prepareFlashLoad" || command.name === "preparePairedFlash") {
     // F28P65x paired Flash contract. The owner core executes the shared Flash
     // Plugin preparation in its own DSS context while it holds the target, and
     // the target core is named explicitly rather than implied by the channel
@@ -1150,7 +1207,20 @@ function handleCommand(command) {
         flashTargetCoreId === ownerCoreId) {
       throw "prepareFlashLoad requires an explicit targetCoreId that differs from the executing owner core";
     }
+    var pairedFlash = command.name === "preparePairedFlash";
     var flashBanks = normalizeFlashBanks(command.flashBanks);
+    var cpu1FlashBanks = pairedFlash ? normalizeFlashBanks(command.cpu1FlashBanks) : [];
+    if (pairedFlash && (ownerCoreId !== 0 || flashTargetCoreId !== 2 ||
+        !command.cpu1FlashBanks || !command.flashBanks ||
+        cpu1FlashBanks.length !== command.cpu1FlashBanks.length ||
+        flashBanks.length !== command.flashBanks.length ||
+        cpu1FlashBanks.length === 0 || flashBanks.length === 0)) {
+      throw "preparePairedFlash requires explicit, valid CPU1 and CPU2 linker-map bank sets";
+    }
+    for (var overlapIndex = 0; overlapIndex < cpu1FlashBanks.length; overlapIndex++) {
+      if (flashBanks.indexOf(cpu1FlashBanks[overlapIndex]) >= 0)
+        throw "preparePairedFlash rejected overlapping CPU1/CPU2 Flash banks";
+    }
     var ownerSession = sessionsByCoreId[String(ownerCoreId)];
     if (!ownerSession) {
       throw "DebugSession for owner core " + ownerCoreId + " is required to configure F28P65x Flash banks";
@@ -1167,13 +1237,18 @@ function handleCommand(command) {
       throw "F28P65x Flash preparation requires owner core " + ownerCoreId +
         " to be connected and halted; observed " + JSON.stringify(ownerRunState);
     }
+    var targetRunState = readCoreRunState(flashTargetCoreId);
+    if (pairedFlash && (!targetRunState.connected || targetRunState.state !== "Halted")) {
+      throw "F28P65x paired Flash preparation requires CPU2 connected and halted; observed " + JSON.stringify(targetRunState);
+    }
     // This existing operation is F28P65x-specific. Do not probe other loads/devices.
     delete pendingFlashLoadEvidence[String(flashTargetCoreId)];
     var evidence = { device: "F28P65x", coreId: flashTargetCoreId,
       ownerCoreId: ownerCoreId, targetCoreId: flashTargetCoreId, ownerState: ownerRunState,
       requestedFlashBanks: flashBanks.slice(0, F28P65X_FLASH_BANK_COUNT),
       expectedBankMuxSel: expectedBankMuxSel(flashBanks),
-      readOnly: true, atomic: false, snapshots: [] };
+      readOnly: !pairedFlash, atomic: pairedFlash, pairedFlash: pairedFlash,
+      cpu1FlashBanks: cpu1FlashBanks.slice(0), snapshots: [] };
     var preparation = runFlashLoadWithEvidence(command, evidence, "prepare", function(capture) {
       // A core-explicit DebugSession does not prove the Flash plugin's separate
       // Core Select option. Bind and verify it before any clock/bank operation.
@@ -1210,16 +1285,60 @@ function handleCommand(command) {
         // Ownership and erase selection are separate concepts even when the
         // linker map currently contains the same bank set for both.
         targetSession.flash.options.setBoolean("FlashC28Bank" + bankIndex, mappedToCpu2);
+        if (pairedFlash) ownerSession.flash.options.setBoolean("FlashC28Bank" + bankIndex,
+          cpu1FlashBanks.indexOf(bankIndex) >= 0);
       }
       targetSession.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
+      if (pairedFlash) ownerSession.flash.options.setString("FlashEraseSelection", "Selected Banks Only");
       ownerSession.flash.performOperation("ConfigureClock");
+      if (pairedFlash) evidence.configureClock = { status: "completed", coreId: 0, completedAtMs: new Date().getTime() };
       capture(":clock-ready");
       ownerSession.flash.performOperation("ConfigureBanks");
+      if (pairedFlash) evidence.configureBanks = { status: "completed", coreId: 0, completedAtMs: new Date().getTime() };
+      if (pairedFlash) {
+        var configuredSnapshot = capture(":configured");
+        assertPairedFlashOptions(configuredSnapshot, cpu1FlashBanks, flashBanks);
+        var configuredBoundary = validateFlashBoundary(configuredSnapshot, flashBanks);
+        evidence.boundaryValidation = configuredBoundary;
+        if (configuredBoundary.status !== "verified")
+          throw "F28P65x paired Flash bank mapping readback failed: " + JSON.stringify(configuredBoundary);
+      }
       return { flashBanks: flashBanks, ownerCoreId: ownerCoreId, targetCoreId: flashTargetCoreId,
         configured: true, validateFlashBoundary: true };
     });
-    if (preparation.status === "OK") pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;
+    if (preparation.status === "OK") {
+      pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;
+      if (pairedFlash) pendingFlashLoadEvidence[String(ownerCoreId)] = evidence;
+    }
     return preparation;
+  } else if (command.name === "verifyPairedFlash") {
+    var verifyCpu1Banks = normalizeFlashBanks(command.cpu1FlashBanks);
+    var verifyCpu2Banks = normalizeFlashBanks(command.flashBanks);
+    var verifyEvidence = pendingFlashLoadEvidence[String(command.targetCoreId)];
+    if (!verifyEvidence || verifyEvidence.pairedFlash !== true || command.coreId !== 0 || command.targetCoreId !== 2)
+      throw "No prepared F28P65x paired Flash transaction exists in this DSS session";
+    if (JSON.stringify(verifyCpu1Banks) !== JSON.stringify(verifyEvidence.cpu1FlashBanks) ||
+        JSON.stringify(verifyCpu2Banks) !== JSON.stringify(verifyEvidence.requestedFlashBanks))
+      throw "F28P65x paired Flash verification bank sets differ from preparation";
+    var cpu1State = readCoreRunState(0);
+    var cpu2State = readCoreRunState(2);
+    if (!cpu1State.connected || cpu1State.state !== "Halted" || !cpu2State.connected || cpu2State.state !== "Halted")
+      throw "F28P65x paired Flash boundary requires both cores halted";
+    try {
+      var verifySnapshot = captureFlashLoadState(command, verifyEvidence, "verify:before");
+      assertPairedFlashOptions(verifySnapshot, verifyCpu1Banks, verifyCpu2Banks);
+      var verifyBoundary = validateFlashBoundary(verifySnapshot, verifyCpu2Banks);
+      verifyEvidence.boundaryValidation = verifyBoundary;
+      if (verifyBoundary.status !== "verified")
+        throw "F28P65x paired Flash boundary mismatch: " + JSON.stringify(verifyBoundary);
+      return { status: "OK", value: withCoreIdentity(command, {
+        targetCoreId: 2, flashLoadEvidence: verifyEvidence, boundaryValidation: verifyBoundary
+      }) };
+    } catch (verifyError) {
+      verifyEvidence.failureClass = classifyFlashLoadFailure(String(verifyError), verifyEvidence);
+      return { status: "FAIL", message: String(verifyError).slice(0, 2048),
+        details: describeCommandException(verifyError), flashLoadEvidence: verifyEvidence };
+    }
   } else if (command.name === "writeData") {
     session.memory.writeData(resolveMemoryPage(command.page), command.address, command.value, command.typeSize);
     return { status: "OK", value: withCoreIdentity(command, { page: command.page, address: command.address, value: command.value, typeSize: command.typeSize }) };

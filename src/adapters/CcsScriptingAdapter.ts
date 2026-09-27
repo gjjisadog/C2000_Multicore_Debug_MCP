@@ -33,6 +33,8 @@ export class CcsScriptingAdapter implements DebugAdapter {
   readonly name = "ccs-scripting";
   readonly supportsSimultaneousOperations = false;
 
+  get supportsPairedFlash(): boolean { return this.bridge.supportsPairedFlash === true; }
+
   constructor(
     private readonly options: CcsScriptingAdapterOptions = {},
     private readonly bridge: CcsScriptingBridge = new PersistentDssBridge({
@@ -213,6 +215,53 @@ export class CcsScriptingAdapter implements DebugAdapter {
     }
   }
 
+  async preparePairedFlash(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]): Promise<{ flashLoadEvidence?: Record<string, unknown> } | void> {
+    return this.pairedFlashCommand("preparePairedFlash", session, ownerCoreId, targetCoreId, cpu1Banks, cpu2Banks);
+  }
+
+  async verifyPairedFlash(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]): Promise<{ flashLoadEvidence?: Record<string, unknown> } | void> {
+    return this.pairedFlashCommand("verifyPairedFlash", session, ownerCoreId, targetCoreId, cpu1Banks, cpu2Banks);
+  }
+
+  private async pairedFlashCommand(operation: "preparePairedFlash" | "verifyPairedFlash",
+    session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]): Promise<{ flashLoadEvidence?: Record<string, unknown> } | void> {
+    if (ownerCoreId !== 0 || targetCoreId !== 2) {
+      throw new DebugMcpError("FlashLoadPreparationUnsupported", "F28P65x paired Flash requires CPU1 and CPU2", {
+        ownerCoreId, targetCoreId
+      });
+    }
+    if (!this.bridge.supportsPairedFlash) {
+      throw new DebugMcpError("FlashLoadPreparationUnsupported", "Paired Flash requires a persistent DSS bridge", {
+        ownerCoreId, targetCoreId, operation
+      });
+    }
+    const timeouts = { ...DEFAULT_TIMEOUTS, ...this.options.timeouts };
+    const timeoutMs = timeoutForOperation(operation, timeouts, this.options.dssTimeoutMs);
+    let result: Record<string, unknown>;
+    try {
+      result = await this.execute(session, ownerCoreId, {
+        operation, targetCoreId, cpu1FlashBanks: cpu1Banks, flashBanks: cpu2Banks
+      });
+    } catch (error) {
+      if (operation === "preparePairedFlash") {
+        throw describeFlashPreparationFailure(error, { ownerCoreId, targetCoreId, flashBanks: cpu2Banks, timeoutMs });
+      }
+      throw error;
+    }
+    if (result.targetCoreId !== targetCoreId) {
+      throw new DebugMcpError("CoreIdentityMismatch", "Paired Flash response did not confirm CPU2", {
+        ownerCoreId, targetCoreId, responseTargetCoreId: result.targetCoreId
+      });
+    }
+    if (typeof result.flashLoadEvidence === "object" && result.flashLoadEvidence !== null &&
+        !Array.isArray(result.flashLoadEvidence)) {
+      return { flashLoadEvidence: result.flashLoadEvidence as Record<string, unknown> };
+    }
+  }
+
   async writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void> {
     await this.execute(session, coreId, { operation: "writeMemory", page, address, value, typeSize });
   }
@@ -335,7 +384,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "targetCoreId" | "resetType" | "programUri" | "expression" | "expressions" | "diagnostics" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks">,
+    command: Pick<CcsScriptingCommand, "operation" | "targetCoreId" | "resetType" | "programUri" | "expression" | "expressions" | "diagnostics" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks" | "cpu1FlashBanks">,
     timeoutOverrideMs?: number
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);
@@ -458,7 +507,7 @@ function timeoutForOperation(operation: CcsScriptingCommand["operation"], timeou
     case "evaluateExpression": case "evaluateExpressions": case "assignExpression": return timeouts.expressionReadMs;
     case "resolveAddress": return timeouts.addressResolveMs;
     case "reset": return timeouts.resetMs;
-    case "prepareFlashLoad": return timeouts.flashPrepareMs;
+    case "prepareFlashLoad": case "preparePairedFlash": case "verifyPairedFlash": return timeouts.flashPrepareMs;
     case "loadProgram": case "loadSymbols": return timeouts.programLoadMs;
     case "writeMemory": return timeouts.memoryWriteMs;
     default: return fallback ?? timeouts.stateReadMs;

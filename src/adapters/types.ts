@@ -25,6 +25,7 @@ export interface AdapterCreateSessionOptions {
 
 export interface DebugAdapter {
   readonly name: string;
+  readonly supportsPairedFlash?: boolean;
   readonly supportsSimultaneousOperations?: boolean;
   ownedProcesses?(): Record<string, unknown>[];
   createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession>;
@@ -56,6 +57,12 @@ export interface DebugAdapter {
   prepareFlashLoad?(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId, flashBanks: number[]): Promise<{
     flashLoadEvidence?: Record<string, unknown>;
   } | void>;
+  /** Configure both Flash plugins and the complete bank map before either image is loaded. */
+  preparePairedFlash?(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]): Promise<{ flashLoadEvidence?: Record<string, unknown> } | void>;
+  /** Read-only check of the prepared plugin options, bank mapping, and halted cores. */
+  verifyPairedFlash?(session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]): Promise<{ flashLoadEvidence?: Record<string, unknown> } | void>;
   writeMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, value: number, typeSize: number): Promise<void>;
   readMemory?(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number): Promise<number>;
   /** Read connection/run state only; use readPc for an explicit PC read. */

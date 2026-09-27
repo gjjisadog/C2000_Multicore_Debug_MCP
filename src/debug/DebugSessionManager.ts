@@ -42,7 +42,8 @@ import { noopLogger } from "../utils/logger.js";
 import { normalizeProgramUri, normalizeWorkspacePath } from "../utils/pathUtils.js";
 import { assertCoreIsolation, CHECKED_PEER_FIELDS, type MulticoreSnapshotLike } from "./isolationAssertions.js";
 import { buildRunPauseAcceptanceSummary } from "./runPauseAcceptance.js";
-import { flashOwnershipActionsForMap, mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap, type RamOwnershipAction } from "../hardware/mapOwnership.js";
+import { flashOwnershipActionsForMap, mapPathForProgram, mergeOwnershipActions, ownershipActionsForMap, parseLinkerMap,
+  normalizeF28P65xFlashBanks, type RamOwnershipAction } from "../hardware/mapOwnership.js";
 import { resolveCpu2FaultEvidenceOptions, resolveDiagnosticsDefaults, type DiagnosticsDefaults } from "./defaultDiagnostics.js";
 import { valuesEqual } from "../utils/expressionMatch.js";
 import { sleep } from "../utils/async.js";
@@ -90,6 +91,7 @@ interface LogicalDebugSession {
     targetCoreId: CoreId;
     flashBanks: number[];
     openedAt: string;
+    prepared?: boolean;
   };
   adapterDisposed?: boolean;
   probeLease?: DebugProbeLease;
@@ -708,7 +710,9 @@ export class DebugSessionManager {
     mapUri?: string,
     ramOwnershipPolicy: RamOwnershipPolicy = "require-map",
     fallbackGsRegions?: number[],
-    allowDestructiveFlashReload = false
+    allowDestructiveFlashReload = false,
+    pairedPrepared = false,
+    skipCpu2Ownership = false
   ): Promise<LoadedProgramInfo> {
     const normalizedUri = this.normalizeArtifactUri(programUri);
     const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
@@ -727,8 +731,15 @@ export class DebugSessionManager {
     let ownershipNote: string | undefined;
     let flashLoadEvidence: Record<string, unknown> | undefined;
     try {
-      await this.refreshSessionForProgramLoad(sessionId, session, coreId);
-      ownershipNote = await this.prepareCpu2RamOwnership(sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions);
+      if (pairedPrepared) {
+        if (!session.flashProgrammingWindow?.prepared) {
+          throw new DebugMcpError("FlashProgrammingWindowActive", "Paired Flash load has no prepared transaction", { sessionId, coreId });
+        }
+      } else {
+        await this.refreshSessionForProgramLoad(sessionId, session, coreId);
+      }
+      ownershipNote = skipCpu2Ownership ? undefined : await this.prepareCpu2RamOwnership(
+        sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions, pairedPrepared);
       const loaded = await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
       flashLoadEvidence = loaded?.flashLoadEvidence;
     } catch (error) {
@@ -841,7 +852,8 @@ export class DebugSessionManager {
     programUri: string,
     mapUri: string | undefined,
     policy: RamOwnershipPolicy,
-    fallbackGsRegions?: number[]
+    fallbackGsRegions?: number[],
+    pairedPrepared = false
   ): Promise<string | undefined> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
       return undefined;
@@ -879,7 +891,7 @@ export class DebugSessionManager {
         }
       );
     }
-    if (flashBanks.length > 0) {
+    if (flashBanks.length > 0 && !pairedPrepared) {
       if (!this.adapter.prepareFlashLoad) {
         throw new DebugMcpError(
           "FlashLoadPreparationUnsupported",
@@ -1300,6 +1312,144 @@ export class DebugSessionManager {
       fallbackUsed: true,
       fallbackWarning: reason
     };
+  }
+
+  /** One queue-held F28P65x transaction: a fresh DSS context, both cores halted,
+   * one shared Flash configuration, then two loads without any intervening
+   * debug command or session refresh. */
+  async loadPairedFlashPrograms(sessionId: string, input: {
+    cpu1: LoadProgramRequest; cpu2: LoadProgramRequest; resetType: ResetType;
+  }) {
+    return this.exclusive(sessionId, async () => {
+      const { cpu1, cpu2 } = input;
+      if (cpu1.coreId !== F28P65X_CPU1_CORE_ID || cpu2.coreId !== F28P65X_CPU2_CORE_ID ||
+          !cpu1.mapUri || !cpu2.mapUri ||
+          input.resetType !== "cpu" ||
+          [cpu1.loadPolicy, cpu2.loadPolicy].some(policy => policy && policy !== "always")) {
+        throw new DebugMcpError("PairedFlashContractInvalid", "Paired Flash requires CPU1/CPU2 programs, both linker maps, CPU reset, and real program loads", {
+          sessionId, resetType: input.resetType, targetMemoryWritten: false
+        });
+      }
+      const session = this.requireSession(sessionId);
+      if (session.flashProgrammingWindow || session.flashLoadQuarantine) {
+        throw new DebugMcpError("FlashProgrammingWindowActive", "Paired Flash session is already active or quarantined", {
+          sessionId, flashLoadQuarantine: session.flashLoadQuarantine
+        });
+      }
+      if (this.adapter.supportsPairedFlash === false || !this.adapter.preparePairedFlash || !this.adapter.verifyPairedFlash) {
+        throw new DebugMcpError("FlashLoadPreparationUnsupported", "Adapter lacks atomic paired Flash preparation and verification", {
+          sessionId, targetMemoryWritten: false
+        });
+      }
+      const cpu1Map = this.normalizeArtifactUri(cpu1.mapUri);
+      const cpu2Map = this.normalizeArtifactUri(cpu2.mapUri);
+      let cpu1Banks: number[];
+      let cpu2Banks: number[];
+      try {
+        const [cpu1Text, cpu2Text] = await Promise.all([readFile(cpu1Map, "utf8"), readFile(cpu2Map, "utf8")]);
+        cpu1Banks = normalizeF28P65xFlashBanks(parseLinkerMap(cpu1Text, {
+          coreId: 0, mapPath: cpu1Map
+        }).usedFlashBanks.map(region => region.bankIndex));
+        cpu2Banks = normalizeF28P65xFlashBanks(parseLinkerMap(cpu2Text, {
+          coreId: 2, mapPath: cpu2Map
+        }).usedFlashBanks.map(region => region.bankIndex));
+      } catch (error) {
+        throw new DebugMcpError("PairedFlashMapInvalid", "Both paired Flash linker maps must be readable and parseable", {
+          sessionId, cpu1Map, cpu2Map, targetMemoryWritten: false, cause: toStructuredError(error)
+        });
+      }
+      const overlap = cpu1Banks.filter(bank => cpu2Banks.includes(bank));
+      if (!cpu1Banks.length || !cpu2Banks.length || overlap.length) {
+        throw new DebugMcpError("PairedFlashMapInvalid", "Paired Flash maps need disjoint, nonempty bank sets", {
+          sessionId, cpu1Banks, cpu2Banks, overlap, targetMemoryWritten: false
+        });
+      }
+      await Promise.all([access(this.normalizeArtifactUri(cpu1.programUri)), access(this.normalizeArtifactUri(cpu2.programUri))]);
+      this.assertFlashLoadSessionAvailable(sessionId, 2);
+      await this.assertSafeFlashReload(sessionId, cpu2, cpu2.allowDestructiveFlashReload === true);
+      await this.assertProgramLoadConnectivity(sessionId, [cpu1, cpu2]);
+
+      session.flashProgrammingWindow = { ownerCoreId: 0, targetCoreId: 2, flashBanks: cpu2Banks,
+        openedAt: new Date().toISOString() };
+      let flashTouched = false;
+      try {
+        // CCS replaces its DSS session on CPU1 load. Do that once, before
+        // halt/reset and all Flash Plugin configuration.
+        await this.refreshSessionForProgramLoad(sessionId, session, 0);
+        const haltResults: BatchItemResult[] = [];
+        for (const coreId of [0, 2]) {
+          const state = await this.haltCoreUnlocked(sessionId, coreId);
+          if (!state.connected || state.state !== "Halted") throw new DebugMcpError("FlashCoreNotHalted", "Core did not halt before paired Flash", { coreId, state });
+          haltResults.push({ ...state, success: true });
+        }
+        const resetResults: BatchItemResult[] = [];
+        for (const coreId of [0, 2]) {
+          const state = await this.resetCoreUnlocked(sessionId, coreId, input.resetType);
+          if (!state.connected || state.state !== "Halted") throw new DebugMcpError("FlashCoreNotHalted", "Core did not halt after paired Flash reset", { coreId, state });
+          resetResults.push({ ...state, success: true });
+        }
+        for (const coreId of [0, 2]) {
+          const state = await this.getTargetStateUnlocked(sessionId, coreId);
+          if (!state.connected || state.state !== "Halted") throw new DebugMcpError("FlashCoreNotHalted", "Core was not halted at Flash preparation", { coreId, state });
+        }
+        flashTouched = true;
+        const preparation = await this.adapter.preparePairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
+        session.flashProgrammingWindow.prepared = true;
+        await this.adapter.verifyPairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
+        // CPU2 GS ownership must be set before the first Flash load as well.
+        await this.prepareCpu2RamOwnership(sessionId, session, 2, this.normalizeArtifactUri(cpu2.programUri), cpu2Map,
+          cpu2.ramOwnershipPolicy ?? "require-map", cpu2.fallbackGsRegions, true);
+        const cpu1Info = await this.loadProgramWithMapUnlocked(sessionId, 0, cpu1.programUri, cpu1Map,
+          cpu1.ramOwnershipPolicy, cpu1.fallbackGsRegions, cpu1.allowDestructiveFlashReload, true);
+        const ownerStateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 0);
+        const cpu2StateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 2);
+        if (ownerStateAfterCpu1Load.state !== "Halted" || cpu2StateAfterCpu1Load.state !== "Halted" ||
+            !ownerStateAfterCpu1Load.connected || !cpu2StateAfterCpu1Load.connected) {
+          throw new DebugMcpError("FlashCoreNotHalted", "Both cores must remain halted between paired Flash loads", {
+            ownerStateAfterCpu1Load, cpu2StateAfterCpu1Load
+          });
+        }
+        const beforeCpu2 = await this.adapter.verifyPairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
+        const cpu2Info = await this.loadProgramWithMapUnlocked(sessionId, 2, cpu2.programUri, cpu2Map,
+          cpu2.ramOwnershipPolicy, cpu2.fallbackGsRegions, cpu2.allowDestructiveFlashReload, true, true);
+        return {
+          initialHalt: { sessionId, sequential: true, results: haltResults },
+          reset: { sessionId, sequential: true, results: resetResults },
+          load: { sessionId, results: [
+            { ...cpu1Info, success: true, loaded: true, skipped: false },
+            { ...cpu2Info, success: true, loaded: true, skipped: false }
+          ] },
+          preparation: preparation?.flashLoadEvidence,
+          beforeCpu2: beforeCpu2?.flashLoadEvidence,
+          ownerStateAfterCpu1Load,
+          cpu1Banks, cpu2Banks,
+          bankOwners: Array.from({ length: 5 }, (_, bank) => ({
+            bank, owner: cpu2Banks.includes(bank) ? "CPU2" : "CPU1",
+            programmed: cpu1Banks.includes(bank) || cpu2Banks.includes(bank)
+          }))
+        };
+      } catch (error) {
+        if (flashTouched && !session.flashLoadQuarantine) {
+          const structured = toStructuredError(error);
+          session.flashLoadQuarantine = {
+            coreId: 2, programUri: this.normalizeArtifactUri(cpu2.programUri),
+            failedAt: new Date().toISOString(), failureClass: "paired_flash_failure",
+            errorCode: structured.code, message: structured.message
+          };
+        }
+        if (flashTouched) {
+          try {
+            await this.adapter.disposeSession?.(session.adapterSession);
+            session.adapterDisposed = true;
+          } catch (disposeError) {
+            this.logger.warn("failed to close quarantined paired Flash DSS session", toStructuredError(disposeError));
+          }
+        }
+        throw error;
+      } finally {
+        delete session.flashProgrammingWindow;
+      }
+    });
   }
 
   async loadPrograms(sessionId: string, programs: LoadProgramRequest[]) {

@@ -14,6 +14,7 @@ const ccxmlPath = "/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28
 
 class RecordingBridge implements CcsScriptingBridge {
   readonly supportsFirmwareHandoff = true;
+  readonly supportsPairedFlash = true;
   readonly sessions: CcsBridgeCreateSessionOptions[] = [];
   readonly commands: CcsScriptingCommand[] = [];
   readonly disposedSessions: string[] = [];
@@ -62,6 +63,19 @@ class RecordingBridge implements CcsScriptingBridge {
 }
 
 describe("CcsScriptingAdapter", () => {
+  test("routes paired preparation and read-only verification through CPU1 with both map bank sets", async () => {
+    const bridge = new RecordingBridge();
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "paired", ccxmlPath, coreMap });
+    await adapter.preparePairedFlash(session, 0, 2, [0], [3]);
+    await adapter.verifyPairedFlash(session, 0, 2, [0], [3]);
+    expect(bridge.commands.map(command => ({ operation: command.operation, coreId: command.coreId,
+      targetCoreId: command.targetCoreId, cpu1FlashBanks: command.cpu1FlashBanks,
+      flashBanks: command.flashBanks, timeoutMs: command.timeoutMs }))).toEqual([
+      { operation: "preparePairedFlash", coreId: 0, targetCoreId: 2, cpu1FlashBanks: [0], flashBanks: [3], timeoutMs: 120000 },
+      { operation: "verifyPairedFlash", coreId: 0, targetCoreId: 2, cpu1FlashBanks: [0], flashBanks: [3], timeoutMs: 120000 }
+    ]);
+  });
   test.each(["pc", "value"] as const)("normalizes decimal DSS %s before application-entry comparison", async field => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);

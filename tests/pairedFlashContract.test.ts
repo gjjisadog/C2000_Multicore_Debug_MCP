@@ -21,6 +21,15 @@ class PairedFlashAdapter extends MockDebugAdapter {
   events: string[] = [];
   resetRequests: Array<{ coreId: CoreId; resetType: ResetType }> = [];
   cpu2StopsAfterRun = false;
+  failCpu2Load = false;
+  failSecondVerify = false;
+  verifyCount = 0;
+
+  async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
+    this.events.push(`refresh:${coreId}`);
+    await this.disposeSession(session);
+    return this.createSession({ sessionName: session.sessionName, ccxmlPath: session.ccxmlPath, coreMap: session.coreMap });
+  }
 
   override async connect(session: AdapterSession, coreId: CoreId) {
     this.events.push(`connect:${coreId}`);
@@ -53,6 +62,7 @@ class PairedFlashAdapter extends MockDebugAdapter {
   }
   override async loadProgram(session: AdapterSession, coreId: CoreId, uri: string) {
     this.events.push(`load:${coreId}`);
+    if (coreId === 2 && this.failCpu2Load) throw Error("first CPU2 erase failure");
     await super.loadProgram(session, coreId, uri);
   }
   async prepareFlashLoad(
@@ -73,6 +83,18 @@ class PairedFlashAdapter extends MockDebugAdapter {
         snapshots: []
       }
     };
+  }
+  async preparePairedFlash(_session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    cpu1Banks: number[], cpu2Banks: number[]) {
+    this.events.push(`preparePairedFlash:${ownerCoreId}->${targetCoreId}:[${cpu1Banks.join(",")}]:[${cpu2Banks.join(",")}]`);
+    return { flashLoadEvidence: { device: "F28P65x", cpu1Banks, cpu2Banks } };
+  }
+  async verifyPairedFlash(_session: AdapterSession, ownerCoreId: CoreId, targetCoreId: CoreId,
+    _cpu1Banks: number[], _cpu2Banks: number[]) {
+    this.events.push(`verifyPairedFlash:${ownerCoreId}->${targetCoreId}`);
+    this.verifyCount++;
+    if (this.failSecondVerify && this.verifyCount === 2) throw Error("paired Flash option readback mismatch");
+    return { flashLoadEvidence: { device: "F28P65x", verified: true } };
   }
 }
 
@@ -170,11 +192,13 @@ describe("F28P65x paired Flash programming contract", () => {
 
     expect(result).toMatchObject({ success: true, status: "flash_prepared", ipcAcceptance: "NOT_RUN" });
     expect(adapter.events).toEqual([
+      "refresh:0", "connect:0", "connect:2",
       "halt:0", "halt:2",
       "reset:0:cpu", "reset:2:cpu",
+      "preparePairedFlash:0->2:[0]:[3]",
+      "verifyPairedFlash:0->2",
       "load:0",
-      "halt:0",
-      "prepareFlashLoad:0->2:[3]",
+      "verifyPairedFlash:0->2",
       "load:2"
     ]);
     expect(result.flashProgramming).toMatchObject({
@@ -188,8 +212,8 @@ describe("F28P65x paired Flash programming contract", () => {
       applicationCoresStartedDuringFlash: false
     });
     expect(result.flashProgramming.ownerStateAfterCpu1Load).toMatchObject({ coreId: 0, state: "Halted" });
-    expect(result.performedSteps).toContain("beginPairedFlashProgramming");
-    expect(result.performedSteps).toContain("confirmHaltedOwnerDuringPairedFlash");
+    expect(result.performedSteps).toContain("preparePairedFlash");
+    expect(result.performedSteps).toContain("verifyPairedFlash");
     expect(result.performedSteps).toContain("completePairedFlashProgramming");
   });
 
@@ -203,10 +227,64 @@ describe("F28P65x paired Flash programming contract", () => {
     expect(cpu2Load).toBeGreaterThan(cpu1Load);
     const flashProgrammingWindow = adapter.events.slice(cpu1Load, cpu2Load + 1);
     expect(flashProgrammingWindow.filter(event => event.startsWith("run:"))).toEqual([]);
-    // The owner is re-confirmed halted between its own load and the target's.
+    // No run, reset, session refresh, or Flash reconfiguration is allowed here.
     expect(flashProgrammingWindow).toEqual([
-      "load:0", "halt:0", "prepareFlashLoad:0->2:[3]", "load:2"
+      "load:0", "verifyPairedFlash:0->2", "load:2"
     ]);
+    expect(adapter.events.filter(event => event.startsWith("refresh:"))).toEqual(["refresh:0"]);
+    expect(adapter.events.indexOf("refresh:0")).toBeLessThan(adapter.events.indexOf("preparePairedFlash:0->2:[0]:[3]"));
+  });
+
+  test("rejects overlapping map banks before touching the target", async () => {
+    const { adapter, handlers, input } = await fixture({ cpu1Map: FLASH_CPU2_MAP });
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result).toMatchObject({ success: false, error: { code: "PairedFlashMapInvalid" } });
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("requires CPU reset before paired Flash preparation", async () => {
+    const { adapter, handlers, input } = await fixture();
+    const result = await handlers.runIpcAcceptance({
+      ...input, startupPreset: undefined, resetType: "default", stopAfterFlashPreparation: true
+    });
+    expect(result).toMatchObject({ success: false, error: { code: "PairedFlashContractInvalid" } });
+    expect(adapter.events).toEqual([]);
+  });
+
+  test("derives both erase sets from linker maps and assigns every unused bank", async () => {
+    const { adapter, handlers, input } = await fixture({
+      cpu1Map: FLASH_CPU1_MAP.replace("FLASH_BANK0", "FLASH_BANK2"),
+      cpu2Map: FLASH_CPU2_MAP.replace("FLASH_BANK3", "FLASH_BANK4")
+    });
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result.success).toBe(true);
+    expect(adapter.events).toContain("preparePairedFlash:0->2:[2]:[4]");
+    expect(result.flashProgramming.bankOwners).toEqual([
+      { bank: 0, owner: "CPU1", programmed: false },
+      { bank: 1, owner: "CPU1", programmed: false },
+      { bank: 2, owner: "CPU1", programmed: true },
+      { bank: 3, owner: "CPU1", programmed: false },
+      { bank: 4, owner: "CPU2", programmed: true }
+    ]);
+  });
+
+  test("quarantines the first CPU2 erase failure without an automatic retry", async () => {
+    const { adapter, handlers, manager, input } = await fixture();
+    adapter.failCpu2Load = true;
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result.success).toBe(false);
+    expect(adapter.events.filter(event => event === "load:2")).toHaveLength(1);
+    await expect(manager.loadPrograms(input.sessionId, [{ coreId: 2, programUri: input.cpu2OutPath,
+      mapUri: input.cpu2MapPath, loadPolicy: "always" }])).rejects.toMatchObject({ code: "FlashLoadSessionQuarantined" });
+  });
+
+  test("stops before CPU2 erase when the post-CPU1 readback changes", async () => {
+    const { adapter, handlers, input } = await fixture();
+    adapter.failSecondVerify = true;
+    const result = await handlers.runIpcAcceptance(input);
+    expect(result.success).toBe(false);
+    expect(adapter.events).toContain("load:0");
+    expect(adapter.events).not.toContain("load:2");
   });
 
   test("keeps the requested reset type for both cores and never substitutes a fallback", async () => {
@@ -500,6 +578,13 @@ describe("F28P65x paired Flash programming contract", () => {
       ownerCoreId: 0,
       targetCoreId: 2,
       cpu2FlashBanks: [3]
+    })).toThrowError(/cannot use loadSequence.mode cpu1-run-before-cpu2/);
+    expect(() => resolvePairedFlashContract({
+      startupPreset: "f28p65x-paired-flash",
+      loadMode: "cpu1-run-before-cpu2",
+      ownerCoreId: 0,
+      targetCoreId: 2,
+      cpu2FlashBanks: []
     })).toThrowError(/cannot use loadSequence.mode cpu1-run-before-cpu2/);
   });
 

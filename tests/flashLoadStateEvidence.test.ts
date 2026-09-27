@@ -8,9 +8,11 @@ function harness() {
   const calls: unknown[][] = [];
   const state = { bank: 0, lock: 0, clock: 0, connected: [true, true], halted: [true, true],
     failReads: false, failStates: false, failLoad: false, failPrepare: false, failBanks: false,
+    lockOnLoad: true,
     configuredBank: 0x3c0, configuredLock: 0,
     loadError: "original Bank 3 erase failed",
     registerValues: {} as Record<string, number>,
+    optionValues: {} as Record<string, string | boolean>,
     coreSelections: { 0: "CPU1", 2: "CPU2" } as Record<number, string>,
     selectionFault: "" as "" | "read" | "write" | "readback" };
   const sessions = Object.fromEntries([0, 2].map((id, index) => [id, {
@@ -33,7 +35,7 @@ function harness() {
       },
       loadProgram(program: string) {
         calls.push(["load", id, program]);
-        state.lock = 4;
+        if (state.lockOnLoad) state.lock = 4;
         if (state.failLoad) throw Error(state.loadError);
       }
     },
@@ -41,17 +43,29 @@ function harness() {
       options: {
         getString(name: string) {
           calls.push(["get-option", id, name]);
-          if (state.selectionFault === "read") throw Error("selection read unavailable");
-          return state.coreSelections[id];
+          if (name === "FlashCoreSelection") {
+            if (state.selectionFault === "read") throw Error("selection read unavailable");
+            return state.coreSelections[id];
+          }
+          return state.optionValues[id + ":" + name];
+        },
+        getBoolean(name: string) {
+          calls.push(["get-option", id, name]);
+          return state.optionValues[id + ":" + name];
         },
         setString(name: string, value: string) {
           calls.push(["option", id, name, value]);
           if (name === "FlashCoreSelection") {
             if (state.selectionFault === "write") throw Error("selection write unavailable");
             if (state.selectionFault !== "readback") state.coreSelections[id] = value;
+          } else {
+            state.optionValues[id + ":" + name] = value;
           }
         },
-        setBoolean(name: string, value: boolean) { calls.push(["option", id, name, value]); }
+        setBoolean(name: string, value: boolean) {
+          calls.push(["option", id, name, value]);
+          state.optionValues[id + ":" + name] = value;
+        }
       },
       performOperation(name: string) {
         calls.push(["perform", id, name]);
@@ -90,6 +104,47 @@ function harness() {
 }
 
 describe("F28P65x Flash load state evidence", () => {
+  test("prepares both erase selections before CPU1 load and only verifies between loads", () => {
+    const h = harness();
+    h.state.configuredBank = 0xc0;
+    h.state.lockOnLoad = false;
+    const prepared = h.command("preparePairedFlash", 0, [3], { targetCoreId: 2, cpu1FlashBanks: [0] });
+    expect(prepared.status).toBe("OK");
+    const firstLoad = h.command("load", 0, [3]);
+    expect(firstLoad.status).toBe("OK");
+    const verified = h.command("verifyPairedFlash", 0, [3], { targetCoreId: 2, cpu1FlashBanks: [0] });
+    expect(verified.status).toBe("OK");
+    const secondLoad = h.command("load", 2, [3]);
+    expect(secondLoad.status).toBe("OK");
+    const firstLoadIndex = h.calls.findIndex(call => call[0] === "load" && call[1] === 0);
+    const secondLoadIndex = h.calls.findIndex(call => call[0] === "load" && call[1] === 2);
+    expect(h.calls.filter(call => call[0] === "perform")).toEqual([
+      ["perform", 0, "ConfigureClock"], ["perform", 0, "ConfigureBanks"]
+    ]);
+    expect(h.calls.findIndex(call => call[0] === "perform" && call[2] === "ConfigureBanks"))
+      .toBeLessThan(firstLoadIndex);
+    expect(h.calls.slice(firstLoadIndex, secondLoadIndex).some(call => call[0] === "perform" || call[0] === "option"))
+      .toBe(false);
+    expect(h.calls).toContainEqual(["option", 0, "FlashC28Bank0", true]);
+    expect(h.calls).toContainEqual(["option", 0, "FlashC28Bank3", false]);
+    expect(h.calls).toContainEqual(["option", 0, "FlashEraseSelection", "Selected Banks Only"]);
+    expect(h.calls).toContainEqual(["option", 2, "FlashC28Bank3", true]);
+    expect(h.calls).toContainEqual(["option", 2, "FlashEraseSelection", "Selected Banks Only"]);
+    expect(secondLoad.value.flashLoadEvidence.snapshots.some((snapshot: any) =>
+      snapshot.phase === "load:before" && snapshot.pluginOptions.length > 0)).toBe(true);
+    const beforeCpu2 = secondLoad.value.flashLoadEvidence.snapshots.find((snapshot: any) => snapshot.phase === "load:before");
+    expect(beforeCpu2.pluginOptions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ coreId: 0, name: "FlashEraseSelection", value: "Selected Banks Only", success: true }),
+      expect.objectContaining({ coreId: 2, name: "FlashEraseSelection", value: "Selected Banks Only", success: true }),
+      expect.objectContaining({ coreId: 0, name: "FlashC28Bank0", value: true, success: true }),
+      expect.objectContaining({ coreId: 2, name: "FlashC28Bank3", value: true, success: true })
+    ]));
+    expect(secondLoad.value.flashLoadEvidence).toMatchObject({
+      configureClock: { status: "completed", coreId: 0 },
+      configureBanks: { status: "completed", coreId: 0 },
+      boundaryValidation: { status: "verified", expectedBankMuxSel: 0xc0, actualBankMuxSel: 0xc0 }
+    });
+  });
   test("binds the Flash plugin core independently of the DebugSession", () => {
     const h = harness();
     h.state.coreSelections = { 0: "CPU2", 2: "CPU1" };

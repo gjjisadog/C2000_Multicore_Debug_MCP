@@ -280,9 +280,10 @@ describe("DSS generated scripts", () => {
     expect(block).toContain("ownerSession.flash.performOperation(\"ConfigureBanks\")");
     expect(block).toContain("targetSession.flash.options.setBoolean(\"FlashC28Bank\" + bankIndex, mappedToCpu2)");
     expect(block).toContain("ownerSession.flash.options.setString(\"FlashMapC28Bank\" + bankIndex");
-    // One preparation arms exactly the target core's next load.
+    // Legacy preparation arms the target; paired preparation arms both loads.
     expect(block).toContain("delete pendingFlashLoadEvidence[String(flashTargetCoreId)];");
-    expect(block).toContain("if (preparation.status === \"OK\") pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;");
+    expect(block).toContain("pendingFlashLoadEvidence[String(flashTargetCoreId)] = evidence;");
+    expect(block).toContain("if (pairedFlash) pendingFlashLoadEvidence[String(ownerCoreId)] = evidence;");
   });
 
   test("persistent DSS fails closed when the Flash owner core is not halted", () => {
