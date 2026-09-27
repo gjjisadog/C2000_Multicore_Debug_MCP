@@ -237,16 +237,19 @@ personal rankings or causal claims from cross-improvement correlations.
   against one probe, and do not call `c2000_recoverBoard` while an active lease
   exists. Use its dry-run first; after a session or worker handoff, require a
   fresh lease, fresh session, and fresh target-image identity.
-- For a Flash task, request one explicit authorization for the named board and
-  current CPU1/CPU2 image pair that covers paired programming, an intentional
-  repeat of that same pair if resident-marker evidence requires it, the
-  product-level power cycle, and read-only verification. Reuse that authorization
-  throughout the bounded task; do not ask again per core, MCP call, fresh
-  session, or power-cycle stage. Set `allowDestructiveFlashReload=true` for an
-  authorized repeated CPU2 load and retain the approval and artifact hashes in
-  evidence. This flag does not create authorization by itself. New board/image
-  scope or a new recovery plan requires a new decision. A failed or uncertain
-  CPU2 Flash load is never retried in its quarantined session.
+- Once the user explicitly authorizes Flash programming in the current
+  conversation, carry that authorization forward for the ongoing work on the
+  authorized board. It covers updated builds of the CPU1/CPU2 pair, intentional
+  reprogramming after a marker mismatch, the product-level power cycle, and
+  read-only verification. Do not ask again because a build hash changed, CPU2
+  needs another intentional load, a session/worker was renewed, or another MCP
+  call is needed. Record the current artifact hashes for each attempt and pass
+  `allowDestructiveFlashReload=true` for an authorized repeated CPU2 load; the
+  flag does not create authorization by itself. Respect any narrower limit the
+  user gave, and ask only for an operation outside the prior authorization,
+  such as a different board or a new class of target mutation. A failed or
+  uncertain CPU2 Flash load is never retried in its quarantined session;
+  inspect evidence and use a fresh session for an intentional retry.
 - Prefer `c2000_launchAndRunIpcAcceptance` with the paired Flash preset and
   `afterFlashPowerCycle` containing both image manifests for one client-visible
   call that writes, verifies markers, cycles power for at least five seconds,

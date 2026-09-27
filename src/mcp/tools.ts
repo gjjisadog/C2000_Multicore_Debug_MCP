@@ -1080,7 +1080,7 @@ export function getToolSurfaceGuide(
         ? ["If firmware is already resident in Flash, use c2000_launchResidentIpcDebug when no session exists, or c2000_runResidentIpcDebug for an existing session; both are resident-image symbol paths and never substitute a program load."]
         : ["If firmware is already resident in Flash, use c2000_loadSymbols; do not use c2000_loadProgram as a symbol-only substitute."]),
       ...(surface === "agent"
-        ? ["Repeated CPU2 Flash programming remains blocked before erase; use the resident-image path or set allowDestructiveFlashReload=true on the approved paired-Flash workflow. One task-scoped user authorization covers its bounded Flash/cycle/read-only sequence."]
+        ? ["Repeated CPU2 Flash programming remains blocked before erase; use the resident-image path or set allowDestructiveFlashReload=true on the approved paired-Flash workflow. Prior user authorization persists for ongoing work on the same board in this conversation; do not ask again per call or rebuilt image."]
         : ["Repeated CPU2 Flash programming is blocked before erase; use c2000_loadSymbols for resident images or explicitly set allowDestructiveFlashReload=true after confirming the intentional reprogram."]),
       "outputDir must be inside a configured allowedWriteRoots path; when omitted, workflow bundles use a timestamped directory under the first allowedWriteRoots entry. Program, map, and ccxml files must be inside allowedReadRoots.",
       ...(surface === "agent"

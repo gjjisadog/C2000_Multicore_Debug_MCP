@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.10 - 2026-09-27
+
+### Conversation-scoped Flash authorization
+
+- Carry explicit user Flash authorization forward within the same conversation
+  for ongoing work on the authorized board, including rebuilt images and
+  intentional reloads. The agent no longer requests approval for each session,
+  call, or CPU2 rewrite; the MCP destructive-reload flag and safety checks remain.
+
 ## 0.7.9 - 2026-09-27
 
 ### One-approval paired Flash and cold-start observation
