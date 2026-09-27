@@ -250,6 +250,20 @@ personal rankings or causal claims from cross-improvement correlations.
   such as a different board or a new class of target mutation. A failed or
   uncertain CPU2 Flash load is never retried in its quarantined session;
   inspect evidence and use a fresh session for an intentional retry.
+- If TI Flash Programmer rejects CPU2 Bank3 erase/load with `Flash registers
+  are locked` after CPU1 was written, record an incomplete paired-programming
+  attempt and preserve the first failure. Confirm the failed session is closed,
+  then inspect the board lease/jobs and any later exact-pair programming and
+  marker evidence. If another flow has already programmed and verified the
+  requested pair, do not power-cycle or reflash again. Do not disturb an active
+  board owner. Otherwise perform a recorded product-level power OFF for at least
+  five seconds and ON through the supported power-control path; if it reports
+  `manual_required`, wait for the operator. Acquire a fresh lease and session,
+  then reprogram the complete CPU1/CPU2 pair with the current artifact hashes
+  and `allowDestructiveFlashReload=true`, followed by the normal resident-marker
+  verification. Allow only one such recovery attempt for this failure; if the
+  lock recurs or the power/lease state is uncertain, stop and retain the
+  evidence rather than looping or retrying CPU2 alone.
 - Prefer `c2000_launchAndRunIpcAcceptance` with the paired Flash preset and
   `afterFlashPowerCycle` containing both image manifests for one client-visible
   call that writes, verifies markers, cycles power for at least five seconds,

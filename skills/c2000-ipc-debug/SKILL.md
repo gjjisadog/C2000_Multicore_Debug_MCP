@@ -110,6 +110,14 @@ must not be substituted for one another.
 - Do not retry a failed CPU2 Flash preparation or load in the same session. The
   session is quarantined after the first failure; preserve that failure evidence
   and open a fresh session before any intentional destructive re-program.
+- For `Flash registers are locked` during CPU2 Bank3 erase/load after CPU1 was
+  written, treat the pair as incomplete and follow the bounded recovery in
+  `c2000-multicore-debug`: close the failed session, check lease/jobs and later
+  exact-pair marker evidence, power OFF for at least five seconds and ON through
+  supported control when the board is free, then reprogram the complete pair in
+  a fresh lease/session. Do not disturb an active owner or repeat a pair already
+  verified by another flow. Allow one recovery attempt; on another lock or
+  uncertain state, stop with the first failure evidence.
 
 ### Flash/firmware-owned startup
 
