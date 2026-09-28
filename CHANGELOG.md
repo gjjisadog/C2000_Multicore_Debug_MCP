@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.16 - 2026-09-29
+
+### Resilient daemon startup for stale board configurations
+
+- Keep the MCP daemon and healthy board workers available when a persisted
+  board points to a missing or invalid serial-bound CCXML file.
+- Mark the affected board `FAILED`, clear its stale worker route, and retain
+  the configuration error for diagnosis. Direct operations on that board still
+  fail until its CCXML registration is corrected.
+
 ## 0.7.15 - 2026-09-27
 
 ### CPU2-first debug and power-control onboarding
