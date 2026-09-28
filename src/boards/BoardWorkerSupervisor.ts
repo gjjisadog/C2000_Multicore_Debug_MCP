@@ -52,7 +52,16 @@ export class BoardWorkerSupervisor {
     // health counts cannot keep dead workers alive across restarts.
     this.options.workers.markStaleForDaemon(this.options.daemonInstanceId);
     for (const board of this.options.registry.list()) {
-      await this.startBoard(board.boardId);
+      try {
+        await this.startBoard(board.boardId);
+      } catch (error) {
+        // A board-local startup failure must not hide the daemon and every
+        // other board. Unexpected persistence failures still abort startup.
+        const failedBoard = this.options.registry.get(board.boardId);
+        const message = error instanceof Error ? error.message : String(error);
+        const recordedError = failedBoard.lastError?.workerStartError ?? failedBoard.lastError?.message ?? failedBoard.lastError?.error;
+        if ((failedBoard.status !== "FAILED" && failedBoard.status !== "QUARANTINED") || recordedError !== message) throw error;
+      }
     }
     this.watchdog ??= setInterval(() => { void this.checkHeartbeats(); }, this.workerConfig.heartbeatIntervalMs);
     this.watchdog.unref();
@@ -92,7 +101,17 @@ export class BoardWorkerSupervisor {
     const board = this.options.registry.get(boardId);
     const powerCycleQuarantine = board.status === "QUARANTINED" && String(board.lastError?.code ?? "").startsWith("PowerCycle");
     if (this.requiresCcxmlProbeValidation) {
-      await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
+      try {
+        await assertCcxmlProbeBinding(board.ccxmlPath, board.probeSerial);
+      } catch (error) {
+        this.options.registry.setWorker(boardId, undefined);
+        const message = error instanceof Error ? error.message : String(error);
+        this.options.registry.transition(boardId, powerCycleQuarantine ? "QUARANTINED" : "FAILED",
+          powerCycleQuarantine
+            ? { ...board.lastError, workerStartError: message }
+            : { code: "CcxmlProbeBindingFailed", message, ccxmlPath: board.ccxmlPath });
+        throw error;
+      }
     }
     // Starting a worker is a control-plane transition. It does not read,
     // reset, run, or program the target, so preserve durable resident-image

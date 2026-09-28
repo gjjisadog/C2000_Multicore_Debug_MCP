@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -22,6 +22,44 @@ afterEach(async () => {
 });
 
 describe("board worker supervisor", () => {
+  test("keeps the daemon startup available when a persisted board CCXML is missing", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-missing-ccxml-"));
+    directories.push(directory);
+    const store = await SqliteStore.open(path.join(directory, "state.sqlite"));
+    const events = new EventRepository(store);
+    const registry = new BoardRegistry(new BoardRepository(store), events, store, new LeaseRepository(store));
+    const validCcxml = path.join(directory, "valid.ccxml");
+    await writeFile(validCcxml, '<property id="-- Enter the serial number" Value="B"/>');
+    registry.register({ boardId: "board-a", probeSerial: "A", device: "F28P65x", ccxmlPath: path.join(directory, "missing.ccxml"), tags: [] });
+    registry.register({ boardId: "board-b", probeSerial: "B", device: "F28P65x", ccxmlPath: validCcxml, tags: [] });
+    registry.setWorker("board-a", "worker-from-previous-daemon");
+    const config = configFor(directory);
+    config.adapter = "ccs";
+    config.ccs.scriptingMode = "ccs";
+    const starts: string[] = [];
+    const supervisor = new BoardWorkerSupervisor({
+      config, daemonInstanceId: "daemon-test", registry, workers: new WorkerRepository(store), events,
+      factory: options => {
+        starts.push(options.boardId);
+        return new FakeWorker(options, false);
+      }
+    });
+    try {
+      await expect(supervisor.startAll()).resolves.toBeUndefined();
+      expect(starts).toEqual(["board-b"]);
+      expect(registry.get("board-a")).toMatchObject({
+        status: "FAILED",
+        lastError: { code: "CcxmlProbeBindingFailed", ccxmlPath: path.join(directory, "missing.ccxml") }
+      });
+      expect(registry.get("board-a").currentWorkerInstanceId).toBeUndefined();
+      expect(registry.get("board-b").status).toBe("READY");
+      await expect(supervisor.startBoard("board-a")).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await supervisor.stopAll();
+      store.close();
+    }
+  });
+
   test("fenced cleanup cannot clear an isolation quarantine", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "c2000-worker-quarantine-"));
     directories.push(directory);
