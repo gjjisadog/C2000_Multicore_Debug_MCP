@@ -9,6 +9,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  python-ci:
+    name: Python SDK (${{ matrix.os }}, Python ${{ matrix.python }})
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            python: "3.9"
+          - os: windows-2022
+            python: "3.12"
+          - os: macos-14
+            python: "3.12"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install "./python[pytest]"
+      # Exercise the installed SDK, rather than pytest.ini's source path.
+      - run: python -m pytest python/tests -o pythonpath= -q
+      - if: matrix.python == '3.12'
+        run: python scripts/verify-python-package.py
+
   fast-ci:
     name: Fast CI (${{ matrix.os }}, Node ${{ matrix.node }})
     timeout-minutes: 20

@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { DaemonRpcServer } from "../src/daemon/DaemonRpcServer.js";
 import { daemonRuntimePaths, writeDaemonInstance } from "../src/daemon/DaemonInstanceFile.js";
@@ -144,7 +144,7 @@ describe("frontend / daemon contract compatibility", () => {
 });
 
 function configFor(runtimeDir: string): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     adapter: "mock",
     ccs: { scriptingMode: "mock" },
     target: {
@@ -167,5 +167,5 @@ function configFor(runtimeDir: string): C2000McpConfig {
     },
     scheduler: { maxParallelBoards: 2, pollIntervalMs: 10 },
     boards: [{ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: ["F28P65x"] }]
-  };
+  });
 }

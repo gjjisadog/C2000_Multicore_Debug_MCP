@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { restartOwnedDaemon } from "../src/daemon/DaemonMaintenance.js";
 import type { DebugDaemonInstance } from "../src/daemon/DaemonInstanceFile.js";
 import type { DiscoveredDaemon } from "../src/proxy/DaemonDiscovery.js";
@@ -86,7 +86,7 @@ function instanceFor(): DebugDaemonInstance {
 }
 
 function configFor(): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     adapter: "mock",
     ccs: { scriptingMode: "mock" },
     target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] },
@@ -97,5 +97,5 @@ function configFor(): C2000McpConfig {
     workers: { heartbeatIntervalMs: 1000, heartbeatTimeoutMs: 5000, defaultCommandTimeoutMs: 15000, restartLimit: 5, restartWindowMs: 60000 },
     scheduler: { maxParallelBoards: 1, pollIntervalMs: 10 },
     boards: []
-  };
+  });
 }

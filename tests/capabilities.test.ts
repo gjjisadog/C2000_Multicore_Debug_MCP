@@ -460,7 +460,7 @@ describe("C2000 task-aware capability exposure", () => {
     const changed = new Promise<any[]>(resolve => { changedResolve = resolve; });
     const client = new Client(
       { name: "c2000-capability-client", version: "test" },
-      { listChanged: { tools: { onChanged: (error, tools) => { if (!error) changedResolve?.(tools); } } } }
+      { listChanged: { tools: { onChanged: (error, tools) => { if (!error && tools) changedResolve?.(tools); } } } }
     );
 
     try {

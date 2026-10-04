@@ -40,6 +40,7 @@ export type DebugErrorCode =
   | "DssTransportFailed"
   | "DaemonUnavailable"
   | "DaemonRequestTimeout"
+  | "DaemonRequestInterrupted"
   | "DaemonEntrypointNotFound"
   | "DaemonStarting"
   | "DaemonAuthenticationFailed"

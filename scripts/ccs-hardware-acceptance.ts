@@ -1,3 +1,4 @@
+import { loadProgramsSchema } from "../src/mcp/toolSchemas.js";
 import { stat } from "node:fs/promises";
 import assert from "node:assert/strict";
 import os from "node:os";
@@ -89,13 +90,13 @@ try {
   assertSuccess("c2000_connectCores", connect, { preflight });
   assertBatchCoreResults("c2000_connectCores", connect, [0, 2]);
 
-  const load = await tools.loadPrograms({
+  const load = await tools.loadPrograms(loadProgramsSchema.parse({
     sessionId: createdSessionId,
     programs: [
       { coreId: 0, programUri: cpu1Program },
       { coreId: 2, programUri: cpu2Program }
     ]
-  });
+  }));
   assertSuccess("c2000_loadPrograms", load, { preflight });
   assertBatchCoreResults("c2000_loadPrograms", load, [0, 2]);
 

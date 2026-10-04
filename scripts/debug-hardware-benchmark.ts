@@ -1,5 +1,6 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
@@ -77,7 +78,7 @@ try {
       ]
     }
   });
-  const content = result.content.find(item => item.type === "text");
+  const content = CallToolResultSchema.parse(result).content.find(item => item.type === "text");
   if (!content || content.type !== "text") throw new Error("Hardware workflow returned no structured text result");
   let parsed: Record<string, any>;
   try { parsed = JSON.parse(content.text); }

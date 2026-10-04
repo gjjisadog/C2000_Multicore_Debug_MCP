@@ -113,6 +113,27 @@
 - Include the supervisor in isolated source installation and register the
   pointer watcher for future installs.
 
+### Verification coverage
+
+- Type-check source, scripts, and tests together; update fixtures and direct
+  handler calls to use current schemas and adapter contracts.
+- Fix the analytics test clock and cover evidence leaving the recommendation
+  window. Make revision validation assertions check the intended schema error.
+- Run installed Python SDK tests in CI on Python 3.9/Linux and Python
+  3.12/Windows/macOS, with package metadata smoke checks on Python 3.12.
+
+### Board selection and RPC failure safety
+
+- Fail Python HIL fixture setup when an explicit board ID is missing or
+  ineligible, instead of falling back to another board.
+- End incomplete daemon RPC responses with `DaemonRequestInterrupted` on
+  disconnect and enforce an absolute request deadline, even while partial data
+  arrives. A disconnect or response timeout leaves the execution outcome
+  unknown; inspect session/job state before manually repeating an operation.
+- Retry unavailable-daemon errors only when the client knows the request was
+  not sent. Interrupted requests and response timeouts are not replayed;
+  stale-authentication recovery remains available.
+
 ### Cross-platform PCAN hardware support
 
 - Keep official PEAK PCAN-Basic support on Windows x64 and add macOS x64/ARM64

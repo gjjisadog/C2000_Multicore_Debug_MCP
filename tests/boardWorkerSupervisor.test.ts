@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import type { BoardWorkerClient } from "../src/boards/BoardWorkerClient.js";
 import { BoardWorkerSupervisor } from "../src/boards/BoardWorkerSupervisor.js";
 import { BoardRegistry } from "../src/boards/BoardRegistry.js";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import type { BoardWorkerLaunchOptions } from "../src/worker/BoardWorkerRuntime.js";
 import type { WorkerHeartbeat } from "../src/worker/WorkerHeartbeat.js";
 import { DebugMcpError } from "../src/utils/errors.js";
@@ -362,9 +362,9 @@ class FakeWorker implements BoardWorkerClient {
 }
 
 function configFor(directory: string): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     adapter: "mock", ccs: { scriptingMode: "mock" }, target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] }, diagnostics: {}, logging: { level: "error" },
     daemon: { enabled: true, host: "127.0.0.1", port: 0, runtimeDir: directory, autoStart: false, startupTimeoutMs: 1000 },
     workers: { heartbeatIntervalMs: 1000, heartbeatTimeoutMs: 5000, defaultCommandTimeoutMs: 5, restartLimit: 5, restartWindowMs: 60000 }
-  };
+  });
 }

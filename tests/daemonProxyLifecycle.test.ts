@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { discoverDaemon } from "../src/proxy/DaemonDiscovery.js";
 import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
@@ -229,7 +229,7 @@ describe("daemon / proxy lifecycle", () => {
 });
 
 function configFor(runtimeDir: string): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     adapter: "mock",
     ccs: { scriptingMode: "mock" },
     target: {
@@ -252,5 +252,5 @@ function configFor(runtimeDir: string): C2000McpConfig {
     },
     scheduler: { maxParallelBoards: 4, pollIntervalMs: 250 },
     boards: [{ boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: ["F28P65x"] }]
-  };
+  });
 }

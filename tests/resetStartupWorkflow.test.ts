@@ -162,7 +162,7 @@ describe("post-load reset and firmware-owned handoff", () => {
     expect(result.performedSteps).not.toContain("waitForIpcReady");
   });
 
-  const bootContract = { abiExpression: "c2.abi", abiVersion: 48, roleExpression: "c2.role", roleValue: 2,
+  const bootContract = { abiExpression: "c2.abi", abiVersion: 48, roleExpression: "c2.role", roleValue: 2 as const,
     epochExpression: "c2.epoch", statusExpression: "c2.status", appInitMask: 32,
     logicAliveExpression: "c2.logic", timeoutMs: 100, intervalMs: 20 };
   test("two-phase workflow arms after committed LogicAlive and before IPC readiness", async () => {

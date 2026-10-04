@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { DebugDaemon } from "../src/daemon/DebugDaemon.js";
 import { discoverDaemon } from "../src/proxy/DaemonDiscovery.js";
 import { McpDaemonClient } from "../src/proxy/McpDaemonClient.js";
@@ -82,7 +82,7 @@ async function waitFor<T>(read: () => Promise<T | undefined>): Promise<T> {
 }
 
 function configFor(directory: string): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     adapter: "mock", ccs: { scriptingMode: "mock" }, target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "C28xx_CPU2" }] }, diagnostics: {}, logging: { level: "error" },
     daemon: { enabled: true, host: "127.0.0.1", port: 0, runtimeDir: directory, autoStart: false, startupTimeoutMs: 1000 },
     storage: { sqlitePath: path.join(directory, "debugd.sqlite"), wal: true }, scheduler: { maxParallelBoards: 2, pollIntervalMs: 10 },
@@ -90,5 +90,5 @@ function configFor(directory: string): C2000McpConfig {
       { boardId: "board-a", probeSerial: "CL650001", device: "F28P65x", ccxmlPath: "board-a.ccxml", tags: ["can"] },
       { boardId: "board-b", probeSerial: "CL650002", device: "F28P65x", ccxmlPath: "board-b.ccxml", tags: ["can"] }
     ]
-  };
+  });
 }

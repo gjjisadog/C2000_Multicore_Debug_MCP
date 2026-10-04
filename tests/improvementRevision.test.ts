@@ -25,7 +25,7 @@ import { InMemoryImprovementReviewFeedbackStore, InMemoryImprovementRevisionProp
 import { MAX_REVIEW_FEEDBACK_RECORDS, ReviewFeedbackService } from "../src/improvement/revision/ReviewFeedbackService.js";
 import { classifyReviewFeedback, sanitizeReviewText } from "../src/improvement/revision/ReviewFeedbackClassifier.js";
 import { RevisionProposalService } from "../src/improvement/revision/RevisionProposalService.js";
-import { improvementReviewFeedbackSchema, type ImprovementRevisionProposal } from "../src/improvement/revision/RevisionSchemas.js";
+import { improvementRevisionProposalSchema, improvementReviewFeedbackSchema, type ImprovementRevisionProposal } from "../src/improvement/revision/RevisionSchemas.js";
 
 const REPOSITORY = "gjjisadog/C2000_Multicore_Debug_MCP";
 const BASELINE_SHA = "b".repeat(40);
@@ -267,7 +267,7 @@ describe("Round8 review feedback and revision governance", () => {
     expect(() => improvementRevisionProposalSchema.parse({
       ...minimalRevision(),
       feedbackHashes: []
-    })).toThrow();
+    })).toThrow("feedbackIds and feedbackHashes must have equal lengths");
     expect(() => improvementImplementationRunSchema.parse({
       ...makeRun(),
       runKind: "revision",

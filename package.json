@@ -27,7 +27,7 @@
   "scripts": {
     "build": "node scripts/build.mjs -p tsconfig.src.json",
     "build:all": "node scripts/build.mjs -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.build.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "register:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register-dev.ps1",
     "start": "node dist/src/index.js",

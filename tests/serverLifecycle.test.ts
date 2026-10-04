@@ -2,10 +2,10 @@ import { describe, expect, test } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { createC2000McpRuntime } from "../src/server.js";
 
-const config: C2000McpConfig = {
+const config: C2000McpConfig = c2000McpConfigSchema.parse({
   adapter: "mock",
   ccs: { scriptingMode: "mock" },
   target: {
@@ -17,7 +17,7 @@ const config: C2000McpConfig = {
   },
   diagnostics: {},
   logging: { level: "error" }
-};
+});
 
 describe("server lifecycle", () => {
   test("runtime disposal is idempotent and closes all active logical sessions", async () => {

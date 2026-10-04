@@ -10,6 +10,7 @@ import type { CoreId } from "../src/debug/types.js";
 import { SessionQueue } from "../src/utils/sessionQueue.js";
 import { DebugMcpError } from "../src/utils/errors.js";
 import { Logger } from "../src/utils/logger.js";
+import type { RamOwnershipAction } from "../src/hardware/mapOwnership.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -219,7 +220,7 @@ describe("DebugSessionManager", () => {
       }
     }
 
-    const action = {
+    const action: RamOwnershipAction = {
       ownerCoreId: 0,
       targetCoreId: 2,
       targetCoreName: "C28xx_CPU2",

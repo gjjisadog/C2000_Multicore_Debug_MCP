@@ -137,7 +137,7 @@ describe("Round7 controlled improvement review pipeline", () => {
   }, 30_000);
 
   test("deterministic recommendations distinguish conflicts, pending gates, and all-pass human review", () => {
-    const fixtureEvidence = (patch: Partial<ReviewEvidence>): ReviewEvidence => ({
+    const fixtureEvidence = (patch: Partial<ReviewEvidence> = {}): ReviewEvidence => ({
       evidenceId: "evidence-test",
       pullRequestId: "pr-test",
       candidateSha: "0123456789abcdef0123456789abcdef01234567",
@@ -172,7 +172,8 @@ describe("Round7 controlled improvement review pipeline", () => {
       createdAt: "2026-09-02T00:00:00.000Z",
       updatedAt: "2026-09-02T00:00:00.000Z",
       generatedBodyHash: "b".repeat(64),
-      humanBodyPreserved: true
+      humanBodyPreserved: true,
+      revisionHistory: []
     };
     expect(recommendation.evaluate({ pullRequest, evidence: fixtureEvidence() }).verdict).toBe("MERGE_RECOMMENDED");
     expect(recommendation.evaluate({ pullRequest: { ...pullRequest, status: "closed" }, evidence: fixtureEvidence() }).verdict).toBe("DO_NOT_MERGE");

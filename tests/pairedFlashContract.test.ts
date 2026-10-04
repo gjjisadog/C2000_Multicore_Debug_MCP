@@ -6,7 +6,7 @@ import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import type { AdapterSession } from "../src/adapters/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
-import type { CoreId, ResetTargetState, ResetType } from "../src/debug/types.js";
+import type { CoreId, ResetEvidence, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
 import { DebugWorkflowService, resolvePairedFlashContract } from "../src/workflows/DebugWorkflowService.js";
 import { F28P65X_PAIRED_FLASH_STARTUP, isPairedFlashPreset, ipcStartupPreset, resolveIpcStartupPreset } from "../src/workflows/startupProfiles.js";
@@ -44,20 +44,16 @@ class PairedFlashAdapter extends MockDebugAdapter {
     await super.run(session, coreId);
     if (coreId === 2 && this.cpu2StopsAfterRun) await super.halt(session, coreId);
   }
-  override async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetTargetState> {
+  override async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetEvidence> {
     this.events.push(`reset:${coreId}:${resetType}`);
     this.resetRequests.push({ coreId, resetType });
     await super.reset(session, coreId, resetType);
-    const state = await this.getState(session, coreId);
     return {
-      ...state,
-      reset: {
-        requestedResetType: resetType,
-        effectiveResetType: resetType,
-        resetName: resetType === "system" ? "System Reset" : resetType === "cpu" ? "CPU Reset" : "Program Restart",
-        mechanism: resetType === "restart" ? "target.restart" : resetType === "default" ? "target.reset" : "ResetType.issueReset",
-        completion: "halt-observed"
-      }
+      requestedResetType: resetType,
+      effectiveResetType: resetType,
+      resetName: resetType === "system" ? "System Reset" : resetType === "cpu" ? "CPU Reset" : "Program Restart",
+      mechanism: resetType === "restart" ? "target.restart" : resetType === "default" ? "target.reset" : "ResetType.issueReset",
+      completion: "halt-observed"
     };
   }
   override async loadProgram(session: AdapterSession, coreId: CoreId, uri: string) {

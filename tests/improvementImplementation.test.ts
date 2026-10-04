@@ -6,7 +6,7 @@ import path from "node:path";
 import { runProcess } from "../src/improvement/implementation/ProcessRunner.js";
 import { InMemoryImprovementProposalStore } from "../src/improvement/ProposalRepository.js";
 import { ImprovementProposalService } from "../src/improvement/ImprovementProposalService.js";
-import type { ImprovementProposal } from "../src/improvement/ProposalSchemas.js";
+import { improvementProposalSchema, type ImprovementProposal } from "../src/improvement/ProposalSchemas.js";
 import { CandidateCommitService } from "../src/improvement/implementation/CandidateCommitService.js";
 import { ConfiguredCodingAgent, type CodingAgentRequest, type ImprovementCodingAgent } from "../src/improvement/implementation/ImprovementAgentRunner.js";
 import { ImprovementImplementationService } from "../src/improvement/implementation/ImprovementImplementationService.js";
@@ -301,7 +301,7 @@ async function createFixture(options: { agent?: ImprovementCodingAgent; commands
 
 function makeProposal(baselineSha: string, overrides: { hardwareRequired?: boolean; allowedAreas?: string[] } = {}): ImprovementProposal {
   const now = new Date().toISOString();
-  return {
+  return improvementProposalSchema.parse({
     proposalId: "imp-round6-test-001",
     fingerprint: "abcdef0123456789abcdef01",
     status: "approved",
@@ -359,7 +359,7 @@ function makeProposal(baselineSha: string, overrides: { hardwareRequired?: boole
     reviewReason: "Approved for the Round6 fixture.",
     reviewedAt: now,
     reviewedBy: "test-reviewer"
-  };
+  });
 }
 
 async function git(cwd: string, args: string[]) {

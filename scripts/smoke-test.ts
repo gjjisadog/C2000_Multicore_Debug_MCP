@@ -1,3 +1,4 @@
+import { loadProgramsSchema } from "../src/mcp/toolSchemas.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -38,13 +39,13 @@ if (!created.success || typeof created.sessionId !== "string") {
 
 await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
 await handlers.resetCores({ sessionId: created.sessionId, coreIds: [0, 2], resetType: "cpu" });
-await handlers.loadPrograms({
+await handlers.loadPrograms(loadProgramsSchema.parse({
   sessionId: created.sessionId,
   programs: [
     { coreId: 0, programUri: cpu1Out },
     { coreId: 2, programUri: cpu2Out }
   ]
-});
+}));
 await handlers.runCore({ sessionId: created.sessionId, coreId: 0 });
 
 const evaluate = await handlers.evaluateMany({

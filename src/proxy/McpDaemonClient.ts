@@ -52,5 +52,8 @@ export class McpDaemonClient implements C2000ToolInvoker {
 
 function isSafeReconnectError(error: unknown): boolean {
   return error instanceof DebugMcpError
-    && ["DaemonUnavailable", "DaemonAuthenticationFailed", "DaemonInstanceInvalid"].includes(error.code);
+    && (error.code === "DaemonAuthenticationFailed"
+      || error.code === "DaemonInstanceInvalid"
+      // A generic unavailable error does not prove the operation was not sent.
+      || (error.code === "DaemonUnavailable" && error.details?.requestSent === false));
 }

@@ -35,7 +35,7 @@ describe("atomic board group leases", () => {
 
   test("rejects duplicate group members before writing", async () => {
     const fixture = await makeFixture();
-    expect(() => fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-a"], ownerJobId: "pair", ttlMs: 1000 })).toThrow();
+    expect(() => fixture.registry.leases.acquireGroup({ boardIds: ["board-a", "board-a"], ownerJobId: "pair", workerInstanceIds: { "board-a": "worker-a" }, ttlMs: 1000 })).toThrow();
     expect(fixture.registry.leases.active("board-a")).toBeUndefined();
     fixture.store.close();
   });

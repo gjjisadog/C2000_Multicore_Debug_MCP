@@ -209,10 +209,10 @@ describe("F28P65x ERAD profiling", () => {
       overflowResources: ["eventCounter"]
     });
     const configured = await backend.configure(context(new MemoryManager()), {
-      startAddress: 1, endAddress: 2, resources, allowOverwrite: false
+      resources, allowOverwrite: false
     });
     await backend.start(context(new MemoryManager()), configured.resources);
-    const raw = await backend.stopAndRead(context(new MemoryManager()), configured.resources);
+    const raw = await backend.stopAndRead(context(new MemoryManager()));
     expect(raw).toEqual({
       count: 5,
       totalCycles: 550,
@@ -367,7 +367,7 @@ describe("F28P65x ERAD profiling", () => {
     const directory = String(exported.artifactDirectory);
     const result = eradProfileResultSchema.parse(JSON.parse(await readFile(path.join(directory, "erad.json"), "utf8")));
     const manifest = JSON.parse(await readFile(path.join(directory, "manifest.json"), "utf8"));
-    const events = (await readFile(path.join(directory, "events.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+    const events = (await readFile(path.join(directory, "events.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
     expect(result.evidenceClassification).toBe("MOCK");
     expect(manifest.evidenceLevel).toBe("MOCK");
     expect(events.map(event => event.sequence)).toEqual([1, 2, 3]);
@@ -561,6 +561,7 @@ async function createFixture(options: {
     boardId: "board-a",
     probeSerial: "XDS-A",
     leaseId: "lease-a",
+    ownerJobId: "job-a",
     leaseToken: "token-a",
     leaseGeneration: 1,
     fencingToken: 1,

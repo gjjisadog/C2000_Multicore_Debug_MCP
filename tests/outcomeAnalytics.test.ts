@@ -28,7 +28,7 @@ function createService(options: {
     repository: options.repository ?? new InMemoryOutcomeEventStore(),
     toolProfile: options.profile ?? "safe",
     toolSurfaceProfile: options.surface ?? "agent",
-    now: options.now,
+    now: options.now ?? (() => Date.parse("2026-09-01T12:00:00.000Z")),
     logger: { warn: () => undefined, error: () => undefined }
   });
 }
@@ -221,6 +221,20 @@ describe("C2000 outcome analytics", () => {
     expect(dlog.recommendations).toEqual(expect.arrayContaining([
       expect.objectContaining({ capability: "observability.dlog" })
     ]));
+  });
+
+  test("excludes job evidence once it leaves the 30-day recommendation window", () => {
+    let now = Date.parse("2026-09-30T00:00:00.000Z");
+    const repository = new InMemoryOutcomeEventStore();
+    const service = createService({ repository, now: () => now });
+    repository.append(event({ jobId: "expiring-job", outcome: "failure", failureClass: "boot-handoff" }));
+    expect(service.getEscalationRecommendations({ jobId: "expiring-job" })).toMatchObject({
+      failure: { failureClass: "boot-handoff" }
+    });
+    now = Date.parse("2026-10-02T00:00:00.000Z");
+    expect(service.getEscalationRecommendations({ jobId: "expiring-job" })).toMatchObject({
+      failure: { failureClass: "unknown" }
+    });
   });
 
   test("returns a safe daemon-worker recovery path for stale lease failures", () => {

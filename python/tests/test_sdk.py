@@ -10,6 +10,7 @@ class FakeClient:
     def __init__(self):
         self.calls = []
         self.timeout = 1.0
+        self.boards = [{"boardId": "mock-a", "tags": ["mock"]}]
 
     def health(self):
         self.calls.append(("health", {}))
@@ -19,7 +20,7 @@ class FakeClient:
         arguments = arguments or {}
         self.calls.append((tool, arguments))
         if tool == "c2000_listBoards":
-            return {"success": True, "boards": [{"boardId": "mock-a", "tags": ["mock"]}]}
+            return {"success": True, "boards": self.boards}
         if tool == "c2000_createDebugSession":
             return {
                 "success": True,
@@ -129,11 +130,43 @@ def test_sdk_source_has_no_direct_hardware_or_sqlite_backend():
     assert "invoke(" in source
 
 
-def _request(failed=False):
+@pytest.mark.parametrize("source", ["option", "environment"])
+@pytest.mark.parametrize("boards", [[], [{"boardId": "mock-a", "tags": ["mock"]}], [{"boardId": "missing-board", "tags": []}]])
+def test_explicit_board_must_exist_and_be_eligible(monkeypatch, source, boards):
+    monkeypatch.setenv("C2000_HIL_MODE", "mock")
+    monkeypatch.delenv("C2000_HARDWARE_TEST", raising=False)
+    monkeypatch.delenv("C2000_BOARD_ID", raising=False)
+    client = FakeClient()
+    client.boards = boards
+    monkeypatch.setattr(pytest_plugin, "DaemonClient", lambda *_: client)
+    if source == "environment":
+        monkeypatch.setenv("C2000_BOARD_ID", "missing-board")
+    request = _request(board_id="missing-board" if source == "option" else None)
+    fixture = pytest_plugin.c2000_board.__wrapped__(request)
+    with pytest.raises(pytest.fail.Exception, match="not registered or eligible"):
+        next(fixture)
+    assert not any(name == "c2000_createDebugSession" for name, _ in client.calls)
+
+
+def test_explicit_board_selects_exact_match_and_option_overrides_environment(monkeypatch):
+    monkeypatch.setenv("C2000_HIL_MODE", "mock")
+    monkeypatch.delenv("C2000_HARDWARE_TEST", raising=False)
+    monkeypatch.setenv("C2000_BOARD_ID", "mock-a")
+    client = FakeClient()
+    client.boards.append({"boardId": "mock-b", "tags": ["mock"]})
+    monkeypatch.setattr(pytest_plugin, "DaemonClient", lambda *_: client)
+    fixture = pytest_plugin.c2000_board.__wrapped__(_request(board_id="mock-b"))
+    try:
+        assert next(fixture).board_id == "mock-b"
+    finally:
+        fixture.close()
+
+
+def _request(failed=False, board_id=None):
     node = SimpleNamespace(
         rep_call=SimpleNamespace(failed=failed),
         user_properties=[],
         get_closest_marker=lambda _name: None,
     )
-    config = SimpleNamespace(getoption=lambda _name: None)
+    config = SimpleNamespace(getoption=lambda name: board_id if name == "--c2000-board-id" else None)
     return SimpleNamespace(node=node, config=config)

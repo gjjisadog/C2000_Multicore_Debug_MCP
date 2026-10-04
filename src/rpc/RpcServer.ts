@@ -124,23 +124,30 @@ export class LocalRpcClient {
       const finish = (callback: () => void) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         socket.destroy();
         callback();
       };
       socket.setEncoding("utf8");
       socket.setNoDelay(true);
-      socket.setTimeout(timeoutMs, () => finish(() => reject(new DebugMcpError(
+      // An absolute deadline must not be extended by partial response data.
+      const timer = setTimeout(() => finish(() => reject(new DebugMcpError(
         connected ? "DaemonRequestTimeout" : "DaemonUnavailable",
         connected
           ? `Timed out waiting for c2000-debugd response after ${timeoutMs}ms`
           : `Timed out connecting to c2000-debugd after ${timeoutMs}ms`,
-        { host: this.options.host, port: this.options.port, method, timeoutMs }
-      ))));
-      socket.once("error", error => finish(() => reject(new DebugMcpError(
-        "DaemonUnavailable",
-        `Unable to connect to c2000-debugd: ${error.message}`,
-        { host: this.options.host, port: this.options.port }
-      ))));
+        { host: this.options.host, port: this.options.port, method, timeoutMs, requestSent: connected }
+      ))), timeoutMs);
+      const interrupted = (cause: string) => finish(() => reject(new DebugMcpError(
+        connected ? "DaemonRequestInterrupted" : "DaemonUnavailable",
+        connected
+          ? `c2000-debugd connection ended before a complete response; execution outcome is unknown: ${cause}`
+          : `Unable to connect to c2000-debugd: ${cause}`,
+        { host: this.options.host, port: this.options.port, method, requestSent: connected }
+      )));
+      socket.once("error", error => interrupted(error.message));
+      socket.once("end", () => interrupted("end of stream"));
+      socket.once("close", () => interrupted("socket closed"));
       socket.on("data", chunk => {
         buffer += chunk;
         const newline = buffer.indexOf("\n");

@@ -1,15 +1,16 @@
+import type { z } from "zod";
 import { afterEach, describe, expect, test } from "vitest";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolveAdapterMode, resolveAdapterModeSync } from "../src/adapters/adapterResolution.js";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { defaultF28P65xCoreMap } from "../src/debug/types.js";
 
 const originalEnv = { ...process.env };
 
-function baseConfig(overrides: Partial<C2000McpConfig> = {}): C2000McpConfig {
-  return {
+function baseConfig(overrides: Partial<z.input<typeof c2000McpConfigSchema>> = {}): C2000McpConfig {
+  return c2000McpConfigSchema.parse({
     adapter: overrides.adapter ?? "auto",
     ccs: {
       scriptingMode: "auto",
@@ -27,7 +28,7 @@ function baseConfig(overrides: Partial<C2000McpConfig> = {}): C2000McpConfig {
       level: "info",
       ...overrides.logging
     }
-  };
+  });
 }
 
 describe("adapter resolution", () => {

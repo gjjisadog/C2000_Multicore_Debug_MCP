@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, test } from "vitest";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
@@ -135,7 +136,7 @@ describe("MCP tool registration contract", () => {
       targetEffect: "host-read",
       effects: ["host-read"]
     }));
-    expect(Object.keys(health?.schema.shape ?? {})).toEqual([]);
+    expect(schemaKeys(health?.schema)).toEqual([]);
   });
 
   test("does not register unprefixed debug control aliases", () => {
@@ -194,7 +195,7 @@ describe("MCP tool registration contract", () => {
       handlerName: "getHardwarePreflight",
       inputScope: "host"
     }));
-    expect(Object.keys(preflight?.schema.shape ?? {})).toEqual(["ccsInstallPath"]);
+    expect(schemaKeys(preflight?.schema)).toEqual(["ccsInstallPath"]);
   });
 
   test("acceptance program discovery is read-only and does not require sessionId or coreId", () => {
@@ -206,7 +207,7 @@ describe("MCP tool registration contract", () => {
       inputScope: "host",
       targetEffect: "host-read"
     }));
-    expect(Object.keys(discovery?.schema.shape ?? {})).toEqual(["cpu1Program", "cpu2Program", "searchRoots", "maxDepth"]);
+    expect(schemaKeys(discovery?.schema)).toEqual(["cpu1Program", "cpu2Program", "searchRoots", "maxDepth"]);
   });
 
   test("acceptance readiness is read-only and does not require sessionId or coreId", () => {
@@ -218,7 +219,7 @@ describe("MCP tool registration contract", () => {
       inputScope: "host",
       targetEffect: "host-read"
     }));
-    expect(Object.keys(readiness?.schema.shape ?? {})).toEqual([
+    expect(schemaKeys(readiness?.schema)).toEqual([
       "ccsInstallPath",
       "ccxmlPath",
       "cpu1Program",
@@ -646,7 +647,12 @@ describe("MCP tool registration contract", () => {
     for (const name of coreScopedTools) {
       const tool = c2000ToolDefinitions.find(candidate => candidate.name === name);
       expect(tool, name).toEqual(expect.objectContaining({ inputScope: "core" }));
-      expect(Object.keys(tool?.schema.shape ?? {}), name).toEqual(expect.arrayContaining(["sessionId", "coreId"]));
+      expect(schemaKeys(tool?.schema), name).toEqual(expect.arrayContaining(["sessionId", "coreId"]));
     }
   });
 });
+
+function schemaKeys(schema: z.ZodTypeAny | undefined): string[] {
+  if (!(schema instanceof z.ZodObject)) throw new Error("Expected an object tool schema");
+  return Object.keys(schema.shape);
+}

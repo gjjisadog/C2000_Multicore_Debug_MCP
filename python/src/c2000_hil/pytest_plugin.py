@@ -36,6 +36,13 @@ def c2000_board(request):
     boards_result = client.invoke("c2000_listBoards", {})
     boards = boards_result.get("boards", [])
     matching = [board for board in boards if _board_is_eligible(board, mode)]
+    requested_id = request.config.getoption("--c2000-board-id") or os.environ.get("C2000_BOARD_ID")
+    if requested_id:
+        selected = next((board for board in matching if board.get("boardId") == requested_id), None)
+        if selected is None:
+            pytest.fail(f"Requested C2000 board {requested_id!r} is not registered or eligible", pytrace=False)
+    else:
+        selected = matching[0] if matching else None
     if not matching:
         pytest.skip("No matching registered C2000 board")
     if hardware:
@@ -45,8 +52,6 @@ def c2000_board(request):
         except Exception as error:
             pytest.skip(f"CCS/XDS110 hardware preflight unavailable: {error}")
         _hardware_gates(request, server_health, preflight, matching)
-    requested_id = request.config.getoption("--c2000-board-id") or os.environ.get("C2000_BOARD_ID")
-    selected = next((board for board in matching if board.get("boardId") == requested_id), matching[0])
     board = C2000Board(client, str(selected["boardId"])).acquire()
     try:
         yield board

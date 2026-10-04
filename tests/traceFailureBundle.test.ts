@@ -234,9 +234,9 @@ describe("automatic failure context bundle", () => {
 
     const result = await fixture.bundles.collect({ jobId: fixture.jobId });
     expect(result.items).toEqual(expect.arrayContaining([expect.objectContaining({ name: "pre-cleanup-launch-diagnostics", status: "COLLECTED" })]));
-    const diagnostics = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "pre-cleanup-launch-diagnostics.json"))) as Record<string, any>;
-    const sessionState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "session-state.json"))) as Record<string, any>;
-    const targetState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "target-state.json"))) as Record<string, any>;
+    const diagnostics = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "pre-cleanup-launch-diagnostics.json"), "utf8")) as Record<string, any>;
+    const sessionState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "session-state.json"), "utf8")) as Record<string, any>;
+    const targetState = JSON.parse(await readFile(path.join(fixture.directory, "failure-bundle", "target-state.json"), "utf8")) as Record<string, any>;
     expect(diagnostics).toEqual(expect.objectContaining({ provenance: expect.objectContaining({ collectorTargetAccessed: false }) }));
     expect(sessionState).toEqual(expect.objectContaining({
       available: true,

@@ -11,7 +11,7 @@ import {
   artifactManifestSchema,
   artifactResultSchema
 } from "../src/artifacts/ArtifactSchemas.js";
-import type { C2000McpConfig } from "../src/config/config.schema.js";
+import { c2000McpConfigSchema, type C2000McpConfig } from "../src/config/config.schema.js";
 import { SqliteStore } from "../src/storage/SqliteStore.js";
 import { ArtifactExportRepository } from "../src/storage/repositories/ArtifactExportRepository.js";
 import { ArtifactRepository } from "../src/storage/repositories/ArtifactRepository.js";
@@ -547,7 +547,7 @@ async function createFixture(status = "PASSED", adapter: "mock" | "ccs" = "ccs")
 }
 
 function testConfig(adapter: "mock" | "ccs"): C2000McpConfig {
-  return {
+  return c2000McpConfigSchema.parse({
     toolProfile: "safe",
     adapter,
     ccs: { scriptingMode: adapter, timeouts: {} },
@@ -562,7 +562,7 @@ function testConfig(adapter: "mock" | "ccs"): C2000McpConfig {
     logging: { level: "info" },
     filesystem: { allowedReadRoots: [], allowedWriteRoots: [] },
     debugProbe: { queueDir: "runtime/debug-probe-queue", queueTimeoutMs: 30000, recoveryPolicy: "owned-and-stale", multiBoardEnabled: false }
-  };
+  });
 }
 
 async function temporaryRoot(): Promise<string> {

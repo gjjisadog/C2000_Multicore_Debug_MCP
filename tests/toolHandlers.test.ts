@@ -1,3 +1,4 @@
+import { loadProgramSchema, loadProgramsSchema, verifyResidentImageSchema } from "../src/mcp/toolSchemas.js";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -420,10 +421,10 @@ describe("tool handlers", () => {
     const created = await manager.createDebugSession({ coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] });
     const handlers = createToolHandlers(manager);
 
-    const result = await handlers.verifyResidentImage({
+    const result = await handlers.verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId,
       checks: [{ coreId: 0, programUri, manifestUri }]
-    });
+    }));
 
     expect(result).toEqual(expect.objectContaining({
       success: true,
@@ -463,10 +464,10 @@ describe("tool handlers", () => {
     const created = await manager.createDebugSession({ coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] });
     const handlers = createToolHandlers(manager);
 
-    const result = await handlers.verifyResidentImage({
+    const result = await handlers.verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId,
       checks: [{ coreId: 0, programUri, manifestUri }]
-    });
+    }));
 
     expect(result).toEqual(expect.objectContaining({
       success: false,
@@ -489,9 +490,9 @@ describe("tool handlers", () => {
     const adapter = new BankOwnerResidentAdapter();
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const created = await manager.createDebugSession({ coreMap });
-    const result = await createToolHandlers(manager).verifyResidentImage({
+    const result = await createToolHandlers(manager).verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
-    });
+    }));
 
     expect(result).toMatchObject({ success: true, verified: true, checks: [{
       coreId: 2, imageCoreId: 2, readCoreId: 0, flashBank: 3, bankOwner: "CPU1",
@@ -504,9 +505,9 @@ describe("tool handlers", () => {
     adapter.bankMuxSel = 0xC0;
     adapter.cpu2MarkerValue = 0xA5A5A5A5;
     const before = adapter.operations.length;
-    const programmedState = await createToolHandlers(manager).verifyResidentImage({
+    const programmedState = await createToolHandlers(manager).verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
-    });
+    }));
     expect(programmedState).toMatchObject({ success: true, verified: true, checks: [{
       imageCoreId: 2, readCoreId: 2, flashBank: 3, bankOwner: "CPU2"
     }] });
@@ -527,9 +528,9 @@ describe("tool handlers", () => {
     adapter.bankMuxSel = 0x40; // Bank3 selector 1 has no CPU read owner.
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const created = await manager.createDebugSession({ coreMap });
-    const result = await createToolHandlers(manager).verifyResidentImage({
+    const result = await createToolHandlers(manager).verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
-    });
+    }));
 
     expect(result).toMatchObject({ success: false, error: { code: "ResidentImageAccessUnavailable" } });
     expect(adapter.operations).not.toContain("read:2:DATA:917760:32");
@@ -549,9 +550,9 @@ describe("tool handlers", () => {
     adapter.cpu1MarkerValue = 0x0BAD0BAD;
     const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
     const created = await manager.createDebugSession({ coreMap });
-    const result = await createToolHandlers(manager).verifyResidentImage({
+    const result = await createToolHandlers(manager).verifyResidentImage(verifyResidentImageSchema.parse({
       sessionId: created.sessionId, checks: [{ coreId: 2, programUri, manifestUri }]
-    });
+    }));
     expect(result).toMatchObject({ success: false, error: { code: "ResidentImageAccessUnavailable" } });
   });
 
@@ -2426,13 +2427,13 @@ describe("tool handlers", () => {
     }));
     const created = await handlers.createDebugSession({ sessionName: "full-debug-bundle", coreMap });
     await handlers.connectCores({ sessionId: created.sessionId, coreIds: [0, 2] });
-    await handlers.loadPrograms({
+    await handlers.loadPrograms(loadProgramsSchema.parse({
       sessionId: created.sessionId,
       programs: [
         { coreId: 0, programUri: cpu1OutPath },
         { coreId: 2, programUri: cpu2OutPath, mapUri: cpu2MapPath }
       ]
-    });
+    }));
 
     const result = await handlers.runFullDebugBundle({
       sessionId: created.sessionId,
@@ -3009,15 +3010,15 @@ describe("tool handlers", () => {
     const created = await handlers.createDebugSession({ sessionName: "load", coreMap });
     await handlers.connectTarget({ sessionId: created.sessionId, coreId: 0 });
 
-    await expect(handlers.loadProgram({ sessionId: created.sessionId, coreId: 0, programUri })).resolves.toEqual(
+    await expect(handlers.loadProgram(loadProgramSchema.parse({ sessionId: created.sessionId, coreId: 0, programUri }))).resolves.toEqual(
       expect.objectContaining({ success: true, programUri, sha256: expect.any(String), loaded: true, skipped: false })
     );
-    await expect(handlers.loadProgram({
+    await expect(handlers.loadProgram(loadProgramSchema.parse({
       sessionId: created.sessionId,
       coreId: 0,
       programUri,
       loadPolicy: "verify-mcp-registry"
-    })).resolves.toEqual(
+    }))).resolves.toEqual(
       expect.objectContaining({
         success: true,
         programUri,
@@ -3078,13 +3079,13 @@ describe("tool handlers", () => {
       })
     );
 
-    await expect(handlers.loadPrograms({
+    await expect(handlers.loadPrograms(loadProgramsSchema.parse({
       sessionId: created.sessionId,
       programs: [
         { coreId: 0, programUri },
         { coreId: 9, programUri }
       ]
-    })).resolves.toEqual(
+    }))).resolves.toEqual(
       expect.objectContaining({
         success: false,
         error: expect.objectContaining({ code: "BatchOperationFailed" }),
@@ -3651,7 +3652,7 @@ describe("tool handlers", () => {
       tiEnvironment: { ccsInstallPath: "C:/ti/ccs" },
       runHardwarePreflight: async options => {
         preflightCalls += 1;
-        expect(options.ccsInstallPath).toBe("C:/ti/ccs");
+        expect(options?.ccsInstallPath).toBe("C:/ti/ccs");
         return {
           xdsdfuPath: "C:/ti/ccs/xdsdfu",
           xdsdfu: {

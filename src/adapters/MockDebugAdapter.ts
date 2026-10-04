@@ -42,7 +42,7 @@ const DEFAULT_MOCK_VARIABLE_SEQUENCES: Record<string, MockVariableSequence> = {
 };
 
 export class MockDebugAdapter implements DebugAdapter {
-  readonly name = "mock";
+  readonly name: string = "mock";
   readonly supportsSimultaneousOperations = false;
   private readonly sessions = new Map<string, Map<CoreId, MockCoreState>>();
   private readonly expressionValues: Record<string, Omit<EvaluateResult, "expression" | "success">>;
@@ -117,7 +117,7 @@ export class MockDebugAdapter implements DebugAdapter {
     state.active = true;
   }
 
-  async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<void> {
+  async reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): ReturnType<DebugAdapter["reset"]> {
     if (!["cpu", "system", "restart", "default"].includes(resetType)) {
       throw new DebugMcpError("UnsupportedResetType", `Unsupported resetType: ${resetType}`, { resetType });
     }
