@@ -36,6 +36,7 @@ export interface ProgramDiscoveryResult {
 }
 
 export interface ProgramDiscoveryOptions {
+  singleCore?: boolean;
   cpu1Program?: string;
   cpu2Program?: string;
   searchRoots?: string[];
@@ -46,21 +47,26 @@ export interface ProgramDiscoveryOptions {
 export async function discoverAcceptancePrograms(options: ProgramDiscoveryOptions = {}): Promise<ProgramDiscoveryResult> {
   const searchRoots = uniqueStrings((options.searchRoots ?? []).filter(Boolean).map(item => path.resolve(item)));
   const candidates = await collectOutFiles(searchRoots, options.maxDepth ?? 5);
-  const cpu1Candidates = rankCandidates(candidates, "cpu1");
-  const cpu2Candidates = rankCandidates(candidates, "cpu2");
+  const cpu1Candidates = options.singleCore
+    ? candidates.filter(candidate => {
+      const identity = describeProgramArtifact(candidate);
+      return identity.core !== "cpu2" && (!identity.device || matchesExpectedDevice(identity.device, options.expectedDevice ?? "F28P65x"));
+    }).sort((left, right) => candidateScore(right, "cpu1") - candidateScore(left, "cpu1") || left.localeCompare(right))
+    : rankCandidates(candidates, "cpu1");
+  const cpu2Candidates = options.singleCore ? [] : rankCandidates(candidates, "cpu2");
   const selection = selectCompatiblePair(
     options.cpu1Program ? [options.cpu1Program] : cpu1Candidates,
     options.cpu2Program ? [options.cpu2Program] : cpu2Candidates,
     options.expectedDevice ?? "F28P65x"
   );
   const cpu1Selected = options.cpu1Program ?? selection.cpu1;
-  const cpu2Selected = options.cpu2Program ?? selection.cpu2;
+  const cpu2Selected = options.singleCore ? undefined : options.cpu2Program ?? selection.cpu2;
 
   return {
     searchRoots,
     cpu1: selectEntry(options.cpu1Program, cpu1Candidates, cpu1Selected),
-    cpu2: selectEntry(options.cpu2Program, cpu2Candidates, cpu2Selected),
-    pairing: validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x")
+    cpu2: selectEntry(options.singleCore ? undefined : options.cpu2Program, cpu2Candidates, cpu2Selected),
+    pairing: validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x", options.singleCore)
   };
 }
 
@@ -91,25 +97,25 @@ export function describeProgramArtifact(artifactPath: string): ProgramArtifactId
   };
 }
 
-export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expectedDevice?: string): ProgramPairValidation {
+export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expectedDevice?: string, singleCore = false): ProgramPairValidation {
   const cpu1 = cpu1Path ? describeProgramArtifact(cpu1Path) : undefined;
   const cpu2 = cpu2Path ? describeProgramArtifact(cpu2Path) : undefined;
   const issues: string[] = [];
   if (!cpu1) {
     issues.push("CPU1 artifact is missing");
   }
-  if (!cpu2) {
+  if (!singleCore && !cpu2) {
     issues.push("CPU2 artifact is missing");
+  }
+  if (cpu1?.core && cpu1.core !== "cpu1") {
+    issues.push(`CPU1 selection is labeled for ${cpu1.core.toUpperCase()}`);
+  }
+  if (cpu2?.core && cpu2.core !== "cpu2") {
+    issues.push(`CPU2 selection is labeled for ${cpu2.core.toUpperCase()}`);
   }
   if (cpu1 && cpu2) {
     if (path.resolve(cpu1.path) === path.resolve(cpu2.path)) {
       issues.push("CPU1 and CPU2 resolve to the same artifact");
-    }
-    if (cpu1.core && cpu1.core !== "cpu1") {
-      issues.push(`CPU1 selection is labeled for ${cpu1.core.toUpperCase()}`);
-    }
-    if (cpu2.core && cpu2.core !== "cpu2") {
-      issues.push(`CPU2 selection is labeled for ${cpu2.core.toUpperCase()}`);
     }
     compareKnownIdentity("device", cpu1.device, cpu2.device, issues);
     compareKnownIdentity("configuration", cpu1.configuration, cpu2.configuration, issues);
@@ -120,13 +126,19 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
   const normalizedExpectedDevice = expectedDevice?.toLowerCase();
   if (normalizedExpectedDevice) {
     for (const [label, artifact] of [["CPU1", cpu1], ["CPU2", cpu2]] as const) {
-      if (artifact?.device && artifact.device !== normalizedExpectedDevice) {
+      if (artifact?.device && !matchesExpectedDevice(artifact.device, normalizedExpectedDevice)) {
         issues.push(`${label} device ${artifact.device} does not match expected ${normalizedExpectedDevice}`);
       }
     }
   }
-  const complete = cpu1 !== undefined && cpu2 !== undefined;
+  const complete = cpu1 !== undefined && (singleCore || cpu2 !== undefined);
   return { complete, compatible: complete && issues.length === 0, ...(cpu1 ? { cpu1 } : {}), ...(cpu2 ? { cpu2 } : {}), issues };
+}
+
+function matchesExpectedDevice(device: string, expectedDevice: string): boolean {
+  const expected = expectedDevice.toLowerCase().replace(/^tms320/, "");
+  // TI's single-CPU examples use the family directory even for an exact part.
+  return device === expected || (expected === "f28374s" && device === "f2837xs");
 }
 
 /**

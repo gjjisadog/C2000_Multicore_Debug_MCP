@@ -610,6 +610,41 @@ Built server:
 C2000_MCP_CONFIG=./examples/f28p65x.config.json npm start
 ```
 
+## F28374S and XDS100v2
+
+Use `examples/f28374s-xds100v2.config.json` for the single-CPU F28374S target.
+Set the CCS install/workspace paths and replace `REPLACE_WITH_XDS100_SERIAL`
+in both the JSON and `examples/targetConfigs/F28374S_XDS100v2.ccxml` with the
+actual probe serial. Run `ccs_base/common/uscif/xds100serial` (`.exe` on Windows)
+inside your CCS installation to enumerate XDS100 probes. The target configuration
+is based on TI's F2837xS XDS100v2 configuration and selects `tms320f28374s.xml`.
+
+```bash
+C2000_MCP_CONFIG=./examples/f28374s-xds100v2.config.json npm run dev
+```
+
+Register the board with `device: "F28374S"` and the same serial/ccxml, then create
+a session with only `{ "coreId": 0, "coreName": "C28xx_CPU1", "corePattern": "C28xx_CPU1" }`.
+Connect, load, run, pause, reset and read variables through the existing explicit
+`sessionId`/`coreId` tools. In a mixed-device installation, supply this `coreMap`
+explicitly when creating the F28374S session. Each daemon uses its configured
+target topology for host readiness checks.
+
+Host preflight now includes XDS100 enumeration alongside XDS110 and XDS2xx.
+XDS100 v1/v2 and v3 identities use the same serial routing; select the actual
+probe driver in CCS when using a version other than v2. A missing enumeration
+utility or driver is reported as a structured preflight failure, never as a
+connected probe. The example serial placeholder must be replaced before board
+registration.
+
+For a configured single-CPU target, program discovery/readiness checks require
+only its CPU1 image, including ordinary `.out` names without a CPU1 suffix.
+Dual-CPU isolation, CPU2 boot/IPC workflows and F28P65x-specific Flash bank/ERAD
+features remain device-specific; do not use them for F28374S. Existing F28P65x
+dual-core configurations retain their CPU1/CPU2 artifact checks. F28374S/XDS100v2
+support has host/mock regression coverage; physical connection and Flash/RAM
+programming still need validation with that board and probe.
+
 ## Persistent daemon, jobs, and board ownership
 
 The stdio executable is a short-lived MCP proxy. It discovers or starts a
@@ -1879,7 +1914,7 @@ The hardware acceptance scripts use `CcsScriptingAdapter` and the persistent DSS
 
 On physical F28P65x boards, CPU2 program loading can take several minutes depending on the current target state. The target-touching acceptance scripts default `C2000_MCP_DSS_TIMEOUT_MS` to `300000` ms and pass it into the MCP server / `CcsScriptingAdapter`; the MCP stdio hardware acceptance client defaults `C2000_MCP_REQUEST_TIMEOUT_MS` to `600000` ms so long CCS/DSS operations do not lose their tool response at the SDK layer. Set both explicitly when diagnosing slower CCS/DSS sessions. Timeout errors include the requested `adapterSessionId`, `operation`, `dssCommandName`, `coreId`, `coreName`, DSS process `pid`, exit state, and stdout/stderr tails, including `C2000_DSS_SERVER_EVENT` command lifecycle records.
 
-Read-only preflight checks debug-probe enumeration (XDS110/XDS2xx) and possible debug-process owners. It does not connect to the target, load programs, or run CPU1/CPU2. MCP clients can call `c2000_getHardwarePreflight` before creating a debug session:
+Read-only preflight checks debug-probe enumeration (XDS100/XDS110/XDS2xx) and possible debug-process owners. It does not connect to the target, load programs, or run CPU1/CPU2. MCP clients can call `c2000_getHardwarePreflight` before creating a debug session:
 
 ```json
 {
@@ -2207,7 +2242,7 @@ Persistent DSS children also register a parent-process exit fallback. Every DSS 
 
 All CCS-backed MCP instances coordinate through a filesystem FIFO lease. The lease is acquired before probe recovery/session creation and held until the logical debug session closes, so multiple Agents or conversations cannot interleave operations on one debug probe. Dead active owners and dead waiting tickets are reclaimed automatically. Configure every instance with the same absolute `C2000_MCP_PROBE_QUEUE_DIR`.
 
-For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique debug-probe `serialNumber` (XDS110 or XDS2xx), and a separate `.ccxml` already bound to that serial number:
+For multiple boards, configure `debugProbe.probes` in the config file (or `C2000_MCP_PROBES_JSON`). Every entry must use a unique `probeId`, unique debug-probe `serialNumber` (XDS100, XDS110 or XDS2xx), and a separate `.ccxml` already bound to that serial number:
 
 ```json
 {

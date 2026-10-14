@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
+import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
 import { resolveTiEnvironment } from "../config/tiPaths.js";
 
-export { defaultCcsInstallPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
+export { defaultCcsInstallPath, resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
 
 export interface CommandOutput {
   stdout: string;
@@ -43,6 +43,17 @@ export interface Xds2xxPreflight {
 
 export interface HardwarePreflightResult {
   xdsdfuPath: string;
+  xds100SerialPath?: string;
+  /** Host-only enumeration; never connects to the target. */
+  xds100?: {
+    ok: boolean;
+    commandOk: boolean;
+    probeReady: boolean;
+    stdout?: string;
+    stderr?: string;
+    error?: string;
+    devices: Array<{ serialNumber: string; name: string; vidPid: string; description?: string }>;
+  };
   /** XDS2xx support is optional on non-Windows hosts and older CCS installs. */
   xds2xxConfPath?: string;
   xdsdfu: {
@@ -97,12 +108,14 @@ export async function runHardwarePreflight(options: {
   const ccsRoot = resolveCcsInstallPath(detectedCcsPath, platform);
   const xdsdfuPath = resolveXdsdfuPath(ccsRoot, platform);
   const xds2xxConfPath = resolveXds2xxConfPath(ccsRoot, platform);
+  const xds100SerialPath = resolveXds100SerialPath(ccsRoot, platform);
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const preflight: HardwarePreflightResult = {
     xdsdfuPath,
     xds2xxConfPath,
+    xds100SerialPath,
     xdsdfu: { ok: false, commandOk: false, probeReady: false, attempts: 0 },
     xds2xx: { ok: false, commandOk: false, probeReady: false, attempts: 0, devices: [] },
     debugProcesses: [],
@@ -171,6 +184,16 @@ export async function runHardwarePreflight(options: {
         devices: []
       };
     }
+  }
+
+  // Enumerate even when an XDS110 is present so mixed-probe hosts can route XDS100 boards.
+  try {
+    const { stdout, stderr } = await run(xds100SerialPath, [], { timeout: 10000 });
+    const devices = parseXds100Devices(stdout);
+    preflight.xds100 = { ok: true, commandOk: true, probeReady: devices.length > 0, stdout, stderr, devices };
+  } catch (error) {
+    preflight.xds100 = { ok: false, commandOk: false, probeReady: false, devices: [],
+      error: error instanceof Error ? error.message : String(error) };
   }
 
   try {
@@ -317,13 +340,23 @@ export function parseXds2xxDevices(output: string): Xds2xxDevice[] {
   }];
 }
 
+export function parseXds100Devices(output: string): NonNullable<HardwarePreflightResult["xds100"]>["devices"] {
+  return output.split(/\r?\n/).flatMap(line => {
+    const match = line.match(/^\s*([0-9a-f]{4}\/[0-9a-f]{4})\s+(XDS100v1\/v2|XDS100v3|generic XDS100)\s+(\S+)(?:\s+(.*))?$/i);
+    if (!match || /^(?:unknown|blank)/i.test(match[3]!)) return [];
+    return [{ vidPid: match[1]!, name: match[2]!, serialNumber: match[3]!, description: match[4]?.trim() }];
+  });
+}
+
 export function getConnectedProbeSerials(preflight: {
   xdsdfu?: { devices?: Array<{ serialNumber?: string }> };
   xds2xx?: { devices?: Array<{ serialNumber?: string }> };
+  xds100?: { devices?: Array<{ serialNumber?: string }> };
 }): string[] {
   return [...new Set([
     ...(preflight.xdsdfu?.devices ?? []),
-    ...(preflight.xds2xx?.devices ?? [])
+    ...(preflight.xds2xx?.devices ?? []),
+    ...(preflight.xds100?.devices ?? [])
   ]
     .map(device => device.serialNumber?.trim())
     .filter((serial): serial is string => Boolean(serial)))];

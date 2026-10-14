@@ -592,21 +592,26 @@ export function buildAdapterEvidence(
     provenance: {
       actualAdapterSource: launchRecord?.effectiveAdapterType ? "worker-response" : topology?.effectiveAdapterType ? "session-topology" : sessionRecord?.adapterSessionId ? "persisted-session" : "unavailable",
       configuredModeIsNotPromoted: true,
-      classificationRequires: ["effectiveAdapterType", "adapterSessionId", "physicalXds110PreflightSerial"]
+      classificationRequires: ["effectiveAdapterType", "adapterSessionId", "physicalProbePreflightSerial"]
     }
   };
 }
 
 function physicalPreflightEvidence(output: unknown, probeSerial: string): Record<string, unknown> & { matched: boolean } {
   const value = isRecord(output) ? output : {};
-  const xdsdfu = isRecord(value.xdsdfu) ? value.xdsdfu : {};
-  const devices = Array.isArray(xdsdfu.devices) ? xdsdfu.devices.filter(isRecord) : [];
-  const matching = devices.find(device => device.serialNumber === probeSerial);
-  const matched = xdsdfu.probeReady === true && Boolean(matching);
+  const sources = ["xdsdfu", "xds100", "xds2xx"].map(name => {
+    const probe = isRecord(value[name]) ? value[name] : {};
+    const devices = Array.isArray(probe.devices) ? probe.devices.filter(isRecord) : [];
+    return { name, probe, devices };
+  });
+  const selected = sources.find(source => source.probe.probeReady === true
+    && source.devices.some(device => device.serialNumber === probeSerial)) ?? sources[0]!;
+  const matching = selected.devices.find(device => device.serialNumber === probeSerial);
+  const matched = selected.probe.probeReady === true && Boolean(matching);
   return {
-    source: "c2000_getHardwarePreflight.xdsdfu",
+    source: `c2000_getHardwarePreflight.${selected.name}`,
     requestedProbeSerial: probeSerial,
-    probeReady: xdsdfu.probeReady === true,
+    probeReady: selected.probe.probeReady === true,
     matched,
     matchedDevice: matching ? {
       serialNumber: matching.serialNumber,
@@ -615,7 +620,7 @@ function physicalPreflightEvidence(output: unknown, probeSerial: string): Record
       mode: matching.mode,
       version: matching.version
     } : null,
-    observedSerials: devices.map(device => device.serialNumber).filter((serial): serial is string => typeof serial === "string")
+    observedSerials: sources.flatMap(source => source.devices).map(device => device.serialNumber).filter((serial): serial is string => typeof serial === "string")
   };
 }
 

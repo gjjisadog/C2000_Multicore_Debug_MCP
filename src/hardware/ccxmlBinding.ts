@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { DebugMcpError } from "../utils/errors.js";
 
-export type CcxmlProbeType = "XDS110" | "XDS2xx" | "unknown";
+export type CcxmlProbeType = "XDS100" | "XDS110" | "XDS2xx" | "unknown";
 
 /** Read the debug-probe serial explicitly selected in a CCS target configuration. */
 export async function readCcxmlProbeSerial(ccxmlPath: string): Promise<string | undefined> {
@@ -24,9 +24,9 @@ export function readCcxmlProbeSerialFromText(text: string): string | undefined {
   for (const tag of tags) {
     const id = readAttribute(tag, "id") ?? readAttribute(tag, "ID");
     const name = readAttribute(tag, "Name");
-    if (id !== "-- Enter the serial number" && id !== "USCIF.ECOM_SERIAL" && name !== "-- Enter the serial number") continue;
+    if (id !== "-- Enter the serial number" && id !== "USCIF.ECOM_SERIAL" && id !== "SEPK.POD_SERIAL" && name !== "-- Enter the serial number") continue;
     const value = readAttribute(tag, "Value");
-    if (value && !/^use\s+xds2xx_conf\b/i.test(value)) return value.trim();
+    if (value?.trim() && !/^(?:use\s+xds2xx_conf\b|run\s+xds100serial\b|REPLACE_WITH_)/i.test(value.trim())) return value.trim();
   }
   return undefined;
 }
@@ -34,6 +34,7 @@ export function readCcxmlProbeSerialFromText(text: string): string | undefined {
 export function readCcxmlProbeTypeFromText(text: string): CcxmlProbeType {
   if (/TIXDS2XX(?:USB|LAN)/i.test(text)) return "XDS2xx";
   if (/TIXDS110/i.test(text)) return "XDS110";
+  if (/TIXDS100/i.test(text)) return "XDS100";
   return "unknown";
 }
 

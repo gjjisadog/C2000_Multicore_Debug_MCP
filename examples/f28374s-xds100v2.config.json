@@ -1,0 +1,32 @@
+{
+  "adapter": "ccs",
+  "ccs": {
+    "installPath": "C:/ti/ccs",
+    "workspacePath": "C:/workspace/f28374s",
+    "ccxmlPath": "./examples/targetConfigs/F28374S_XDS100v2.ccxml",
+    "scriptingMode": "ccs"
+  },
+  "target": {
+    "name": "F28374S",
+    "coreMap": [
+      {
+        "coreId": 0,
+        "coreName": "C28xx_CPU1",
+        "corePattern": "C28xx_CPU1"
+      }
+    ]
+  },
+  "debugProbe": {
+    "probes": [
+      {
+        "probeId": "f28374s-xds100v2",
+        "serialNumber": "REPLACE_WITH_XDS100_SERIAL",
+        "ccxmlPath": "./examples/targetConfigs/F28374S_XDS100v2.ccxml",
+        "enabled": true
+      }
+    ]
+  },
+  "logging": {
+    "level": "info"
+  }
+}

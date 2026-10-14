@@ -288,7 +288,8 @@ function buildRuntime(
       getActiveCriticalImprovementRegression,
       effectiveAdapterType: adapterResolution.mode,
       filesystem,
-      programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots
+      programSearchRoots: toolHandlerDeps.programSearchRoots ?? config.programSearchRoots,
+      target: config.target
     },
     toolProfile,
     filesystem,

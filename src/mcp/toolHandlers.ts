@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
-import type { ResetType } from "../debug/types.js";
+import type { CoreConfig, ResetType } from "../debug/types.js";
 import { createApplicationEntryPlan, waitForApplicationEntry } from "../debug/applicationEntry.js";
 import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js";
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
@@ -277,11 +277,14 @@ export interface ToolHandlerDeps {
   resolveTiEnvironment?: typeof resolveTiEnvironmentDefault;
   tiEnvironment?: ResolveTiEnvironmentOptions;
   programSearchRoots?: string[];
+  target?: { name: string; coreMap: CoreConfig[] };
   filesystem?: FilesystemPolicy;
   sysconfig?: SysConfigServiceOptions["config"];
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
+  const singleCore = deps.target?.coreMap.length === 1 && deps.target.coreMap[0]?.coreId === 0;
+  const expectedDevice = singleCore ? deps.target!.name.replace(/^TMS320/i, "") : "F28P65x";
   const hardwarePreflight = deps.runHardwarePreflight ?? runHardwarePreflight;
   const discoverAcceptancePrograms = deps.discoverAcceptancePrograms ?? discoverAcceptanceProgramsDefault;
   const analyzeRamOwnership = deps.analyzeRamOwnership ?? analyzeRamOwnershipDefault;
@@ -847,7 +850,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
           searchRoots: input.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
-          maxDepth: input.maxDepth
+          maxDepth: input.maxDepth,
+          expectedDevice,
+          singleCore
         }));
       } catch (error) {
         return fail(error);
@@ -859,14 +864,16 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       try {
         const waitForProbeMs = input.waitForProbeMs ?? 0;
         const probePollIntervalMs = input.probePollIntervalMs ?? 250;
-        const ccxmlPath = input.ccxmlPath ?? process.env.C2000_MCP_CCXML_PATH;
+        const ccxmlPath = input.ccxmlPath ?? process.env.C2000_MCP_CCXML_PATH ?? deps.tiEnvironment?.ccxmlPath;
         const allowExistingDebugProcesses = input.allowExistingDebugProcesses ?? process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
         readinessStage = "program-discovery";
         const programDiscovery = await discoverAcceptancePrograms({
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
           searchRoots: input.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
-          maxDepth: input.maxDepth
+          maxDepth: input.maxDepth,
+          expectedDevice,
+          singleCore
         });
         const probeWaitStartedAt = Date.now();
         readinessStage = "hardware-preflight";
@@ -893,8 +900,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const acceptanceEvidence = buildAcceptanceEvidencePlan();
         readinessStage = "artifact-pair-validation";
         const cpu1Program = discoveredProgramForCore(0, programDiscovery);
-        const cpu2Program = discoveredProgramForCore(2, programDiscovery);
-        const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, "F28P65x");
+        const cpu2Program = singleCore ? undefined : discoveredProgramForCore(2, programDiscovery);
+        const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, expectedDevice, singleCore);
         const debugProcessOwners = formatDebugProcessOwners(preflight);
         const hasDebugProcessOwners = hasBlockingDebugProcesses(preflight);
         readinessStage = "daemon-health";
@@ -946,7 +953,9 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const checks = {
           ccxml: await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required"),
           cpu1Program: await hostFileCheck(cpu1Program, "CPU1 .out program was not discovered"),
-          cpu2Program: await hostFileCheck(cpu2Program, "CPU2 .out program was not discovered"),
+          cpu2Program: singleCore
+            ? { ok: true, applicable: false, reason: "Configured target has one C28x CPU." }
+            : await hostFileCheck(cpu2Program, "CPU2 .out program was not discovered"),
           artifactPair: {
             ok: artifactPair.compatible,
             ...artifactPair
@@ -956,6 +965,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
             probeReady: getConnectedProbeSerials(preflight).length > 0,
             serials: getConnectedProbeSerials(preflight),
             xds2xx: preflight.xds2xx ?? null,
+            xds100: preflight.xds100 ?? null,
           },
           // Kept for compatibility with existing readiness consumers.
           xds110: {
@@ -998,8 +1008,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           probeWait,
           debugBoundary,
           uiIndependenceEvidence,
-          acceptanceEvidence,
-          nextCommand: hardwareAcceptanceCommand({
+          acceptanceEvidence: singleCore
+            ? { applicable: false, reason: "CPU1/CPU2 isolation and IPC acceptance require two CPUs." }
+            : acceptanceEvidence,
+          nextTools: singleCore ? ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_continue", "c2000_pause"] : undefined,
+          nextCommand: singleCore ? undefined : hardwareAcceptanceCommand({
             ccsInstallPath: input.ccsInstallPath,
             ccxmlPath,
             cpu1Program,
@@ -2690,7 +2703,7 @@ function acceptanceBlockers(checks: ToolResult): string[] {
     blockers.push(`CPU1/CPU2 artifacts are incompatible: ${(checks.artifactPair?.issues ?? []).join("; ")}`);
   }
   if (!checks.probe?.ok && !checks.xds110?.ok) {
-    blockers.push("No supported debug probe (XDS110/XDS2xx) is enumerated");
+    blockers.push("No supported debug probe (XDS100/XDS110/XDS2xx) is enumerated");
   }
   if (!checks.debugProcessOwnership?.ok) {
     blockers.push(checks.debugProcessOwnership?.inspection?.ok === false
@@ -2698,7 +2711,7 @@ function acceptanceBlockers(checks: ToolResult): string[] {
       : `Existing debug-related process(es) may own the XDS probe: ${checks.debugProcessOwnership.owners}`);
   }
   if (!checks.debugBoundary?.ok) {
-    blockers.push("Debug boundary contract is not ready for F28P65x explicit per-core automation");
+    blockers.push("Debug boundary contract is not ready for explicit per-core automation");
   }
   if (!checks.daemonRoute?.ok) {
     blockers.push(checks.daemonRoute?.nextTool === "c2000_registerBoard"
