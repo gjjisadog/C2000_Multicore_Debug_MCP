@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Logger } from "../utils/logger.js";
 import { runtimeBuildInfo, SERVER_VERSION } from "../runtimeInfo.js";
-import type { CapabilityAuditEvent, ToolCapability } from "../mcp/capabilities.js";
+import { TOOL_CAPABILITY_NAMES, type CapabilityAuditEvent, type ToolCapability } from "../mcp/capabilities.js";
 import {
   c2000ToolDefinitions,
   definitionsForSafetyProfile,
@@ -1035,7 +1035,7 @@ function normalizeFailureClass(value: unknown): OutcomeFailureClass | undefined 
 }
 
 function isToolCapability(value: unknown): value is ToolCapability {
-  return typeof value === "string" && ["debug.manual", "debug.program", "debug.wait", "observability.variables", "observability.dlog", "observability.erad", "observability.metrics", "can.advanced"].includes(value);
+  return typeof value === "string" && (TOOL_CAPABILITY_NAMES as readonly string[]).includes(value);
 }
 
 function boundedLabel(value: unknown): string | undefined {

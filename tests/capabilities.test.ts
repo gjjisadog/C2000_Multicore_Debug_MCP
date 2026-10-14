@@ -96,7 +96,7 @@ function listedNames(listed: { tools: Array<{ name: string }> }): Set<string> {
 
 describe("C2000 task-aware capability exposure", () => {
   test("defines a small capability vocabulary and a single membership source", () => {
-    expect(TOOL_CAPABILITY_NAMES).toHaveLength(8);
+    expect(TOOL_CAPABILITY_NAMES).toHaveLength(9);
     expect(CAPABILITY_DESCRIPTORS.map(descriptor => descriptor.name)).toEqual([...TOOL_CAPABILITY_NAMES]);
 
     const expectedMembership: Record<ToolCapability, string[]> = {
@@ -143,7 +143,8 @@ describe("C2000 task-aware capability exposure", () => {
         "c2000_exportEradProfile"
       ],
       "observability.metrics": ["c2000_createAcceptanceClosure", "c2000_createRunBaseline", "c2000_compareRunWithBaseline"],
-      "can.advanced": ["c2000_getBoardGroupSnapshot", "c2000_listCanProfiles", "c2000_submitCanFaultCampaign", "c2000_submitCanSoakTest"]
+      "can.advanced": ["c2000_getBoardGroupSnapshot", "c2000_listCanProfiles", "c2000_submitCanFaultCampaign", "c2000_submitCanSoakTest"],
+      "configuration.sysconfig": ["c2000_inspectSysConfig", "c2000_updateSysConfig"]
     };
 
     for (const capability of TOOL_CAPABILITY_NAMES) {

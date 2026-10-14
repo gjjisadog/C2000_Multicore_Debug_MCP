@@ -294,8 +294,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 33,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 95,
-      advancedOnlyCount: 93,
+      hiddenBySurfaceCount: 97,
+      advancedOnlyCount: 95,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -310,7 +310,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(93);
+    expect(guide.advancedOnly).toBe(95);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -333,14 +333,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 33,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 95,
-      advancedOnlyCount: 93,
+      hiddenBySurfaceCount: 97,
+      advancedOnlyCount: 95,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 33,
         hiddenBySafety: 8,
-        hiddenBySurface: 95,
-        advancedOnly: 93,
+        hiddenBySurface: 97,
+        advancedOnly: 95,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -418,8 +418,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(128);
-    expect(fullCompatibility.count).toBe(136);
+    expect(safeCompatibility.count).toBe(130);
+    expect(fullCompatibility.count).toBe(138);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

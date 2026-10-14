@@ -9,6 +9,26 @@ Use this skill for F28P65x CPU1/CPU2 debug, IPC acceptance, CPU2 boot handoff,
 RAMGS ownership, stale program/map diagnosis, CAN evidence, and engineering
 verification through `c2000-multicore-mcp`.
 
+## SysConfig changes
+
+For settings already managed by `.syscfg`, use the configuration tools before
+editing generated C/H. Open `configuration.sysconfig` with a task-specific
+reason, then use `c2000_inspectSysConfig` to discover module IDs and instance
+names. Read the selected instances and use the returned `sha256` as
+`expectedSha256` for `c2000_updateSysConfig`. Preview with `dryRun: true`
+(the default); set false to save after official validation succeeds.
+Use `$static` for singleton settings and the project's actual CPU context.
+
+These tools run the official TI SysConfig CLI and work with CCS closed.
+They update existing instances; they cannot create/delete instances or migrate
+devices. Do not substitute text patches to generated C/H if validation fails.
+Read the returned official diagnostics and fix the configuration first.
+After saving, reload any open SysConfig editor from disk and rebuild before
+loading firmware; `requiresRebuild` does not prove that a build has run.
+For unsaved IDE edits, use the official CCS SysConfig MCP instead of changing
+the same file concurrently. See the README's SysConfig configuration editing
+section for CLI discovery, filesystem roots and the real-engine test command.
+
 ## Core principles
 
 - Use server-side workflow tools and preserve explicit `sessionId`, `boardId`,

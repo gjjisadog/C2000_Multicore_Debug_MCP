@@ -262,6 +262,7 @@ function buildRuntime(
     {
       ...toolHandlerDeps,
       verification,
+      sysconfig: toolHandlerDeps.sysconfig ?? config.sysconfig,
       outcomeAnalytics: localAnalytics ?? toolHandlerDeps.outcomeAnalytics,
       getWorkflowAnalytics: toolHandlerDeps.getWorkflowAnalytics ?? (input => localAnalytics!.getWorkflowAnalytics(input)),
       getToolAnalytics: toolHandlerDeps.getToolAnalytics ?? (input => localAnalytics!.getToolAnalytics(input)),

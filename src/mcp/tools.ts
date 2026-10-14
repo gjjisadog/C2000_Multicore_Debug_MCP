@@ -17,6 +17,7 @@ import type { Logger } from "../utils/logger.js";
 import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
 import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy.js";
 import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
+import { inspectSysConfigSchema, updateSysConfigSchema } from "../sysconfig/SysConfigSchemas.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -314,6 +315,8 @@ type BaseToolDefinition = Omit<ToolDefinition, "effects" | "annotations" | "appr
  * `advanced`.
  */
 const baseToolDefinitions: BaseToolDefinition[] = [
+  { name: "c2000_inspectSysConfig", title: "Inspect C2000 SysConfig", description: "Read existing .syscfg modules, named instances, configurable values and static choices using the official TI SysConfig CLI, without CCS or target access. Returns SHA-256 for guarded updates. Pass instances to inspect their configuration. Generated validation artifacts stay temporary.", schema: inspectSysConfigSchema, handlerName: "inspectSysConfig", inputScope: "host", targetEffect: "host-read", role: "primary", family: "host", capability: "configuration.sysconfig" },
+  { name: "c2000_updateSysConfig", title: "Update C2000 SysConfig", description: "Change existing .syscfg instance settings through the official TI configuration engine, with CCS open or closed. Requires expectedSha256 from inspect. Previews by default; set dryRun=false to save only after official parameter and pin-conflict validation succeeds. Does not edit generated C/H; rebuild the project and reload open editors after saving.", schema: updateSysConfigSchema, handlerName: "updateSysConfig", inputScope: "host", targetEffect: "repository-control", role: "primary", family: "host", capability: "configuration.sysconfig" },
   { name: "c2000_listCapabilities", title: "List C2000 Capabilities", description: "List temporary advanced capability groups, their safety-derived availability, and active capability sessions without touching a target.", schema: listCapabilitiesSchema, handlerName: "listCapabilities", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
   { name: "c2000_openCapabilitySession", title: "Open C2000 Capability Session", description: "Open one short-lived, reason-bound advanced capability group. This never expands the configured safety profile; only tools still allowed by safety can become visible.", schema: openCapabilitySessionSchema, handlerName: "openCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
   { name: "c2000_closeCapabilitySession", title: "Close C2000 Capability Session", description: "Close a temporary advanced capability session and remove its tools from the MCP surface.", schema: closeCapabilitySessionSchema, handlerName: "closeCapabilitySession", inputScope: "host", targetEffect: "capability-control", role: "host", family: "host", exposure: "default" },
@@ -544,6 +547,7 @@ export function registerC2000Tools(
     closeCapabilitySession: input => controller.closeCapabilitySession(input),
     getServerHealth: runtime.getServerHealth ?? deps.getServerHealth,
     tiEnvironment,
+    filesystem: deps.filesystem ?? filesystem,
   };
   const invoker = isToolInvoker(source) ? source : createC2000ToolInvoker(source, effectiveDeps);
 

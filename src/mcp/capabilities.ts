@@ -10,7 +10,8 @@ export const TOOL_CAPABILITY_NAMES = [
   "observability.dlog",
   "observability.erad",
   "observability.metrics",
-  "can.advanced"
+  "can.advanced",
+  "configuration.sysconfig"
 ] as const;
 
 export type ToolCapability = typeof TOOL_CAPABILITY_NAMES[number];
@@ -62,6 +63,11 @@ export const CAPABILITY_DESCRIPTORS: readonly CapabilityDescriptor[] = [
     name: "can.advanced",
     description: "Specialized multi-board CAN campaigns, soak execution, profiles, and board-group diagnostics.",
     risk: "target-control"
+  },
+  {
+    name: "configuration.sysconfig",
+    description: "Inspect and edit existing .syscfg settings through the official TI SysConfig CLI, including when CCS is closed. Validate before saving and rebuild generated artifacts afterwards.",
+    risk: "workflow-confirmation"
   }
 ];
 

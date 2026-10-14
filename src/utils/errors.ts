@@ -1,4 +1,9 @@
 export type DebugErrorCode =
+  | "SysConfigUnavailable"
+  | "SysConfigInvalidInput"
+  | "SysConfigValidationFailed"
+  | "SysConfigConflict"
+  | "SysConfigBusy"
   | "SessionNotFound"
   | "CoreNotFound"
   | "DuplicateCoreId"

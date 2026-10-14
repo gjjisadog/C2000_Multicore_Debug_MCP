@@ -22,6 +22,8 @@ import { resolveTiEnvironment as resolveTiEnvironmentDefault, type ResolveTiEnvi
 import type { FilesystemPolicy } from "../security/pathPolicy.js";
 import type { VerificationService } from "../verification/VerificationService.js";
 import type { OutcomeAnalyticsService } from "../analytics/OutcomeAnalyticsService.js";
+import { SysConfigService, type SysConfigServiceOptions } from "../sysconfig/SysConfigService.js";
+import { inspectSysConfigSchema, updateSysConfigSchema } from "../sysconfig/SysConfigSchemas.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -276,6 +278,7 @@ export interface ToolHandlerDeps {
   tiEnvironment?: ResolveTiEnvironmentOptions;
   programSearchRoots?: string[];
   filesystem?: FilesystemPolicy;
+  sysconfig?: SysConfigServiceOptions["config"];
 }
 
 export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandlerDeps = {}) {
@@ -378,6 +381,11 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
   const resolveTiEnvironment = deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault;
   const configuredProgramSearchRoots = deps.programSearchRoots;
   const workflows = new DebugWorkflowService(manager, analyzeRamOwnership, deps.filesystem);
+  const sysconfig = new SysConfigService({
+    filesystem: deps.filesystem ?? { allowedReadRoots: [process.cwd()], allowedWriteRoots: [] },
+    tiEnvironment: deps.tiEnvironment,
+    config: deps.sysconfig
+  });
   const ok = (body: ToolResult = {}): ToolResult => ({ success: true, timestamp: new Date().toISOString(), ...body });
   const fail = (error: unknown, body: ToolResult = {}): ToolResult => ({
     success: false,
@@ -779,6 +787,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       } catch (error) {
         return fail(error);
       }
+    },
+
+    async inspectSysConfig(input: z.input<typeof inspectSysConfigSchema>) {
+      try { return ok(await sysconfig.inspect(input)); } catch (error) { return fail(error); }
+    },
+
+    async updateSysConfig(input: z.input<typeof updateSysConfigSchema>) {
+      try { return ok(await sysconfig.update(input)); } catch (error) { return fail(error); }
     },
 
     async getEnvironment(_input: z.infer<typeof environmentSchema>) {

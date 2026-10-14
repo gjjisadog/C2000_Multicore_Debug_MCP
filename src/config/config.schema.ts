@@ -3,6 +3,7 @@ import { coreConfigSchema } from "../mcp/toolSchemas.js";
 import { verificationConfigSchema } from "../verification/VerificationConfigSchemas.js";
 import { skillEvolutionConfigSchema } from "../evolution/EvolutionSchemas.js";
 import { reviewPolicyConfigSchema } from "../improvement/review/ReviewSchemas.js";
+import { sysConfigConfigSchema } from "../sysconfig/SysConfigSchemas.js";
 
 const boardConfigSchema = z.object({
   boardId: z.string().min(1),
@@ -81,6 +82,7 @@ export const c2000McpConfigSchema = z.object({
     allowedWriteRoots: z.array(z.string().min(1)).default([])
   }).default({ allowedReadRoots: [], allowedWriteRoots: [] }),
   verification: verificationConfigSchema.default({}),
+  sysconfig: sysConfigConfigSchema.optional(),
   skillEvolution: skillEvolutionConfigSchema.default({}),
   improvement: improvementConfigSchema.optional(),
   /** Optional board power control. Each cycle still requires an explicit tool call. */

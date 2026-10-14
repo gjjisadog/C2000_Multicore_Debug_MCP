@@ -58,6 +58,105 @@ tool blocked by the selected safety profile. The agent surface favors task
 workflows; canonical low-level controls and DLOG/ERAD/Variable Stream
 lifecycle tools remain available on `advanced`.
 
+## SysConfig configuration editing
+
+Use `c2000_inspectSysConfig` and `c2000_updateSysConfig` to change existing
+`.syscfg` settings instead of patching generated `board.c` / `board.h` files.
+Both tools use the installed **official TI SysConfig CLI** and work with CCS
+open or closed. They do not need JTAG, a board lease, or a debug session.
+On the default `agent` surface, first call `c2000_openCapabilitySession` with
+`capability: "configuration.sysconfig"` and a task-specific `reason`.
+The tools are also available on the `advanced` surface. `readonly` permits
+inspection only; saving requires `safe` or `full` and an allowed write root.
+
+The CLI is discovered under the resolved CCS `utils/sysconfig_*/dist/cli.js`.
+For a standalone installation or a project requiring a specific version,
+set the following in the server configuration (paths are examples):
+
+```json
+{
+  "sysconfig": {
+    "cliPath": "/opt/ti/sysconfig_1.28.0/dist/cli.js",
+    "timeoutMs": 60000
+  },
+  "ccs": { "c2000WarePath": "/opt/ti/C2000Ware_26_01_00_00_STS" },
+  "filesystem": {
+    "allowedReadRoots": ["/work/project", "/opt/ti/C2000Ware_26_01_00_00_STS"],
+    "allowedWriteRoots": ["/work/project"]
+  }
+}
+```
+
+`sysconfig.nodePath` optionally selects a trusted Node executable. Commands
+and CLI paths cannot be submitted through tool arguments. The SDK product
+defaults to C2000Ware's `.metadata/sdk.json`; `productPath` can select another
+SDK product inside an allowed read root. Device/package/part/context arguments
+can be supplied when the file has no embedded `@cliArgs`; use the values from
+the project's actual SysConfig build settings. In particular, explicitly
+select CPU1 or CPU2 when the project configuration requires it.
+
+Inspect the file to discover module IDs and instance names. Pass `instances`
+to read settings and static choices, and `configurableIds` to narrow the result:
+
+```json
+{
+  "syscfgPath": "/work/project/app.syscfg",
+  "context": "CPU1",
+  "instances": [
+    { "moduleId": "/driverlib/gpio.js", "moduleInstanceId": "LED1" }
+  ]
+}
+```
+
+Use `moduleInstanceId: "$static"` for singleton/static settings. Copy the
+returned `sha256` into the update's `expectedSha256`:
+
+```json
+{
+  "syscfgPath": "/work/project/app.syscfg",
+  "context": "CPU1",
+  "expectedSha256": "<sha256 returned by inspection>",
+  "dryRun": true,
+  "changes": [
+    {
+      "moduleId": "/driverlib/gpio.js",
+      "moduleInstanceId": "LED1",
+      "configurable": "direction",
+      "value": "GPIO_DIR_MODE_OUT"
+    }
+  ]
+}
+```
+
+Updates preview by default. Set `dryRun: false` to save. The server loads the
+original file and applies typed changes as a dependent script inside TI's
+engine, runs its callbacks, validation, pin solver and code generation in a
+temporary directory, then appends the validated settings to `.syscfg` using
+an atomic replacement. Invalid values, pin conflicts, timeouts and detected
+file changes prevent saving. Returned diagnostics include official warnings;
+temporary generated artifacts are deleted and `artifactsPublished` is false.
+
+Only `.syscfg` is published. After saving, **reload any open SysConfig editor
+from disk and rebuild the project** to regenerate artifacts before loading
+firmware. `requiresRebuild: true` makes this explicit. The hash check and
+process-local edit lock protect against stale callers and detected external
+changes; they do not coordinate unsaved changes in a CCS editor. Prefer the
+official CCS SysConfig MCP for an actively edited IDE configuration.
+
+This first implementation modifies existing instances, nested settings and
+instance references; it does not create/delete instances, migrate devices,
+or create new projects. Static choices are included when provided by module
+metadata; dynamic choices and UI help remain available in the official editor.
+For IDE integration, TI also documents its
+[official SysConfig MCP proxy](https://software-dl.ti.com/ccs/esd/documents/users_guide_ccs_21.0.0/ccs_ai.html#using-other-ai-assistants),
+which requires a running, MCP-enabled CCS workspace.
+
+Run the host-only tests with `npx vitest run tests/sysConfig.test.ts`. To also
+run the real F28P65x engine test, set `C2000_SYSCONFIG_CLI` to `dist/cli.js`
+and `C2000_SYSCONFIG_PRODUCT` to C2000Ware's `.metadata/sdk.json` before running
+that command. The real test creates a temporary configuration and never
+accesses hardware or changes SDK examples.
+
 ## pytest HIL SDK
 
 The package contains a pure-Python SDK under `python/`. Install it from a

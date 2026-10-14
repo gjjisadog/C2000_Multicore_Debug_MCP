@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### SysConfig editing without CCS
+
+- Add `configuration.sysconfig` capability with configuration inspection and
+  guarded updates through the installed official TI SysConfig CLI.
+- Preview changes by default, require the inspected file SHA-256, validate
+  settings and pin conflicts before saving, and preserve generated C/H files.
+- Report rebuild requirements and official diagnostics. Support existing
+  named instances, singleton settings, nested pins and instance references.
+
 ## 0.7.16 - 2026-09-29
 
 ### Resilient daemon startup for stale board configurations
