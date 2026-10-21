@@ -24,6 +24,7 @@ import {
   type ToolSurfaceProfile
 } from "./mcp/tools.js";
 import { CapabilitySessionManager } from "./mcp/capabilities.js";
+import { C2000_SERVER_INSTRUCTIONS } from "./mcp/invocationScope.js";
 import type { ToolHandlerDeps } from "./mcp/toolHandlers.js";
 import { buildServerHealth, runtimeBuildInfo, SERVER_NAME, SERVER_VERSION } from "./runtimeInfo.js";
 import { DebugMcpError } from "./utils/errors.js";
@@ -184,7 +185,7 @@ function buildRuntime(
   let getExposureSummary = () => getToolExposureSummary(toolProfile, toolSurfaceProfile);
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { logging: {} } }
+    { capabilities: { logging: {} }, instructions: C2000_SERVER_INSTRUCTIONS }
   );
   const effectiveInstallPath = adapterResolution.ccsInstallPath ?? config.ccs.installPath;
   const workspacePath = normalizeWorkspacePath(config.ccs.workspacePath);

@@ -1145,6 +1145,15 @@ This repository includes a lightweight Codex Skill at:
 .skills/c2000-multicore-debug/SKILL.md
 ```
 
+Invocation is limited to explicitly requested C2000 board operations or explicit
+use of `c2000-multicore-mcp`, including follow-up calls within that authorized
+task. C2000/CCS/CPU1/CPU2/IPC/RAMGS/CAN keywords alone do not trigger tools.
+General questions, source/log analysis, source edits, local builds/tests, and
+MCP/skill maintenance do not trigger environment, health, or board preflight.
+Explicit host-only MCP diagnostics do not authorize board access. This routing
+guidance is included in MCP initialization and tool descriptions; existing
+safety profiles, capabilities, and leases still apply.
+
 The skill teaches Codex to prefer high-level `c2000-multicore-mcp` workflow tools for F28P65x CPU1/CPU2 debugging, especially `c2000_launchAndRunIpcAcceptance` when no session exists and `c2000_runIpcAcceptance` for an existing connected session, instead of chaining many atomic MCP calls that may each trigger an approval dialog.
 
 For IPC-ready failures and acceptance-test diagnosis, the focused skill is:

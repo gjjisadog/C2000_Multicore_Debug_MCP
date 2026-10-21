@@ -1,13 +1,24 @@
 ---
 name: c2000-multicore-debug
-description: Safely debug TI C2000 F28P65x CPU1/CPU2 and multi-board workflows through the daemon, with explicit core identity, durable jobs, lease fencing, hardware evidence, and deterministic engineering verification.
+description: Use when the user explicitly requests TI C2000 board operations or a debug workflow through c2000-multicore-mcp. Do not trigger for general C2000/CCS/IPC questions, source analysis or edits, local builds/tests, or MCP/skill maintenance.
 ---
 
 # C2000 Multicore Debug
 
-Use this skill for F28P65x CPU1/CPU2 debug, IPC acceptance, CPU2 boot handoff,
-RAMGS ownership, stale program/map diagnosis, CAN evidence, and engineering
-verification through `c2000-multicore-mcp`.
+## Invocation scope
+
+Use this skill when the user explicitly requests actual TI C2000 board work
+(connect, read target state, load, run, reset, capture, or acceptance), explicitly
+requests a workflow through `c2000-multicore-mcp`, or invokes this skill for
+that work. Necessary follow-up calls remain covered by the ongoing task's
+authorization; keep its board and operation scope.
+
+Mentions of C2000, F28P65x, CPU1/CPU2, CCS, IPC, RAMGS, CAN, debugging, stale
+maps, or verification alone do not trigger this skill. General explanations,
+source analysis/edits, local builds/tests, and changes to this MCP or its skills
+use ordinary development tools. Do not run environment/health/board preflight
+for those tasks unless the user explicitly requests this MCP. An explicit
+host-only MCP request does not authorize board access.
 
 ## SysConfig changes
 

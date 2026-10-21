@@ -1,14 +1,20 @@
 ---
 name: c2000-ipc-debug
-description: Diagnose TI C2000 F28P65x CPU1/CPU2 IPC-ready failures and acceptance-test false negatives, separating target boot faults from debugger, session, artifact, and test-method issues while keeping RAM and Flash startup semantics separate.
+description: Use when the user explicitly requests C2000 board IPC acceptance or target startup diagnosis through c2000-multicore-mcp. Do not trigger for IPC concepts, source/log analysis, RAMGS discussion, local builds/tests, or MCP/skill maintenance.
 ---
 
 # C2000 IPC Debug
 
-Use this focused skill for F28P65x CPU1/CPU2 IPC-ready failures, CPU2 boot
-handoff, RAMGS ownership, parameter synchronization, and Flash cold-start
-validation. It adds IPC-specific test-method discipline to the general
-`c2000-multicore-debug` rules. Do not use it for unrelated single-core debug.
+Use this focused skill for explicitly requested C2000 board IPC acceptance or
+target startup diagnosis through `c2000-multicore-mcp`, including necessary
+follow-up calls within the ongoing authorized task. It adds IPC-specific
+test-method discipline to the general `c2000-multicore-debug` rules.
+
+IPC-ready failures, CPU2 boot handoff, RAMGS, parameter synchronization, or
+Flash startup mentioned in a question, source file, or log do not alone trigger
+this skill or MCP preflight. Analyze supplied files locally unless actual
+board work or use of this MCP was requested. Invoking this skill for advice
+does not authorize board access. Do not use it for unrelated single-core debug.
 
 ## The invariant that defines a valid attempt
 

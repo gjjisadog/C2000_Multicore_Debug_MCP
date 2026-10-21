@@ -7,6 +7,7 @@ import { isDevelopmentMode, runtimeBuildIdentity, runtimeBuildInfo, SERVER_NAME,
 import path from "node:path";
 import { withAdditionalReadRoots } from "../security/pathPolicy.js";
 import { CapabilitySessionManager } from "../mcp/capabilities.js";
+import { C2000_SERVER_INSTRUCTIONS } from "../mcp/invocationScope.js";
 import { Logger } from "../utils/logger.js";
 import { capabilityAuditToOutcomeEvent } from "../analytics/OutcomeAnalyticsService.js";
 import { compareRuntimeContract, runtimeContractIdentity } from "../contracts/RuntimeContract.js";
@@ -25,7 +26,7 @@ export async function createC2000McpProxyRuntime(config: C2000McpConfig): Promis
   );
   const server = new McpServer(
     { name: SERVER_NAME, version: SERVER_VERSION },
-    { capabilities: { logging: {} } }
+    { capabilities: { logging: {} }, instructions: C2000_SERVER_INSTRUCTIONS }
   );
   const logger = new Logger(config.logging.level, config.logging.logFile);
   const capabilitySessions = new CapabilitySessionManager({

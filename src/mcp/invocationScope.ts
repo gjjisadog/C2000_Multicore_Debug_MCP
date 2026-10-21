@@ -1,0 +1,4 @@
+export const C2000_INVOCATION_SCOPE =
+  "Use only when the user explicitly requests TI C2000 board operations or use of c2000-multicore-mcp, including necessary follow-up calls within that authorized task.";
+
+export const C2000_SERVER_INSTRUCTIONS = `${C2000_INVOCATION_SCOPE} Mere mentions of C2000, CCS, CPU1/CPU2, IPC, RAMGS, CAN, debugging, or verification do not authorize tool calls. General questions, source-code analysis or edits, local builds/tests, and maintenance of this MCP or its skills do not trigger environment, health, board, or target preflight. Use local files and ordinary development tools for those tasks unless the user explicitly requests this MCP. An explicit request for this server's host-only analysis or diagnostics does not authorize board access. Keep follow-up calls within the existing task, board, and operation scope; preserve all safety and lease requirements.`;

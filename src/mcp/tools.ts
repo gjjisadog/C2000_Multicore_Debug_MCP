@@ -18,6 +18,7 @@ import { createToolHandlers, type ToolHandlerDeps } from "./toolHandlers.js";
 import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy.js";
 import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import { inspectSysConfigSchema, updateSysConfigSchema } from "../sysconfig/SysConfigSchemas.js";
+import { C2000_INVOCATION_SCOPE } from "./invocationScope.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -1221,7 +1222,7 @@ function decorateDefinition(definition: BaseToolDefinition): ToolDefinition {
   const exposure = exposureForDefinition(definition);
   return {
     ...definition,
-    description: descriptionForExposure(definition, exposure),
+    description: `${C2000_INVOCATION_SCOPE} ${descriptionForExposure(definition, exposure)}`,
     exposure,
     effects,
     annotations: { readOnlyHint, destructiveHint, idempotentHint: readOnlyHint, openWorldHint: false },
