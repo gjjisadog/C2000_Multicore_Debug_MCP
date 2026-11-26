@@ -688,7 +688,7 @@ follow `nextCapabilities` to open `debug.program`, then use the tools listed
 by readiness. With the `safe` profile, `advanced` exposes these tools directly.
 Dual-CPU isolation, CPU2 boot/IPC workflows and F28P65x-specific Flash bank/ERAD
 features remain device-specific; do not use them for F28374S. Existing F28P65x
-dual-core configurations retain their CPU1/CPU2 artifact checks. F28374S/XDS100v2
+paired workflows retain their CPU1/CPU2 artifact checks. F28374S/XDS100v2
 support has host/mock regression coverage; physical connection and Flash/RAM
 programming still need validation with that board and probe.
 
@@ -1609,6 +1609,33 @@ Example:
 ```
 
 For CPU2 sections in `RAMGS4`, the analysis emits an ownership action with `ownerCoreId: 0`, `targetCoreId: 2`, `address: 0x0005F444`, `value: 0x10`, and `page: "DATA"`. If the map shows multiple used GS blocks (for example RAMGS4 and RAMGS5), analysis still lists per-region actions; **before load**, `DebugSessionManager` merges same-register actions with bitwise OR into **one** write (for example `0x10 | 0x20 = 0x30`). `c2000_loadProgram` and `c2000_loadPrograms` use the same parser when `mapUri` is supplied, or when a sibling `.map` can be derived from the `.out`.
+
+## Single-image Flash programming
+
+Use `c2000_loadProgram` with one `programUri` and one `coreId`, including on a
+dual-core F28P65x. Open the `debug.program` capability on the agent surface.
+Create a debug session for the board and connect the target core.
+
+- CPU1 (`coreId: 0`) accepts a single `.out`, `.hex`, or raw `.bin`.
+- CPU2 (`coreId: 2`) uses linker-map evidence for `.out`. For `.hex` or
+  `.bin`, supply `flashBanks` with the complete set of Flash banks assigned to
+  CPU2. Include both cores in the session and connect and halt CPU1 so it can
+  configure the shared Flash controller. The only image loaded is CPU2's.
+- A raw `.bin` requires `binaryLoadAddress` in C28x **16-bit word addresses**.
+  A `.hex` uses addresses stored in the file. Both formats report
+  `symbolsLoaded: false`.
+
+For example, program one CPU1 binary starting at word address `0x80000`
+by calling `c2000_loadProgram`:
+
+```json
+{
+  "sessionId": "dbg-...",
+  "coreId": 0,
+  "programUri": "/path/to/cpu1.bin",
+  "binaryLoadAddress": 524288
+}
+```
 
 ## F28P65x Dual-Core Flash Programming Contract
 

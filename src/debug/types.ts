@@ -78,6 +78,8 @@ export interface LoadProgramRequest {
   coreId: CoreId;
   programUri: string;
   mapUri?: string;
+  binaryLoadAddress?: number;
+  flashBanks?: number[];
   ramOwnershipPolicy?: RamOwnershipPolicy;
   fallbackGsRegions?: number[];
   loadPolicy?: LoadPolicy;
@@ -107,6 +109,8 @@ export interface LoadedProgramInfo {
   coreName: string;
   programUri: string;
   mapUri?: string;
+  binaryLoadAddress?: number;
+  flashBanks?: number[];
   loadedAt: string;
   fileMTime: string;
   fileSize: number;

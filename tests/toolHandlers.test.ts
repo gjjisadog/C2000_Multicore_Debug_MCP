@@ -3056,6 +3056,67 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("programs a single CPU1 binary on a dual-core target and includes its address in change detection", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "c2000-single-cpu1-"));
+    const programUri = path.join(directory, "CPU1.BIN");
+    await writeFile(programUri, Buffer.from([0x01, 0x02]));
+    const adapter = new WorkflowRecordingAdapter();
+    const load = vi.spyOn(adapter, "loadProgram");
+    const handlers = createHandlers(adapter);
+    const { sessionId } = await handlers.createDebugSession({ sessionName: "single-cpu1", coreMap });
+    await handlers.connectTarget({ sessionId, coreId: 0 });
+    const input = { sessionId, coreId: 0, programUri };
+
+    await expect(handlers.loadProgram(loadProgramSchema.parse(input))).resolves.toMatchObject({
+      success: false, error: { code: "ProgramLoadInputInvalid", message: expect.stringContaining("binaryLoadAddress") }
+    });
+    expect(load).not.toHaveBeenCalled();
+
+    for (const binaryLoadAddress of [0x80000, 0x80001]) {
+      await expect(handlers.loadProgram(loadProgramSchema.parse({
+        ...input, binaryLoadAddress, loadPolicy: "if-changed"
+      }))).resolves.toMatchObject({ success: true, loaded: true, coreId: 0, symbolsLoaded: false, binaryLoadAddress });
+    }
+    await expect(handlers.loadProgram(loadProgramSchema.parse({
+      ...input, binaryLoadAddress: 0x80001, loadPolicy: "if-changed"
+    }))).resolves.toMatchObject({ success: true, skipped: true });
+    expect(load.mock.calls).toEqual([
+      [expect.anything(), 0, programUri, { binaryLoadAddress: 0x80000, limitFlashErase: true }],
+      [expect.anything(), 0, programUri, { binaryLoadAddress: 0x80001, limitFlashErase: true }]
+    ]);
+    expect(adapter.events).toEqual(["connect:0", "load:0:CPU1.BIN", "load:0:CPU1.BIN"]);
+  });
+
+  test("programs a single CPU2 hex image after CPU1 prepares Flash and blocks an implicit reload", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "c2000-single-cpu2-"));
+    const programUri = path.join(directory, "cpu2.hex");
+    await writeFile(programUri, ":02000004000EEC\n:020000000102FB\n:00000001FF\n");
+    const prepareFlashLoad = vi.fn(async () => {});
+    const adapter = Object.assign(new WorkflowRecordingAdapter(), { prepareFlashLoad });
+    const handlers = createHandlers(adapter);
+    const { sessionId } = await handlers.createDebugSession({ sessionName: "single-cpu2", coreMap });
+    await handlers.connectCores({ sessionId, coreIds: [0, 2] });
+    const input = { sessionId, coreId: 2, programUri };
+
+    await expect(handlers.loadProgram(loadProgramSchema.parse(input))).resolves.toMatchObject({
+      success: false, error: { code: "ProgramLoadInputInvalid", message: expect.stringContaining("flashBanks") }
+    });
+    const request = loadProgramSchema.parse({ ...input, flashBanks: [3] });
+    await expect(handlers.loadProgram(request)).resolves.toMatchObject({
+      success: false, error: { code: "FlashOwnerCoreNotHalted" }
+    });
+    expect(prepareFlashLoad).not.toHaveBeenCalled();
+    await handlers.haltCore({ sessionId, coreId: 0 });
+    await expect(handlers.loadProgram(request)).resolves.toMatchObject({
+      success: true, coreId: 2, targetMemoryWritten: true, symbolsLoaded: false, flashBanks: [3]
+    });
+    await expect(handlers.loadProgram(request)).resolves.toMatchObject({
+      success: false, error: { code: "DestructiveFlashReloadBlocked" }
+    });
+    expect(prepareFlashLoad.mock.calls).toEqual([[expect.anything(), 0, 2, [3]]]);
+    expect(adapter.events).toEqual(["connect:0", "connect:2", "halt:0", "load:2:cpu2.hex"]);
+  });
+
   test("loadProgram and getLoadedProgramInfo expose hash metadata through handlers", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-handler-"));
     const programUri = path.join(tempDir, "cpu1.out");

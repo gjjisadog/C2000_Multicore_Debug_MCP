@@ -7,7 +7,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
-import { dssLaunchArguments, resolveCcsRoot, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
+import { dssLaunchArguments, dssProgramLoadHelperSource, resolveCcsRoot, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { dssResetHelperSource } from "./DssResetSource.js";
 import { PersistentCoreChannel } from "./PersistentCoreChannel.js";
@@ -486,7 +486,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
     case "reset":
       return { ...base, name: "reset", resetType: command.resetType };
     case "loadProgram":
-      return { ...base, name: "load", program: command.programUri };
+      return { ...base, name: "load", program: command.programUri,
+        binaryLoadAddress: command.binaryLoadAddress, limitFlashErase: command.limitFlashErase };
     case "loadSymbols":
       return { ...base, name: "loadSymbols", program: command.programUri };
     case "prepareFlashLoad":
@@ -1258,6 +1259,8 @@ function normalizeFlashBanks(flashBanks) {
   return normalized;
 }
 
+${dssProgramLoadHelperSource}
+
 function readCoreRunState(coreId) {
   var session = sessionsByCoreId[String(coreId)];
   if (!session) {
@@ -1308,12 +1311,11 @@ function handleCommand(command) {
     delete pendingFlashLoadEvidence[String(command.coreId)];
     if (loadEvidence) {
       return runFlashLoadWithEvidence(command, loadEvidence, "load", function() {
-        session.memory.loadProgram(command.program);
-        return { symbolsLoaded: true };
+        return loadProgramFile(session, command.program, command.binaryLoadAddress, command.limitFlashErase);
       });
     }
-    session.memory.loadProgram(command.program);
-    return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true }) };
+    var loaded = loadProgramFile(session, command.program, command.binaryLoadAddress, command.limitFlashErase);
+    return { status: "OK", value: withCoreIdentity(command, loaded) };
   } else if (command.name === "loadSymbols") {
     session.symbol.load(command.program);
     return { status: "OK", value: withCoreIdentity(command, { symbolsLoaded: true, targetMemoryWritten: false }) };

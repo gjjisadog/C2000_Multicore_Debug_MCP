@@ -618,6 +618,10 @@ export const resetCoreSchema = sessionCoreSchema.extend({
 export const loadProgramSchema = sessionCoreSchema.extend({
   programUri: z.string().min(1),
   mapUri: z.string().min(1).optional(),
+  binaryLoadAddress: z.number().int().min(0).max(0x3fffff).optional()
+    .describe("Required for raw .bin images. C28x program-memory word address as a JSON integer."),
+  flashBanks: z.array(z.number().int().min(0).max(4)).min(1).max(5).optional()
+    .describe("Required for F28P65x CPU2 .hex/.bin images. List the Flash banks assigned to CPU2."),
   ramOwnershipPolicy: z.enum(["require-map", "explicit-fallback", "skip"]).optional(),
   fallbackGsRegions: z.array(z.number().int().min(0).max(15)).min(1).optional(),
   loadPolicy: z.enum(["always", "if-changed", "verify-mcp-registry", "verify-only"]).default("always")

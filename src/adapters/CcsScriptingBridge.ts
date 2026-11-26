@@ -48,6 +48,8 @@ export interface CcsScriptingCommand {
   targetCoreId?: CoreId;
   resetType?: ResetType;
   programUri?: string;
+  binaryLoadAddress?: number;
+  limitFlashErase?: boolean;
   expression?: string;
   expressions?: string[];
   diagnostics?: "full" | "errors-only";
@@ -331,6 +333,25 @@ function parseDssResult(stdout: string, stderr: string): Record<string, unknown>
   return payload.result ?? {};
 }
 
+export const dssProgramLoadHelperSource = `
+function loadProgramFile(session, program, binaryLoadAddress, limitFlashErase) {
+  if (limitFlashErase === true) {
+    var options = session.flash.options;
+    var erase = "Necessary Sectors Only (for Program Load)";
+    options.setString("FlashEraseSelection", erase);
+    if (String(options.getString("FlashEraseSelection")) !== erase) {
+      throw "Could not verify the Flash erase scope before program load";
+    }
+  }
+  if (typeof binaryLoadAddress === "number") {
+    session.memory.loadBinaryProgram(program, binaryLoadAddress);
+    return { symbolsLoaded: false };
+  }
+  session.memory.loadProgram(program);
+  return { symbolsLoaded: !/\\.hex$/i.test(program) };
+}
+`;
+
 export function dssCommandScriptSource(json2Path: string): string {
   return String.raw`
 importPackage(Packages.com.ti.debug.engine.scripting);
@@ -399,8 +420,7 @@ try {
   } else if (command.operation === "reset") {
     result = applyTargetReset(debugSession, command.resetType);
   } else if (command.operation === "loadProgram") {
-    debugSession.memory.loadProgram(command.programUri);
-    result = { symbolsLoaded: true };
+    result = loadProgramFile(debugSession, command.programUri, command.binaryLoadAddress, command.limitFlashErase);
   } else if (command.operation === "loadSymbols") {
     debugSession.symbol.load(command.programUri);
     result = { symbolsLoaded: true, targetMemoryWritten: false };
@@ -452,6 +472,7 @@ try {
 }
 
 ${dssResetHelperSource}
+${dssProgramLoadHelperSource}
 
 function resolveMemoryPage(page) {
   if (page === "PROGRAM") {

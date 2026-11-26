@@ -1165,6 +1165,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           coreId: input.coreId,
           programUri: input.programUri,
           mapUri: input.mapUri,
+          binaryLoadAddress: input.binaryLoadAddress,
+          flashBanks: input.flashBanks,
           ramOwnershipPolicy: input.ramOwnershipPolicy,
           fallbackGsRegions: input.fallbackGsRegions,
           loadPolicy: input.loadPolicy,

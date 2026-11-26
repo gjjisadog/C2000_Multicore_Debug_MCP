@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, stat } from "node:fs/promises";
 import type { AdapterSession, DebugAdapter } from "../adapters/types.js";
 import type {
   BatchItemResult,
@@ -709,28 +709,18 @@ export class DebugSessionManager {
     fallbackGsRegions?: number[],
     allowDestructiveFlashReload = false
   ): Promise<LoadedProgramInfo> {
-    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(
-      sessionId,
-      coreId,
-      programUri,
-      mapUri,
-      ramOwnershipPolicy,
-      fallbackGsRegions,
-      allowDestructiveFlashReload
-    ));
+    return this.exclusive(sessionId, async () => this.loadProgramWithMapUnlocked(sessionId, {
+      coreId, programUri, mapUri, ramOwnershipPolicy, fallbackGsRegions, allowDestructiveFlashReload
+    }));
   }
 
   private async loadProgramWithMapUnlocked(
     sessionId: string,
-    coreId: CoreId,
-    programUri: string,
-    mapUri?: string,
-    ramOwnershipPolicy: RamOwnershipPolicy = "require-map",
-    fallbackGsRegions?: number[],
-    allowDestructiveFlashReload = false,
-    pairedPrepared = false,
-    skipCpu2Ownership = false
+    program: LoadProgramRequest,
+    { pairedPrepared = false, skipCpu2Ownership = false, singleImage = true } = {}
   ): Promise<LoadedProgramInfo> {
+    const { coreId, programUri, mapUri, binaryLoadAddress, flashBanks,
+      ramOwnershipPolicy = "require-map", fallbackGsRegions, allowDestructiveFlashReload = false } = program;
     const normalizedUri = this.normalizeArtifactUri(programUri);
     const normalizedMapUri = mapUri === undefined ? undefined : this.normalizeArtifactUri(mapUri);
     const { session, core } = this.requireCore(sessionId, coreId);
@@ -740,6 +730,38 @@ export class DebugSessionManager {
     } catch {
       throw new DebugMcpError("ProgramFileNotFound", `Program file was not found: ${normalizedUri}`, { programUri: normalizedUri });
     }
+    const binaryImage = /\.bin$/i.test(normalizedUri);
+    const flashImageWithoutSymbols = binaryImage || /\.hex$/i.test(normalizedUri);
+    if (binaryImage) {
+      if (binaryLoadAddress === undefined || !Number.isInteger(binaryLoadAddress) ||
+          binaryLoadAddress < 0 || binaryLoadAddress > 0x3fffff) {
+        throw new DebugMcpError("ProgramLoadInputInvalid", "A .bin image requires binaryLoadAddress as a C28x program-memory word address", {
+          coreId, programUri: normalizedUri, binaryLoadAddress, targetMemoryWritten: false
+        });
+      }
+      const file = await stat(normalizedUri);
+      if (!file.isFile() || file.size === 0 || file.size % 2 !== 0 || binaryLoadAddress + file.size / 2 > 0x400000) {
+        throw new DebugMcpError("ProgramLoadInputInvalid", "A C28x .bin image must contain complete 16-bit words within program-memory address space", {
+          coreId, programUri: normalizedUri, binaryLoadAddress, fileSize: file.size, targetMemoryWritten: false
+        });
+      }
+    } else if (binaryLoadAddress !== undefined) {
+      throw new DebugMcpError("ProgramLoadInputInvalid", "binaryLoadAddress is only used for a .bin image", {
+        coreId, programUri: normalizedUri, targetMemoryWritten: false
+      });
+    }
+    const cpu2FlashImage = coreId === F28P65X_CPU2_CORE_ID && flashImageWithoutSymbols;
+    if (cpu2FlashImage && (!flashBanks?.length || !session.cores.has(F28P65X_CPU1_CORE_ID))) {
+      throw new DebugMcpError("ProgramLoadInputInvalid", "A CPU2 .hex/.bin image requires flashBanks and a CPU1 Flash owner in the session", {
+        coreId, programUri: normalizedUri, targetMemoryWritten: false
+      });
+    }
+    if (!cpu2FlashImage && flashBanks !== undefined) {
+      throw new DebugMcpError("ProgramLoadInputInvalid", "flashBanks is only used for an F28P65x CPU2 .hex/.bin image", {
+        coreId, programUri: normalizedUri, targetMemoryWritten: false
+      });
+    }
+    const cpu2Banks = flashBanks === undefined ? undefined : normalizeF28P65xFlashBanks(flashBanks);
     await this.assertSafeFlashReload(
       sessionId,
       { coreId, programUri: normalizedUri, mapUri: normalizedMapUri, loadPolicy: "always", allowDestructiveFlashReload },
@@ -756,8 +778,11 @@ export class DebugSessionManager {
         await this.refreshSessionForProgramLoad(sessionId, session, coreId);
       }
       ownershipNote = skipCpu2Ownership ? undefined : await this.prepareCpu2RamOwnership(
-        sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions, pairedPrepared);
-      const loaded = await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri);
+        sessionId, session, coreId, normalizedUri, normalizedMapUri, ramOwnershipPolicy, fallbackGsRegions, pairedPrepared, cpu2Banks);
+      const limitFlashErase = !pairedPrepared && (flashImageWithoutSymbols ||
+        (singleImage && coreId === F28P65X_CPU1_CORE_ID && core.coreName === "C28xx_CPU1"));
+      const loadOptions = limitFlashErase || binaryLoadAddress !== undefined ? { binaryLoadAddress, limitFlashErase } : undefined;
+      const loaded = await this.adapter.loadProgram(session.adapterSession, coreId, normalizedUri, loadOptions);
       flashLoadEvidence = loaded?.flashLoadEvidence;
     } catch (error) {
       this.quarantineFailedFlashSession(session, coreId, normalizedUri, error);
@@ -788,11 +813,13 @@ export class DebugSessionManager {
       coreName: core.coreName,
       programUri: normalizedUri,
       ...(normalizedMapUri ? { mapUri: normalizedMapUri } : {}),
+      ...(binaryLoadAddress === undefined ? {} : { binaryLoadAddress }),
+      ...(cpu2Banks === undefined ? {} : { flashBanks: cpu2Banks }),
       loadedAt: new Date().toISOString(),
       fileMTime: metadata.fileMTime,
       fileSize: metadata.fileSize,
       sha256: metadata.sha256,
-      symbolsLoaded: true,
+      symbolsLoaded: !flashImageWithoutSymbols,
       targetMemoryWritten: true,
       ...(flashLoadEvidence ? { flashLoadEvidence } : {}),
       warning: warnings.join(" ")
@@ -870,15 +897,18 @@ export class DebugSessionManager {
     mapUri: string | undefined,
     policy: RamOwnershipPolicy,
     fallbackGsRegions?: number[],
-    pairedPrepared = false
+    pairedPrepared = false,
+    explicitFlashBanks?: number[]
   ): Promise<string | undefined> {
     if (coreId !== F28P65X_CPU2_CORE_ID || !session.cores.has(F28P65X_CPU1_CORE_ID)) {
       return undefined;
     }
-    if (policy === "skip") {
+    if (policy === "skip" && !explicitFlashBanks) {
       return "CPU2 RAM ownership preparation was explicitly skipped.";
     }
-    const ownership = await this.cpu2RamOwnershipActions(coreId, programUri, mapUri, policy, fallbackGsRegions);
+    const ownership = explicitFlashBanks
+      ? { actions: [], flashBanks: explicitFlashBanks, fallbackWarning: undefined }
+      : await this.cpu2RamOwnershipActions(coreId, programUri, mapUri, policy, fallbackGsRegions);
     const actions = mergeOwnershipActions(ownership.actions);
     const flashBanks = ownership.flashBanks;
     if (actions.length === 0 && flashBanks.length === 0) {
@@ -1057,7 +1087,7 @@ export class DebugSessionManager {
       if (program.loadPolicy === "if-changed" && existing.programUri === normalizedProgramUri) {
         try {
           const metadata = await fileMetadata(normalizedProgramUri);
-          if (existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256) {
+          if (matchesLoadedProgram(program, normalizedProgramUri, metadata, existing)) {
             continue;
           }
         } catch {
@@ -1084,7 +1114,8 @@ export class DebugSessionManager {
           // An unreadable map is intentionally treated as unknown evidence.
         }
       }
-      if (parsedMapCount > 0 && flashBanks.size === 0) {
+      const rawFlashImage = /\.(hex|bin)$/i.test(normalizedProgramUri) || /\.(hex|bin)$/i.test(existing.programUri);
+      if (!rawFlashImage && parsedMapCount > 0 && flashBanks.size === 0) {
         continue;
       }
       blocked.push({
@@ -1092,7 +1123,7 @@ export class DebugSessionManager {
         programUri: normalizedProgramUri,
         existingProgramUri: existing.programUri,
         mapUris,
-        mapEvidence: parsedMapCount > 0 ? "flash" : "unavailable",
+        mapEvidence: rawFlashImage || parsedMapCount > 0 ? "flash" : "unavailable",
         flashBanks: [...flashBanks].sort((left, right) => left - right),
         targetMemoryWritten: false
       });
@@ -1341,6 +1372,7 @@ export class DebugSessionManager {
       const { cpu1, cpu2 } = input;
       if (cpu1.coreId !== F28P65X_CPU1_CORE_ID || cpu2.coreId !== F28P65X_CPU2_CORE_ID ||
           !cpu1.mapUri || !cpu2.mapUri ||
+          [cpu1, cpu2].some(program => /\.(hex|bin)$/i.test(this.normalizeArtifactUri(program.programUri))) ||
           input.resetType !== "cpu" ||
           [cpu1.loadPolicy, cpu2.loadPolicy].some(policy => policy && policy !== "always")) {
         throw new DebugMcpError("PairedFlashContractInvalid", "Paired Flash requires CPU1/CPU2 programs, both linker maps, CPU reset, and real program loads", {
@@ -1418,8 +1450,7 @@ export class DebugSessionManager {
         await this.prepareCpu2RamOwnership(sessionId, session, 2, this.normalizeArtifactUri(cpu2.programUri), cpu2Map,
           cpu2.ramOwnershipPolicy ?? "require-map", cpu2.fallbackGsRegions, true);
         const cpu1LoadStartedAt = performance.now();
-        const cpu1Info = await this.loadProgramWithMapUnlocked(sessionId, 0, cpu1.programUri, cpu1Map,
-          cpu1.ramOwnershipPolicy, cpu1.fallbackGsRegions, cpu1.allowDestructiveFlashReload, true);
+        const cpu1Info = await this.loadProgramWithMapUnlocked(sessionId, { ...cpu1, mapUri: cpu1Map }, { pairedPrepared: true });
         const cpu1LoadMs = performance.now() - cpu1LoadStartedAt;
         const ownerStateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 0);
         const cpu2StateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 2);
@@ -1431,8 +1462,8 @@ export class DebugSessionManager {
         }
         const beforeCpu2 = await this.adapter.verifyPairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
         const cpu2LoadStartedAt = performance.now();
-        const cpu2Info = await this.loadProgramWithMapUnlocked(sessionId, 2, cpu2.programUri, cpu2Map,
-          cpu2.ramOwnershipPolicy, cpu2.fallbackGsRegions, cpu2.allowDestructiveFlashReload, true, true);
+        const cpu2Info = await this.loadProgramWithMapUnlocked(sessionId, { ...cpu2, mapUri: cpu2Map },
+          { pairedPrepared: true, skipCpu2Ownership: true });
         return {
           initialHalt: { sessionId, sequential: true, results: haltResults },
           reset: { sessionId, sequential: true, results: resetResults },
@@ -1499,7 +1530,7 @@ export class DebugSessionManager {
           const normalizedUri = this.normalizeArtifactUri(program.programUri);
           const existing = this.loadedPrograms.get(sessionId, program.coreId);
           const metadata = await fileMetadata(normalizedUri);
-          const unchanged = Boolean(existing && existing.programUri === normalizedUri && existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize && existing.sha256 === metadata.sha256);
+          const unchanged = matchesLoadedProgram(program, normalizedUri, metadata, existing);
           const registryVerification = program.loadPolicy === "verify-mcp-registry" || program.loadPolicy === "verify-only";
           if (registryVerification || (program.loadPolicy === "if-changed" && unchanged)) {
             results.push({
@@ -1518,15 +1549,7 @@ export class DebugSessionManager {
             });
             continue;
           }
-          const info = await this.loadProgramWithMapUnlocked(
-            sessionId,
-            program.coreId,
-            program.programUri,
-            program.mapUri,
-            program.ramOwnershipPolicy,
-            program.fallbackGsRegions,
-            program.allowDestructiveFlashReload
-          );
+          const info = await this.loadProgramWithMapUnlocked(sessionId, program, { singleImage: programs.length === 1 });
           results.push({ ...info, success: true, loaded: true, skipped: false });
         } catch (error) {
           results.push({ coreId: program.coreId, success: false, programUri: program.programUri, error: toStructuredError(error) });
@@ -1607,7 +1630,7 @@ export class DebugSessionManager {
           continue;
         }
         const metadata = await fileMetadata(normalizedUri);
-        if (existing.fileMTime !== metadata.fileMTime || existing.fileSize !== metadata.fileSize || existing.sha256 !== metadata.sha256) {
+        if (!matchesLoadedProgram(program, normalizedUri, metadata, existing)) {
           targetCoreIds.push(program.coreId);
         }
       } catch {
@@ -2515,6 +2538,18 @@ function containsF28P65xFlashEvidence(value: unknown): boolean {
  */
 function isF28P65xFlashProgrammingFailure(value: unknown): boolean {
   return containsF28P65xFlashEvidence(value) || toStructuredError(value).code === "FlashPreparationTimeout";
+}
+
+function matchesLoadedProgram(
+  program: LoadProgramRequest,
+  normalizedUri: string,
+  metadata: Awaited<ReturnType<typeof fileMetadata>>,
+  existing: LoadedProgramInfo | undefined
+): boolean {
+  return existing !== undefined && existing.programUri === normalizedUri &&
+    existing.fileMTime === metadata.fileMTime && existing.fileSize === metadata.fileSize &&
+    existing.sha256 === metadata.sha256 && existing.binaryLoadAddress === program.binaryLoadAddress &&
+    existing.flashBanks?.join() === (program.flashBanks && normalizeF28P65xFlashBanks(program.flashBanks).join());
 }
 
 function validateCoreMap(coreMap: CoreConfig[]): CoreConfig[] {

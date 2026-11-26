@@ -167,10 +167,13 @@ export class CcsScriptingAdapter implements DebugAdapter {
     }
   }
 
-  async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<{
+  async loadProgram(session: AdapterSession, coreId: CoreId, programUri: string, options?: {
+    binaryLoadAddress?: number;
+    limitFlashErase?: boolean;
+  }): Promise<{
     flashLoadEvidence?: Record<string, unknown>;
   } | void> {
-    const result = await this.execute(session, coreId, { operation: "loadProgram", programUri });
+    const result = await this.execute(session, coreId, { operation: "loadProgram", programUri, ...options });
     if (typeof result.flashLoadEvidence === "object" && result.flashLoadEvidence !== null &&
         !Array.isArray(result.flashLoadEvidence)) {
       return { flashLoadEvidence: result.flashLoadEvidence as Record<string, unknown> };
@@ -398,7 +401,7 @@ export class CcsScriptingAdapter implements DebugAdapter {
   private async execute(
     session: AdapterSession,
     coreId: CoreId,
-    command: Pick<CcsScriptingCommand, "operation" | "targetCoreId" | "resetType" | "programUri" | "expression" | "expressions" | "diagnostics" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks" | "cpu1FlashBanks">,
+    command: Pick<CcsScriptingCommand, "operation" | "targetCoreId" | "resetType" | "programUri" | "binaryLoadAddress" | "limitFlashErase" | "expression" | "expressions" | "diagnostics" | "valueExpression" | "page" | "address" | "value" | "typeSize" | "flashBanks" | "cpu1FlashBanks">,
     timeoutOverrideMs?: number
   ): Promise<Record<string, unknown>> {
     const core = this.requireCore(session, coreId);

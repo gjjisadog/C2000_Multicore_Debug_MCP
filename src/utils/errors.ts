@@ -19,6 +19,7 @@ export type DebugErrorCode =
   | "OwnerCoreNotConnected"
   | "StartupStageFailed"
   | "ProgramFileNotFound"
+  | "ProgramLoadInputInvalid"
   | "ProgramLoadFailed"
   | "ProgramLoadSessionRefreshFailed"
   | "BatchOperationFailed"

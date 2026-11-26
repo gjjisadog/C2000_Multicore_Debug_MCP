@@ -37,6 +37,9 @@ function harness() {
         calls.push(["load", id, program]);
         if (state.lockOnLoad) state.lock = 4;
         if (state.failLoad) throw Error(state.loadError);
+      },
+      loadBinaryProgram(program: string, address: number) {
+        calls.push(["load-bin", id, program, address]);
       }
     },
     flash: {
@@ -104,6 +107,21 @@ function harness() {
 }
 
 describe("F28P65x Flash load state evidence", () => {
+  test("routes a single binary or hex image through the appropriate DSS programmer", () => {
+    const h = harness();
+    const eraseMode = "Necessary Sectors Only (for Program Load)";
+    expect(h.command("load", 0, [], { program: "cpu1.bin", binaryLoadAddress: 0x80000, limitFlashErase: true }))
+      .toMatchObject({ status: "OK", value: { coreId: 0, symbolsLoaded: false } });
+    expect(h.command("load", 0, [], { program: "cpu1.hex", limitFlashErase: true }))
+      .toMatchObject({ status: "OK", value: { coreId: 0, symbolsLoaded: false } });
+    expect(h.calls).toEqual([
+      ["option", 0, "FlashEraseSelection", eraseMode], ["get-option", 0, "FlashEraseSelection"],
+      ["load-bin", 0, "cpu1.bin", 0x80000],
+      ["option", 0, "FlashEraseSelection", eraseMode], ["get-option", 0, "FlashEraseSelection"],
+      ["load", 0, "cpu1.hex"]
+    ]);
+  });
+
   test("prepares both erase selections before CPU1 load and only verifies between loads", () => {
     const h = harness();
     h.state.configuredBank = 0xc0;

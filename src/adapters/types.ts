@@ -50,7 +50,10 @@ export interface DebugAdapter {
   reset(session: AdapterSession, coreId: CoreId, resetType: ResetType): Promise<ResetEvidence | void>;
   /** Remove core-local GEL callbacks before firmware-owned boot/reset. */
   prepareFirmwareHandoff?(session: AdapterSession, coreId: CoreId): Promise<void>;
-  loadProgram(session: AdapterSession, coreId: CoreId, programUri: string): Promise<{
+  loadProgram(session: AdapterSession, coreId: CoreId, programUri: string, options?: {
+    binaryLoadAddress?: number;
+    limitFlashErase?: boolean;
+  }): Promise<{
     flashLoadEvidence?: Record<string, unknown>;
   } | void>;
   loadSymbols?(session: AdapterSession, coreId: CoreId, programUri: string): Promise<void>;

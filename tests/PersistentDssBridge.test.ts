@@ -323,14 +323,18 @@ describe("PersistentDssBridge", () => {
       coreId: 2,
       coreName: "C28xx_CPU2",
       corePattern: "C28xx_CPU2",
-      programUri: "/tmp/cpu2.out",
+      programUri: "/tmp/cpu2.bin",
+      binaryLoadAddress: 0xe0000,
+      limitFlashErase: true,
       timeoutMs: 300000
     });
 
     expect(receivedByPort.get(cpu2.port)).toEqual([
       expect.objectContaining({
         name: "load",
-        program: "/tmp/cpu2.out",
+        program: "/tmp/cpu2.bin",
+        binaryLoadAddress: 0xe0000,
+        limitFlashErase: true,
         timeoutMs: 300000,
         coreId: 2,
         coreName: "C28xx_CPU2"

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.24 - 2026-11-26
+
+- Program a single CPU1 or CPU2 image on a dual-core F28P65x through
+  `c2000_loadProgram`. Accept `.hex` and addressed raw `.bin` files alongside
+  `.out` programs, and retain shared Flash preparation for CPU2.
+
 ## 0.7.23 - 2026-11-26
 
 - Discover CCS and DSS without fixed installation versions. Report missing
