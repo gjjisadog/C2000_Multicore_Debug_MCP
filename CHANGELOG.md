@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.7.17 - 2026-11-26
+
+### DeepSeek Harness integration
+
+- Install the built npm package into DSH Web as a bundle that starts the
+  existing stdio MCP server, with support for the existing C2000 config file.
+
+### Target support and workflow reliability
+
+- Add F28374S targets and XDS100 debug probe support.
+- Harden board selection and RPC retries and close validation gaps.
+- Narrow automatic MCP and debug skill invocation to explicit board and
+  hardware debugging workflows.
 
 ### SysConfig editing without CCS
 
