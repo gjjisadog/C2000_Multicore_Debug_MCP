@@ -16,6 +16,11 @@
       "./skills"
     ]
   },
+  "dsh": {
+    "bundle": {
+      "patch": "./dsh/cordis.patch.yml"
+    }
+  },
   "type": "module",
   "bin": {
     "c2000-multicore-mcp": "./dist/src/index.js",
@@ -126,6 +131,7 @@
     "skills/c2000-skill-improver/**",
     "README.md",
     "pi/mcp.json",
+    "dsh/cordis.patch.yml",
     "CHANGELOG.md"
   ],
   "packageManager": "npm@10"

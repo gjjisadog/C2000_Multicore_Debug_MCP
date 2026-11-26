@@ -38,6 +38,31 @@ package, plus the CCS/DSS environment and C2000 hardware required by the
 requested debug workflow. This npm package is not published yet; the commands
 will work after its first npm release.
 
+## DeepSeek Harness (DSH)
+
+Build and install the local package on the machine that runs DSH Web. Run these
+commands from the checkout with Node.js 24.9 or later in the 24.x series, the
+DSH CLI, and pnpm on `PATH`.
+
+```sh
+npm ci
+npm run build
+npm pack
+dsh web --dump-default-config
+dsh plugin --profile web add ./c2000-multicore-mcp-0.7.16.tgz --ignore-scripts
+dsh web
+```
+
+Use the filename printed by `npm pack` if the version differs. The built package
+already includes the native bindings needed at runtime. DSH starts the installed
+server over stdio. In a new DSH session, look for
+`mcp__c2000__c2000_getServerHealth` to verify the connection.
+
+The server uses the current working directory of `dsh web` and the existing
+C2000 configuration. Set `C2000_MCP_CONFIG` to an absolute config path before
+starting DSH to select a board setup. For a connection check without a board,
+start DSH with `C2000_MCP_ADAPTER=mock` from a separate working directory.
+
 ## Tool Profiles
 
 The MCP uses two independent profile dimensions. `ToolProfile` is the safety

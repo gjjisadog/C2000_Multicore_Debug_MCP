@@ -1,0 +1,10 @@
+- insert:
+    - id: mcp-c2000
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: c2000
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js process.getBuiltinModule('node:module').createRequire(baseUrl).resolve('c2000-multicore-mcp/dist/src/index.js')
+        toolCallTimeoutMs: 600000
