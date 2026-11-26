@@ -458,7 +458,7 @@ describe("daemon tool router interactive session lifecycle", () => {
     fixture.store.close();
   });
 
-  test("lets a resident workflow establish UNKNOWN identity from inline manifest evidence", async () => {
+  test.each(["resident", "conditional-flash"] as const)("lets the %s workflow establish UNKNOWN identity from inline manifest evidence", async mode => {
     const fixture = await makeFixture();
     const cpu1Path = path.join(fixture.directory, "cpu1.out");
     const cpu2Path = path.join(fixture.directory, "cpu2.out");
@@ -482,39 +482,43 @@ describe("daemon tool router interactive session lifecycle", () => {
     }));
     const cpu1ManifestSha256 = await sha256File(cpu1ManifestPath);
     const cpu2ManifestSha256 = await sha256File(cpu2ManifestPath);
-    fixture.workers.invokeBoard = async () => ({
-      success: true,
-      workflow: "c2000_launchResidentIpcDebug",
-      residentVerification: {
+    const toolName = mode === "resident" ? "c2000_launchResidentIpcDebug" : "c2000_launchAndRunIpcAcceptance";
+    fixture.workers.invokeBoard = async (boardId, invokedTool, input) => {
+      expect(boardId).toBe("board-a");
+      expect(invokedTool).toBe(toolName);
+      if (mode === "conditional-flash") expect(input).toHaveProperty("__leaseContext.boardId", "board-a");
+      return {
         success: true,
-        verified: true,
-        verificationMethod: "resident-image-manifest-raw-memory",
-        targetAccess: {
-          programming: false,
-          symbolLoad: false,
-          reset: false,
-          run: false,
-          targetMemoryWrite: false
-        },
-        checks: [
-          { coreId: 0, programUri: cpu1Path, manifestUri: cpu1ManifestPath, programSha256: cpu1Sha256, manifestSha256: cpu1ManifestSha256, marker: { matched: true } },
-          { coreId: 2, programUri: cpu2Path, manifestUri: cpu2ManifestPath, programSha256: cpu2Sha256, manifestSha256: cpu2ManifestSha256, marker: { matched: true } }
-        ]
-      }
-    });
+        workflow: toolName,
+        ...(mode === "conditional-flash" ? { sessionId: "dbg-skipped", status: "flash_skipped", targetFlashVerified: true, targetMemoryWritten: false } : {}),
+        residentVerification: {
+          success: true,
+          verified: true,
+          verificationMethod: "resident-image-manifest-raw-memory",
+          targetAccess: { programming: false, symbolLoad: false, reset: false, run: false, targetMemoryWrite: false },
+          checks: [
+            { coreId: 0, programUri: cpu1Path, manifestUri: cpu1ManifestPath, programSha256: cpu1Sha256, manifestSha256: cpu1ManifestSha256, marker: { matched: true } },
+            { coreId: 2, programUri: cpu2Path, manifestUri: cpu2ManifestPath, programSha256: cpu2Sha256, manifestSha256: cpu2ManifestSha256, marker: { matched: true } }
+          ]
+        }
+      };
+    };
     const router = new DaemonToolRouter(fixture.local, fixture.registry, fixture.workers, fixture.sessions);
 
-    await expect(router.invokeTool("c2000_launchResidentIpcDebug", {
+    await expect(router.invokeTool(toolName, {
       boardId: "board-a",
       cpu1CoreId: 0,
       cpu2CoreId: 2,
       cpu1OutPath: cpu1Path,
       cpu2OutPath: cpu2Path,
-      residentImageManifests: [
+      ...(mode === "conditional-flash" ? {
+        startupPreset: "f28p65x-paired-flash", timeoutMs: 5000,
+        flashIfChanged: { cpu1ManifestUri: cpu1ManifestPath, cpu2ManifestUri: cpu2ManifestPath }
+      } : { residentImageManifests: [
         { coreId: 0, manifestUri: cpu1ManifestPath },
         { coreId: 2, manifestUri: cpu2ManifestPath }
-      ]
-    })).resolves.toEqual(expect.objectContaining({ success: true, workflow: "c2000_launchResidentIpcDebug" }));
+      ] })
+    })).resolves.toEqual(expect.objectContaining({ success: true, workflow: toolName }));
     expect(fixture.registry.targetIdentity("board-a")).toEqual(expect.objectContaining({
       status: "KNOWN",
       reason: "resident-image-verification",
@@ -523,6 +527,7 @@ describe("daemon tool router interactive session lifecycle", () => {
         "2": expect.objectContaining({ coreId: 2, sha256: cpu2Sha256 })
       }
     }));
+    if (mode === "conditional-flash") expect(fixture.sessions.get("dbg-skipped")?.status).toBe("OPEN");
     fixture.store.close();
   });
 

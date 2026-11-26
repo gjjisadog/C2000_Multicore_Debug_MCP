@@ -29,7 +29,7 @@ import { sleep } from "../utils/async.js";
 import type { RamOwnershipAction } from "../hardware/mapOwnership.js";
 import type { DebugEvidence } from "../debug/DebugEvidence.js";
 import { assertAllowedWritePath, type FilesystemPolicy } from "../security/pathPolicy.js";
-import { verifyResidentImageForSession, type ResidentImageVerificationCheck } from "../debug/residentImageVerification.js";
+import { prepareResidentImageChecks, readResidentImageMarkers, verifyResidentImageForSession, type ResidentImageVerificationCheck } from "../debug/residentImageVerification.js";
 
 type ToolResult = Record<string, any>;
 type ExpressionCondition = z.infer<typeof expressionConditionSchema>;
@@ -45,15 +45,32 @@ export class DebugWorkflowService {
   ) {}
 
   async launchAndRunIpcAcceptance(input: z.infer<typeof launchAndRunIpcAcceptanceSchema>): Promise<ToolResult> {
+    const workflowStartedAt = performance.now();
     if (input.systemResetBeforeHandoff) {
       throw new DebugMcpError("StartupContractInvalid", "System Reset requires a guarded current-session IPC step after an exact-pair load; it cannot create a new session");
     }
     assertWorkflowStartupContract(input);
     const artifactPreflight = await assertIpcArtifactSet(input, artifactPath => this.manager.normalizeArtifactUri(artifactPath));
+    const flashPerformance: Record<string, number> = {};
+    let flashChecks: Awaited<ReturnType<typeof prepareResidentImageChecks>> | undefined;
+    let flashOwnership: RamOwnershipAnalysis | undefined;
+    if (input.flashIfChanged) {
+      flashOwnership = await this.analyzeRamOwnership({ maps: this.normalizeMaps(mapsFromPaths(input)) });
+      const flashBanksByCore = new Map(flashOwnership.maps.map(map => [map.coreId, map.usedFlashBanks.map(region => region.bankIndex)]));
+      const cpu1Banks = flashBanksByCore.get(0);
+      const cpu2Banks = flashBanksByCore.get(2);
+      if (!cpu1Banks?.length || !cpu2Banks?.length || cpu1Banks.some(bank => cpu2Banks.includes(bank))) {
+        throw new DebugMcpError("PairedFlashMapInvalid", "Paired Flash maps need disjoint, nonempty bank sets", { cpu1Banks, cpu2Banks, targetAccessAttempted: false });
+      }
+      flashChecks = await prepareResidentImageChecks(this.manager, [
+        { coreId: 0, programUri: input.cpu1OutPath, mapUri: input.cpu1MapPath, manifestUri: input.flashIfChanged.cpu1ManifestUri },
+        { coreId: 2, programUri: input.cpu2OutPath, mapUri: input.cpu2MapPath, manifestUri: input.flashIfChanged.cpu2ManifestUri }
+      ], { flashBanksByCore });
+      flashPerformance.artifactPreflightMs = performance.now() - workflowStartedAt;
+    }
     const sessionName = input.sessionName ?? "launch-and-run-ipc-acceptance";
     const coreIds = [input.cpu1CoreId, input.cpu2CoreId];
     let sessionId: string | undefined;
-    const workflowStartedAt = performance.now();
     const cleanup: ToolResult = { sessionClosed: false, probeLeaseReleased: false, cleanupErrors: [], cleanupDurationMs: 0 };
     let cleanupAttempted = false;
     const cleanupSession = async () => {
@@ -72,6 +89,7 @@ export class DebugWorkflowService {
     };
 
     try {
+      const connectionStartedAt = performance.now();
       const created = await this.manager.createDebugSession({
         sessionName,
         ccxmlPath: input.ccxmlPath,
@@ -89,10 +107,54 @@ export class DebugWorkflowService {
       const residentVerification = input.residentImageManifests?.length
         ? await this.verifyResidentImage(sessionId, input.residentImageManifests)
         : undefined;
-      const acceptance = await this.runIpcAcceptanceInternal({
-        ...input,
-        sessionId
-      }, artifactPreflight, () => undefined, residentVerification);
+      const sessionInput = { ...input, sessionId };
+      let acceptance: ToolResult;
+      if (flashChecks) {
+        assertBatchSucceeded("connectCores", connected);
+        flashPerformance.connectMs = performance.now() - connectionStartedAt;
+        const verifyStartedAt = performance.now();
+        const before = await readResidentImageMarkers(this.manager, { sessionId, checks: flashChecks, connectIfNeeded: false });
+        flashPerformance.verifyBeforeMs = performance.now() - verifyStartedAt;
+        const flashArtifacts = [
+          ...artifactPreflight.hostFiles,
+          ...flashChecks.flatMap(check => [
+            { path: check.programUri, sha256: check.programMetadata.sha256 },
+            { path: check.manifestUri, sha256: check.manifestMetadata.sha256 }
+          ])
+        ];
+        await assertFlashArtifactsUnchanged(flashArtifacts);
+        if (before.verified === true) {
+          const attachStartedAt = performance.now();
+          acceptance = await this.attachResidentIpcDebugInternal({ ...sessionInput, programPreparation: "symbols-only" }, artifactPreflight, before);
+          flashPerformance.attachMs = performance.now() - attachStartedAt;
+          acceptance.status = "flash_skipped";
+          acceptance.ipcAcceptance = "NOT_RUN";
+          acceptance.coldStartVerified = false;
+        } else {
+          const programStartedAt = performance.now();
+          acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, () => undefined, undefined, flashOwnership);
+          flashPerformance.programMs = performance.now() - programStartedAt;
+          const verifyAfterStartedAt = performance.now();
+          try {
+            const after = await readResidentImageMarkers(this.manager, { sessionId, checks: flashChecks, connectIfNeeded: false });
+            await assertFlashArtifactsUnchanged(flashArtifacts);
+            if (after.verified !== true) {
+              throw new DebugMcpError("ResidentImageMismatch", "One or more freshly programmed version markers did not match", { residentVerification: after });
+            }
+            acceptance = { ...acceptance, targetFlashVerified: true, residentVerification: after };
+          } catch (error) {
+            const failure = toStructuredError(error);
+            throw new DebugMcpError(error instanceof DebugMcpError ? error.code : "MemoryReadFailed", failure.message, {
+              ...failure.details, sessionId, targetMemoryWritten: true, targetFlashVerified: false
+            });
+          } finally {
+            flashPerformance.verifyAfterMs = performance.now() - verifyAfterStartedAt;
+          }
+        }
+        acceptance.flashCheckBefore = before;
+      } else {
+        acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, () => undefined, residentVerification);
+      }
 
       const result = {
         ...acceptance,
@@ -103,7 +165,7 @@ export class DebugWorkflowService {
         approvalClass: "workflow-confirmation",
         sessionMode: input.sessionMode,
         cleanup,
-        performance: { ...acceptance.performance, totalMs: performance.now() - workflowStartedAt },
+        performance: { ...acceptance.performance, ...flashPerformance, totalMs: performance.now() - workflowStartedAt },
         launch: {
           sessionName,
           ...(input.ccxmlPath ? { ccxmlPath: input.ccxmlPath } : {}),
@@ -144,7 +206,7 @@ export class DebugWorkflowService {
       throw new DebugMcpError(
         "PostLaunchCheckFailed",
         "Launch and IPC acceptance workflow failed",
-        { launch, cause, cleanup, optimization: classifyDebugFailure(cause) }
+        { launch, cause, cleanup, ...(flashChecks ? { performance: flashPerformance } : {}), optimization: classifyDebugFailure(cause) }
       );
     } finally {
       if (sessionId && input.sessionMode === "ephemeral") await cleanupSession();
@@ -406,7 +468,8 @@ export class DebugWorkflowService {
     input: z.infer<typeof runIpcAcceptanceSchema>,
     artifactPreflight: ToolResult,
     setStage: (stage: string) => void,
-    residentVerification?: ToolResult
+    residentVerification?: ToolResult,
+    preflightRamOwnership?: RamOwnershipAnalysis
   ): Promise<ToolResult> {
     const workflowStartedAt = performance.now();
     const bundleOutputDir = input.collectDebugBundle
@@ -461,7 +524,7 @@ export class DebugWorkflowService {
     // Parse linker maps before touching the target. This produces the GS/flash
     // ownership plan up front and prevents a malformed map from leaving a
     // partially reset or partially loaded multicore session behind.
-    const ramOwnership = await this.analyzeRamOwnership({ maps });
+    const ramOwnership = preflightRamOwnership ?? await this.analyzeRamOwnership({ maps });
     // Resolve the F28P65x Flash programming contract from real linker-map
     // evidence before the first halt/reset/load reaches the target.
     const pairedFlash = resolvePairedFlashContract({
@@ -629,6 +692,7 @@ export class DebugWorkflowService {
           ownerStateAfterCpu1Load: paired.ownerStateAfterCpu1Load,
           preparation: paired.preparation,
           beforeCpu2: paired.beforeCpu2,
+          performance: paired.performance,
           cpu1LoadedBeforeCpu2: true,
           applicationCoresStartedDuringFlash: false,
           boundary: "Both Flash images are programmed while every application core stays halted; application startup begins only after this boundary."
@@ -1963,6 +2027,14 @@ export class DebugWorkflowService {
     files.unshift(summaryPath);
     return { outputDir, files };
   }
+}
+
+async function assertFlashArtifactsUnchanged(files: Array<{ path: string; sha256: string }>): Promise<void> {
+  await Promise.all(files.map(async file => {
+    if ((await fileMetadata(file.path)).sha256 !== file.sha256) {
+      throw new DebugMcpError("ArtifactPairInvalid", "A Flash artifact changed after preflight", { path: file.path, targetMemoryWritten: false });
+    }
+  }));
 }
 
 async function assertIpcArtifactSet(input: {

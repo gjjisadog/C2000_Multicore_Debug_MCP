@@ -8,10 +8,17 @@ import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import type { CoreId, ResetEvidence, ResetType } from "../src/debug/types.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
+import { createC2000ToolInvoker } from "../src/mcp/tools.js";
 import { DebugWorkflowService, resolvePairedFlashContract } from "../src/workflows/DebugWorkflowService.js";
 import { F28P65X_PAIRED_FLASH_STARTUP, isPairedFlashPreset, ipcStartupPreset, resolveIpcStartupPreset } from "../src/workflows/startupProfiles.js";
+import { F28P65X_DEVCFG_BANKMUXSEL_ADDRESS, expectedF28P65xBankMuxSel } from "../src/hardware/mapOwnership.js";
+import { sha256File } from "../src/utils/fileHash.js";
 
 const coreMap = [{ coreId: 0, coreName: "C28xx_CPU1" }, { coreId: 2, coreName: "C28xx_CPU2" }];
+const cpu1MarkerAddress = 0x80010;
+const cpu2MarkerAddress = 0xe0010;
+const cpu1Marker = 0x13572468;
+const cpu2Marker = 0x24681357;
 
 /**
  * Records the target-operation order. Flash preparation is recorded with the
@@ -24,6 +31,9 @@ class PairedFlashAdapter extends MockDebugAdapter {
   failCpu2Load = false;
   failSecondVerify = false;
   verifyCount = 0;
+  flashMarkers?: Map<number, number>;
+  failMarkerRead = false;
+  updateMarkersOnLoad = true;
 
   async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {
     this.events.push(`refresh:${coreId}`);
@@ -60,6 +70,17 @@ class PairedFlashAdapter extends MockDebugAdapter {
     this.events.push(`load:${coreId}`);
     if (coreId === 2 && this.failCpu2Load) throw Error("first CPU2 erase failure");
     await super.loadProgram(session, coreId, uri);
+    if (this.updateMarkersOnLoad) this.flashMarkers?.set(coreId === 0 ? cpu1MarkerAddress : cpu2MarkerAddress,
+      coreId === 0 ? cpu1Marker : cpu2Marker);
+  }
+  override async readMemory(session: AdapterSession, coreId: CoreId, page: string, address: number, typeSize: number) {
+    if (this.flashMarkers && address === F28P65X_DEVCFG_BANKMUXSEL_ADDRESS) return expectedF28P65xBankMuxSel([3]);
+    if (this.flashMarkers?.has(address)) {
+      this.events.push(`readMarker:${coreId}`);
+      if (this.failMarkerRead) throw Error("probe read failed");
+      return this.flashMarkers.get(address)!;
+    }
+    return super.readMemory(session, coreId, page, address, typeSize);
   }
   async prepareFlashLoad(
     _session: AdapterSession,
@@ -138,6 +159,54 @@ async function fixture(options: { cpu2Map?: string; cpu1Map?: string } = {}) {
 }
 
 describe("F28P65x paired Flash programming contract", () => {
+  test.each(["match", "changed", "read-failed", "readback-mismatch", "invalid-bank"] as const)("one-shot conditional Flash: %s", async scenario => {
+    const { adapter, manager, input } = await fixture();
+    const { sessionId: _sessionId, ...launchInput } = input;
+    adapter.flashMarkers = new Map([[cpu1MarkerAddress, cpu1Marker], [cpu2MarkerAddress, scenario === "match" ? cpu2Marker : 0x100]]);
+    adapter.failMarkerRead = scenario === "read-failed";
+    adapter.updateMarkersOnLoad = scenario !== "readback-mismatch";
+    const manifests = await Promise.all([
+      [input.cpu1OutPath, scenario === "invalid-bank" ? cpu2MarkerAddress : cpu1MarkerAddress, cpu1Marker],
+      [input.cpu2OutPath, cpu2MarkerAddress, cpu2Marker]
+    ].map(async ([out, address, expectedValue]) => {
+      const programPath = String(out);
+      const manifestPath = `${programPath}.json`;
+      await writeFile(manifestPath, JSON.stringify({
+        format: "c2000-resident-image-manifest", version: 1, programSha256: await sha256File(programPath),
+        identity: { address: `0x${Number(address).toString(16)}`, expectedValue }
+      }));
+      return manifestPath;
+    }));
+
+    const result = await createC2000ToolInvoker(manager).invokeTool("c2000_launchAndRunIpcAcceptance", { ...launchInput,
+      flashIfChanged: { cpu1ManifestUri: manifests[0]!, cpu2ManifestUri: manifests[1]! }
+    });
+    const loads = adapter.events.filter(event => event.startsWith("load:"));
+    if (scenario === "match") {
+      expect(result).toMatchObject({ success: true, status: "flash_skipped", mode: "attach-only", targetMemoryWritten: false,
+        targetFlashVerified: true, performance: { verifyBeforeMs: expect.any(Number), attachMs: expect.any(Number) } });
+      expect(adapter.events).toEqual(["connect:0", "connect:2", "readMarker:0", "readMarker:2"]);
+    } else if (scenario === "changed") {
+      expect(result).toMatchObject({ success: true, status: "flash_prepared", targetMemoryWritten: true,
+        targetFlashVerified: true, flashCheckBefore: { verified: false },
+        flashProgramming: { performance: { flashPreparationMs: expect.any(Number), cpu1LoadMs: expect.any(Number), cpu2LoadMs: expect.any(Number) } },
+        performance: { programMs: expect.any(Number), verifyAfterMs: expect.any(Number) } });
+      expect(loads).toEqual(["load:0", "load:2"]);
+      expect(adapter.events.slice(-2)).toEqual(["readMarker:0", "readMarker:2"]);
+      expect(adapter.events.some(event => event.startsWith("run:"))).toBe(false);
+    } else if (scenario === "invalid-bank") {
+      expect(result).toMatchObject({ success: false, error: { code: "ResidentImageManifestInvalid" } });
+      expect(adapter.events).toEqual([]);
+    } else {
+      expect(result).toMatchObject({ success: false, cleanedUp: true, error: { details: { cause: {
+        code: scenario === "read-failed" ? "ResidentImageAccessUnavailable" : "ResidentImageMismatch",
+        details: { targetMemoryWritten: scenario === "readback-mismatch" }
+      } } } });
+      expect(loads).toEqual(scenario === "readback-mismatch" ? ["load:0", "load:2"] : []);
+    }
+    if (result.success && typeof result.sessionId === "string") await manager.closeDebugSession(result.sessionId);
+  });
+
   test("stops after both Flash writes when product power cycling is selected", async () => {
     const { adapter, handlers, input } = await fixture();
     const result = await handlers.runIpcAcceptance({ ...input, stopAfterFlashPreparation: true });

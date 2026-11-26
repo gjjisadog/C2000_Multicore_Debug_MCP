@@ -104,6 +104,7 @@ describe("C2000 task-aware capability exposure", () => {
         "c2000_createDebugSession",
         "c2000_listCores",
         "c2000_closeDebugSession",
+        "c2000_openCcsView",
         "c2000_connectTarget",
         "c2000_disconnectTarget",
         "c2000_runCore",

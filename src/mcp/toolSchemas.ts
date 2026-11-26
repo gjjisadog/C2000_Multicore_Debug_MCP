@@ -957,6 +957,10 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   probeId: z.string().min(1).optional(),
   preferredProbeIds: z.array(z.string().min(1)).min(1).optional(),
   allowAutoProbeAllocation: z.boolean().default(false),
+  flashIfChanged: z.object({
+    cpu1ManifestUri: z.string().min(1),
+    cpu2ManifestUri: z.string().min(1)
+  }).strict().optional().describe("Verify both resident Flash markers before paired programming. Skip programming and attach if both match; program and verify both images on a readable mismatch."),
   afterFlashPowerCycle: z.object({
     mode: z.enum(["auto", "manual", "auto_or_manual"]).default("auto_or_manual"),
     offSeconds: z.number().min(5).max(60).default(5),
@@ -964,6 +968,11 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
       .describe("Manifest-backed CPU1/CPU2 marker checks for the exact images in this request")
   }).strict().optional().describe("Complete paired Flash programming, verified five-second USB power cycle, and read-only fresh-session attach in this single MCP call. Manual power intervention still pauses the flow.")
 }).superRefine((value, context) => {
+  if (value.flashIfChanged && (value.startupPreset !== "f28p65x-paired-flash" || value.device !== "F28P65x" ||
+      value.programPreparation !== "load" || !value.stopAfterFlashPreparation || value.loadPolicy !== "always" ||
+      value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.residentImageManifests || value.afterFlashPowerCycle)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["flashIfChanged"], message: "flashIfChanged requires the F28P65x paired Flash preset with coreIds 0/2 and cannot be combined with residentImageManifests or afterFlashPowerCycle" });
+  }
   if (value.stopAfterFlashPreparation && !value.afterFlashPowerCycle &&
       (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["stopAfterFlashPreparation"], message: "Flash preparation must retain an interactive session without auto-close for the explicit power-cycle step" });

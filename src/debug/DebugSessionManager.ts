@@ -1410,14 +1410,17 @@ export class DebugSessionManager {
           if (!state.connected || state.state !== "Halted") throw new DebugMcpError("FlashCoreNotHalted", "Core was not halted at Flash preparation", { coreId, state });
         }
         flashTouched = true;
+        const preparationStartedAt = performance.now();
         const preparation = await this.adapter.preparePairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
         session.flashProgrammingWindow.prepared = true;
         await this.adapter.verifyPairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
         // CPU2 GS ownership must be set before the first Flash load as well.
         await this.prepareCpu2RamOwnership(sessionId, session, 2, this.normalizeArtifactUri(cpu2.programUri), cpu2Map,
           cpu2.ramOwnershipPolicy ?? "require-map", cpu2.fallbackGsRegions, true);
+        const cpu1LoadStartedAt = performance.now();
         const cpu1Info = await this.loadProgramWithMapUnlocked(sessionId, 0, cpu1.programUri, cpu1Map,
           cpu1.ramOwnershipPolicy, cpu1.fallbackGsRegions, cpu1.allowDestructiveFlashReload, true);
+        const cpu1LoadMs = performance.now() - cpu1LoadStartedAt;
         const ownerStateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 0);
         const cpu2StateAfterCpu1Load = await this.getTargetStateUnlocked(sessionId, 2);
         if (ownerStateAfterCpu1Load.state !== "Halted" || cpu2StateAfterCpu1Load.state !== "Halted" ||
@@ -1427,6 +1430,7 @@ export class DebugSessionManager {
           });
         }
         const beforeCpu2 = await this.adapter.verifyPairedFlash(session.adapterSession, 0, 2, cpu1Banks, cpu2Banks);
+        const cpu2LoadStartedAt = performance.now();
         const cpu2Info = await this.loadProgramWithMapUnlocked(sessionId, 2, cpu2.programUri, cpu2Map,
           cpu2.ramOwnershipPolicy, cpu2.fallbackGsRegions, cpu2.allowDestructiveFlashReload, true, true);
         return {
@@ -1438,6 +1442,7 @@ export class DebugSessionManager {
           ] },
           preparation: preparation?.flashLoadEvidence,
           beforeCpu2: beforeCpu2?.flashLoadEvidence,
+          performance: { flashPreparationMs: cpu1LoadStartedAt - preparationStartedAt, cpu1LoadMs, cpu2LoadMs: performance.now() - cpu2LoadStartedAt },
           ownerStateAfterCpu1Load,
           cpu1Banks, cpu2Banks,
           bankOwners: Array.from({ length: 5 }, (_, bank) => ({

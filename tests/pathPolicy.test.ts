@@ -68,6 +68,10 @@ describe("filesystem path policy", () => {
     await expect(validateToolPaths({
       searchRoots: [path.join(os.tmpdir(), "c2000-path-unrelated")]
     }, policy)).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
+    await expect(validateToolPaths({ flashIfChanged: {
+      cpu1ManifestUri: path.join(firmwareRoot, "cpu1.json"),
+      cpu2ManifestUri: path.join(os.tmpdir(), "c2000-path-unrelated", "cpu2.json")
+    } }, policy)).rejects.toMatchObject({ code: "PathOutsideAllowedReadRoots" });
   });
 });
 

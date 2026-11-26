@@ -359,8 +359,21 @@ export class DaemonToolRouter implements C2000ToolInvoker {
           this.invalidateTargetIdentityAfterFailure(boardId, toolName, input);
           throw error;
         }
-        this.recordTargetMutation(boardId, toolName, input, result);
-        await this.recordVerifiedResidentImage(boardId, toolName, input, result);
+        const conditionalFlashSucceeded = toolName === "c2000_launchAndRunIpcAcceptance" &&
+          record(input).flashIfChanged !== undefined && result.success === true;
+        if (!conditionalFlashSucceeded) this.recordTargetMutation(boardId, toolName, input, result);
+        try {
+          await this.recordVerifiedResidentImage(boardId, toolName, input, result);
+        } catch (error) {
+          if (conditionalFlashSucceeded && typeof result.sessionId === "string") {
+            this.invalidateTargetIdentityAfterFailure(boardId, toolName, input);
+            const cleanup = await this.cleanupFailedLaunchSession(boardId, result.sessionId, input, interactive);
+            throw new DebugMcpError("ResidentImageVerificationInvalid", "The daemon could not confirm conditional Flash verification evidence", {
+              boardId, sessionId: result.sessionId, targetMemoryWritten: result.targetMemoryWritten, cause: toStructuredError(error), cleanup
+            });
+          }
+          throw error;
+        }
         if (result.success === false && result.cleanedUp !== true && failedLaunchCleanupEnabled(toolName, input)) {
           const failedSessionId = launchSessionIdFromResult(result);
           if (failedSessionId) {
@@ -1035,9 +1048,15 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     input: unknown,
     result: Record<string, unknown>
   ): Promise<void> {
+    const values = record(input);
+    const flashIfChanged = toolName === "c2000_launchAndRunIpcAcceptance" && values.flashIfChanged !== undefined;
     const directVerification = toolName === "c2000_verifyResidentImage" ? result : record(result.residentVerification);
-    const workflowVerification = toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug";
+    const workflowVerification = flashIfChanged || toolName === "c2000_runResidentIpcDebug" || toolName === "c2000_launchResidentIpcDebug";
     if (!workflowVerification && toolName !== "c2000_verifyResidentImage") return;
+    if (flashIfChanged && result.success === true &&
+        (result.targetFlashVerified !== true || directVerification.success !== true || directVerification.verified !== true)) {
+      throw new DebugMcpError("ResidentImageVerificationInvalid", "Conditional Flash requires both resident marker checks to pass", { boardId });
+    }
     if (directVerification.success !== true || directVerification.verified !== true) return;
     if (directVerification.verificationMethod !== "resident-image-manifest-raw-memory") {
       throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification did not report the required verification method", { boardId, targetMemoryWritten: false });
@@ -1046,9 +1065,10 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     if (access.programming !== false || access.symbolLoad !== false || access.reset !== false || access.run !== false || access.targetMemoryWrite !== false) {
       throw new DebugMcpError("ResidentImageVerificationInvalid", "Resident-image verification reported an unsafe target access", { boardId, targetMemoryWritten: false });
     }
-    const inputChecks = workflowVerification
-      ? record(input).residentImageManifests
-      : record(input).checks;
+    const inputChecks = flashIfChanged ? [
+      { coreId: 0, programUri: values.cpu1OutPath, manifestUri: record(values.flashIfChanged).cpu1ManifestUri },
+      { coreId: 2, programUri: values.cpu2OutPath, manifestUri: record(values.flashIfChanged).cpu2ManifestUri }
+    ] : workflowVerification ? values.residentImageManifests : values.checks;
     const requested = Array.isArray(inputChecks) ? inputChecks.map(record) : [];
     const reported = Array.isArray(directVerification.checks) ? directVerification.checks.map(record) : [];
     if (requested.length === 0 || requested.length !== reported.length) {

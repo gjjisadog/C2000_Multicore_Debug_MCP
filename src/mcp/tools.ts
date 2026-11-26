@@ -19,6 +19,7 @@ import { validateToolPaths, type FilesystemPolicy } from "../security/pathPolicy
 import type { ResolveTiEnvironmentOptions } from "../config/tiPaths.js";
 import { inspectSysConfigSchema, updateSysConfigSchema } from "../sysconfig/SysConfigSchemas.js";
 import { C2000_INVOCATION_SCOPE } from "./invocationScope.js";
+import { resolveIpcStartupPreset } from "../workflows/startupProfiles.js";
 import {
   exportVariableStreamSchema,
   getVariableStreamStatusSchema,
@@ -503,7 +504,11 @@ export function createC2000ToolInvoker(
       }
       try {
         // The daemon validates again even when a proxy has already checked this input.
-        const parsedInput = definition.schema.parse(input);
+        const values = input as Record<string, unknown> | undefined;
+        const resolvedInput = toolName === "c2000_launchAndRunIpcAcceptance" && values?.flashIfChanged !== undefined
+          ? resolveIpcStartupPreset(values)
+          : input;
+        const parsedInput = definition.schema.parse(resolvedInput);
         const handler = handlers[definition.handlerName] as Handler;
         // Several workflow wrappers intentionally call sibling handlers through
         // `this`; preserve the handler object when invoking through the generic router.

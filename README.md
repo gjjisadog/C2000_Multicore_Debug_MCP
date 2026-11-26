@@ -1622,6 +1622,46 @@ Select the pair contract explicitly:
 
 `f28p65x-paired-flash` resolves to `resetType=cpu` and `loadSequence.mode=cpu1-then-cpu2`. A real Flash load defaults to `stopAfterFlashPreparation=true` and `sessionMode=interactive`; `stopAfterFlashPreparation=false` is rejected before programming. Without `afterFlashPowerCycle`, the result is `flash_prepared`, with `ipcAcceptance=NOT_RUN`, and the caller verifies both resident markers, performs the five-second power cycle, then attaches in a fresh session. With `afterFlashPowerCycle`, those steps run inside the same MCP call and return separate `flash`, `powerCycle`, and `resident` evidence. Omit `sessionMode`, `autoCloseOnComplete`, and `cleanupOnFailure` from the one-call request; the daemon owns that session until marker verification and confirmed close before power control. An explicit conflicting lifecycle setting fails before target access. A separate controlled-debug run can use `cpu2_pre_running` (CPU2 must be confirmed `Running` before CPU1 runs) or `cpu1_boots_cpu2` when firmware owns CPU2 release; explicit contradictory reset/load parameters are rejected before any target access.
 
+For a faster development loop, call `c2000_launchAndRunIpcAcceptance` with `flashIfChanged`:
+
+```json
+{
+  "startupPreset": "f28p65x-paired-flash",
+  "cpu1CoreId": 0,
+  "cpu2CoreId": 2,
+  "cpu1OutPath": "/path/cpu1.out",
+  "cpu2OutPath": "/path/cpu2.out",
+  "cpu1MapPath": "/path/cpu1.map",
+  "cpu2MapPath": "/path/cpu2.map",
+  "timeoutMs": 10000,
+  "flashIfChanged": {
+    "cpu1ManifestUri": "/path/cpu1.manifest.json",
+    "cpu2ManifestUri": "/path/cpu2.manifest.json"
+  }
+}
+```
+
+Each [resident-image manifest](#debug-workflow-performance) must bind to the exact
+`.out` and identify a firmware marker in a Flash bank used by that core's map.
+Give each firmware version a distinct marker value and keep the build artifacts
+stable while the tool runs. The workflow holds the same board session through
+readback and the programming decision:
+
+- Both markers match: return `flash_skipped`, load debug symbols, and leave the
+  board attached without resetting, starting either core, or writing Flash.
+- Either marker returns a different value: write CPU1 then CPU2, read both
+  markers again, and return `flash_prepared` only after both checks pass.
+- An invalid artifact or an unreadable marker blocks programming. A failed
+  check after programming reports the failed readback and that Flash was written.
+
+The result includes `performance` with artifact preflight, session connection,
+marker readback, and attach or programming timings in milliseconds. A write also
+reports Flash preparation and per-core load timings under `flashProgramming.performance`.
+Both successful outcomes keep an interactive session. Close it when finished, or use
+the `flash_prepared` session for `c2000_cycleBoardPower` to verify product startup.
+Use `afterFlashPowerCycle` separately when the launch should always program,
+power cycle, and reconnect in one call.
+
 IPC readiness expressions are firmware-specific and optional. When omitted,
 the workflow can load and start the target but reports `ipcAcceptance:
 "NOT_EVALUATED"`; it does not silently assume that IPC passed. The `.map`

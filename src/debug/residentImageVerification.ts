@@ -25,25 +25,12 @@ export interface ResidentImageVerificationManager {
   readMemory(sessionId: string, coreId: number, page: string, address: number, typeSize: number): Promise<number>;
 }
 
-/**
- * Verify firmware-declared resident markers without programming, symbol
- * loading, reset, run, or target-memory writes.  Both the existing-session
- * and no-session resident workflows call this function before symbols are
- * loaded when manifests are supplied.
- */
-export async function verifyResidentImageForSession(
-  manager: ResidentImageVerificationManager,
-  options: {
-    sessionId: string;
-    checks: ResidentImageVerificationCheck[];
-    connectIfNeeded?: boolean;
-  }
-): Promise<Record<string, unknown>> {
-  const connectedCoreIds = new Set<number>();
-  const results: Record<string, unknown>[] = [];
-  const connectIfNeeded = options.connectIfNeeded !== false;
-
-  for (const request of options.checks) {
+export async function prepareResidentImageChecks(
+  manager: Pick<ResidentImageVerificationManager, "normalizeArtifactUri">,
+  checks: ResidentImageVerificationCheck[],
+  options: { sessionId?: string; flashBanksByCore?: ReadonlyMap<number, number[]> } = {}
+) {
+  return Promise.all(checks.map(async request => {
     const programUri = manager.normalizeArtifactUri(request.programUri);
     const manifestUri = manager.normalizeArtifactUri(request.manifestUri);
     const manifestMetadata = await fileMetadata(manifestUri);
@@ -51,7 +38,7 @@ export async function verifyResidentImageForSession(
     const programMetadata = await fileMetadata(programUri);
     if (programMetadata.sha256.toLowerCase() !== manifest.programSha256.toLowerCase()) {
       throw new DebugMcpError("ResidentImageManifestMismatch", "Resident-image manifest does not bind to the requested .out artifact", {
-        sessionId: options.sessionId,
+        ...(options.sessionId ? { sessionId: options.sessionId } : {}),
         coreId: request.coreId,
         programUri,
         manifestUri,
@@ -60,12 +47,6 @@ export async function verifyResidentImageForSession(
         targetMemoryWritten: false,
         nextAction: "Regenerate the manifest from the exact .out artifact and retry the read-only verification."
       });
-    }
-
-    const state = await manager.getTargetState(options.sessionId, request.coreId);
-    if (connectIfNeeded && !state.connected && !connectedCoreIds.has(request.coreId)) {
-      await manager.connectTarget(options.sessionId, request.coreId);
-      connectedCoreIds.add(request.coreId);
     }
 
     const identity = manifest.identity;
@@ -81,19 +62,56 @@ export async function verifyResidentImageForSession(
           });
         })()
         : await resolveSymbolAddressFromMap(mapUri, identity.symbol!);
-    const route = await resolveResidentReadRoute(manager, options.sessionId, request.coreId, address, connectIfNeeded, connectedCoreIds);
     const expectedValue = normalizeIdentityValue(identity.expectedValue, identity.typeSize);
+    if (options.flashBanksByCore) {
+      const flashBank = f28p65xFlashBank(address);
+      const lastBank = f28p65xFlashBank(address + (identity.typeSize === 32 ? 1 : 0));
+      if (flashBank === undefined || flashBank !== lastBank || !options.flashBanksByCore.get(request.coreId)?.includes(flashBank) ||
+          expectedValue === 0 || expectedValue === 2 ** identity.typeSize - 1) {
+        throw new DebugMcpError("ResidentImageManifestInvalid", "The version marker must be inside this image's programmed Flash banks and differ from blank or zero memory", {
+          coreId: request.coreId, manifestUri, address: formatHexAddress(address), flashBank, targetMemoryWritten: false
+        });
+      }
+    }
+    return { coreId: request.coreId, programUri, manifestUri, manifestMetadata, programMetadata, identity, address, expectedValue };
+  }));
+}
+
+/** Verify firmware-declared markers without programming, loading symbols, or starting a core. */
+export async function verifyResidentImageForSession(
+  manager: ResidentImageVerificationManager,
+  options: { sessionId: string; checks: ResidentImageVerificationCheck[]; connectIfNeeded?: boolean }
+): Promise<Record<string, unknown>> {
+  const checks = await prepareResidentImageChecks(manager, options.checks, { sessionId: options.sessionId });
+  return readResidentImageMarkers(manager, { ...options, checks });
+}
+
+export async function readResidentImageMarkers(
+  manager: ResidentImageVerificationManager,
+  options: { sessionId: string; checks: Awaited<ReturnType<typeof prepareResidentImageChecks>>; connectIfNeeded?: boolean }
+): Promise<Record<string, unknown>> {
+  const connectedCoreIds = new Set<number>();
+  const results: Record<string, unknown>[] = [];
+  const connectIfNeeded = options.connectIfNeeded !== false;
+
+  for (const { coreId, programUri, manifestUri, manifestMetadata, programMetadata, identity, address, expectedValue } of options.checks) {
+    const state = await manager.getTargetState(options.sessionId, coreId);
+    if (connectIfNeeded && !state.connected && !connectedCoreIds.has(coreId)) {
+      await manager.connectTarget(options.sessionId, coreId);
+      connectedCoreIds.add(coreId);
+    }
+    const route = await resolveResidentReadRoute(manager, options.sessionId, coreId, address, connectIfNeeded, connectedCoreIds);
     let rawValue: number;
     try {
       rawValue = await manager.readMemory(options.sessionId, route.readCoreId, identity.page, address, identity.typeSize);
     } catch (error) {
       if (route.flashBank === undefined) throw error;
-      throw residentAccessUnavailable(options.sessionId, request.coreId, route.flashBank, address,
+      throw residentAccessUnavailable(options.sessionId, coreId, route.flashBank, address,
         `Resident marker could not be read through ${route.bankOwner}`, error);
     }
     if (route.flashBank !== undefined && (!Number.isInteger(rawValue) ||
         rawValue < -2147483648 || rawValue > 0xffffffff || (rawValue >>> 0) === 0x0BAD0BAD)) {
-      throw residentAccessUnavailable(options.sessionId, request.coreId, route.flashBank, address,
+      throw residentAccessUnavailable(options.sessionId, coreId, route.flashBank, address,
         `Resident marker read through ${route.bankOwner} returned an invalid value`);
     }
     const unsignedValue = rawValue < 0
@@ -101,9 +119,9 @@ export async function verifyResidentImageForSession(
       : rawValue;
     const actualValue = normalizeIdentityValue(unsignedValue, identity.typeSize);
     results.push({
-      coreId: request.coreId,
+      coreId,
       coreName: state.coreName,
-      imageCoreId: request.coreId,
+      imageCoreId: coreId,
       readCoreId: route.readCoreId,
       ...(route.flashBank !== undefined ? {
         flashBank: route.flashBank,

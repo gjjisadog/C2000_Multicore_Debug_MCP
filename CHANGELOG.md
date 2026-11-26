@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.20 - 2026-11-26
+
+- Add opt-in F28P65x paired Flash programming with `flashIfChanged`.
+  Check CPU1 and CPU2 firmware markers before writing, skip matching images,
+  and verify both markers after programming changed images.
+- Report timings for artifact checks, connection, marker reads, and each core's Flash load.
+
 ## 0.7.19 - 2026-11-26
 
 - Add `c2000_openCcsView` to open a desktop CCS window on an existing MCP
