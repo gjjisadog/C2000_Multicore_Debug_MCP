@@ -220,6 +220,7 @@ describe("MCP tool registration contract", () => {
       targetEffect: "host-read"
     }));
     expect(schemaKeys(readiness?.schema)).toEqual([
+      "boardId",
       "ccsInstallPath",
       "ccxmlPath",
       "cpu1Program",
@@ -254,7 +255,7 @@ describe("MCP tool registration contract", () => {
         name: "c2000_getAcceptanceReadiness",
         inputScope: "host",
         targetEffect: "host-read",
-        inputFields: ["ccsInstallPath", "ccxmlPath", "cpu1Program", "cpu2Program", "searchRoots", "maxDepth", "allowExistingDebugProcesses", "waitForProbeMs", "probePollIntervalMs"],
+        inputFields: ["boardId", "ccsInstallPath", "ccxmlPath", "cpu1Program", "cpu2Program", "searchRoots", "maxDepth", "allowExistingDebugProcesses", "waitForProbeMs", "probePollIntervalMs"],
         requiredInputFields: []
       }),
       expect.objectContaining({

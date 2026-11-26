@@ -110,7 +110,7 @@ async function main() {
   const launchCpu1Out = path.join(tempDir, "launch-cpu1.out");
   const launchCpu2Out = path.join(tempDir, "launch-cpu2.out");
   const cpu2Map = path.join(tempDir, "cpu2.map");
-  await writeFile(ccxmlPath, "<configurations />");
+  await writeFile(ccxmlPath, '<configurations><property id="USCIF.ECOM_SERIAL" Value="MOCK-XDS110" /></configurations>');
   await writeFile(cpu1Out, "cpu1-image");
   await writeFile(cpu1ReloadOut, "cpu1-reload-image");
   await writeFile(cpu2Out, "cpu2-image");
@@ -451,7 +451,7 @@ async function main() {
 
     const acceptanceReadiness = structured(await client.callTool({
       name: "c2000_getAcceptanceReadiness",
-      arguments: { ccxmlPath, cpu1Program: cpu1Out, cpu2Program: cpu2Out, searchRoots: [tempDir], maxDepth: 1 }
+      arguments: { boardId: "smoke-board", cpu1Program: cpu1Out, cpu2Program: cpu2Out, searchRoots: [tempDir], maxDepth: 1 }
     }));
     assert.equal(acceptanceReadiness.success, true);
     assert.equal(typeof acceptanceReadiness.readyForHardwareAcceptance, "boolean");
@@ -459,6 +459,8 @@ async function main() {
     assert.equal(acceptanceReadiness.programDiscovery.cpu1.selected, cpu1Out);
     assert.equal(acceptanceReadiness.programDiscovery.cpu2.selected, cpu2Out);
     assert.equal(acceptanceReadiness.checks.ccxml.ok, true);
+    assert.deepEqual(acceptanceReadiness.nextLaunchArguments, { boardId: "smoke-board", ccxmlPath });
+    assert(acceptanceReadiness.nextCommand.includes("C2000_BOARD_ID='smoke-board'"));
     assert.equal(acceptanceReadiness.checks.cpu1Program.ok, true);
     assert.equal(acceptanceReadiness.checks.cpu2Program.ok, true);
     assert.equal(acceptanceReadiness.debugBoundary.officialTiMcpDebugControlsUsed, false);

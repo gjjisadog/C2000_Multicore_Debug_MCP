@@ -2651,9 +2651,11 @@ describe("tool handlers", () => {
   test("getAcceptanceReadiness blocks daemon hardware acceptance until a board route is ready", async () => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-mcp-readiness-daemon-route-"));
     const ccxmlPath = path.join(tempDir, "f28p65x.ccxml");
+    const otherCcxmlPath = path.join(tempDir, "other.ccxml");
     const cpu1Program = path.join(tempDir, "cpu1.out");
     const cpu2Program = path.join(tempDir, "cpu2.out");
-    await writeFile(ccxmlPath, "<configurations />");
+    await writeFile(ccxmlPath, '<property id="USCIF.ECOM_SERIAL" Value="CL650001" />');
+    await writeFile(otherCcxmlPath, '<property id="USCIF.ECOM_SERIAL" Value="CL650002" />');
     await writeFile(cpu1Program, "cpu1");
     await writeFile(cpu2Program, "cpu2");
     const sharedDeps = {
@@ -2702,6 +2704,7 @@ describe("tool handlers", () => {
         boards: [{
           boardId: "board-b",
           probeSerial: "CL659999",
+          ccxmlPath: otherCcxmlPath,
           status: "READY",
           currentWorkerInstanceId: "worker-b"
         }]
@@ -2726,6 +2729,7 @@ describe("tool handlers", () => {
         boards: [{
           boardId: "board-a",
           probeSerial: "CL650001",
+          ccxmlPath,
           status: "READY",
           currentLeaseId: "lease-running",
           currentWorkerInstanceId: "worker-a"
@@ -2745,21 +2749,14 @@ describe("tool handlers", () => {
       })
     }));
 
-    const withReadyBoard = createToolHandlers(manager, {
-      ...sharedDeps,
-      listBoards: async () => ({
-        boards: [{
-          boardId: "board-a",
-          probeSerial: "CL650001",
-          status: "READY",
-          currentWorkerInstanceId: "worker-a"
-        }]
-      })
-    });
+    const boardA = { boardId: "board-a", probeSerial: "CL650001", ccxmlPath, status: "READY", currentWorkerInstanceId: "worker-a" };
+    const withReadyBoard = createToolHandlers(manager, { ...sharedDeps, listBoards: () => ({ boards: [boardA] }) });
     const ready = await withReadyBoard.getAcceptanceReadiness({ ccxmlPath, searchRoots: [tempDir] });
     expect(ready).toEqual(expect.objectContaining({
       readyForHardwareAcceptance: true,
       blockers: [],
+      nextLaunchArguments: { boardId: "board-a", ccxmlPath },
+      nextCommand: expect.stringContaining("C2000_BOARD_ID='board-a'"),
       checks: expect.objectContaining({
         daemonRoute: expect.objectContaining({
           applicable: true,
@@ -2768,6 +2765,38 @@ describe("tool handlers", () => {
         })
       })
     }));
+
+    const boardB = { boardId: "board-b", device: "F28374S", probeSerial: "CL650002", ccxmlPath: otherCcxmlPath,
+      status: "READY", currentWorkerInstanceId: "worker-b" };
+    let boardBLease: string | undefined = "lease-b";
+    const withBothBoards = createToolHandlers(manager, {
+      ...sharedDeps,
+      listBoards: () => ({ boards: [boardA, { ...boardB, currentLeaseId: boardBLease }] }),
+      runHardwarePreflight: async () => {
+        const preflight = await sharedDeps.runHardwarePreflight();
+        preflight.xdsdfu.devices.push({ ...preflight.xdsdfu.devices[0]!, serialNumber: "CL650002" });
+        return preflight;
+      }
+    });
+    const ambiguous = await withBothBoards.getAcceptanceReadiness({ searchRoots: [tempDir] });
+    expect(ambiguous.blockers).toContain("Multiple boards are registered; supply boardId to check readiness");
+    expect(ambiguous.nextCommand).toBeUndefined();
+    const busy = await withBothBoards.getAcceptanceReadiness({ boardId: "board-b", searchRoots: [tempDir] });
+    expect(busy).toMatchObject({ readyForHardwareAcceptance: false, blockers: ["Board board-b already has a lease"],
+      nextLaunchArguments: { boardId: "board-b", ccxmlPath: otherCcxmlPath } });
+    boardBLease = undefined;
+    const singleCore = await withBothBoards.getAcceptanceReadiness({ boardId: "board-b", searchRoots: [tempDir] });
+    expect(singleCore).toMatchObject({ readyForHardwareAcceptance: true, acceptanceEvidence: { applicable: false },
+      checks: { cpu2Program: { applicable: false } }, nextLaunchArguments: { coreMap: [{ coreId: 0 }] } });
+    expect(singleCore.nextCommand).toBeUndefined();
+    const wrongCcxml = await withBothBoards.getAcceptanceReadiness({ boardId: "board-a", ccxmlPath: otherCcxmlPath, searchRoots: [tempDir] });
+    expect(wrongCcxml).toMatchObject({ readyForHardwareAcceptance: false,
+      checks: { ccxml: { ok: false, reason: "Use the registered CCXML for board board-a" } } });
+    expect(wrongCcxml.nextCommand).toBeUndefined();
+    await writeFile(ccxmlPath, '<property id="USCIF.ECOM_SERIAL" Value="CL650002" />');
+    const changedBinding = await withBothBoards.getAcceptanceReadiness({ boardId: "board-a", searchRoots: [tempDir] });
+    expect(changedBinding).toMatchObject({ readyForHardwareAcceptance: false, checks: { ccxml: { ok: false,
+      reason: "CCXML probe serial does not match the registered board" } } });
   });
 
   test("getAcceptanceReadiness waits for an existing probe owner to release", async () => {

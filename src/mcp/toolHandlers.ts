@@ -3,13 +3,14 @@ import { readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DebugSessionManager } from "../debug/DebugSessionManager.js";
-import type { CoreConfig, ResetType } from "../debug/types.js";
+import { defaultF28P65xCoreMap, type CoreConfig, type ResetType } from "../debug/types.js";
 import { createApplicationEntryPlan, waitForApplicationEntry } from "../debug/applicationEntry.js";
 import { assertRunPauseAcceptanceSummary } from "../debug/runPauseAcceptance.js";
 import { buildAcceptanceEvidencePlan, buildUiIndependenceEvidence, getDebugBoundary } from "../debug/boundary.js";
 import { discoverAcceptancePrograms as discoverAcceptanceProgramsDefault, validateProgramPair } from "../hardware/programDiscovery.js";
 import { analyzeRamOwnership as analyzeRamOwnershipDefault, type MapOwnershipInput } from "../hardware/mapOwnership.js";
 import { formatDebugProcessOwners, getConnectedProbeSerials, hasBlockingDebugProcesses, runHardwarePreflight } from "../hardware/preflight.js";
+import { assertCcxmlProbeBinding } from "../hardware/ccxmlBinding.js";
 import { verifyResidentImageForSession } from "../debug/residentImageVerification.js";
 import { DebugWorkflowService } from "../workflows/DebugWorkflowService.js";
 import { MAX_WORKFLOW_POLL_ITERATIONS, resolveIpcStartupPreset, workflowPollIterations } from "../workflows/startupProfiles.js";
@@ -864,16 +865,27 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       try {
         const waitForProbeMs = input.waitForProbeMs ?? 0;
         const probePollIntervalMs = input.probePollIntervalMs ?? 250;
-        const ccxmlPath = input.ccxmlPath ?? process.env.C2000_MCP_CCXML_PATH ?? deps.tiEnvironment?.ccxmlPath;
         const allowExistingDebugProcesses = input.allowExistingDebugProcesses ?? process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
+        readinessStage = "board-route";
+        const boardListing = daemonRoutingConfigured ? await listBoards({}) : undefined;
+        const registeredBoards = Array.isArray(boardListing?.boards) ? boardListing.boards as ToolResult[] : [];
+        const board = input.boardId
+          ? registeredBoards.find(entry => entry.boardId === input.boardId)
+          : registeredBoards.length === 1 ? registeredBoards[0] : undefined;
+        const probeSerial = typeof board?.probeSerial === "string" ? board.probeSerial : undefined;
+        const registeredCcxml = typeof board?.ccxmlPath === "string" ? board.ccxmlPath : undefined;
+        const ccxmlPath = input.ccxmlPath ?? registeredCcxml ?? process.env.C2000_MCP_CCXML_PATH ?? deps.tiEnvironment?.ccxmlPath;
+        const boardDevice = typeof board?.device === "string" ? board.device.replace(/^TMS320/i, "").toLowerCase() : undefined;
+        const readinessSingleCore = boardDevice === "f28374s" || (!boardDevice?.startsWith("f28p65") && singleCore);
+        const readinessDevice = boardDevice === "f28374s" ? "F28374S" : readinessSingleCore ? expectedDevice : "F28P65x";
         readinessStage = "program-discovery";
         const programDiscovery = await discoverAcceptancePrograms({
           cpu1Program: input.cpu1Program ?? process.env.C2000_CPU1_OUT,
           cpu2Program: input.cpu2Program ?? process.env.C2000_CPU2_OUT,
           searchRoots: input.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
           maxDepth: input.maxDepth,
-          expectedDevice,
-          singleCore
+          expectedDevice: readinessDevice,
+          singleCore: readinessSingleCore
         });
         const probeWaitStartedAt = Date.now();
         readinessStage = "hardware-preflight";
@@ -881,7 +893,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         let probeWaitAttempts = 1;
         while (waitForProbeMs > 0
           && Date.now() - probeWaitStartedAt < waitForProbeMs
-          && !preflightReady(preflight, allowExistingDebugProcesses)) {
+          && !preflightReady(preflight, allowExistingDebugProcesses, probeSerial)) {
           readinessStage = "hardware-preflight-wait";
           const remainingMs = waitForProbeMs - (Date.now() - probeWaitStartedAt);
           await sleepCore(Math.min(probePollIntervalMs, Math.max(1, remainingMs)));
@@ -892,7 +904,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           requestedMs: waitForProbeMs,
           elapsedMs: Date.now() - probeWaitStartedAt,
           attempts: probeWaitAttempts,
-          released: preflightReady(preflight, allowExistingDebugProcesses)
+          released: preflightReady(preflight, allowExistingDebugProcesses, probeSerial)
         };
         readinessStage = "debug-boundary";
         const debugBoundary = getDebugBoundary();
@@ -900,22 +912,19 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const acceptanceEvidence = buildAcceptanceEvidencePlan();
         readinessStage = "artifact-pair-validation";
         const cpu1Program = discoveredProgramForCore(0, programDiscovery);
-        const cpu2Program = singleCore ? undefined : discoveredProgramForCore(2, programDiscovery);
-        const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, expectedDevice, singleCore);
+        const cpu2Program = readinessSingleCore ? undefined : discoveredProgramForCore(2, programDiscovery);
+        const artifactPair = programDiscovery.pairing ?? validateProgramPair(cpu1Program, cpu2Program, readinessDevice, readinessSingleCore);
         const debugProcessOwners = formatDebugProcessOwners(preflight);
         const hasDebugProcessOwners = hasBlockingDebugProcesses(preflight);
         readinessStage = "daemon-health";
         const daemonHealth: ToolResult | undefined = daemonRoutingConfigured
-          ? await Promise.resolve(getDaemonHealth()) as ToolResult
+          ? await getDaemonHealth()
           : undefined;
-        readinessStage = "board-route";
-        const boardListing = daemonRoutingConfigured ? await Promise.resolve(listBoards({})) : undefined;
-        const registeredBoards = Array.isArray(boardListing?.boards) ? boardListing.boards as ToolResult[] : [];
-        const enumeratedProbeSerials = new Set(getConnectedProbeSerials(preflight));
+        const enumeratedProbeSerials = getConnectedProbeSerials(preflight);
         const selectedBoards = registeredBoards.filter(board =>
-          typeof board.probeSerial === "string" && enumeratedProbeSerials.has(board.probeSerial)
+          (!input.boardId || board.boardId === input.boardId) && enumeratedProbeSerials.includes(board.probeSerial)
         );
-        const readyBoards = selectedBoards.filter(board => board.status === "READY" && !board.currentLeaseId);
+        const probeReady = probeSerial ? enumeratedProbeSerials.includes(probeSerial) : enumeratedProbeSerials.length > 0;
         const boardConcurrency = daemonHealth?.boardConcurrency as ToolResult | undefined;
         const workers = daemonHealth?.workers as ToolResult | undefined;
         const workersHealthy = typeof workers?.healthy === "number" && workers.healthy > 0;
@@ -923,47 +932,68 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           && typeof boardConcurrency?.active === "number"
           && boardConcurrency.limit > 0
           && boardConcurrency.active < boardConcurrency.limit;
+        let routeBlocker: string | undefined;
+        if (!daemonRoutingConfigured && input.boardId) {
+          routeBlocker = "Checking a boardId requires the c2000-debugd board router";
+        } else if (daemonRoutingConfigured) {
+          if (input.boardId && !board) routeBlocker = `Board ${input.boardId} is not registered with c2000-debugd`;
+          else if (registeredBoards.length === 0) routeBlocker = "No board is registered with c2000-debugd; call c2000_registerBoard before hardware acceptance";
+          else if (!board) routeBlocker = "Multiple boards are registered; supply boardId to check readiness";
+          else if (!probeSerial || !probeReady) routeBlocker = `The registered probe for board ${board.boardId} is not enumerated`;
+          else if (board.currentLeaseId) routeBlocker = `Board ${board.boardId} already has a lease`;
+          else if (board.status !== "READY" || !board.currentWorkerInstanceId || !workersHealthy) routeBlocker = `Board ${board.boardId} does not have a READY worker route`;
+          else if (!concurrencyAvailable) routeBlocker = "Daemon board concurrency is exhausted";
+        }
         const daemonRoute = daemonRoutingConfigured
           ? {
             applicable: true,
-            ok: registeredBoards.length > 0
-              && selectedBoards.length > 0
-              && readyBoards.length > 0
-              && workersHealthy
-              && concurrencyAvailable,
-            enumeratedProbeSerials: [...enumeratedProbeSerials],
+            ok: !routeBlocker,
+            reason: routeBlocker,
+            boardId: board?.boardId ?? input.boardId,
+            enumeratedProbeSerials,
             registeredBoardIds: registeredBoards.map(board => board.boardId),
             selectedBoards: selectedBoards.map(board => ({
               boardId: board.boardId,
               probeSerial: board.probeSerial,
+              ccxmlPath: board.ccxmlPath,
               status: board.status,
               currentLeaseId: board.currentLeaseId,
               workerInstanceId: board.currentWorkerInstanceId
             })),
             workers,
             boardConcurrency,
-            nextTool: registeredBoards.length === 0
-              ? "c2000_registerBoard"
-              : readyBoards.length === 0
-                ? "c2000_listBoards"
-                : undefined
+            nextTool: routeBlocker ? (!registeredBoards.length || (input.boardId && !board)
+              ? "c2000_registerBoard" : "c2000_listBoards") : undefined
           }
-          : { applicable: false, ok: true, reason: "Readiness is running without the c2000-debugd board router." };
+          : { applicable: false, ok: !routeBlocker, reason: routeBlocker ?? "Readiness is running without the c2000-debugd board router." };
         readinessStage = "host-readiness-checks";
+        const ccxml = await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required");
+        if (board && ccxml.ok && ccxmlPath) {
+          try {
+            if (!registeredCcxml || !probeSerial || path.resolve(ccxmlPath) !== path.resolve(registeredCcxml)) {
+              throw new DebugMcpError("ProbeBindingInvalid", `Use the registered CCXML for board ${board.boardId}`);
+            }
+            await assertCcxmlProbeBinding(registeredCcxml, probeSerial);
+          } catch (error) {
+            Object.assign(ccxml, { ok: false, reason: toStructuredError(error).message, registeredCcxml, probeSerial });
+          }
+        }
         const checks = {
-          ccxml: await hostFileCheck(ccxmlPath, "C2000_MCP_CCXML_PATH or ccxmlPath is required"),
+          ccxml,
           cpu1Program: await hostFileCheck(cpu1Program, "CPU1 .out program was not discovered"),
-          cpu2Program: singleCore
+          cpu2Program: readinessSingleCore
             ? { ok: true, applicable: false, reason: "Configured target has one C28x CPU." }
             : await hostFileCheck(cpu2Program, "CPU2 .out program was not discovered"),
           artifactPair: {
             ok: artifactPair.compatible,
-            ...artifactPair
+            ...artifactPair,
+            selectionIssue: programDiscovery.selectionIssue
           },
           probe: {
-            ok: getConnectedProbeSerials(preflight).length > 0,
-            probeReady: getConnectedProbeSerials(preflight).length > 0,
-            serials: getConnectedProbeSerials(preflight),
+            ok: probeReady,
+            probeReady,
+            serials: enumeratedProbeSerials,
+            expectedSerial: probeSerial,
             xds2xx: preflight.xds2xx ?? null,
             xds100: preflight.xds100 ?? null,
           },
@@ -998,6 +1028,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         };
         const blockers = acceptanceBlockers(checks);
         const warnings = acceptanceWarnings(checks);
+        const hasLaunchRoute = (!daemonRoutingConfigured && !input.boardId) || Boolean(board && ccxml.ok);
+        const nextLaunchArguments = board && ccxml.ok ? {
+          boardId: board.boardId,
+          ccxmlPath,
+          ...(readinessSingleCore ? { coreMap: singleCore ? deps.target!.coreMap : defaultF28P65xCoreMap.slice(0, 1) } : {})
+        } : undefined;
         return ok({
           readyForHardwareAcceptance: blockers.length === 0,
           blockers,
@@ -1008,11 +1044,13 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           probeWait,
           debugBoundary,
           uiIndependenceEvidence,
-          acceptanceEvidence: singleCore
+          acceptanceEvidence: readinessSingleCore
             ? { applicable: false, reason: "CPU1/CPU2 isolation and IPC acceptance require two CPUs." }
             : acceptanceEvidence,
-          nextTools: singleCore ? ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_runCore", "c2000_haltCore"] : undefined,
-          nextCommand: singleCore ? undefined : hardwareAcceptanceCommand({
+          nextLaunchArguments,
+          nextTools: readinessSingleCore ? ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_runCore", "c2000_haltCore"] : undefined,
+          nextCommand: readinessSingleCore || programDiscovery.selectionIssue || !hasLaunchRoute ? undefined : hardwareAcceptanceCommand({
+            boardId: board?.boardId,
             ccsInstallPath: input.ccsInstallPath,
             ccxmlPath,
             cpu1Program,
@@ -1853,10 +1891,12 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         failureContext = { effectiveStartup, workflowStage, performedSteps: [...performedSteps], targetAccessAttempted: false };
         let physicalPreflight: ToolResult | undefined;
         workflowStage = "program-discovery";
+        const cpu1ProgramUri = parsed.cores.find(core => core.coreId === 0)?.programUri;
+        const cpu2ProgramUri = parsed.cores.find(core => core.coreId === 2)?.programUri;
         const programDiscovery = parsed.loadPrograms && parsed.programDiscovery?.enabled
           ? await discoverAcceptancePrograms({
-            cpu1Program: parsed.programDiscovery.cpu1Program ?? process.env.C2000_CPU1_OUT,
-            cpu2Program: parsed.programDiscovery.cpu2Program ?? process.env.C2000_CPU2_OUT,
+            cpu1Program: cpu1ProgramUri ? manager.normalizeArtifactUri(cpu1ProgramUri) : parsed.programDiscovery.cpu1Program ?? process.env.C2000_CPU1_OUT,
+            cpu2Program: cpu2ProgramUri ? manager.normalizeArtifactUri(cpu2ProgramUri) : parsed.programDiscovery.cpu2Program ?? process.env.C2000_CPU2_OUT,
             searchRoots: parsed.programDiscovery.searchRoots ?? programSearchRoots(configuredProgramSearchRoots),
             maxDepth: parsed.programDiscovery.maxDepth
           })
@@ -1874,7 +1914,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         launchCores = cores;
         for (const core of cores) {
           if (core.load && !core.programUri) {
-            throw new DebugMcpError("LaunchProgramMissing", `No programUri is available for launch core ${core.coreId}`, {
+            throw new DebugMcpError("LaunchProgramMissing", programDiscovery?.selectionIssue ?? `No programUri is available for launch core ${core.coreId}`, {
               coreId: core.coreId,
               coreName: core.coreName,
               programDiscovery
@@ -2701,16 +2741,20 @@ function acceptanceBlockers(checks: ToolResult): string[] {
   if (!checks.ccxml?.ok) {
     blockers.push(`Target configuration is not ready: ${checks.ccxml?.reason ?? checks.ccxml?.path ?? "missing ccxml"}`);
   }
-  if (!checks.cpu1Program?.ok) {
-    blockers.push(`CPU1 program is not ready: ${checks.cpu1Program?.reason ?? checks.cpu1Program?.path ?? "missing .out"}`);
+  if (checks.artifactPair?.selectionIssue) {
+    blockers.push(checks.artifactPair.selectionIssue);
+  } else {
+    if (!checks.cpu1Program?.ok) {
+      blockers.push(`CPU1 program is not ready: ${checks.cpu1Program?.reason ?? checks.cpu1Program?.path ?? "missing .out"}`);
+    }
+    if (!checks.cpu2Program?.ok) {
+      blockers.push(`CPU2 program is not ready: ${checks.cpu2Program?.reason ?? checks.cpu2Program?.path ?? "missing .out"}`);
+    }
+    if (!checks.artifactPair?.ok) {
+      blockers.push(`CPU1/CPU2 artifacts are incompatible: ${(checks.artifactPair?.issues ?? []).join("; ")}`);
+    }
   }
-  if (!checks.cpu2Program?.ok) {
-    blockers.push(`CPU2 program is not ready: ${checks.cpu2Program?.reason ?? checks.cpu2Program?.path ?? "missing .out"}`);
-  }
-  if (!checks.artifactPair?.ok) {
-    blockers.push(`CPU1/CPU2 artifacts are incompatible: ${(checks.artifactPair?.issues ?? []).join("; ")}`);
-  }
-  if (!checks.probe?.ok && !checks.xds110?.ok) {
+  if (!checks.probe?.ok && !checks.probe?.expectedSerial) {
     blockers.push("No supported debug probe (XDS100/XDS110/XDS2xx) is enumerated");
   }
   if (!checks.debugProcessOwnership?.ok) {
@@ -2722,15 +2766,14 @@ function acceptanceBlockers(checks: ToolResult): string[] {
     blockers.push("Debug boundary contract is not ready for explicit per-core automation");
   }
   if (!checks.daemonRoute?.ok) {
-    blockers.push(checks.daemonRoute?.nextTool === "c2000_registerBoard"
-      ? "No board is registered with c2000-debugd; call c2000_registerBoard before hardware acceptance"
-      : "No matching registered board has a READY, unleased worker route with available concurrency");
+    blockers.push(checks.daemonRoute.reason);
   }
   return blockers;
 }
 
-function preflightReady(preflight: ToolResult, allowExistingDebugProcesses: boolean): boolean {
-  const xdsReady = getConnectedProbeSerials(preflight).length > 0;
+function preflightReady(preflight: ToolResult, allowExistingDebugProcesses: boolean, probeSerial?: string): boolean {
+  const serials = getConnectedProbeSerials(preflight);
+  const xdsReady = probeSerial ? serials.includes(probeSerial) : serials.length > 0;
   const hasOwners = hasBlockingDebugProcesses(preflight);
   return preflight.processInspection?.ok !== false && xdsReady && (!hasOwners || allowExistingDebugProcesses);
 }
@@ -2744,6 +2787,7 @@ function acceptanceWarnings(checks: ToolResult): string[] {
 }
 
 function hardwareAcceptanceCommand(options: {
+  boardId?: string;
   ccsInstallPath?: string;
   ccxmlPath?: string;
   cpu1Program?: string;
@@ -2753,6 +2797,8 @@ function hardwareAcceptanceCommand(options: {
   const assignments = [
     ["C2000_RUN_LAUNCH", "1"],
     ["C2000_RUN_ISOLATION", "1"],
+    ["C2000_BOARD_ID", options.boardId],
+    ["C2000_MCP_CONFIG", process.env.C2000_MCP_CONFIG],
     ["C2000_ALLOW_EXISTING_DEBUG_PROCESSES", options.allowExistingDebugProcesses ? "1" : undefined],
     ["C2000_MCP_CCS_INSTALL_PATH", options.ccsInstallPath],
     ["C2000_MCP_CCXML_PATH", options.ccxmlPath],

@@ -88,6 +88,44 @@ describe("hardware acceptance program discovery", () => {
     expect(result.pairing).toEqual(expect.objectContaining({ compatible: true }));
   });
 
+  test("does not join outputs from different builds and requires a choice between complete builds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "c2000-program-builds-"));
+    try {
+      const oldCpu1 = path.join(root, "old", "ipc_cpu1", "CPU1_RAM", "ipc_cpu1.out");
+      const oldCpu2 = path.join(root, "old", "ipc_cpu2", "CPU2_RAM", "ipc_cpu2.out");
+      const newCpu1 = path.join(root, "new", "ipc_cpu1", "CPU1_RAM", "ipc_cpu1.out");
+      const newCpu2 = path.join(root, "new", "ipc_cpu2", "CPU2_RAM", "ipc_cpu2.out");
+      for (const output of [oldCpu1, newCpu2]) {
+        await mkdir(path.dirname(output), { recursive: true });
+        await writeFile(output, "image");
+      }
+      const mixed = await discoverAcceptancePrograms({ searchRoots: [root] });
+      expect(mixed).toMatchObject({ pairing: { compatible: false }, selectionIssue: expect.stringContaining("shares a build directory") });
+      expect(mixed.cpu1.selected).toBeUndefined();
+      expect(mixed.cpu2.selected).toBeUndefined();
+
+      await mkdir(path.dirname(oldCpu2), { recursive: true });
+      await writeFile(oldCpu2, "image");
+      expect(await discoverAcceptancePrograms({ searchRoots: [root] })).toMatchObject({
+        cpu1: { selected: oldCpu1 }, cpu2: { selected: oldCpu2 }, pairing: { compatible: true }
+      });
+
+      await mkdir(path.dirname(newCpu1), { recursive: true });
+      await writeFile(newCpu1, "image");
+      const ambiguous = await discoverAcceptancePrograms({ searchRoots: [root] });
+      expect(ambiguous).toMatchObject({ selectionIssue: expect.stringContaining("Multiple compatible"), pairing: { compatible: false } });
+      expect(ambiguous.cpu1.candidates).toEqual(expect.arrayContaining([oldCpu1, newCpu1]));
+      expect(ambiguous.cpu2.candidates).toEqual(expect.arrayContaining([oldCpu2, newCpu2]));
+
+      const partial = await discoverAcceptancePrograms({ searchRoots: [root], cpu1Program: newCpu1 });
+      expect(partial).toMatchObject({ cpu1: { selected: newCpu1 }, cpu2: { selected: newCpu2 }, pairing: { compatible: true } });
+      const explicit = await discoverAcceptancePrograms({ searchRoots: [root], cpu1Program: oldCpu1, cpu2Program: oldCpu2 });
+      expect(explicit).toMatchObject({ cpu1: { selected: oldCpu1 }, cpu2: { selected: oldCpu2 }, pairing: { compatible: true } });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("reports explicit RAM/FLASH and device mismatches", async () => {
     const result = await discoverAcceptancePrograms({
       cpu1Program: "C:/build/f28p65x/ipc_ex1_c28x1/CPU1_RAM/ipc_ex1_c28x1.out",

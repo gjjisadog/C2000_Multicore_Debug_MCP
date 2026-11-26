@@ -1620,7 +1620,7 @@ export class DebugSessionManager {
   }
 
   async connectCores(sessionId: string, coreIds: CoreId[]) {
-    return this.batchCoreOperation(sessionId, coreIds, coreId => this.connectTargetUnlocked(sessionId, coreId));
+    return this.batchCoreOperation(sessionId, coreIds, coreId => this.connectTargetUnlocked(sessionId, coreId), "connected");
   }
 
   async haltCores(sessionId: string, coreIds: CoreId[]) {
@@ -2354,7 +2354,7 @@ export class DebugSessionManager {
     sessionId: string,
     coreIds: CoreId[],
     operation: (coreId: CoreId) => Promise<TargetRunState>,
-    expectedState?: TargetStateName
+    expectedState?: TargetStateName | "connected"
   ): Promise<{ sessionId: string; sequential: boolean; results: BatchItemResult[] }> {
     return this.exclusive(sessionId, async () => {
       const results: BatchItemResult[] = [];
@@ -2362,7 +2362,7 @@ export class DebugSessionManager {
         try {
           const state = await operation(coreId);
           const stateMatchesExpected = expectedState === undefined
-            || (state.connected && state.state === expectedState);
+            || (state.connected && (expectedState === "connected" || state.state === expectedState));
           results.push({
             coreId,
             coreName: state.coreName,

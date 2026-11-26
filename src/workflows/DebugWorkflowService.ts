@@ -88,6 +88,8 @@ export class DebugWorkflowService {
       }
     };
 
+    let workflowStage = "create-session";
+    const setStage = (stage: string) => { workflowStage = stage; };
     try {
       const connectionStartedAt = performance.now();
       const created = await this.manager.createDebugSession({
@@ -103,15 +105,18 @@ export class DebugWorkflowService {
         ]
       });
       sessionId = created.sessionId;
+      setStage("connect-cores");
       const connected = await this.manager.connectCores(sessionId, coreIds);
+      assertBatchSucceeded("connectCores", connected);
+      setStage("resident-image-verification");
       const residentVerification = input.residentImageManifests?.length
         ? await this.verifyResidentImage(sessionId, input.residentImageManifests)
         : undefined;
       const sessionInput = { ...input, sessionId };
       let acceptance: ToolResult;
       if (flashChecks) {
-        assertBatchSucceeded("connectCores", connected);
         flashPerformance.connectMs = performance.now() - connectionStartedAt;
+        setStage("verify-flash-before");
         const verifyStartedAt = performance.now();
         const before = await readResidentImageMarkers(this.manager, { sessionId, checks: flashChecks, connectIfNeeded: false });
         flashPerformance.verifyBeforeMs = performance.now() - verifyStartedAt;
@@ -124,6 +129,7 @@ export class DebugWorkflowService {
         ];
         await assertFlashArtifactsUnchanged(flashArtifacts);
         if (before.verified === true) {
+          setStage("attach-resident-symbols");
           const attachStartedAt = performance.now();
           acceptance = await this.attachResidentIpcDebugInternal({ ...sessionInput, programPreparation: "symbols-only" }, artifactPreflight, before);
           flashPerformance.attachMs = performance.now() - attachStartedAt;
@@ -132,8 +138,10 @@ export class DebugWorkflowService {
           acceptance.coldStartVerified = false;
         } else {
           const programStartedAt = performance.now();
-          acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, () => undefined, undefined, flashOwnership);
+          setStage("startup-preparation");
+          acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, setStage, undefined, flashOwnership);
           flashPerformance.programMs = performance.now() - programStartedAt;
+          setStage("verify-flash-after");
           const verifyAfterStartedAt = performance.now();
           try {
             const after = await readResidentImageMarkers(this.manager, { sessionId, checks: flashChecks, connectIfNeeded: false });
@@ -153,7 +161,8 @@ export class DebugWorkflowService {
         }
         acceptance.flashCheckBefore = before;
       } else {
-        acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, () => undefined, residentVerification);
+        setStage("startup-preparation");
+        acceptance = await this.runIpcAcceptanceInternal(sessionInput, artifactPreflight, setStage, residentVerification);
       }
 
       const result = {
@@ -206,7 +215,7 @@ export class DebugWorkflowService {
       throw new DebugMcpError(
         "PostLaunchCheckFailed",
         "Launch and IPC acceptance workflow failed",
-        { launch, cause, cleanup, ...(flashChecks ? { performance: flashPerformance } : {}), optimization: classifyDebugFailure(cause) }
+        { launch, cause, cleanup, workflowStage, ...(flashChecks ? { performance: flashPerformance } : {}), optimization: classifyDebugFailure(cause) }
       );
     } finally {
       if (sessionId && input.sessionMode === "ephemeral") await cleanupSession();
@@ -318,6 +327,7 @@ export class DebugWorkflowService {
       });
       sessionId = created.sessionId;
       const connected = await this.manager.connectCores(sessionId, coreIds);
+      assertBatchSucceeded("connectCores", connected);
       const residentVerification = input.residentImageManifests?.length
         ? await this.verifyResidentImage(sessionId, input.residentImageManifests)
         : undefined;

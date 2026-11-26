@@ -652,8 +652,9 @@ Register the board with `device: "F28374S"` and the same serial/ccxml, then crea
 a session with only `{ "coreId": 0, "coreName": "C28xx_CPU1", "corePattern": "C28xx_CPU1" }`.
 Connect, load, run, pause, reset and read variables through the existing explicit
 `sessionId`/`coreId` tools. In a mixed-device installation, supply this `coreMap`
-explicitly when creating the F28374S session. Each daemon uses its configured
-target topology for host readiness checks.
+explicitly when creating the F28374S session. Host readiness uses the selected
+board's registered F28374S or F28P65x device, with the configured topology as
+the fallback for other devices and standalone checks.
 
 Host preflight now includes XDS100 enumeration alongside XDS110 and XDS2xx.
 XDS100 v1/v2 and v3 identities use the same serial routing; select the actual
@@ -1953,6 +1954,8 @@ Example:
 
 When `programDiscovery.enabled` is true, `c2000_launchMulticoreDebug` runs the same CPU1/CPU2 `.out` discovery used by `c2000_discoverAcceptancePrograms` before creating the debug session. Explicit per-core `programUri` values still win; missing `programUri` values for `coreId: 0` and `coreId: 2` are filled from the discovered CPU1/CPU2 programs. The launch response includes `programDiscovery` so the acceptance log records exactly which `.out` files were loaded. If a core has `load: true` and no explicit or discovered `programUri`, launch fails with `error.code: "LaunchProgramMissing"` and cleans up any created session.
 
+`c2000_launchAndRunIpcAcceptance` checks the connection result for both cores before halting, resetting, or loading either core. A connection failure reports `workflowStage: "connect-cores"`, the failed core's error, and cleanup evidence.
+
 `postLaunchActions.assignExpressions` and `postLaunchActions.injectFaults` run after connect/load/halt and the initial snapshot, and before post-launch checks. They use the same explicit per-item `coreId` contract as `c2000_assignExpressions` and `c2000_injectFaults`; any failed item makes the launch fail and triggers cleanup. `postLaunchChecks.compareExpressions` requires all comparisons to match, otherwise the launch fails and is cleaned up.
 
 `verifyRunPauseIsolation` is opt-in because it runs and pauses targets. It is intended for explicit acceptance, not routine non-invasive snapshots. The tool response includes `acceptanceSummary`, a compact machine-readable verdict for `c2000_continue(cpu1)`, `c2000_pause(cpu1)`, `c2000_continue(cpu2)`, and `c2000_pause(cpu2)`.
@@ -2041,7 +2044,11 @@ npm run acceptance:ready
 
 `acceptance:ready` exits with code `0` only when the host-side checks pass and no existing debug-related process appears to own the XDS probe. It exits with code `2` when the report was produced but blockers remain, such as an existing `DSLite` process. To intentionally accept that risk, set `C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1`; readiness then records the existing owner under `warnings`, marks `debugProcessOwnership.overrideAccepted: true`, and includes the same override in `nextCommand`.
 
+With a daemon, pass `boardId` to `c2000_getAcceptanceReadiness` or set `C2000_BOARD_ID` for `acceptance:ready` when multiple boards are registered. Readiness checks the selected board's probe serial, registered `.ccxml`, worker route, and lease. It includes the board and `.ccxml` in `nextLaunchArguments` and carries the same selection into the generated `acceptance:ccs:mcp` command. A single registered board is selected automatically.
+
 If `C2000_CPU1_OUT` or `C2000_CPU2_OUT` is not set, `acceptance:ready`, `acceptance:ccs`, and `acceptance:ccs:mcp` perform a read-only `.out` discovery pass before reporting blockers or touching the target. By default they search `~/workspace_ccstheia`; set `C2000_PROGRAM_SEARCH_ROOTS` to one or more roots separated by the platform path delimiter (`:` on macOS/Linux, `;` on Windows) to search another workspace. The same roots can be persisted as the top-level `programSearchRoots` array in the MCP config; the installer writes its `--workspace` value there automatically. Explicit `C2000_CPU1_OUT` and `C2000_CPU2_OUT` values still win over discovery. The JSON report includes `programDiscovery` with the selected CPU1/CPU2 `.out` paths, candidate lists, and whether each path came from env or discovery. The printed readiness `nextCommand` uses discovered paths when available.
+
+Dual-core discovery selects a unique compatible pair from a shared build directory, including sibling CCS core projects. If several pairs match or the images are in different build directories, `programDiscovery.selectionIssue` explains the blocker and the per-core candidate lists show the available paths. Supply both paths explicitly to resolve it. For reproducible IPC acceptance, pass both `.out` and `.map` paths and their SHA-256 values from the intended build.
 
 Safe default mode connects both cores, loads CPU1/CPU2 programs, and reads a multicore snapshot. If the CPU program paths can be discovered from `~/workspace_ccstheia`, the `C2000_CPU1_OUT` and `C2000_CPU2_OUT` lines below are optional:
 

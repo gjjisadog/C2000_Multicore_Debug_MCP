@@ -17,6 +17,7 @@ const environment = await resolveTiEnvironment({
 const ccsInstallPath = environment.ccs.path ?? "";
 const c2000WarePath = environment.c2000Ware.path ?? "";
 const ccxmlPath = environment.ccxml.path ?? "";
+const boardId = process.env.C2000_BOARD_ID;
 const allowExistingDebugProcesses = process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
 
 const transport = new StdioClientTransport({
@@ -33,6 +34,7 @@ const transport = new StdioClientTransport({
     C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
     C2000_MCP_TOOL_PROFILE: "full",
     C2000_MCP_TOOL_SURFACE: "compatibility",
+    ...(process.env.C2000_MCP_CONFIG ? { C2000_MCP_CONFIG: process.env.C2000_MCP_CONFIG } : {}),
     C2000_MCP_ALLOWED_READ_ROOTS: [ccsInstallPath, ccxmlPath ? path.dirname(ccxmlPath) : "", os.homedir()].filter(Boolean).join(path.delimiter)
   }
 });
@@ -118,8 +120,9 @@ try {
   readiness = structured(await client.callTool({
     name: "c2000_getAcceptanceReadiness",
     arguments: {
+      boardId,
       ccsInstallPath,
-      ccxmlPath,
+      ccxmlPath: process.env.C2000_MCP_CCXML_PATH,
       cpu1Program: process.env.C2000_CPU1_OUT,
       cpu2Program: process.env.C2000_CPU2_OUT,
       searchRoots: programSearchRoots(),
@@ -152,93 +155,95 @@ try {
   assert.equal(uiIndependenceEvidence.selectedCpuRequired, false);
   assert.deepEqual(uiIndependenceEvidence.requiredPerCoreInputs, ["sessionId", "coreId"]);
   const acceptanceEvidence = readiness.acceptanceEvidence;
-  assert.equal(acceptanceEvidence.evidence, "c2000_multicore_acceptance_evidence_plan");
-  assertAcceptanceEvidence(acceptanceEvidence);
-  assertAcceptanceRequirement(acceptanceEvidence, "continue_cpu1_only", "c2000_verifyRunPauseIsolation", {
-    checkedCommandFields: ["coreId", "coreName"],
-    checkedPeerFields: ["connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
-  });
-  assertAcceptanceRequirement(acceptanceEvidence, "debug_tool_contracts", "c2000_getToolContracts", {
-    expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram", "c2000_loadSymbols"],
-    expectedRequiredInputs: ["sessionId", "coreId"],
-    expectedResponseCoreIdentityFields: ["coreId", "coreName"]
-  });
-  assertAcceptanceRequirement(acceptanceEvidence, "multicore_tool_contracts", "c2000_getToolContracts", {
-    expectedMulticoreToolContracts: [
-      { name: "c2000_loadPrograms", inputScope: "batch", requiredInputFields: ["sessionId", "programs"], coreIdentityFields: ["programs[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_connectCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_haltCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_resetCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_runCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_getMulticoreSnapshot", inputScope: "session", requiredInputFields: ["sessionId"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["cores[].coreId", "cores[].coreName"] }
-    ]
-  });
-  assertAcceptanceRequirement(acceptanceEvidence, "core_read_tool_contracts", "c2000_getToolContracts", {
-    expectedCoreReadToolContracts: [
-      { name: "c2000_evaluateMany", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "expressions"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-      { name: "c2000_getLoadedProgramInfo", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-      { name: "c2000_resolvePc", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-      { name: "c2000_resolveAddress", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "address"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-      { name: "c2000_waitUntilExpression", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "expression", "expected", "timeoutMs"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] }
-    ]
-  });
-  assertAcceptanceRequirement(acceptanceEvidence, "advanced_automation_contracts", "c2000_getToolContracts", {
-    expectedAdvancedAutomationToolContracts: [
-      { name: "c2000_analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", requiredInputFields: ["maps"], coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: ["maps[].coreId", "ownershipActions[].targetCoreId"] },
-      { name: "c2000_assignExpressions", inputScope: "batch", targetEffect: "memory-write", requiredInputFields: ["sessionId", "assignments"], coreIdentityFields: ["assignments[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_injectFaults", inputScope: "batch", targetEffect: "memory-write", requiredInputFields: ["sessionId", "faults"], coreIdentityFields: ["faults[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
-      { name: "c2000_compareExpressions", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "comparisons"], coreIdentityFields: ["comparisons[].left.coreId", "comparisons[].right.coreId"], responseCoreIdentityFields: ["comparisons[].left.coreId", "comparisons[].right.coreId"] },
-      { name: "c2000_waitForExpressionSet", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "conditions", "timeoutMs"], coreIdentityFields: ["conditions[].coreId"], responseCoreIdentityFields: ["conditions[].coreId"] },
-      { name: "c2000_diagnoseCpu2Boot", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"] },
-      { name: "c2000_diagnoseBootHandoff", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_waitForIpcReady", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: ["conditions[].coreId"] },
-      { name: "c2000_reloadResetRunToMain", inputScope: "core", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "coreId", "programUri"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
-      { name: "c2000_launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_runBootHandoffDiagnosis", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId", "ramOwnership.maps[].coreId", "expressions[].coreId", "pc[].coreId"] },
-      { name: "c2000_runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "wait.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_runResidentIpcDebug", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_launchResidentIpcDebug", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["cpu1OutPath", "cpu2OutPath"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
-      { name: "c2000_runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "loadedPrograms[].coreId", "expressions[].coreId", "pc[].coreId", "ramOwnership.maps[].coreId", "bootHandoff.cpu1.coreId", "bootHandoff.cpu2.coreId"] },
-      {
-        name: "c2000_launchMulticoreDebug",
-        inputScope: "launch",
-        targetEffect: "launch-workflow",
-        requiredInputFields: ["cores"],
-        coreIdentityFields: [
-          "cores[].coreId",
-          "postLaunchActions.assignExpressions[].coreId",
-          "postLaunchActions.injectFaults[].coreId",
-          "postLaunchChecks.waitForExpressionSet.conditions[].coreId",
-          "postLaunchChecks.compareExpressions[].left.coreId",
-          "postLaunchChecks.compareExpressions[].right.coreId",
-          "postLaunchChecks.diagnoseCpu2Boot.cpu1CoreId",
-          "postLaunchChecks.diagnoseCpu2Boot.cpu2CoreId",
-          "postLaunchChecks.verifyRunPauseIsolation.cpu1CoreId",
-          "postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"
-        ],
-        responseCoreIdentityFields: [
-          "snapshot.cores[].coreId",
-          "postLaunchActions.assignExpressions.results[].coreId",
-          "postLaunchActions.injectFaults.results[].coreId",
-          "postLaunchChecks.waitForExpressionSet.conditions[].coreId",
-          "postLaunchChecks.compareExpressions.comparisons[].left.coreId",
-          "postLaunchChecks.compareExpressions.comparisons[].right.coreId",
-          "postLaunchChecks.diagnoseCpu2Boot.cpu1.coreId",
-          "postLaunchChecks.diagnoseCpu2Boot.cpu2.coreId",
-          "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreId",
-          "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreName"
-        ]
-      }
-    ]
-  });
-  assertAcceptanceRequirement(acceptanceEvidence, "multicore_snapshot", "c2000_getMulticoreSnapshot", {
-    expectedCoreFields: ["coreName", "connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
-  });
+  if (acceptanceEvidence.applicable !== false) {
+    assert.equal(acceptanceEvidence.evidence, "c2000_multicore_acceptance_evidence_plan");
+    assertAcceptanceEvidence(acceptanceEvidence);
+    assertAcceptanceRequirement(acceptanceEvidence, "continue_cpu1_only", "c2000_verifyRunPauseIsolation", {
+      checkedCommandFields: ["coreId", "coreName"],
+      checkedPeerFields: ["connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
+    });
+    assertAcceptanceRequirement(acceptanceEvidence, "debug_tool_contracts", "c2000_getToolContracts", {
+      expectedCoreDebugTools: ["c2000_connectTarget", "c2000_disconnectTarget", "c2000_runCore", "c2000_continue", "c2000_haltCore", "c2000_pause", "c2000_reset", "c2000_getTargetState", "c2000_loadProgram", "c2000_loadSymbols"],
+      expectedRequiredInputs: ["sessionId", "coreId"],
+      expectedResponseCoreIdentityFields: ["coreId", "coreName"]
+    });
+    assertAcceptanceRequirement(acceptanceEvidence, "multicore_tool_contracts", "c2000_getToolContracts", {
+      expectedMulticoreToolContracts: [
+        { name: "c2000_loadPrograms", inputScope: "batch", requiredInputFields: ["sessionId", "programs"], coreIdentityFields: ["programs[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_connectCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_haltCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_resetCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_runCores", inputScope: "batch", requiredInputFields: ["sessionId", "coreIds"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_getMulticoreSnapshot", inputScope: "session", requiredInputFields: ["sessionId"], coreIdentityFields: ["coreIds[]"], responseCoreIdentityFields: ["cores[].coreId", "cores[].coreName"] }
+      ]
+    });
+    assertAcceptanceRequirement(acceptanceEvidence, "core_read_tool_contracts", "c2000_getToolContracts", {
+      expectedCoreReadToolContracts: [
+        { name: "c2000_evaluateMany", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "expressions"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+        { name: "c2000_getLoadedProgramInfo", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+        { name: "c2000_resolvePc", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+        { name: "c2000_resolveAddress", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "address"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+        { name: "c2000_waitUntilExpression", inputScope: "core", targetEffect: "target-read", requiredInputFields: ["sessionId", "coreId", "expression", "expected", "timeoutMs"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] }
+      ]
+    });
+    assertAcceptanceRequirement(acceptanceEvidence, "advanced_automation_contracts", "c2000_getToolContracts", {
+      expectedAdvancedAutomationToolContracts: [
+        { name: "c2000_analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", requiredInputFields: ["maps"], coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: ["maps[].coreId", "ownershipActions[].targetCoreId"] },
+        { name: "c2000_assignExpressions", inputScope: "batch", targetEffect: "memory-write", requiredInputFields: ["sessionId", "assignments"], coreIdentityFields: ["assignments[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_injectFaults", inputScope: "batch", targetEffect: "memory-write", requiredInputFields: ["sessionId", "faults"], coreIdentityFields: ["faults[].coreId"], responseCoreIdentityFields: ["results[].coreId", "results[].coreName"] },
+        { name: "c2000_compareExpressions", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "comparisons"], coreIdentityFields: ["comparisons[].left.coreId", "comparisons[].right.coreId"], responseCoreIdentityFields: ["comparisons[].left.coreId", "comparisons[].right.coreId"] },
+        { name: "c2000_waitForExpressionSet", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "conditions", "timeoutMs"], coreIdentityFields: ["conditions[].coreId"], responseCoreIdentityFields: ["conditions[].coreId"] },
+        { name: "c2000_diagnoseCpu2Boot", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId"] },
+        { name: "c2000_diagnoseBootHandoff", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_waitForIpcReady", inputScope: "session", targetEffect: "target-read", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "conditions[].coreId"], responseCoreIdentityFields: ["conditions[].coreId"] },
+        { name: "c2000_reloadResetRunToMain", inputScope: "core", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "coreId", "programUri"], coreIdentityFields: ["coreId"], responseCoreIdentityFields: ["coreId", "coreName"] },
+        { name: "c2000_launchAndRunIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_runIpcAcceptance", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath", "timeoutMs"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_runBootHandoffDiagnosis", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "expressions[].coreId"], responseCoreIdentityFields: ["cpu1.coreId", "cpu2.coreId", "snapshot.cores[].coreId", "ramOwnership.maps[].coreId", "expressions[].coreId", "pc[].coreId"] },
+        { name: "c2000_runReloadAndDiagnose", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId", "cpu1OutPath", "cpu2OutPath"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "waitExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "wait.conditions[].coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_runResidentIpcDebug", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_launchResidentIpcDebug", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["cpu1OutPath", "cpu2OutPath"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "ipcReadyExpressions[].coreId"], responseCoreIdentityFields: ["launch.coreMap[].coreId", "launch.created.cores[].coreId", "launch.connected.results[].coreId", "snapshot.cores[].coreId", "ipcReady.conditions[].coreId", "applicationEntry.coreId", "diagnosis.cpu1.coreId", "diagnosis.cpu2.coreId", "diagnosis.snapshot.cores[].coreId", "ramOwnership.maps[].coreId"] },
+        { name: "c2000_runFullDebugBundle", inputScope: "launch", targetEffect: "launch-workflow", requiredInputFields: ["sessionId", "cpu1CoreId", "cpu2CoreId"], coreIdentityFields: ["cpu1CoreId", "cpu2CoreId", "coreIds[]", "expressions[].coreId", "maps[].coreId"], responseCoreIdentityFields: ["snapshot.cores[].coreId", "loadedPrograms[].coreId", "expressions[].coreId", "pc[].coreId", "ramOwnership.maps[].coreId", "bootHandoff.cpu1.coreId", "bootHandoff.cpu2.coreId"] },
+        {
+          name: "c2000_launchMulticoreDebug",
+          inputScope: "launch",
+          targetEffect: "launch-workflow",
+          requiredInputFields: ["cores"],
+          coreIdentityFields: [
+            "cores[].coreId",
+            "postLaunchActions.assignExpressions[].coreId",
+            "postLaunchActions.injectFaults[].coreId",
+            "postLaunchChecks.waitForExpressionSet.conditions[].coreId",
+            "postLaunchChecks.compareExpressions[].left.coreId",
+            "postLaunchChecks.compareExpressions[].right.coreId",
+            "postLaunchChecks.diagnoseCpu2Boot.cpu1CoreId",
+            "postLaunchChecks.diagnoseCpu2Boot.cpu2CoreId",
+            "postLaunchChecks.verifyRunPauseIsolation.cpu1CoreId",
+            "postLaunchChecks.verifyRunPauseIsolation.cpu2CoreId"
+          ],
+          responseCoreIdentityFields: [
+            "snapshot.cores[].coreId",
+            "postLaunchActions.assignExpressions.results[].coreId",
+            "postLaunchActions.injectFaults.results[].coreId",
+            "postLaunchChecks.waitForExpressionSet.conditions[].coreId",
+            "postLaunchChecks.compareExpressions.comparisons[].left.coreId",
+            "postLaunchChecks.compareExpressions.comparisons[].right.coreId",
+            "postLaunchChecks.diagnoseCpu2Boot.cpu1.coreId",
+            "postLaunchChecks.diagnoseCpu2Boot.cpu2.coreId",
+            "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreId",
+            "postLaunchChecks.verifyRunPauseIsolation.acceptanceSummary.steps[].commandCoreName"
+          ]
+        }
+      ]
+    });
+    assertAcceptanceRequirement(acceptanceEvidence, "multicore_snapshot", "c2000_getMulticoreSnapshot", {
+      expectedCoreFields: ["coreName", "connected", "state", "pc", "loadedProgram", "loadedProgramInfo"]
+    });
+  }
   const debugProcessDetails = readiness.preflight?.debugProcessDetails;
   void debugProcessDetails;
   void readiness.programDiscovery;
-  assertNextHardwareAcceptanceCommand(readiness.nextCommand);
+  if (readiness.nextCommand !== undefined) assertNextHardwareAcceptanceCommand(readiness.nextCommand);
 
   console.log(JSON.stringify(readiness, null, 2));
   process.exitCode = readiness.readyForHardwareAcceptance ? 0 : 2;

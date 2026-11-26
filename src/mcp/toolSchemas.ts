@@ -99,6 +99,7 @@ export const acceptanceProgramDiscoverySchema = z.object({
 });
 
 export const acceptanceReadinessSchema = z.object({
+  boardId: z.string().min(1).optional().describe("Registered board to check. Required for daemon readiness when multiple boards are registered."),
   ccsInstallPath: z.string().min(1).optional(),
   ccxmlPath: z.string().min(1).optional(),
   cpu1Program: z.string().min(1).optional(),

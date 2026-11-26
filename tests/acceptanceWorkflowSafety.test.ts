@@ -4,10 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import type { AdapterSession } from "../src/adapters/types.js";
-import type { CoreId, EvaluateResult } from "../src/debug/types.js";
+import type { CoreId, EvaluateResult, TargetRunState } from "../src/debug/types.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
+import { DebugMcpError } from "../src/utils/errors.js";
 
 const coreMap = [
   { coreId: 0, coreName: "C28xx_CPU1" },
@@ -63,6 +64,37 @@ async function launchInput(directory: string, includeEntrySection = false) {
 }
 
 describe("launch acceptance cleanup and entry gate", () => {
+  test.each([true, false])("stops before halt if CPU2 connect throws=%s or remains disconnected", async throws => {
+    const directory = await mkdtemp(path.join(tmpdir(), "c2000-launch-connect-failure-"));
+    temporaryDirectories.push(directory);
+    const haltCalls: CoreId[] = [];
+    class PartialConnectAdapter extends MockDebugAdapter {
+      override async connect(session: AdapterSession, coreId: CoreId): Promise<void> {
+        if (coreId === 2 && throws) throw new DebugMcpError("ProbeNotConnected", "CPU2 connection failed");
+        return super.connect(session, coreId);
+      }
+      override async getState(session: AdapterSession, coreId: CoreId): Promise<TargetRunState> {
+        const state = await super.getState(session, coreId);
+        return coreId === 2 ? { ...state, connected: false, state: "Disconnected" } : state;
+      }
+      override async halt(session: AdapterSession, coreId: CoreId): Promise<void> {
+        haltCalls.push(coreId);
+        return super.halt(session, coreId);
+      }
+    }
+    const manager = new DebugSessionManager(new PartialConnectAdapter(), new LoadedProgramRegistry());
+    const result = await createToolHandlers(manager).launchAndRunIpcAcceptance(await launchInput(directory, true));
+
+    expect(result).toMatchObject({ success: false, cleanedUp: true, error: { details: {
+      workflowStage: "connect-cores",
+      cause: { code: "BatchOperationFailed", details: { failed: [
+        { coreId: 2, error: { code: throws ? "ProbeNotConnected" : "TargetStateMismatch" } }
+      ] } },
+      cleanup: { sessionClosed: true, probeLeaseReleased: true }
+    } } });
+    expect(haltCalls).toEqual([]);
+  });
+
   test("cleans a failed interactive launch by default and returns the cleanup evidence", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "c2000-launch-cleanup-"));
     temporaryDirectories.push(directory);

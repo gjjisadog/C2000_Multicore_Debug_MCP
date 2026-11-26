@@ -20,6 +20,7 @@ const environment = await resolveTiEnvironment({
 });
 const ccsInstallPath = environment.ccs.path ?? "";
 const ccxmlPath = environment.ccxml.path ?? "";
+const boardId = process.env.C2000_BOARD_ID;
 const runIsolation = process.env.C2000_RUN_ISOLATION === "1";
 const runLaunch = process.env.C2000_RUN_LAUNCH === "1";
 const allowExistingDebugProcesses = process.env.C2000_ALLOW_EXISTING_DEBUG_PROCESSES === "1";
@@ -46,6 +47,7 @@ const transport = new StdioClientTransport({
     C2000_MCP_LOG_LEVEL: process.env.C2000_MCP_LOG_LEVEL ?? "error",
     C2000_MCP_TOOL_PROFILE: "full",
     C2000_MCP_TOOL_SURFACE: "compatibility",
+    ...(process.env.C2000_MCP_CONFIG ? { C2000_MCP_CONFIG: process.env.C2000_MCP_CONFIG } : {}),
     ...(process.env.C2000_MCP_LOG_FILE ? { C2000_MCP_LOG_FILE: process.env.C2000_MCP_LOG_FILE } : {})
   }
 });
@@ -112,6 +114,7 @@ try {
     name: "c2000_createDebugSession",
     arguments: {
       sessionName: "f28p65x-mcp-hardware-acceptance",
+      boardId,
       ccxmlPath,
       coreMap: [
         { coreId: 0, coreName: "C28xx_CPU1", corePattern: "C28xx_CPU1" },
@@ -196,6 +199,7 @@ try {
       name: "c2000_launchMulticoreDebug",
       arguments: {
         sessionName: "f28p65x-mcp-hardware-launch-acceptance",
+        boardId,
         ccxmlPath,
         programDiscovery: {
           enabled: true,

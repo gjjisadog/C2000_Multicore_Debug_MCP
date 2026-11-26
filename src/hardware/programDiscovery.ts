@@ -32,6 +32,7 @@ export interface ProgramDiscoveryResult {
   cpu1: ProgramDiscoveryEntry;
   cpu2: ProgramDiscoveryEntry;
   pairing?: ProgramPairValidation;
+  selectionIssue?: string;
   searchRoots: string[];
 }
 
@@ -46,7 +47,8 @@ export interface ProgramDiscoveryOptions {
 
 export async function discoverAcceptancePrograms(options: ProgramDiscoveryOptions = {}): Promise<ProgramDiscoveryResult> {
   const searchRoots = uniqueStrings((options.searchRoots ?? []).filter(Boolean).map(item => path.resolve(item)));
-  const candidates = await collectOutFiles(searchRoots, options.maxDepth ?? 5);
+  const explicitPrograms = Boolean(options.cpu1Program && (options.singleCore || options.cpu2Program));
+  const candidates = explicitPrograms ? [] : await collectOutFiles(searchRoots, options.maxDepth ?? 5);
   const cpu1Candidates = options.singleCore
     ? candidates.filter(candidate => {
       const identity = describeProgramArtifact(candidate);
@@ -54,28 +56,35 @@ export async function discoverAcceptancePrograms(options: ProgramDiscoveryOption
     }).sort((left, right) => candidateScore(right, "cpu1") - candidateScore(left, "cpu1") || left.localeCompare(right))
     : rankCandidates(candidates, "cpu1");
   const cpu2Candidates = options.singleCore ? [] : rankCandidates(candidates, "cpu2");
-  const selection = selectCompatiblePair(
-    options.cpu1Program ? [options.cpu1Program] : cpu1Candidates,
-    options.cpu2Program ? [options.cpu2Program] : cpu2Candidates,
-    options.expectedDevice ?? "F28P65x"
-  );
+  const selection = options.singleCore || explicitPrograms
+    ? { cpu1: cpu1Candidates[0] }
+    : selectCompatiblePair(
+        options.cpu1Program ? [options.cpu1Program] : cpu1Candidates,
+        options.cpu2Program ? [options.cpu2Program] : cpu2Candidates,
+        options.expectedDevice ?? "F28P65x"
+      );
   const cpu1Selected = options.cpu1Program ?? selection.cpu1;
   const cpu2Selected = options.singleCore ? undefined : options.cpu2Program ?? selection.cpu2;
+  const pairing = validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x", options.singleCore);
 
   return {
     searchRoots,
     cpu1: selectEntry(options.cpu1Program, cpu1Candidates, cpu1Selected),
     cpu2: selectEntry(options.singleCore ? undefined : options.cpu2Program, cpu2Candidates, cpu2Selected),
-    pairing: validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x", options.singleCore)
+    pairing,
+    ...(selection.issue ? { selectionIssue: selection.issue } : {})
   };
 }
+
+const cpu1Label = /(?:^|[^a-z0-9])(?:cpu1|c28x1)(?:[^a-z0-9]|$)/i;
+const cpu2Label = /(?:^|[^a-z0-9])(?:cpu2|c28x2)(?:[^a-z0-9]|$)/i;
 
 export function describeProgramArtifact(artifactPath: string): ProgramArtifactIdentity {
   const normalized = artifactPath.toLowerCase().replace(/\\/g, "/");
   const filename = path.basename(normalized, path.extname(normalized));
-  const core = /(?:^|[^a-z0-9])(?:cpu1|c28x1)(?:[^a-z0-9]|$)/.test(normalized)
+  const core = cpu1Label.test(normalized)
     ? "cpu1"
-    : /(?:^|[^a-z0-9])(?:cpu2|c28x2)(?:[^a-z0-9]|$)/.test(normalized)
+    : cpu2Label.test(normalized)
       ? "cpu2"
       : undefined;
   const device = normalized.match(/(?:^|[^a-z0-9])(?:tms320)?((?:f28p|f283|f280)\d+[a-z0-9]*)(?:[^a-z0-9]|$)/)?.[1];
@@ -165,15 +174,40 @@ function compareKnownIdentity(label: string, left: string | undefined, right: st
   }
 }
 
-function selectCompatiblePair(cpu1Candidates: string[], cpu2Candidates: string[], expectedDevice: string): { cpu1?: string; cpu2?: string } {
+function selectCompatiblePair(cpu1Candidates: string[], cpu2Candidates: string[], expectedDevice: string): { cpu1?: string; cpu2?: string; issue?: string } {
+  if (cpu1Candidates.length === 0 || cpu2Candidates.length === 0) {
+    return { cpu1: cpu1Candidates[0], cpu2: cpu2Candidates[0] };
+  }
+  const cpu2ByDirectory = new Map<string, string[]>();
+  for (const cpu2 of cpu2Candidates) {
+    const directory = buildDirectory(cpu2);
+    const entries = cpu2ByDirectory.get(directory) ?? [];
+    entries.push(cpu2);
+    cpu2ByDirectory.set(directory, entries);
+  }
+  let selected: { cpu1: string; cpu2: string } | undefined;
   for (const cpu1 of cpu1Candidates) {
-    for (const cpu2 of cpu2Candidates) {
+    for (const cpu2 of cpu2ByDirectory.get(buildDirectory(cpu1)) ?? []) {
       if (validateProgramPair(cpu1, cpu2, expectedDevice).compatible) {
-        return { cpu1, cpu2 };
+        if (selected) return { issue: "Multiple compatible CPU1/CPU2 pairs were found; supply both program paths explicitly" };
+        selected = { cpu1, cpu2 };
       }
     }
   }
-  return { cpu1: cpu1Candidates[0], cpu2: cpu2Candidates[0] };
+  return selected ?? { issue: "No compatible CPU1/CPU2 pair shares a build directory; supply both program paths explicitly" };
+}
+
+function buildDirectory(program: string): string {
+  const directory = path.dirname(path.resolve(program));
+  const root = path.parse(directory).root;
+  const parts = path.relative(root, directory).split(path.sep);
+  // CCS places the two cores in sibling projects or output directories.
+  const coreDirectory = parts.findIndex(part => cpu1Label.test(part) || cpu2Label.test(part));
+  if (coreDirectory < 0) return directory;
+  const suffix = parts.slice(coreDirectory + 1).map(part =>
+    cpu1Label.test(part) || cpu2Label.test(part) ? part.replace(/cpu[12]|c28x[12]/gi, "").toLowerCase() : part
+  );
+  return path.join(root, ...parts.slice(0, coreDirectory), ...suffix);
 }
 
 function selectEntry(explicitProgram: string | undefined, candidates: string[], selected?: string): ProgramDiscoveryEntry {
@@ -183,7 +217,7 @@ function selectEntry(explicitProgram: string | undefined, candidates: string[], 
   if (selected) {
     return { selected, source: "discovered", candidates };
   }
-  return { source: "missing", candidates: [] };
+  return { source: "missing", candidates };
 }
 
 async function collectOutFiles(searchRoots: string[], maxDepth: number): Promise<string[]> {
