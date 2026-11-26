@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { CCS_VIEW_COMMAND_TIMEOUT_MS } from "../adapters/CcsScriptingBridge.js";
 import type { C2000McpConfig } from "../config/config.schema.js";
 import type { WorkerHeartbeat } from "../worker/WorkerHeartbeat.js";
 import { DebugMcpError } from "../utils/errors.js";
@@ -405,6 +406,9 @@ export class BoardWorkerSupervisor {
 
     if (toolName === "c2000_createDebugSession") {
       return Math.max(baseMs, startupEnvelopeMs + marginMs);
+    }
+    if (toolName === "c2000_openCcsView") {
+      return Math.max(baseMs, CCS_VIEW_COMMAND_TIMEOUT_MS + marginMs);
     }
     if (toolName === "c2000_loadProgram" || toolName === "c2000_loadSymbols" || toolName === "c2000_reloadResetRunToMain") {
       return Math.max(baseMs, programLoadMs + resetMs + marginMs);

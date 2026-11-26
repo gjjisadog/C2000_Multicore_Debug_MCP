@@ -1065,6 +1065,14 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
       }
     },
 
+    async openCcsView(input: z.infer<typeof sessionSchema>) {
+      try {
+        return ok(await manager.openCcsView(input.sessionId));
+      } catch (error) {
+        return fail(error, { sessionId: input.sessionId });
+      }
+    },
+
     async closeDebugSession(input: z.infer<typeof sessionSchema>) {
       try {
         return ok(await manager.closeDebugSession(input.sessionId));

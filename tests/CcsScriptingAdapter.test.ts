@@ -63,6 +63,22 @@ class RecordingBridge implements CcsScriptingBridge {
 }
 
 describe("CcsScriptingAdapter", () => {
+  test("requires evidence from persistent DSS before reporting the CCS view attached", async () => {
+    const bridge = Object.assign(new RecordingBridge(), { supportsCcsView: true });
+    const adapter = new CcsScriptingAdapter({}, bridge);
+    const session = await adapter.createSession({ sessionName: "view", ccxmlPath, coreMap });
+    await expect(adapter.openCcsView(session)).rejects.toMatchObject({ code: "DssCommandFailed" });
+    for (const view of [
+      { backend: "theia", attached: true, alreadyOpen: true },
+      { backend: "eclipse", attached: null, alreadyOpen: false }
+    ]) {
+      bridge.execute = async command => ({ coreId: command.coreId, coreName: command.coreName, ...view });
+      await expect(adapter.openCcsView(session)).resolves.toEqual(view);
+    }
+    const stateless = new CcsScriptingAdapter({}, { execute: bridge.execute });
+    await expect(stateless.openCcsView(session)).rejects.toMatchObject({ code: "AdapterNotAvailable" });
+  });
+
   test("routes paired preparation and read-only verification through CPU1 with both map bank sets", async () => {
     const bridge = new RecordingBridge();
     const adapter = new CcsScriptingAdapter({}, bridge);

@@ -34,6 +34,13 @@ describe("MCP tool surface profiles", () => {
     expect(definitionsForSurfaceProfile("advanced").every(tool => tool.exposure !== "compatibility")).toBe(true);
   });
 
+  test("exposes the shared CCS view through manual debug on the agent surface", () => {
+    expect(names("safe", "agent")).not.toContain("c2000_openCcsView");
+    expect(getToolExposureSummary("safe", "agent", ["debug.manual"]).registered)
+      .toContainEqual(expect.objectContaining({ name: "c2000_openCcsView", inputScope: "session", effects: ["host-write"] }));
+    expect(names("readonly", "advanced")).not.toContain("c2000_openCcsView");
+  });
+
   test("improvement governance tools are advanced-only and never part of the agent budget", () => {
     const improvementTools = [
       "c2000_generateImprovementProposals",
@@ -294,8 +301,8 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 33,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 97,
-      advancedOnlyCount: 95,
+      hiddenBySurfaceCount: 98,
+      advancedOnlyCount: 96,
       compatibilityOnlyCount: 2,
       hiddenAliases: ["c2000_continue", "c2000_pause"]
     }));
@@ -310,7 +317,7 @@ describe("MCP tool surface profiles", () => {
     expect(guide.surface).toBe("agent");
     expect(guide.aliases).toEqual([]);
     expect(guide.hiddenAliases).toEqual(["c2000_continue", "c2000_pause"]);
-    expect(guide.advancedOnly).toBe(95);
+    expect(guide.advancedOnly).toBe(96);
     expect(guide.compatibilityOnly).toBe(2);
   });
 
@@ -333,14 +340,14 @@ describe("MCP tool surface profiles", () => {
       surface: "agent",
       registeredToolCount: 33,
       hiddenBySafetyCount: 8,
-      hiddenBySurfaceCount: 97,
-      advancedOnlyCount: 95,
+      hiddenBySurfaceCount: 98,
+      advancedOnlyCount: 96,
       compatibilityOnlyCount: 2,
       counts: expect.objectContaining({
         registered: 33,
         hiddenBySafety: 8,
-        hiddenBySurface: 97,
-        advancedOnly: 95,
+        hiddenBySurface: 98,
+        advancedOnly: 96,
         compatibilityOnly: 2
       }),
       hiddenAliases: ["c2000_continue", "c2000_pause"]
@@ -418,8 +425,8 @@ describe("MCP tool surface profiles", () => {
     expect(safeAgent.count).toBe(MAX_AGENT_TOOL_COUNT);
     expect(safeAgent.bytes).toBeLessThan(safeAdvanced.bytes);
     expect(safeAdvanced.bytes).toBeLessThan(safeCompatibility.bytes);
-    expect(safeCompatibility.count).toBe(130);
-    expect(fullCompatibility.count).toBe(138);
+    expect(safeCompatibility.count).toBe(131);
+    expect(fullCompatibility.count).toBe(139);
     expect(fullCompatibility.bytes).toBeGreaterThan(safeCompatibility.bytes);
   });
 

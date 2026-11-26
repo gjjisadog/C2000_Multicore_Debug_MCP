@@ -2912,6 +2912,31 @@ describe("tool handlers", () => {
     }));
   });
 
+  test("opens a CCS view on the existing adapter session outside paired Flash programming", async () => {
+    const openCcsView = vi.fn(async (_session: AdapterSession) => ({
+      backend: "theia" as const, attached: true as const, alreadyOpen: false
+    }));
+    const adapter = Object.assign(new MockDebugAdapter(), { openCcsView });
+    const manager = new DebugSessionManager(adapter, new LoadedProgramRegistry());
+    const handlers = createToolHandlers(manager);
+    const { sessionId } = await manager.createDebugSession({ coreMap });
+    await manager.beginPairedFlashProgramming(sessionId, { ownerCoreId: 0, targetCoreId: 2, flashBanks: [1] });
+    await expect(handlers.openCcsView({ sessionId })).resolves.toMatchObject({
+      success: false, error: { code: "FlashProgrammingWindowActive" }
+    });
+    expect(openCcsView).not.toHaveBeenCalled();
+    await manager.endPairedFlashProgramming(sessionId);
+    const { adapterSessionId } = await manager.getSessionTopology(sessionId);
+    await expect(handlers.openCcsView({ sessionId })).resolves.toMatchObject({
+      success: true, sessionId, backend: "theia", attached: true, alreadyOpen: false
+    });
+    expect(openCcsView).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ adapterSessionId }));
+    await manager.closeDebugSession(sessionId);
+    await expect(handlers.openCcsView({ sessionId })).resolves.toMatchObject({
+      success: false, error: { code: "SessionNotFound" }
+    });
+  });
+
   test("getSessionTopology exposes the logical core mapping without target control", async () => {
     const handlers = createHandlers();
     const created = await handlers.createDebugSession({

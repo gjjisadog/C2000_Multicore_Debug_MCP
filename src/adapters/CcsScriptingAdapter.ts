@@ -1,7 +1,7 @@
-import type { DebugAdapter, AdapterCreateSessionOptions, AdapterSession } from "./types.js";
+import type { DebugAdapter, AdapterCreateSessionOptions, AdapterSession, CcsViewResult } from "./types.js";
 import type { CoreId, CoreInfo, EvaluateResult, ExpressionAssignmentValue, ResolveResult, ResetEvidence, ResetType, TargetRunState } from "../debug/types.js";
 import type { CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
-import { formatExpressionAssignmentValue } from "./CcsScriptingBridge.js";
+import { CCS_VIEW_COMMAND_TIMEOUT_MS, formatExpressionAssignmentValue } from "./CcsScriptingBridge.js";
 import { PersistentDssBridge } from "./PersistentDssBridge.js";
 import { DebugMcpError, toStructuredError } from "../utils/errors.js";
 import { normalizeProgramUri } from "../utils/pathUtils.js";
@@ -89,6 +89,20 @@ export class CcsScriptingAdapter implements DebugAdapter {
 
   async disposeSession(session: AdapterSession): Promise<void> {
     await this.bridge.disposeSession?.(session.adapterSessionId);
+  }
+
+  async openCcsView(session: AdapterSession): Promise<CcsViewResult> {
+    if (!this.bridge.supportsCcsView) {
+      throw new DebugMcpError("AdapterNotAvailable", "Opening a shared CCS view requires persistent DSS");
+    }
+    const result = await this.execute(session, session.coreMap[0]!.coreId,
+      { operation: "openCcsView" }, CCS_VIEW_COMMAND_TIMEOUT_MS);
+    const { backend, attached, alreadyOpen } = result;
+    if (typeof alreadyOpen === "boolean") {
+      if (backend === "theia" && attached === true) return { backend, attached, alreadyOpen };
+      if (backend === "eclipse" && attached === null) return { backend, attached, alreadyOpen };
+    }
+    throw new DebugMcpError("DssCommandFailed", "DSS did not confirm that the CCS view started");
   }
 
   async refreshSessionForProgramLoad(session: AdapterSession, coreId: CoreId): Promise<AdapterSession> {

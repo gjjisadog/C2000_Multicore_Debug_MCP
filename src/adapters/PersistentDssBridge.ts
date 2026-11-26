@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { CcsBridgeCreateSessionOptions, CcsScriptingBridge, CcsScriptingCommand } from "./CcsScriptingBridge.js";
-import { dssLaunchArguments, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
+import { dssLaunchArguments, resolveCcsRoot, resolveDssJson2Path, resolveDssLaunch, resolveDssScriptPath } from "./CcsScriptingBridge.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { dssResetHelperSource } from "./DssResetSource.js";
 import { PersistentCoreChannel } from "./PersistentCoreChannel.js";
@@ -59,6 +60,7 @@ const processCleanupBridges = new Set<PersistentDssBridge>();
 let processCleanupHooksInstalled = false;
 
 export class PersistentDssBridge implements CcsScriptingBridge {
+  readonly supportsCcsView = true;
   readonly supportsFirmwareHandoff = true;
   readonly supportsPairedFlash = true;
   private readonly launcher: DssServerLauncher;
@@ -241,7 +243,12 @@ class DefaultDssServerLauncher implements DssServerLauncher {
     const scriptPath = path.join(tempDir, "c2000-persistent-server.js");
     const dssScriptPath = this.options.dssScriptPath ?? resolveDssScriptPath(this.options.ccsInstallPath);
     const launch = resolveDssLaunch(dssScriptPath, this.options.ccsInstallPath, this.options.workspacePath);
-    const launchArgs = dssLaunchArguments(launch, [scriptPath, configPath]);
+    const ccsRoot = resolveCcsRoot(this.options.ccsInstallPath);
+    // Eclipse locks its workspace even when DSS starts headless.
+    const workspaceArgs = existsSync(path.join(ccsRoot, "eclipse"))
+      ? ["-dss.workspace", path.join(tempDir, "eclipse-workspace")]
+      : [];
+    const launchArgs = dssLaunchArguments(launch, [...workspaceArgs, scriptPath, configPath]);
     const processStartTime = new Date().toISOString();
     const commandLineHash = createHash("sha256").update(JSON.stringify([launch.command, ...launchArgs])).digest("hex");
     const authToken = randomBytes(32).toString("base64url");
@@ -466,6 +473,8 @@ function toDssCommand(command: CcsScriptingCommand): Record<string, unknown> {
     ...(command.timeoutMs === undefined ? {} : { timeoutMs: command.timeoutMs })
   };
   switch (command.operation) {
+    case "openCcsView":
+      return { ...base, name: "openCcsView" };
     case "connect":
       return { ...base, name: "connect" };
     case "disconnect":
@@ -747,6 +756,110 @@ var coreNamesByCoreId = {};
 var pendingFlashLoadEvidence = {};
 var sockets = [];
 var cleanupDone = false;
+var ccsViewProcess = null;
+var ccsCloudAgentLoader = null;
+var eclipseViewServer = null;
+var eclipseViewSession = null;
+
+function openEclipseCcsView() {
+  if (eclipseViewSession && eclipseViewServer.getSessionCount() > 0) {
+    return { backend: "eclipse", attached: null, alreadyOpen: true };
+  }
+  eclipseViewServer = script.getServer("CCSServer.1");
+  eclipseViewSession = eclipseViewServer.openSession(".*");
+  if (!eclipseViewSession) throw "Eclipse DSS did not return a CCS GUI session";
+  // Eclipse starts the GUI on a separate thread with no attach acknowledgment.
+  return { backend: "eclipse", attached: null, alreadyOpen: false };
+}
+
+function closeEclipseCcsView() {
+  if (eclipseViewSession) {
+    try {
+      eclipseViewSession.terminate();
+    } catch (ignoreSession) {}
+  }
+  if (eclipseViewServer) eclipseViewServer.stop();
+}
+
+function getCcsCloudAgentLoader(ccsRoot) {
+  if (ccsCloudAgentLoader) return ccsCloudAgentLoader;
+  // TI's DSS launcher does not put Cloud Agent on Rhino's classpath.
+  // Inherit DebugServer from the parent loader so both clients share one engine.
+  var jarDirectory = new File(ccsRoot, "ccs_base/DebugServer/packages/ti/dss/java");
+  var files = jarDirectory.listFiles();
+  var urls = [];
+  if (files) {
+    for (var index = 0; index < files.length; index++) {
+      var name = String(files[index].getName());
+      if (/^(com\.ti\.cloudagent_.+|org\.json|java_websocket)\.jar$/.test(name)) {
+        urls.push(files[index].toURI().toURL());
+      }
+    }
+  }
+  var parent = debugServer.getClass().getClassLoader();
+  ccsCloudAgentLoader = new java.net.URLClassLoader(urls, parent);
+  return ccsCloudAgentLoader;
+}
+
+function closeCcsView() {
+  if (ccsViewProcess && ccsViewProcess.isAlive()) {
+    ccsViewProcess.destroy();
+    if (!ccsViewProcess.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
+      ccsViewProcess.destroyForcibly();
+      ccsViewProcess.waitFor(1, java.util.concurrent.TimeUnit.SECONDS);
+    }
+  }
+}
+
+function openCcsView() {
+  if (ccsViewProcess && ccsViewProcess.isAlive()) {
+    return { backend: "theia", attached: true, alreadyOpen: true };
+  }
+  var ccsRoot = java.lang.System.getenv("C2000_MCP_CCS_INSTALL_PATH");
+  var osName = String(java.lang.System.getProperty("os.name"));
+  var relativePath = osName.indexOf("Mac") === 0
+    ? "Code Composer Studio.app/Contents/MacOS/Code Composer Studio"
+    : osName.indexOf("Windows") === 0 ? "theia/ccstudio.exe" : "theia/ccstudio";
+  var executable = new File(ccsRoot, relativePath);
+  if (!ccsRoot || !executable.isFile()) {
+    if (ccsRoot && new File(ccsRoot, "eclipse").isDirectory()) return openEclipseCcsView();
+    throw "Sharing the DSS session requires a desktop CCS Theia or Eclipse installation";
+  }
+
+  // TI's Cloud Agent registers the same DebugServer already used by this JVM.
+  var seconds = java.util.concurrent.TimeUnit.SECONDS;
+  var loader = getCcsCloudAgentLoader(ccsRoot);
+  var agentClass = loader.loadClass("com.ti.cloudagent.Agent");
+  var agent = agentClass.getMethod("instance", []).invoke(null, []).get(10, seconds);
+  var port = Number(agent.getPort());
+  var broker = agent.createEventBroker().get(5, seconds);
+  try {
+    var attached = new java.util.concurrent.CountDownLatch(1);
+    var event = broker.onEvent("attachedToCloudAgent", loader.loadClass("org.json.JSONObject"));
+    event.addIObjectEventListener(new Packages.com.ti.debug.engine.events.types.IObjectEventListener({
+      onEvent: function(data) {
+        if (data.optInt("agentPort") === port) attached.countDown();
+      }
+    }));
+    var launcher = new java.lang.ProcessBuilder([String(executable.getPath()),
+      "--agent-port=" + port, "--ccxml=" + config.ccxmlPath]);
+    launcher.redirectOutput(java.lang.ProcessBuilder.Redirect.INHERIT);
+    launcher.redirectError(java.lang.ProcessBuilder.Redirect.INHERIT);
+    ccsViewProcess = launcher.start();
+    for (var attempt = 0; attempt < 30; attempt++) {
+      if (attached.await(1, seconds) && ccsViewProcess.isAlive()) {
+        return { backend: "theia", attached: true, alreadyOpen: false };
+      }
+      if (!ccsViewProcess.isAlive()) throw "CCS exited before attaching to the DSS session";
+    }
+    throw "CCS did not confirm attachment to the DSS session within 30 seconds";
+  } catch (error) {
+    closeCcsView();
+    throw error;
+  } finally {
+    broker.close();
+  }
+}
 
 function isAuthenticated(command) {
   return command != null && typeof command.authToken === "string" &&
@@ -804,6 +917,9 @@ function cleanupPersistentDebugServer() {
     return;
   }
   cleanupDone = true;
+  try {
+    closeCcsView();
+  } catch (ignoreCcsView) {}
   for (var socketIndex = 0; socketIndex < sockets.length; socketIndex++) {
     try {
       sockets[socketIndex].close();
@@ -817,6 +933,9 @@ function cleanupPersistentDebugServer() {
   try {
     debugServer.stop();
   } catch (ignoreServer) {}
+  try {
+    closeEclipseCcsView();
+  } catch (ignoreEclipseView) {}
 }
 
 Runtime.getRuntime().addShutdownHook(new Thread(new Runnable({
@@ -1161,6 +1280,13 @@ function readCoreRunState(coreId) {
 function handleCommand(command) {
   if (command.name === "shutdown") {
     return { status: "OK", value: { shutdown: true } };
+  }
+  if (command.name === "openCcsView") {
+    try {
+      return { status: "OK", value: withCoreIdentity(command, openCcsView()) };
+    } catch (error) {
+      return { status: "FAIL", message: String(error).slice(0, 2048), details: describeCommandException(error) };
+    }
   }
   var session = getSessionForCommand(command);
   if (command.name === "connect") {

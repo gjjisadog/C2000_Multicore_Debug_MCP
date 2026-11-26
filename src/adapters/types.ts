@@ -23,12 +23,18 @@ export interface AdapterCreateSessionOptions {
   coreMap: CoreConfig[];
 }
 
+export type CcsViewResult = { alreadyOpen: boolean } & (
+  | { backend: "theia"; attached: true }
+  | { backend: "eclipse"; attached: null }
+);
+
 export interface DebugAdapter {
   readonly name: string;
   readonly supportsPairedFlash?: boolean;
   readonly supportsSimultaneousOperations?: boolean;
   ownedProcesses?(): Record<string, unknown>[];
   createSession(options: AdapterCreateSessionOptions): Promise<AdapterSession>;
+  openCcsView?(session: AdapterSession): Promise<CcsViewResult>;
   disposeSession?(session: AdapterSession): Promise<void>;
   /**
    * Return the adapter session that must be used for the next program load.

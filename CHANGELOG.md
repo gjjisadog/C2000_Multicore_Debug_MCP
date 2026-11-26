@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.19 - 2026-11-26
+
+- Add `c2000_openCcsView` to open a desktop CCS window on an existing MCP
+  debug session. Support Theia through Cloud Agent and legacy Eclipse-based
+  CCS through DSS with a temporary Eclipse workspace.
+
 ## 0.7.18 - 2026-11-26
 
 ### DeepSeek Harness integration

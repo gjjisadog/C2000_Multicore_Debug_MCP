@@ -49,7 +49,7 @@ npm ci
 npm run build
 npm pack
 dsh web --dump-default-config
-dsh plugin --profile web add ./c2000-multicore-mcp-0.7.18.tgz --ignore-scripts
+dsh plugin --profile web add ./c2000-multicore-mcp-0.7.19.tgz --ignore-scripts
 dsh web
 ```
 
@@ -2081,6 +2081,33 @@ If an existing debug process is expected and you still want to try the acceptanc
 ```bash
 C2000_ALLOW_EXISTING_DEBUG_PROCESSES=1
 ```
+
+## Open a CCS view for an MCP debug session
+
+MCP can open a desktop CCS window on its existing DSS session on the board
+worker's host. Configure `ccs.installPath` for the installed CCS version. Theia
+uses TI's Cloud Agent attach interface. Eclipse-based CCS, such as CCS 12.x, uses
+TI's DSS `CCSServer.1` interface and a temporary Eclipse workspace. The regular
+CCS editor can stay open. End any standalone CCS debug session using that probe
+before MCP connects.
+
+1. Start an interactive MCP debug session and connect the desired cores. Load
+   the program or matching symbols before opening the view. For launch tools
+   that offer idle cleanup, use `autoCloseOnComplete: false` for GUI use.
+2. On the default `agent` surface, open `c2000_openCapabilitySession` with
+   `capability: "debug.manual"` and a reason. The `advanced` surface exposes
+   the view tool directly.
+3. Call `c2000_openCcsView({ sessionId })`. Theia returns `attached: true` after
+   attachment. Eclipse returns `backend: "eclipse", attached: null` after DSS
+   accepts the launch. Wait for the Eclipse window and switch to the **CCS
+   Debug** perspective if needed. The shared view can display the target state,
+   registers, and loaded symbols. A repeated call reuses the existing view.
+4. Call `c2000_closeDebugSession({ sessionId })` to close the shared window and
+   release the probe. Closing the window yourself leaves the MCP session open.
+
+The window follows the current DSS process. If a CPU1 program load replaces that
+process, open the view again after loading. Keep GUI actions to observation
+during MCP workflows that change target state.
 
 ## Switching To Real CCS
 

@@ -12,6 +12,7 @@ import { dssResetHelperSource } from "./DssResetSource.js";
 const execFileAsync = promisify(execFile);
 
 export type CcsScriptingOperation =
+  | "openCcsView"
   | "connect"
   | "disconnect"
   | "run"
@@ -68,6 +69,7 @@ export interface CcsBridgeCreateSessionOptions {
 }
 
 export interface CcsScriptingBridge {
+  readonly supportsCcsView?: boolean;
   readonly supportsFirmwareHandoff?: boolean;
   readonly supportsPairedFlash?: boolean;
   createSession?(options: CcsBridgeCreateSessionOptions): Promise<void>;
@@ -75,6 +77,8 @@ export interface CcsScriptingBridge {
   execute(command: CcsScriptingCommand): Promise<Record<string, unknown>>;
   ownedProcesses?(): Record<string, unknown>[];
 }
+
+export const CCS_VIEW_COMMAND_TIMEOUT_MS = 50_000;
 
 export interface DssCliBridgeOptions {
   ccsInstallPath?: string;

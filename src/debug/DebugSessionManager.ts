@@ -260,6 +260,23 @@ export class DebugSessionManager {
     };
   }
 
+  async openCcsView(sessionId: string) {
+    return this.exclusive(sessionId, async () => {
+      const session = this.requireSession(sessionId);
+      if (session.activity.closing || session.adapterDisposed) {
+        throw new DebugMcpError("SessionClosing", "The debug session is closing", { sessionId });
+      }
+      if (session.flashProgrammingWindow) {
+        throw new DebugMcpError("FlashProgrammingWindowActive", "Open the CCS view after paired Flash programming finishes", { sessionId });
+      }
+      if (!this.adapter.openCcsView) {
+        throw new DebugMcpError("AdapterNotAvailable", "Opening a shared CCS view requires the CCS Scripting adapter", { sessionId });
+      }
+      const view = await this.adapter.openCcsView(session.adapterSession);
+      return { sessionId, ...view };
+    });
+  }
+
   async closeDebugSession(sessionId: string) {
     return this.exclusive(sessionId, async () => {
       const startedAtMs = Date.now();

@@ -1,6 +1,6 @@
 import net from "node:net";
 import { runInNewContext } from "node:vm";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -38,6 +38,42 @@ describe("XDS launch retry policy", () => {
 });
 
 describe("PersistentDssBridge", () => {
+  test("opens and closes an Eclipse GUI session through the existing DSS environment", () => {
+    const source = persistentServerScriptSource("C:/ti/json2.js");
+    const start = source.indexOf("var ccsViewProcess = null;");
+    const helper = source.slice(start, source.indexOf("function isAuthenticated(", start));
+    const calls: string[] = [];
+    let open = false;
+    const server = {
+      getSessionCount: () => Number(open),
+      openSession: (pattern: string) => {
+        calls.push(pattern);
+        open = true;
+        return { terminate: () => { calls.push("terminate"); open = false; } };
+      },
+      stop: () => calls.push("stop")
+    };
+    const results = runInNewContext(helper + `
+      var first = openCcsView();
+      var second = openCcsView();
+      closeEclipseCcsView();
+      [first, second];
+    `, {
+      java: { lang: { System: { getenv: () => "/ti/ccs", getProperty: () => "Mac OS X" } } },
+      File: class {
+        constructor(_root: string, private readonly relative: string) {}
+        isFile() { return false; }
+        isDirectory() { return this.relative === "eclipse"; }
+      },
+      script: { getServer(name: string) { calls.push(name); return server; } }
+    });
+    expect(results).toEqual([
+      { backend: "eclipse", attached: null, alreadyOpen: false },
+      { backend: "eclipse", attached: null, alreadyOpen: true }
+    ]);
+    expect(calls).toEqual(["CCSServer.1", ".*", "terminate", "stop"]);
+  });
+
   test("serializes bounded Java causes and frames from the generated DSS helper", () => {
     const source = persistentServerScriptSource("C:/ti/json2.js");
     const start = source.indexOf("function describeCommandException(");
@@ -851,16 +887,18 @@ describe("PersistentDssBridge", () => {
     expect(disposed).toBe(true);
   });
 
-  test("terminates the session-owned DSS process group and its descendants", async () => {
+  test.each([false, true])("isolates Eclipse workspace when installed (%s) and releases the DSS process group", async eclipse => {
     if (process.platform === "win32") {
       return;
     }
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-dss-process-group-"));
     const dssScriptPath = path.join(tempDir, "fake-dss.sh");
     const adapterSessionId = "ccs-session-process-group";
+    if (eclipse) await mkdir(path.join(tempDir, "eclipse"));
     await writeFile(dssScriptPath, [
       "#!/bin/sh",
       "set -eu",
+      "printf '%s\\n' \"$@\" > \"$0.args\"",
       "child_pid_file=\"$0.child.pid\"",
       "sleep 60 &",
       "child_pid=$!",
@@ -889,6 +927,12 @@ describe("PersistentDssBridge", () => {
 
       const diagnostics = bridge.ownedProcesses()[0];
       expect(diagnostics.processGroupId).toBe(diagnostics.pid);
+      const args = (await waitForTextFile(`${dssScriptPath}.args`)).split("\n");
+      const [scriptPath, configPath] = args.slice(-2);
+      expect(path.basename(scriptPath)).toBe("c2000-persistent-server.js");
+      expect(args).toEqual(eclipse
+        ? ["-dss.workspace", path.join(path.dirname(scriptPath), "eclipse-workspace"), scriptPath, configPath]
+        : [scriptPath, configPath]);
       const childPid = Number(await waitForTextFile(`${dssScriptPath}.child.pid`));
       expect(childPid).toBeGreaterThan(0);
 
