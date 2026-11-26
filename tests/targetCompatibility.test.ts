@@ -55,7 +55,7 @@ describe("F28374S / XDS100 compatibility", () => {
   });
 
   test("enumerates XDS100 when the XDS110 utility fails and reports missing XDS100 utility", async () => {
-    const preflight = (available: boolean) => runHardwarePreflight({ platform: "linux", execFile: async command => {
+    const preflight = (available: boolean) => runHardwarePreflight({ ccsInstallPath: "/fixtures/ccs", platform: "linux", execFile: async command => {
       if (command.endsWith("xds100serial") && available) return { stdout: table, stderr: "" };
       if (command === "ps") return { stdout: "", stderr: "" };
       throw new Error("utility unavailable");

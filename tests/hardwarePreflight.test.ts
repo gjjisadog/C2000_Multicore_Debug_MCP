@@ -295,6 +295,7 @@ describe("hardware preflight", () => {
 
   test("returns a structured xdsdfu failure without throwing", async () => {
     const result = await runHardwarePreflight({
+      ccsInstallPath: "/fixtures/ccs",
       platform: "darwin",
       execFile: async command => {
         if (command.endsWith("/xdsdfu")) {
@@ -364,6 +365,7 @@ describe("hardware preflight", () => {
   test("retries a successful but empty enumeration and reports probe readiness separately", async () => {
     let enumerations = 0;
     const result = await runHardwarePreflight({
+      ccsInstallPath: "/fixtures/ccs",
       platform: "darwin",
       enumerationAttempts: 3,
       sleep: async () => undefined,
@@ -387,6 +389,7 @@ describe("hardware preflight", () => {
 
   test("reports command success without claiming readiness when no probe appears", async () => {
     const result = await runHardwarePreflight({
+      ccsInstallPath: "/fixtures/ccs",
       platform: "darwin",
       enumerationAttempts: 2,
       sleep: async () => undefined,
