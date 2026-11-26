@@ -221,15 +221,16 @@ function buildMcpLaunchArgs(entrypoint: string, nodeExecutable: string, supervis
   ];
 }
 
-export function createInstalledConfig(workspace: string, runtimeDirectory: string): Record<string, unknown> {
+export function createInstalledConfig(workspace: string | undefined, runtimeDirectory: string, cwd = process.cwd()): Record<string, unknown> {
+  const readRoot = workspace ?? cwd;
   return {
     adapter: "auto",
-    ccs: { scriptingMode: "auto" },
+    ccs: { scriptingMode: "auto", ...(workspace ? { workspacePath: workspace } : {}) },
     filesystem: {
-      allowedReadRoots: [workspace],
+      allowedReadRoots: [readRoot],
       allowedWriteRoots: [runtimeDirectory]
     },
-    programSearchRoots: [workspace],
+    programSearchRoots: [readRoot],
     debugProbe: {
       queueDir: path.join(runtimeDirectory, "debug-probe-queue"),
       queueTimeoutMs: 30000,
@@ -361,7 +362,8 @@ export async function runSetup(options: SetupOptions, dependencies: SetupDepende
       await cp(sourceConfig, installedConfigPath);
     }
   } else {
-    const config = createInstalledConfig(path.resolve(options.workspace ?? cwd), dataDirectory);
+    const workspace = options.workspace ? path.resolve(cwd, options.workspace) : undefined;
+    const config = createInstalledConfig(workspace, dataDirectory, cwd);
     await writeFile(installedConfigPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 

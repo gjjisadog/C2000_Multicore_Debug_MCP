@@ -1,5 +1,7 @@
-import { describe, expect, test } from "vitest";
-import { defaultCcsInstallPath, getConnectedProbeSerials, hasBlockingDebugProcesses, recoverDebugProbe, resolveXds2xxConfPath, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+import { describe, expect, test, vi } from "vitest";
+import { getConnectedProbeSerials, hasBlockingDebugProcesses, recoverDebugProbe, resolveXds2xxConfPath, resolveXdsdfuPath, runHardwarePreflight } from "../src/hardware/preflight.js";
+import * as tiPaths from "../src/config/tiPaths.js";
+import * as ccsPaths from "../src/adapters/ccsInstallPath.js";
 
 test.each([
   ["123 /ti/ccstudio", false],
@@ -39,9 +41,31 @@ portUSB=true
 `;
 
 describe("hardware preflight", () => {
+  test("reports missing CCS and still inspects debugger process ownership", async () => {
+    vi.stubEnv("C2000_MCP_CCS_INSTALL_PATH", "");
+    const unresolved = { source: "unresolved", valid: false } as const;
+    const ti = vi.spyOn(tiPaths, "resolveTiEnvironment").mockResolvedValueOnce({
+      ccs: unresolved, c2000Ware: unresolved, ccxml: unresolved, attempts: []
+    });
+    const ccs = vi.spyOn(ccsPaths, "resolveCcsInstallPath").mockResolvedValueOnce({
+      source: "unresolved", candidates: [], reason: "no CCS installation with DSS found"
+    });
+    const execFile = vi.fn(async () => ({ stdout: " 100 ./DSLite", stderr: "" }));
+    try {
+      const result = await runHardwarePreflight({ platform: "darwin", execFile });
+
+      expect(execFile.mock.calls).toEqual([["ps", expect.any(Array), expect.any(Object)]]);
+      expect(result.xdsdfuPath).toBeUndefined();
+      expect(result.xdsdfu).toMatchObject({ ok: false, attempts: 0, error: expect.stringContaining("CCS not found") });
+      expect(result.debugProcessDetails.map(owner => owner.pid)).toEqual([100]);
+    } finally {
+      ti.mockRestore();
+      ccs.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   test("resolves the platform-native XDS110 executable path", () => {
-    expect(defaultCcsInstallPath("darwin")).toBe("/Applications/ti/ccs2100/ccs");
-    expect(defaultCcsInstallPath("win32")).toBe("C:\\ti\\ccs2100\\ccs");
     expect(resolveXdsdfuPath("/Applications/ti/ccs2100/ccs", "darwin")).toBe(
       "/Applications/ti/ccs2100/ccs/ccs_base/common/uscif/xds110/xdsdfu"
     );

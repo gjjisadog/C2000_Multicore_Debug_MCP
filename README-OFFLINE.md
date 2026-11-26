@@ -28,6 +28,12 @@ loads SQLite native code, installs an immutable version slot, registers the
 MCP, and runs the doctor handshake. Installation is per-user by default at
 `%USERPROFILE%\.c2000-multicore-mcp`; it does not require administrator rights.
 
+To use a specific firmware directory on this machine, run
+`.\install.cmd --workspace "D:\Firmware Workspace"` with your local path.
+This sets the default CCS workspace and the firmware search and read roots.
+For physical debugging, configure the local CCS and board paths in the
+installed JSON configuration.
+
 If Codex is not installed yet, install the MCP runtime without registration:
 
 ```powershell

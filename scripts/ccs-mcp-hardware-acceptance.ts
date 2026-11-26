@@ -6,7 +6,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { assertAcceptanceEvidence, assertUiIndependenceEvidence, buildUiIndependenceEvidence } from "../src/debug/boundary.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
-import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
 import { hasBlockingDebugProcesses, formatDebugProcessOwners } from "../src/hardware/preflight.js";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
 import { requireHardwareOptIn, requireSupportedHardwareRuntime } from "./hardware-opt-in.js";

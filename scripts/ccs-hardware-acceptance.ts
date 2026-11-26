@@ -8,7 +8,6 @@ import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import { assertAcceptanceEvidence, assertUiIndependenceEvidence, buildUiIndependenceEvidence } from "../src/debug/boundary.js";
 import { assertRunPauseAcceptanceSummary as assertAcceptanceSummary } from "../src/debug/runPauseAcceptance.js";
-import { resolveCcxmlPath, resolveCcsInstallPath } from "../src/ccs/paths.js";
 import { discoverAcceptancePrograms } from "../src/hardware/programDiscovery.js";
 import { hasBlockingDebugProcesses, formatDebugProcessOwners, runHardwarePreflight } from "../src/hardware/preflight.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";

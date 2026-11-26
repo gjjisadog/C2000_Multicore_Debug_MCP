@@ -1,6 +1,7 @@
 import { access, readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { defaultCcsSearchRoots, dssLauncherPathForInstall } from "../adapters/ccsInstallPath.js";
 
 export type TiPathKind = "ccs" | "c2000ware" | "ccxml";
 export type TiPathSource = "explicit" | "discovered" | "derived" | "unresolved";
@@ -35,20 +36,21 @@ export interface ResolveTiEnvironmentOptions {
   ccxmlPath?: string;
   homeDir?: string;
   applicationRoots?: string[];
+  requireDss?: boolean;
 }
 
 const F28P65X_CCXML = path.join("device_support", "f28p65x", "common", "targetConfigs", "TMS320F28P650DK9.ccxml");
 
 export async function resolveTiEnvironment(options: ResolveTiEnvironmentOptions = {}): Promise<TiEnvironmentResolution> {
   const homeDir = options.homeDir ?? os.homedir();
-  const applicationRoots = options.applicationRoots ?? (process.platform === "darwin" ? ["/Applications/ti"] : []);
+  const applicationRoots = options.applicationRoots ?? defaultCcsSearchRoots(process.platform, homeDir);
   const attempts: TiPathAttempt[] = [];
 
   const ccsCandidates = unique([
     ...(options.ccsInstallPath ? [{ path: options.ccsInstallPath, source: "explicit" as const }] : []),
     ...(await discoverCcsCandidates(homeDir, applicationRoots)).map(candidate => ({ path: candidate, source: "discovered" as const }))
   ]);
-  const ccs = await selectCcs(ccsCandidates, attempts);
+  const ccs = await selectCcs(ccsCandidates, attempts, options.requireDss ?? false);
 
   const wareCandidates = unique([
     ...(options.c2000WarePath ? [{ path: options.c2000WarePath, source: "explicit" as const }] : []),
@@ -67,23 +69,22 @@ export async function resolveTiEnvironment(options: ResolveTiEnvironmentOptions 
 }
 
 async function discoverCcsCandidates(homeDir: string, applicationRoots: string[]): Promise<string[]> {
-  const roots = [
-    path.join(homeDir, "ti"),
-    ...applicationRoots,
-    ...(process.platform === "win32" ? ["C:\\ti", "D:\\ti", "C:\\", "D:\\"] : [])
-  ];
+  const roots = new Set([path.join(homeDir, "ti"), ...applicationRoots]);
   const candidates: string[] = [];
   for (const root of roots) {
     for (const entry of await directories(root)) {
-      if (/^ccs(?:\d+(?:[._-]\d+)*)?$/i.test(entry)) candidates.push(path.join(root, entry, "ccs"));
+      if (/^ccs(?:\d+(?:[._-]\d+)*)?$/i.test(entry)) candidates.push(path.join(root, entry, "ccs"), path.join(root, entry));
     }
   }
   return candidates;
 }
 
 async function discoverWareCandidates(homeDir: string, applicationRoots: string[]): Promise<string[]> {
-  const roots = [path.join(homeDir, "ti", "c2000"), path.join(homeDir, "ti")];
-  for (const applicationRoot of applicationRoots) roots.push(path.join(applicationRoot, "c2000"), applicationRoot);
+  const roots = new Set([path.join(homeDir, "ti", "c2000"), path.join(homeDir, "ti")]);
+  for (const applicationRoot of applicationRoots) {
+    roots.add(path.join(applicationRoot, "c2000"));
+    roots.add(applicationRoot);
+  }
   const candidates: string[] = [];
   for (const root of roots) {
     for (const entry of await directories(root)) {
@@ -93,7 +94,7 @@ async function discoverWareCandidates(homeDir: string, applicationRoots: string[
   return candidates;
 }
 
-async function selectCcs(candidates: Candidate[], attempts: TiPathAttempt[]): Promise<ResolvedTiPath> {
+async function selectCcs(candidates: Candidate[], attempts: TiPathAttempt[], requireDss: boolean): Promise<ResolvedTiPath> {
   const valid: Array<Candidate & { version: string; anchor: string }> = [];
   for (const candidate of candidates) {
     const binDir = path.join(candidate.path, "ccs_base", "DebugServer", "bin");
@@ -103,18 +104,16 @@ async function selectCcs(candidates: Candidate[], attempts: TiPathAttempt[]): Pr
       path.join(binDir, process.platform === "win32" ? "DSLite.exe" : "DSLite"),
       path.join(binDir, process.platform === "win32" ? "DSLite" : "DSLite.exe")
     ]);
-    const exists = anchor !== undefined;
+    const hasDss = !requireDss || await fileExists(dssLauncherPathForInstall(candidate.path));
+    const exists = anchor !== undefined && hasDss;
     const version = ccsVersion(candidate.path);
-    attempts.push({ kind: "ccs", ...candidate, valid: exists, reason: exists ? "Validated CCS DSLite anchor" : "Missing CCS DSLite anchor", version });
-    if (anchor) valid.push({ ...candidate, version, anchor });
+    const reason = !anchor ? "Missing CCS DSLite anchor" : !hasDss ? "Missing CCS DSS launcher" : "Validated CCS DSLite anchor";
+    attempts.push({ kind: "ccs", ...candidate, valid: exists, reason, version });
+    if (anchor && hasDss) valid.push({ ...candidate, version, anchor });
   }
   // An explicit path is an operator decision. If it is invalid, fail closed
   // instead of silently switching to a different installed CCS version.
-  const explicit = candidates.find(candidate => candidate.source === "explicit");
-  if (explicit && !valid.some(candidate => candidate.source === "explicit")) {
-    return unresolved();
-  }
-  const selected = choose(valid);
+  const selected = choose(candidates, valid);
   return selected ? { path: selected.path, version: selected.version, source: selected.source, valid: true, anchor: selected.anchor } : unresolved();
 }
 
@@ -126,7 +125,7 @@ async function selectWare(candidates: Candidate[], attempts: TiPathAttempt[]): P
     attempts.push({ kind: "c2000ware", ...candidate, valid: Boolean(sdk), reason: sdk ? "Validated C2000Ware sdk.json anchor" : "Missing C2000Ware sdk.json anchor", ...(sdk ? { version: sdk.version } : {}) });
     if (sdk) valid.push({ ...candidate, version: sdk.version, anchor });
   }
-  const selected = choose(valid);
+  const selected = choose(candidates, valid);
   return selected ? { path: selected.path, version: selected.version, source: selected.source, valid: true, anchor: selected.anchor } : unresolved();
 }
 
@@ -135,6 +134,7 @@ async function selectCcxml(candidates: Candidate[], attempts: TiPathAttempt[]): 
     const exists = await fileExists(candidate.path);
     attempts.push({ kind: "ccxml", ...candidate, valid: exists, reason: exists ? "Validated target configuration" : "Missing target configuration" });
     if (exists) return { path: candidate.path, source: candidate.source, valid: true, anchor: candidate.path };
+    if (candidate.source === "explicit") return unresolved();
   }
   return unresolved();
 }
@@ -155,10 +155,11 @@ function unique<T extends Candidate>(candidates: T[]): T[] {
   });
 }
 
-function choose<T extends Candidate & { version: string }>(candidates: T[]): T | undefined {
-  const explicit = candidates.find(candidate => candidate.source === "explicit");
-  if (explicit) return explicit;
-  return [...candidates].sort((left, right) => compareVersions(right.version, left.version))[0];
+function choose<T extends Candidate & { version: string }>(candidates: Candidate[], valid: T[]): T | undefined {
+  if (candidates.some(candidate => candidate.source === "explicit")) {
+    return valid.find(candidate => candidate.source === "explicit");
+  }
+  return [...valid].sort((left, right) => compareVersions(right.version, left.version))[0];
 }
 
 function compareVersions(left: string, right: string): number {

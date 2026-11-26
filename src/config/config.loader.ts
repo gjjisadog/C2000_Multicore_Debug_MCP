@@ -52,10 +52,12 @@ export async function loadConfig(configPath = process.env.C2000_MCP_CONFIG, deps
     ...fileConfig
   });
   const ccs = { ...objectAt(merged, "ccs") };
+  const adapter = merged.adapter === "auto" ? ccs.scriptingMode : merged.adapter;
   const resolved = await (deps.resolveTiEnvironment ?? resolveTiEnvironmentDefault)({
     ccsInstallPath: stringAt(ccs, "installPath"),
     c2000WarePath: stringAt(ccs, "c2000WarePath"),
-    ccxmlPath: stringAt(ccs, "ccxmlPath")
+    ccxmlPath: stringAt(ccs, "ccxmlPath"),
+    requireDss: adapter !== "mock"
   });
   if (resolved.ccs.path) ccs.installPath = resolved.ccs.path;
   if (resolved.c2000Ware.path) ccs.c2000WarePath = resolved.c2000Ware.path;

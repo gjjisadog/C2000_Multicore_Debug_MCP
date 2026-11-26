@@ -25,15 +25,15 @@ MEMORY CONFIGURATION
 const merged = mergeOwnershipActions(ownershipActionsForMap(parsed));
 assert(merged.length === 1 && merged[0].value === 0x30, "merge multi-GS ownership");
 
-const noDss = await resolveAdapterMode({
+const tempCcs = await mkdtemp(path.join(tmpdir(), "c2000-dss-"));
+const invalidCcs = await resolveAdapterMode({
   adapter: "auto",
-  ccs: { scriptingMode: "auto", installPath: "/tmp/no-ccs-install" },
+  ccs: { scriptingMode: "auto", installPath: tempCcs },
   target: { name: "F28P65x", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] },
   logging: { level: "info" }
-});
-assert(noDss.mode === "mock" && noDss.reason.includes("not found"), "auto falls back without DSS");
+}).then(() => undefined, error => error);
+assert(invalidCcs?.code === "DssNotFound", "auto rejects an invalid configured CCS path");
 
-const tempCcs = await mkdtemp(path.join(tmpdir(), "c2000-dss-"));
 const dssDir = path.join(tempCcs, "ccs_base", "scripting", "bin");
 await mkdir(dssDir, { recursive: true });
 await writeFile(path.join(dssDir, process.platform === "win32" ? "dss.bat" : "dss.sh"), "#!/bin/sh\n");

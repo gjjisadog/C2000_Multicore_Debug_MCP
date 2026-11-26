@@ -1,9 +1,6 @@
 {
   "adapter": "mock",
   "ccs": {
-    "installPath": "C:/ti/ccs",
-    "workspacePath": "D:/workspace",
-    "ccxmlPath": "D:/workspace/targetConfigs/TMS320F28P650DK9.ccxml",
     "scriptingMode": "mock"
   },
   "target": {
@@ -33,7 +30,6 @@
     ]
   },
   "logging": {
-    "level": "info",
-    "logFile": "./logs/c2000-multicore-mcp.log"
+    "level": "info"
   }
 }

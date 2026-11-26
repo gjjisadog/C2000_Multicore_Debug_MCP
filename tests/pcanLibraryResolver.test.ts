@@ -41,6 +41,17 @@ describe("PCAN native platform support", () => {
       .rejects.toMatchObject({ code: "PcanLibraryNotFound", message: expect.stringContaining("MacCAN libPCBUSB") });
   });
 
+  test("uses the configured Windows system directory for PCAN-Basic discovery", async () => {
+    await expect(resolvePcanBasicLibrary(undefined, {
+      platform: "win32",
+      arch: "x64",
+      env: { PATH: "", SystemRoot: "X:\\TestWindows" }
+    })).rejects.toMatchObject({
+      code: "PcanLibraryNotFound",
+      details: { attempts: ["X:\\TestWindows\\System32\\PCANBasic.dll"] }
+    });
+  });
+
   test("uses PEAK's non-linear USB channel handles above channel eight", () => {
     expect(PCAN_CHANNELS.PCAN_USBBUS1).toBe(0x51);
     expect(PCAN_CHANNELS.PCAN_USBBUS8).toBe(0x58);

@@ -29,6 +29,7 @@ export async function resolvePcanBasicLibrary(
 
   const pathEntries = (env.PATH ?? "").split(platform === "win32" ? ";" : ":").filter(Boolean);
   const explicitCandidates = [explicitPath, env.C2000_PCAN_BASIC_LIBRARY].filter((value): value is string => Boolean(value));
+  const windowsRoot = env.SystemRoot ?? env.WINDIR;
   const directories = [...new Set([
     ...(options.searchDirectories ?? []),
     ...pathEntries,
@@ -42,7 +43,7 @@ export async function resolvePcanBasicLibrary(
   const candidates = platform === "win32"
     ? [
       ...explicitCandidates,
-      "C:\\Windows\\System32\\PCANBasic.dll",
+      windowsRoot ? pathApi.join(windowsRoot, "System32", "PCANBasic.dll") : undefined,
       env.ProgramFiles ? pathApi.join(env.ProgramFiles, "PEAK-System", "PCAN-Basic API", "x64", "PCANBasic.dll") : undefined,
       ...directories.map(directory => pathApi.join(directory, "PCANBasic.dll"))
     ].filter((value): value is string => Boolean(value))

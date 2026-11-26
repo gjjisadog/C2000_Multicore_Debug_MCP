@@ -1,7 +1,7 @@
 import type { C2000McpConfig } from "../config/config.schema.js";
 import { existsSync } from "node:fs";
-import { isCcsDssAvailable } from "./CcsScriptingBridge.js";
-import { resolveCcsInstallPath, resolveCcsInstallPathSync } from "./ccsInstallPath.js";
+import { resolveCcsInstallPath, resolveCcsInstallPathSync, type CcsInstallResolution } from "./ccsInstallPath.js";
+import { DebugMcpError } from "../utils/errors.js";
 
 export type ResolvedAdapterMode = "ccs" | "mock";
 
@@ -15,75 +15,44 @@ export interface AdapterResolution {
 
 export async function resolveAdapterMode(config: C2000McpConfig): Promise<AdapterResolution> {
   const requested = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
-  if (requested === "ccs") {
-    const install = await resolveCcsInstallPath({ installPath: config.ccs.installPath });
-    return {
-      mode: "ccs",
-      requested,
-      reason: "explicit ccs adapter selection",
-      ccsInstallPath: install.installPath,
-      ccsInstallSource: install.source
-    };
-  }
   if (requested === "mock") {
     return { mode: "mock", requested, reason: "explicit mock adapter selection" };
   }
-  const install = await resolveCcsInstallPath({ installPath: config.ccs.installPath });
-  const available = await isCcsDssAvailable(install.installPath);
-  if (available) {
+  return selectAdapter(requested, await resolveCcsInstallPath({ installPath: config.ccs.installPath }));
+}
+
+export function resolveAdapterModeSync(config: C2000McpConfig): AdapterResolution {
+  const requested = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
+  if (requested === "mock") {
+    return { mode: "mock", requested, reason: "explicit mock adapter selection" };
+  }
+  return selectAdapter(requested, resolveCcsInstallPathSync({ installPath: config.ccs.installPath }));
+}
+
+function selectAdapter(requested: "auto" | "ccs", install: CcsInstallResolution): AdapterResolution {
+  if (install.dssLauncherPath && existsSync(install.dssLauncherPath)) {
     return {
       mode: "ccs",
       requested,
-      reason: `auto: DSS launcher found (${install.reason})`,
+      reason: requested === "ccs" ? "explicit ccs adapter selection" : `auto: DSS launcher found (${install.reason})`,
       ccsInstallPath: install.installPath,
       ccsInstallSource: install.source
     };
+  }
+  if (install.source === "explicit" || install.source === "env") {
+    throw new DebugMcpError(
+      "DssNotFound",
+      `DSS launcher not found at ${install.dssLauncherPath}. Set ccs.installPath or C2000_MCP_CCS_INSTALL_PATH to the CCS directory containing ccs_base.`,
+      { ccsInstallPath: install.installPath, dssLauncherPath: install.dssLauncherPath }
+    );
+  }
+  if (requested === "ccs") {
+    return { mode: "ccs", requested, reason: install.reason, ccsInstallSource: install.source };
   }
   return {
     mode: "mock",
     requested,
     reason: `auto: DSS launcher not found (${install.reason}); falling back to mock adapter`,
-    ccsInstallPath: install.installPath,
-    ccsInstallSource: install.source
-  };
-}
-
-export function resolveAdapterModeSync(config: C2000McpConfig): AdapterResolution {
-  const requested = config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter;
-  const install = resolveCcsInstallPathSync({ installPath: config.ccs.installPath });
-  if (requested === "ccs") {
-    return {
-      mode: "ccs",
-      requested,
-      reason: "explicit ccs adapter selection",
-      ccsInstallPath: install.installPath,
-      ccsInstallSource: install.source
-    };
-  }
-  if (requested === "mock") {
-    return {
-      mode: "mock",
-      requested,
-      reason: "explicit mock adapter selection",
-      ccsInstallPath: install.installPath,
-      ccsInstallSource: install.source
-    };
-  }
-  const available = existsSync(install.dssLauncherPath);
-  if (available) {
-    return {
-      mode: "ccs",
-      requested,
-      reason: `auto: DSS launcher found (${install.reason})`,
-      ccsInstallPath: install.installPath,
-      ccsInstallSource: install.source
-    };
-  }
-  return {
-    mode: "mock",
-    requested,
-    reason: `auto: DSS launcher not found (${install.reason}); falling back to mock`,
-    ccsInstallPath: install.installPath,
     ccsInstallSource: install.source
   };
 }

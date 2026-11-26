@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
-import { defaultCcsInstallPath, resolveCcsInstallPath, resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
+import { resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
+import { resolveCcsInstallPath } from "../adapters/ccsInstallPath.js";
 import { resolveTiEnvironment } from "../config/tiPaths.js";
 
-export { defaultCcsInstallPath, resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
+export { resolveXds100SerialPath, resolveXds2xxConfPath, resolveXdsdfuPath } from "../ccs/paths.js";
 
 export interface CommandOutput {
   stdout: string;
@@ -42,7 +43,7 @@ export interface Xds2xxPreflight {
 }
 
 export interface HardwarePreflightResult {
-  xdsdfuPath: string;
+  xdsdfuPath?: string;
   xds100SerialPath?: string;
   /** Host-only enumeration; never connects to the target. */
   xds100?: {
@@ -103,12 +104,12 @@ export async function runHardwarePreflight(options: {
   sleep?: (ms: number) => Promise<void>;
 } = {}): Promise<HardwarePreflightResult> {
   const platform = options.platform ?? process.platform;
-  const detectedCcsPath = options.ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH
-    ?? (await resolveTiEnvironment()).ccs.path;
-  const ccsRoot = resolveCcsInstallPath(detectedCcsPath, platform);
-  const xdsdfuPath = resolveXdsdfuPath(ccsRoot, platform);
-  const xds2xxConfPath = resolveXds2xxConfPath(ccsRoot, platform);
-  const xds100SerialPath = resolveXds100SerialPath(ccsRoot, platform);
+  const ccsRoot = options.ccsInstallPath || process.env.C2000_MCP_CCS_INSTALL_PATH
+    || (await resolveTiEnvironment()).ccs.path
+    || (await resolveCcsInstallPath({ platform })).installPath;
+  const xdsdfuPath = ccsRoot ? resolveXdsdfuPath(ccsRoot, platform) : undefined;
+  const xds2xxConfPath = ccsRoot ? resolveXds2xxConfPath(ccsRoot, platform) : undefined;
+  const xds100SerialPath = ccsRoot ? resolveXds100SerialPath(ccsRoot, platform) : undefined;
   const run = options.execFile ?? ((command, args, execOptions) => execFileAsync(command, args, execOptions));
   const enumerationAttempts = Math.max(1, options.enumerationAttempts ?? 3);
   const sleep = options.sleep ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -116,14 +117,17 @@ export async function runHardwarePreflight(options: {
     xdsdfuPath,
     xds2xxConfPath,
     xds100SerialPath,
-    xdsdfu: { ok: false, commandOk: false, probeReady: false, attempts: 0 },
+    xdsdfu: {
+      ok: false, commandOk: false, probeReady: false, attempts: 0,
+      ...(ccsRoot ? {} : { error: "CCS not found. Set ccs.installPath or C2000_MCP_CCS_INSTALL_PATH." })
+    },
     xds2xx: { ok: false, commandOk: false, probeReady: false, attempts: 0, devices: [] },
     debugProcesses: [],
     debugProcessDetails: [],
     processInspection: { ok: false, platform }
   };
 
-  for (let attempt = 1; attempt <= enumerationAttempts; attempt += 1) {
+  for (let attempt = 1; xdsdfuPath && attempt <= enumerationAttempts; attempt += 1) {
     try {
       const { stdout, stderr } = await run(xdsdfuPath, ["-e"], { timeout: 10000 });
       const devices = parseXds110Devices(stdout);
@@ -156,7 +160,7 @@ export async function runHardwarePreflight(options: {
   // identity through the CCS xds2xx_conf utility instead, so a successful
   // XDS110 enumeration remains the fast path while XDS2xx is probed when
   // no XDS110 was found. The command is host-only and never touches a target.
-  if (platform === "win32" && (preflight.xdsdfu.devices?.length ?? 0) === 0) {
+  if (xds2xxConfPath && platform === "win32" && (preflight.xdsdfu.devices?.length ?? 0) === 0) {
     try {
       const platformPath = path.win32;
       const { stdout, stderr } = await run(
@@ -187,13 +191,15 @@ export async function runHardwarePreflight(options: {
   }
 
   // Enumerate even when an XDS110 is present so mixed-probe hosts can route XDS100 boards.
-  try {
-    const { stdout, stderr } = await run(xds100SerialPath, [], { timeout: 10000 });
-    const devices = parseXds100Devices(stdout);
-    preflight.xds100 = { ok: true, commandOk: true, probeReady: devices.length > 0, stdout, stderr, devices };
-  } catch (error) {
-    preflight.xds100 = { ok: false, commandOk: false, probeReady: false, devices: [],
-      error: error instanceof Error ? error.message : String(error) };
+  if (xds100SerialPath) {
+    try {
+      const { stdout, stderr } = await run(xds100SerialPath, [], { timeout: 10000 });
+      const devices = parseXds100Devices(stdout);
+      preflight.xds100 = { ok: true, commandOk: true, probeReady: devices.length > 0, stdout, stderr, devices };
+    } catch (error) {
+      preflight.xds100 = { ok: false, commandOk: false, probeReady: false, devices: [],
+        error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   try {

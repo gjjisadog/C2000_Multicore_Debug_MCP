@@ -426,7 +426,12 @@ async function main() {
 
     const preflight = structured(await client.callTool({ name: "c2000_getHardwarePreflight", arguments: {} }));
     assert.equal(preflight.success, true);
-    assert.equal(typeof preflight.xdsdfuPath, "string");
+    if (preflight.xdsdfuPath === undefined) {
+      assert.equal(preflight.xdsdfu?.ok, false);
+      assert.match(preflight.xdsdfu?.error ?? "", /CCS not found/);
+    } else {
+      assert.equal(typeof preflight.xdsdfuPath, "string");
+    }
     assert.equal(typeof preflight.xdsdfu?.ok, "boolean");
     assert(Array.isArray(preflight.debugProcesses));
 

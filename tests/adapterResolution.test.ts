@@ -36,27 +36,26 @@ describe("adapter resolution", () => {
     process.env = { ...originalEnv };
   });
 
-  test("explicit mock and ccs selections win over auto", async () => {
-    await expect(resolveAdapterMode(baseConfig({ adapter: "mock" }))).resolves.toEqual(
+  test("explicit mock ignores a CCS path", async () => {
+    const config = baseConfig({ adapter: "mock", ccs: { installPath: "missing-ccs" } });
+    await expect(resolveAdapterMode(config)).resolves.toEqual(
       expect.objectContaining({ mode: "mock", reason: expect.stringContaining("explicit mock") })
     );
-    await expect(resolveAdapterMode(baseConfig({ adapter: "ccs" }))).resolves.toEqual(
-      expect.objectContaining({ mode: "ccs", reason: expect.stringContaining("explicit ccs") })
-    );
+    expect(resolveAdapterModeSync(config).mode).toBe("mock");
   });
 
-  test("auto mode uses mock when DSS launcher is missing", async () => {
+  test.each(["auto", "ccs"] as const)("%s rejects a configured CCS path with no DSS launcher", async (adapter) => {
     const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-no-dss-"));
-    const resolution = await resolveAdapterMode(baseConfig({
-      adapter: "auto",
-      ccs: { scriptingMode: "auto", installPath: tempDir }
-    }));
+    const config = baseConfig({ adapter, ccs: { installPath: tempDir } });
+    const expected = { code: "DssNotFound", details: expect.objectContaining({ ccsInstallPath: tempDir }) };
 
-    expect(resolution).toEqual(expect.objectContaining({
-      mode: "mock",
-      requested: "auto",
-      reason: expect.stringContaining("DSS launcher not found")
-    }));
+    await expect(resolveAdapterMode(config)).rejects.toMatchObject(expected);
+    expect(() => resolveAdapterModeSync(config)).toThrow(expect.objectContaining(expected));
+  });
+
+  test("auto rejects an invalid CCS path set by the environment", async () => {
+    process.env.C2000_MCP_CCS_INSTALL_PATH = path.join(tmpdir(), "missing-c2000-ccs");
+    await expect(resolveAdapterMode(baseConfig())).rejects.toMatchObject({ code: "DssNotFound" });
   });
 
   test("auto mode selects ccs when DSS launcher exists", async () => {
@@ -75,6 +74,8 @@ describe("adapter resolution", () => {
       requested: "auto",
       reason: expect.stringContaining("DSS launcher found")
     }));
+    await expect(resolveAdapterMode(baseConfig({ adapter: "ccs", ccs: { installPath: tempDir } })))
+      .resolves.toMatchObject({ mode: "ccs", reason: "explicit ccs adapter selection" });
   });
 
   test("sync auto path selects ccs when the DSS launcher exists", async () => {

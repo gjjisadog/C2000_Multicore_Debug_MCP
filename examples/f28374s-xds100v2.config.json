@@ -1,8 +1,6 @@
 {
   "adapter": "ccs",
   "ccs": {
-    "installPath": "C:/ti/ccs",
-    "workspacePath": "C:/workspace/f28374s",
     "ccxmlPath": "./examples/targetConfigs/F28374S_XDS100v2.ccxml",
     "scriptingMode": "ccs"
   },

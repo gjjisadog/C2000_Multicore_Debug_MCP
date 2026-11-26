@@ -4,10 +4,12 @@ import { loadConfig } from "./config/config.loader.js";
 import { createC2000McpProxyRuntime } from "./proxy/index.js";
 import { startupFailure, startupReady, writeStartupDiagnostic, type StartupPhase } from "./startupDiagnostics.js";
 import { isBundledRuntime } from "./runtimeInfo.js";
+import { resolveAdapterMode } from "./adapters/adapterResolution.js";
 
 let startupPhase: StartupPhase = "load-config";
 async function main() {
   const config = await loadConfig();
+  const adapterResolution = await resolveAdapterMode(config);
   startupPhase = "create-server";
   const runtime = await createC2000McpProxyRuntime(config);
   const transport = new StdioServerTransport();
@@ -49,7 +51,7 @@ async function main() {
   await runtime.server.connect(transport);
   writeStartupDiagnostic(startupReady({
     bundled: isBundledRuntime(),
-    adapterMode: config.adapter === "auto" ? config.ccs.scriptingMode : config.adapter,
+    adapterMode: adapterResolution.mode,
     toolProfile: config.toolProfile,
     toolSurfaceProfile: config.toolSurfaceProfile,
     capabilityMode: "dynamic",

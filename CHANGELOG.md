@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.23 - 2026-11-26
+
+- Discover CCS and DSS without fixed installation versions. Report missing
+  DSS for a configured CCS directory during startup.
+- Use the installation workspace for CCS and firmware discovery, and update
+  the example configurations and migration instructions for a new machine.
+- Find PCAN-Basic under the Windows system directory configured on the host.
+
 ## 0.7.22 - 2026-11-26
 
 - Combine conditional paired Flash programming with the post-write power

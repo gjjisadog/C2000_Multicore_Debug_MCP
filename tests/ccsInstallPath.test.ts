@@ -5,11 +5,19 @@ import { describe, expect, test } from "vitest";
 import {
   discoverCcsInstallCandidates,
   resolveCcsInstallPath,
+  resolveCcsInstallPathSync,
   scoreCcsInstallPath,
   sortCcsInstallCandidates
 } from "../src/adapters/ccsInstallPath.js";
 
 describe("ccs install path discovery", () => {
+  test("leaves the path unresolved when there are no CCS candidates", async () => {
+    const options = { searchRoots: [], envInstallPath: "" };
+    const unresolved = { source: "unresolved", candidates: [], reason: "no CCS installation with DSS found" };
+    expect(await resolveCcsInstallPath(options)).toEqual(unresolved);
+    expect(resolveCcsInstallPathSync(options)).toEqual(unresolved);
+  });
+
   test("scores higher CCS product versions first", () => {
     expect(scoreCcsInstallPath("/Applications/ti/ccs2100/ccs")).toBeGreaterThan(
       scoreCcsInstallPath("/Applications/ti/ccs1281/ccs")

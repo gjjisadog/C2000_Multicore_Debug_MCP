@@ -112,15 +112,23 @@ describe("one-command installer", () => {
     const workspace = path.resolve("firmware");
     const runtime = path.resolve("runtime");
     const config = createInstalledConfig(workspace, runtime) as {
+      ccs: { workspacePath: string };
       filesystem: { allowedReadRoots: string[] };
       programSearchRoots: string[];
       daemon: { runtimeDir: string };
       storage: { sqlitePath: string };
     };
+    expect(config.ccs.workspacePath).toBe(workspace);
     expect(config.filesystem.allowedReadRoots).toEqual([workspace]);
     expect(config.programSearchRoots).toEqual([workspace]);
     expect(config.daemon.runtimeDir).toBe(runtime);
     expect(config.storage.sqlitePath).toBe(path.join(runtime, "c2000-debugd.sqlite"));
+    expect(createInstalledConfig(undefined, runtime, workspace)).toMatchObject({
+      ccs: { scriptingMode: "auto" },
+      filesystem: { allowedReadRoots: [workspace] },
+      programSearchRoots: [workspace]
+    });
+    expect(createInstalledConfig(undefined, runtime, workspace).ccs).not.toHaveProperty("workspacePath");
   });
 
   test("publishes changed same-version runtimes beside an in-use runtime and reuses the active slot", async () => {

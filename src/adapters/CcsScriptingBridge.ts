@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFile, spawnSync, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
-import { resolveCcsInstallPath } from "../ccs/paths.js";
+import { resolveCcsInstallPathSync } from "./ccsInstallPath.js";
 import type { CoreConfig, CoreId, ExpressionAssignmentValue, ResetType } from "../debug/types.js";
 import { DebugMcpError } from "../utils/errors.js";
 import { dssResetHelperSource } from "./DssResetSource.js";
@@ -129,22 +129,17 @@ export class DssCliBridge implements CcsScriptingBridge {
 }
 
 export function resolveCcsRoot(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
-  return resolveCcsInstallPath(ccsInstallPath, platform);
+  const root = ccsInstallPath || resolveCcsInstallPathSync({ platform }).installPath;
+  if (!root) {
+    throw new DebugMcpError("AdapterNotAvailable", "CCS install path is unresolved. Set ccs.installPath or C2000_MCP_CCS_INSTALL_PATH.");
+  }
+  return root;
 }
 
 export function resolveDssScriptPath(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
   const ccsRoot = resolveCcsRoot(ccsInstallPath, platform);
   const platformPath = platform === "win32" ? path.win32 : path.posix;
   return platformPath.join(ccsRoot, "ccs_base", "scripting", "bin", platform === "win32" ? "dss.bat" : "dss.sh");
-}
-
-export async function isCcsDssAvailable(ccsInstallPath?: string): Promise<boolean> {
-  try {
-    await access(resolveDssScriptPath(ccsInstallPath));
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export function resolveDssJson2Path(ccsInstallPath?: string, platform: NodeJS.Platform = process.platform): string {
@@ -313,12 +308,6 @@ function assertSafeWindowsCmdPath(filePath: string): string {
 
 function isPlatform(value: string | undefined): value is NodeJS.Platform {
   return value === "darwin" || value === "win32" || value === "linux" || value === "aix" || value === "android" || value === "freebsd" || value === "haiku" || value === "openbsd" || value === "sunos" || value === "cygwin" || value === "netbsd";
-}
-
-function requireCcsRoot(ccsInstallPath?: string): string {
-  const ccsRoot = ccsInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH;
-  if (!ccsRoot) throw new DebugMcpError("AdapterNotAvailable", "CCS install path is unresolved; run c2000_getEnvironment or set C2000_MCP_CCS_INSTALL_PATH");
-  return ccsRoot;
 }
 
 async function assertExecutableExists(filePath: string) {

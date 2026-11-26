@@ -498,6 +498,23 @@ For F28P65x CPU2 RAM builds that place sections in `RAMGSx`, `c2000_loadProgram`
 
 ## Install
 
+### Moving to another machine
+
+Run the installer on the destination machine so Codex registration uses the
+local Node executable, MCP entrypoint, and config file. Pass
+`--workspace <absolute firmware directory>` to set the default CCS workspace
+and the firmware search and read roots. For a custom `--config` file, update the
+workspace, read and write roots, and runtime, SQLite, and probe queue paths for
+the destination before installing.
+
+For physical debugging, set `adapter` to `ccs` and configure the local
+`ccs.installPath`, `ccs.c2000WarePath`, and `ccs.ccxmlPath` as needed. Supply a
+target configuration that matches the actual device and probe serial.
+Run doctor, then use `c2000_getServerHealth`, `c2000_getEnvironment`, and
+`c2000_getHardwarePreflight` to check the adapter mode, resolved TI paths, and
+detected probes. The paths in `examples/launch-f28p65x-ram-debug.json` are
+relative to `ccs.workspacePath` and use the configured default `.ccxml`.
+
 ### Standalone offline install (Windows x64)
 
 Download the single release asset
@@ -878,18 +895,18 @@ Example runtime registration:
 
 For the DK8 board with an X200 (XDS2xx) USB debug probe, start from
 [`examples/f28p650dk8-x200.config.json`](examples/f28p650dk8-x200.config.json).
-The example binds device `F28P650DK8`, CPU1/CPU2 as cores `0`/`2`, the probe
-serial `S200-1A2F00022635`, and
-`examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml`. Replace the
-serial and paths when using another X200; the `.ccxml` serial binding and the
-registered `serialNumber` must remain identical.
+The example binds device `F28P650DK8` and CPU1/CPU2 as cores `0`/`2`. Enter
+your probe serial and the absolute path of your `.ccxml` in the configuration.
+The `.ccxml` serial binding and the registered `serialNumber` must match. A
+reference file is available at
+`examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml`.
 
 ```json
 {
   "boardId": "dk8-x200",
-  "probeSerial": "S200-1A2F00022635",
+  "probeSerial": "REPLACE_WITH_XDS2XX_SERIAL",
   "device": "F28P650DK8",
-  "ccxmlPath": "./examples/targetConfigs/F28P650DK8_XDS2XX_S200-1A2F00022635.ccxml",
+  "ccxmlPath": "/absolute/path/to/serial-bound-dk8.ccxml",
   "tags": ["dk8", "x200", "xds2xx"]
 }
 ```
@@ -1250,7 +1267,7 @@ Example:
 | --- | --- |
 | `mock` | Always use `MockDebugAdapter` (no CCS/DSS). |
 | `ccs` | Always use `CcsScriptingAdapter` + persistent DSS bridge. |
-| `auto` | Prefer `ccs.scriptingMode` when `adapter` is `auto`. If that is also `auto`, **probe** for `ccs_base/scripting/bin/dss.sh` (or `dss.bat` on Windows). Search order: explicit `ccs.installPath` → `C2000_MCP_CCS_INSTALL_PATH` → multi-version discovery under `/Applications/ti`, `~/ti` (and Windows `C:\\ti` / `D:\\ti`), preferring the highest `ccsNNNN` product tree → last-resort default `/Applications/ti/ccs2100/ccs`. DSS found → `ccs`; otherwise → `mock`. |
+| `auto` | Prefer `ccs.scriptingMode` when set. Otherwise, use DSS from the configured CCS directory or discover an installation with DSS. An invalid configured CCS directory fails startup. If no CCS directory is configured and discovery finds no DSS, use Mock. |
 
 On startup the server logs `debug adapter selected` with `mode`, `requested`, `reason`, and when available `ccsInstallPath` / `ccsInstallSource`. Prefer explicit `mock` or `ccs` in committed configs so environments do not silently change when CCS is installed or removed.
 
@@ -1911,7 +1928,7 @@ Example:
   "sessionName": "f28p65x-ram-debug",
   "programDiscovery": {
     "enabled": true,
-    "searchRoots": ["/Users/wangxuwen/workspace_ccstheia"]
+    "searchRoots": ["/absolute/path/to/firmware-workspace"]
   },
   "cores": [
     { "coreId": 0, "coreName": "C28xx_CPU1" },
@@ -2001,11 +2018,11 @@ Read-only preflight checks debug-probe enumeration (XDS100/XDS110/XDS2xx) and po
 
 ```json
 {
-  "ccsInstallPath": "/Applications/ti/ccs2100/ccs"
+  "ccsInstallPath": "/absolute/path/to/ccs"
 }
 ```
 
-`ccsInstallPath` and `C2000_MCP_CCS_INSTALL_PATH` take precedence on every platform. Without either, macOS uses `/Applications/ti/ccs2100/ccs`; Windows searches mounted drives for common CCS layouts such as `D:\\ccs21.0\\ccs` and falls back to `C:\\ti\\ccs2100\\ccs`. It resolves `xdsdfu` on macOS and `xdsdfu.exe` on Windows. Windows acceptance scripts similarly discover the F28P650DK9 `.ccxml` under common C2000Ware layouts; set `C2000_MCP_CCXML_PATH` to override it.
+`ccsInstallPath` and `C2000_MCP_CCS_INSTALL_PATH` take precedence on every platform. Preflight searches the installed CCS layouts when neither is set and reports an unresolved path when discovery comes up empty. It resolves `xdsdfu` on macOS and `xdsdfu.exe` on Windows. Set `C2000_MCP_CCXML_PATH` to use your board configuration in the acceptance scripts.
 
 Preflight keeps the legacy `debugProcesses` string array and also returns `debugProcessDetails`, with `pid`, optional `ppid`, optional `elapsed`, `kind`, `command`, and `rawLine` for each possible probe owner. Readiness and hardware acceptance use this structured detail to report blockers such as `93717 DSLite: ./DSLite` without terminating anything automatically.
 
@@ -2030,17 +2047,17 @@ capped exponential backoff.
 The same check is also available from the CLI:
 
 ```bash
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
 npm run acceptance:preflight
 ```
 
 Before running target-touching acceptance, use the MCP stdio readiness check. It is read-only: it starts the built MCP server, checks `c2000_getToolContracts`, calls `c2000_getAcceptanceReadiness`, and prints `readyForHardwareAcceptance`, `blockers`, and the exact next command. The script also asserts that `nextCommand` enables both `C2000_RUN_LAUNCH=1` and `C2000_RUN_ISOLATION=1` and runs `npm run acceptance:ccs:mcp`, so a malformed handoff to hardware acceptance fails before the target is touched. It does not create a debug session, connect cores, load programs, run, pause, or reset:
 
 ```bash
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
-C2000_MCP_CCXML_PATH=/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml \
-C2000_CPU1_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu1/CPU1_RAM/hybrid30k_f28p65x_ipc_cpu1.out \
-C2000_CPU2_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu2/CPU2_RAM/hybrid30k_f28p65x_ipc_cpu2.out \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
+C2000_MCP_CCXML_PATH="/absolute/path/to/board.ccxml" \
+C2000_CPU1_OUT="/absolute/path/to/cpu1.out" \
+C2000_CPU2_OUT="/absolute/path/to/cpu2.out" \
 npm run acceptance:ready
 ```
 
@@ -2055,20 +2072,20 @@ Dual-core discovery selects a unique compatible pair from a shared build directo
 Safe default mode connects both cores, loads CPU1/CPU2 programs, and reads a multicore snapshot. If the CPU program paths can be discovered from `~/workspace_ccstheia`, the `C2000_CPU1_OUT` and `C2000_CPU2_OUT` lines below are optional:
 
 ```bash
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
-C2000_MCP_CCXML_PATH=/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml \
-C2000_CPU1_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu1/CPU1_RAM/hybrid30k_f28p65x_ipc_cpu1.out \
-C2000_CPU2_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu2/CPU2_RAM/hybrid30k_f28p65x_ipc_cpu2.out \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
+C2000_MCP_CCXML_PATH="/absolute/path/to/board.ccxml" \
+C2000_CPU1_OUT="/absolute/path/to/cpu1.out" \
+C2000_CPU2_OUT="/absolute/path/to/cpu2.out" \
 npm run acceptance:ccs
 ```
 
 The equivalent end-to-end MCP stdio path starts the built MCP server, checks `c2000_getToolContracts`, calls `c2000_getDebugBoundary` and `c2000_getHardwarePreflight`, then performs the same connect/load/snapshot flow through MCP `tools/call`:
 
 ```bash
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
-C2000_MCP_CCXML_PATH=/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml \
-C2000_CPU1_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu1/CPU1_RAM/hybrid30k_f28p65x_ipc_cpu1.out \
-C2000_CPU2_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu2/CPU2_RAM/hybrid30k_f28p65x_ipc_cpu2.out \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
+C2000_MCP_CCXML_PATH="/absolute/path/to/board.ccxml" \
+C2000_CPU1_OUT="/absolute/path/to/cpu1.out" \
+C2000_CPU2_OUT="/absolute/path/to/cpu2.out" \
 npm run acceptance:ccs:mcp
 ```
 
@@ -2076,10 +2093,10 @@ Run/pause isolation mode is opt-in because it changes target execution state:
 
 ```bash
 C2000_RUN_ISOLATION=1 \
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
-C2000_MCP_CCXML_PATH=/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml \
-C2000_CPU1_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu1/CPU1_RAM/hybrid30k_f28p65x_ipc_cpu1.out \
-C2000_CPU2_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu2/CPU2_RAM/hybrid30k_f28p65x_ipc_cpu2.out \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
+C2000_MCP_CCXML_PATH="/absolute/path/to/board.ccxml" \
+C2000_CPU1_OUT="/absolute/path/to/cpu1.out" \
+C2000_CPU2_OUT="/absolute/path/to/cpu2.out" \
 npm run acceptance:ccs
 ```
 
@@ -2089,10 +2106,10 @@ The direct and MCP stdio acceptance scripts can also exercise the high-level lau
 
 ```bash
 C2000_RUN_LAUNCH=1 \
-C2000_MCP_CCS_INSTALL_PATH=/Applications/ti/ccs2100/ccs \
-C2000_MCP_CCXML_PATH=/Applications/ti/C2000Ware_26_01_00_00_STS/device_support/f28p65x/common/targetConfigs/TMS320F28P650DK9.ccxml \
-C2000_CPU1_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu1/CPU1_RAM/hybrid30k_f28p65x_ipc_cpu1.out \
-C2000_CPU2_OUT=/Users/wangxuwen/workspace_ccstheia/hybrid30k_f28p65x_ipc_cpu2/CPU2_RAM/hybrid30k_f28p65x_ipc_cpu2.out \
+C2000_MCP_CCS_INSTALL_PATH="/absolute/path/to/ccs" \
+C2000_MCP_CCXML_PATH="/absolute/path/to/board.ccxml" \
+C2000_CPU1_OUT="/absolute/path/to/cpu1.out" \
+C2000_CPU2_OUT="/absolute/path/to/cpu2.out" \
 npm run acceptance:ccs:mcp
 ```
 

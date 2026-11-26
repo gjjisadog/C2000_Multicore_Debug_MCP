@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { resolveTiEnvironment } from "../src/config/tiPaths.js";
+import { dssLauncherPathForInstall } from "../src/adapters/ccsInstallPath.js";
 
 async function createCcs(root: string, folder: string) {
   const ccsPath = path.join(root, "ti", folder, "ccs");
@@ -75,5 +76,31 @@ describe("resolveTiEnvironment", () => {
       expect.objectContaining({ kind: "ccs", path: missingCcs, valid: false, reason: "Missing CCS DSLite anchor" }),
       expect.objectContaining({ kind: "c2000ware", path: invalidWare, valid: false, reason: "Missing C2000Ware sdk.json anchor" })
     ]));
+  });
+
+  test("CCS debug discovery skips a newer installation missing DSS", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "c2000-paths-dss-"));
+    const workingCcs = await createCcs(homeDir, "ccs2050");
+    const newerCcs = await createCcs(homeDir, "ccs2100");
+    const launcher = dssLauncherPathForInstall(workingCcs);
+    await mkdir(path.dirname(launcher), { recursive: true });
+    await writeFile(launcher, "");
+
+    const result = await resolveTiEnvironment({ homeDir, applicationRoots: [], requireDss: true });
+
+    expect(result.ccs).toMatchObject({ path: workingCcs, valid: true });
+    expect(result.attempts).toContainEqual(expect.objectContaining({ path: newerCcs, valid: false, reason: "Missing CCS DSS launcher" }));
+  });
+
+  test("keeps invalid explicit SDK and target paths unresolved even when alternatives exist", async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), "c2000-paths-pinned-"));
+    await createC2000Ware(homeDir, "C2000Ware_26_01_00_00", "26.01.00.00");
+    const options = { homeDir, applicationRoots: [] };
+    const withPinnedWare = await resolveTiEnvironment({ ...options, c2000WarePath: path.join(homeDir, "missing-sdk") });
+    const withPinnedTarget = await resolveTiEnvironment({ ...options, ccxmlPath: path.join(homeDir, "missing.ccxml") });
+
+    expect(withPinnedWare.c2000Ware).toMatchObject({ source: "unresolved", valid: false });
+    expect(withPinnedTarget.c2000Ware.valid).toBe(true);
+    expect(withPinnedTarget.ccxml).toMatchObject({ source: "unresolved", valid: false });
   });
 });

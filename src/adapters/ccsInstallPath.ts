@@ -4,25 +4,26 @@ import os from "node:os";
 import path from "node:path";
 
 export interface CcsInstallResolution {
-  installPath: string;
-  source: "explicit" | "env" | "discovered" | "default-fallback";
-  dssLauncherPath: string;
+  installPath?: string;
+  source: "explicit" | "env" | "discovered" | "unresolved";
+  dssLauncherPath?: string;
   candidates: string[];
   reason: string;
 }
 
 /** Well-known roots where TI CCS is commonly installed. */
-export function defaultCcsSearchRoots(platform: NodeJS.Platform = process.platform): string[] {
+export function defaultCcsSearchRoots(platform: NodeJS.Platform = process.platform, homeDir = os.homedir()): string[] {
   if (platform === "win32") {
     // CCS is often installed on a data drive as `D:\\ccs21.0\\ccs`, rather
     // than under the TI SDK root. Keep the root scan shallow; discovery only
     // inspects directories whose names start with `ccs`.
-    return ["C:\\ti", "D:\\ti", "C:\\", "D:\\", path.join(os.homedir(), "ti")];
+    const drives = Array.from({ length: 24 }, (_, index) => `${String.fromCharCode("C".charCodeAt(0) + index)}:\\`);
+    return [path.join(homeDir, "ti"), ...drives.filter(root => existsSync(root)).flatMap(root => [path.win32.join(root, "ti"), root])];
   }
   if (platform === "darwin") {
-    return ["/Applications/ti", path.join(os.homedir(), "ti")];
+    return ["/Applications/ti", path.join(homeDir, "ti")];
   }
-  return ["/opt/ti", "/usr/local/ti", path.join(os.homedir(), "ti")];
+  return ["/opt/ti", "/usr/local/ti", path.join(homeDir, "ti")];
 }
 
 export function dssLauncherRelativePath(platform: NodeJS.Platform = process.platform): string {
@@ -108,12 +109,10 @@ export async function resolveCcsInstallPath(options: {
   envInstallPath?: string;
   searchRoots?: string[];
   platform?: NodeJS.Platform;
-  allowMissingFallback?: boolean;
 } = {}): Promise<CcsInstallResolution> {
   const platform = options.platform ?? process.platform;
   const envInstallPath = options.envInstallPath ?? process.env.C2000_MCP_CCS_INSTALL_PATH;
-  const candidates = await discoverCcsInstallCandidates(options.searchRoots, platform);
-  const fallbackDefault = platform === "win32" ? "C:\\ti\\ccs\\ccs" : "/Applications/ti/ccs2100/ccs";
+  const candidates = await discoverCcsInstallCandidates(options.searchRoots ?? defaultCcsSearchRoots(platform), platform);
 
   if (options.installPath) {
     const installPath = path.resolve(options.installPath);
@@ -153,11 +152,9 @@ export async function resolveCcsInstallPath(options: {
   }
 
   return {
-    installPath: fallbackDefault,
-    source: "default-fallback",
-    dssLauncherPath: dssLauncherPathForInstall(fallbackDefault, platform),
+    source: "unresolved",
     candidates,
-    reason: `no CCS install discovered; falling back to ${fallbackDefault}`
+    reason: "no CCS installation with DSS found"
   };
 }
 
@@ -200,7 +197,6 @@ export function resolveCcsInstallPathSync(options: {
     }
   }
   const sorted = sortCcsInstallCandidates(candidates);
-  const fallbackDefault = platform === "win32" ? "C:\\ti\\ccs\\ccs" : "/Applications/ti/ccs2100/ccs";
 
   if (options.installPath) {
     const installPath = path.resolve(options.installPath);
@@ -233,11 +229,9 @@ export function resolveCcsInstallPathSync(options: {
     };
   }
   return {
-    installPath: fallbackDefault,
-    source: "default-fallback",
-    dssLauncherPath: dssLauncherPathForInstall(fallbackDefault, platform),
+    source: "unresolved",
     candidates: sorted,
-    reason: `no CCS install discovered; falling back to ${fallbackDefault}`
+    reason: "no CCS installation with DSS found"
   };
 }
 
