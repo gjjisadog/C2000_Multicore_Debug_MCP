@@ -101,6 +101,7 @@ describe("C2000 task-aware capability exposure", () => {
 
     const expectedMembership: Record<ToolCapability, string[]> = {
       "debug.manual": [
+        "c2000_getAcceptanceReadiness",
         "c2000_createDebugSession",
         "c2000_listCores",
         "c2000_closeDebugSession",

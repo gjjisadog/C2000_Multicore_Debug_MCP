@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.21 - 2026-11-26
+
+- Accept matching F28P650DK8 or F28P650DK9 CPU1/CPU2 images in F28P65x
+  readiness checks, including paths with a `TMS320` prefix.
+- Make single-core readiness accessible through `debug.manual` and guide
+  clients to the program-loading capability or the available debug tools.
+
 ## 0.7.20 - 2026-11-26
 
 - Add opt-in F28P65x paired Flash programming with `flashIfChanged`.

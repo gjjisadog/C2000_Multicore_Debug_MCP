@@ -78,11 +78,11 @@ export function describeProgramArtifact(artifactPath: string): ProgramArtifactId
     : /(?:^|[^a-z0-9])(?:cpu2|c28x2)(?:[^a-z0-9]|$)/.test(normalized)
       ? "cpu2"
       : undefined;
-  const device = normalized.match(/(?:^|[^a-z0-9])((?:f28p|f283|f280)\d+[a-z0-9]*)(?:[^a-z0-9]|$)/)?.[1];
+  const device = normalized.match(/(?:^|[^a-z0-9])(?:tms320)?((?:f28p|f283|f280)\d+[a-z0-9]*)(?:[^a-z0-9]|$)/)?.[1];
   const configurationMatch = normalized.match(/(?:^|[\/_-])(ram|flash)(?:[\/_-]|$)/)?.[1];
   const example = filename
     .replace(/(?:cpu1|cpu2|c28x1|c28x2)/g, "")
-    .replace(/(?:f28p|f283|f280)\d+[a-z0-9]*/g, "")
+    .replace(/(?:tms320)?(?:f28p|f283|f280)\d+[a-z0-9]*/g, "")
     .replace(/(?:^|[_-])(?:ram|flash)(?:[_-]|$)/g, "_")
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
@@ -137,8 +137,9 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
 
 function matchesExpectedDevice(device: string, expectedDevice: string): boolean {
   const expected = expectedDevice.toLowerCase().replace(/^tms320/, "");
-  // TI's single-CPU examples use the family directory even for an exact part.
-  return device === expected || (expected === "f28374s" && device === "f2837xs");
+  return device === expected
+    || (expected === "f28p65x" && (device === "f28p650dk8" || device === "f28p650dk9"))
+    || (expected === "f28374s" && device === "f2837xs");
 }
 
 /**

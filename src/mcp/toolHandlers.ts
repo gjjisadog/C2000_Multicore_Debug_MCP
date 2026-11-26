@@ -1011,7 +1011,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           acceptanceEvidence: singleCore
             ? { applicable: false, reason: "CPU1/CPU2 isolation and IPC acceptance require two CPUs." }
             : acceptanceEvidence,
-          nextTools: singleCore ? ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_continue", "c2000_pause"] : undefined,
+          nextTools: singleCore ? ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_runCore", "c2000_haltCore"] : undefined,
           nextCommand: singleCore ? undefined : hardwareAcceptanceCommand({
             ccsInstallPath: input.ccsInstallPath,
             ccxmlPath,

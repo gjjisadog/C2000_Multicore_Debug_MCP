@@ -1,9 +1,9 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
-import { discoverAcceptancePrograms } from "../src/hardware/programDiscovery.js";
+import { discoverAcceptancePrograms, validateProgramPair } from "../src/hardware/programDiscovery.js";
 
 describe("hardware acceptance program discovery", () => {
   test("uses explicit CPU program paths before scanning roots", async () => {
@@ -103,6 +103,35 @@ describe("hardware acceptance program discovery", () => {
         expect.stringContaining("does not match expected")
       ])
     }));
+  });
+
+  test.each(["F28P650DK8", "F28P650DK9", "TMS320F28P650DK9"])("discovers a compatible %s image pair for F28P65x", async (device) => {
+    const tempDir = await mkdtemp(path.join(tmpdir(), "c2000-program-pairing-"));
+    try {
+      const cpu1 = path.join(tempDir, device, "CPU1_RAM", "ipc_ex1_c28x1.out");
+      const cpu2 = path.join(tempDir, device, "CPU2_RAM", "ipc_ex1_c28x2.out");
+      for (const artifact of [cpu1, cpu2]) {
+        await mkdir(path.dirname(artifact), { recursive: true });
+        await writeFile(artifact, "image");
+      }
+
+      const result = await discoverAcceptancePrograms({ searchRoots: [tempDir] });
+      expect(result.cpu1.selected).toBe(cpu1);
+      expect(result.cpu2.selected).toBe(cpu2);
+      const deviceId = device.toLowerCase().replace(/^tms320/, "");
+      expect(result.pairing).toMatchObject({ complete: true, compatible: true, issues: [],
+        cpu1: { device: deviceId }, cpu2: { device: deviceId } });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects known different models within the F28P65x family", () => {
+    const result = validateProgramPair("F28P650DK8/cpu1.out", "F28P650DK9/cpu2.out", "F28P65x");
+    expect(result).toMatchObject({
+      compatible: false,
+      issues: ["CPU1/CPU2 device mismatch: f28p650dk8 vs f28p650dk9"]
+    });
   });
 
   test("accepts profile-qualified CPU1/CPU2 companion artifacts from the same build family", async () => {

@@ -664,6 +664,10 @@ registration.
 
 For a configured single-CPU target, program discovery/readiness checks require
 only its CPU1 image, including ordinary `.out` names without a CPU1 suffix.
+On the `agent` surface, open `debug.manual` with `c2000_openCapabilitySession`
+to call `c2000_getAcceptanceReadiness`. For a debug session that loads a program,
+follow `nextCapabilities` to open `debug.program`, then use the tools listed
+by readiness. With the `safe` profile, `advanced` exposes these tools directly.
 Dual-CPU isolation, CPU2 boot/IPC workflows and F28P65x-specific Flash bank/ERAD
 features remain device-specific; do not use them for F28374S. Existing F28P65x
 dual-core configurations retain their CPU1/CPU2 artifact checks. F28374S/XDS100v2

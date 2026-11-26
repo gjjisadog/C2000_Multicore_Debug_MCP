@@ -2,11 +2,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { MockDebugAdapter } from "../src/adapters/MockDebugAdapter.js";
 import { c2000McpConfigSchema } from "../src/config/config.schema.js";
 import { DebugSessionManager } from "../src/debug/DebugSessionManager.js";
 import { LoadedProgramRegistry } from "../src/debug/LoadedProgramRegistry.js";
 import { createToolHandlers } from "../src/mcp/toolHandlers.js";
+import { createC2000ToolInvoker, registerC2000Tools } from "../src/mcp/tools.js";
 import { assertCcxmlProbeBinding, readCcxmlProbeSerialFromText, readCcxmlProbeTypeFromText } from "../src/hardware/ccxmlBinding.js";
 import { getConnectedProbeSerials, parseXds100Devices, resolveXds100SerialPath, runHardwarePreflight } from "../src/hardware/preflight.js";
 import { discoverAcceptancePrograms, validateProgramPair } from "../src/hardware/programDiscovery.js";
@@ -122,6 +126,65 @@ describe("F28374S / XDS100 compatibility", () => {
       expect(await manager.haltCore(session.sessionId, 0)).toMatchObject({ coreId: 0, state: "Halted" });
       await expect(manager.connectTarget(session.sessionId, 2)).rejects.toMatchObject({ code: "CoreNotFound" });
     } finally { await manager.closeDebugSession(session.sessionId); }
+  });
+
+  test.each([
+    ["safe", "agent"],
+    ["safe", "advanced"],
+    ["readonly", "agent"]
+  ] as const)("single-CPU readiness suggests visible next tools on %s/%s", async (profile, surface) => {
+    const root = await tempRoot();
+    const cpu1Program = path.join(root, "blink.out");
+    const ccxmlPath = path.join(root, "board.ccxml");
+    await writeFile(cpu1Program, "mock image");
+    await writeFile(ccxmlPath, "<configurations/>");
+    const manager = new DebugSessionManager(new MockDebugAdapter(), new LoadedProgramRegistry());
+    const invoker = createC2000ToolInvoker(manager, {
+      target: { name: "F28374S", coreMap: [{ coreId: 0, coreName: "C28xx_CPU1" }] },
+      runHardwarePreflight: async () => ({ xdsdfuPath: "unused", xdsdfu: { ok: false },
+        xds100: { ok: true, commandOk: true, probeReady: true, devices: parseXds100Devices(table) },
+        debugProcesses: [], debugProcessDetails: [] })
+    });
+    const server = new McpServer({ name: "single-core-readiness", version: "test" });
+    const registration = registerC2000Tools(server, invoker, {}, profile,
+      { allowedReadRoots: [root], allowedWriteRoots: [] }, {}, {}, surface);
+    const client = new Client({ name: "single-core-client", version: "test" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const readinessName = "c2000_getAcceptanceReadiness";
+    const openCapability = (capability: string) => client.callTool({ name: "c2000_openCapabilitySession",
+      arguments: { capability, reason: "Check the single-core debug path" } });
+    const readiness = () => client.callTool({ name: readinessName, arguments: { cpu1Program, ccxmlPath, searchRoots: [root] } });
+    const visible = async () => (await client.listTools()).tools.map(tool => tool.name);
+
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      if (surface === "agent") {
+        expect(await visible()).not.toContain(readinessName);
+        expect((await openCapability("debug.manual")).structuredContent).toMatchObject({ success: true });
+      }
+      expect(await visible()).toContain(readinessName);
+      if (profile === "readonly") {
+        expect((await readiness()).structuredContent).toMatchObject({ success: true, nextTools: [] });
+        return;
+      }
+      if (surface === "agent") {
+        expect((await readiness()).structuredContent).toMatchObject({
+          success: true, nextTools: ["c2000_openCapabilitySession"], nextCapabilities: ["debug.program"]
+        });
+        expect((await openCapability("debug.program")).structuredContent).toMatchObject({ success: true });
+      }
+
+      const nextTools = ["c2000_createDebugSession", "c2000_connectCores", "c2000_loadProgram", "c2000_runCore", "c2000_haltCore"];
+      const result = await readiness();
+      expect(result.structuredContent).toMatchObject({ success: true, readyForHardwareAcceptance: true, nextTools });
+      expect(result.structuredContent).not.toHaveProperty("nextCapabilities");
+      expect(await visible()).toEqual(expect.arrayContaining(nextTools));
+    } finally {
+      registration.dispose();
+      await client.close();
+      await server.close();
+    }
   });
 
   test.each(["xds100", "xds2xx"])("requires actual matching %s preflight evidence for hardware classification", source => {

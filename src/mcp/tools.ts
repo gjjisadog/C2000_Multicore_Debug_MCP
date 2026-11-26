@@ -404,7 +404,7 @@ const baseToolDefinitions: BaseToolDefinition[] = [
   { name: "c2000_getAcceptanceEvidence", title: "Get C2000 Acceptance Evidence", description: "Return a read-only map from final F28P65x acceptance requirements to the c2000 tools and evidence fields that prove them.", schema: acceptanceEvidenceSchema, handlerName: "getAcceptanceEvidence", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
   { name: "c2000_getHardwarePreflight", title: "Get C2000 Hardware Preflight", description: "Run read-only host checks for XDS100/XDS110/XDS2xx enumeration and existing CCS debug owner processes before target control.", schema: hardwarePreflightSchema, handlerName: "getHardwarePreflight", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", exposure: "default" },
   { name: "c2000_discoverAcceptancePrograms", title: "Discover C2000 Acceptance Programs", description: "Find CPU1 and CPU2 .out files for F28P65x hardware acceptance without touching the target.", schema: acceptanceProgramDiscoverySchema, handlerName: "discoverAcceptancePrograms", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
-  { name: "c2000_getAcceptanceReadiness", title: "Get C2000 Acceptance Readiness", description: "Return a read-only hardware acceptance readiness report that combines ccxml, CPU program discovery, XDS100/XDS110/XDS2xx preflight, debug ownership, and debug boundary checks.", schema: acceptanceReadinessSchema, handlerName: "getAcceptanceReadiness", inputScope: "host", targetEffect: "host-read", role: "host", family: "host" },
+  { name: "c2000_getAcceptanceReadiness", title: "Get C2000 Acceptance Readiness", description: "Return a read-only hardware acceptance readiness report that combines ccxml, CPU program discovery, XDS100/XDS110/XDS2xx preflight, debug ownership, and debug boundary checks.", schema: acceptanceReadinessSchema, handlerName: "getAcceptanceReadiness", inputScope: "host", targetEffect: "host-read", role: "host", family: "host", capability: "debug.manual" },
   { name: "c2000_analyzeRamOwnership", title: "Analyze C2000 RAM Ownership", description: "Parse C2000 linker .map files and report GS RAM ownership handoff writes required before CPU2 loads.", schema: ramOwnershipAnalysisSchema, handlerName: "analyzeRamOwnership", inputScope: "host", targetEffect: "host-read", role: "diagnostic", family: "diagnosis", coreIdentityFields: ["maps[].coreId"], responseCoreIdentityFields: [...ramOwnershipResponseIdentity] },
   { name: "c2000_createDebugSession", title: "Create C2000 Debug Session", description: "Create a logical multicore debug session with explicit core mapping. The response includes stage-timed startupDiagnostics for probe preparation, DSS startup, and initial core-state discovery.", schema: createDebugSessionSchema, handlerName: "createDebugSession", inputScope: "launch", targetEffect: "session-lifecycle", role: "primary", family: "session", capability: "debug.manual" },
   { name: "c2000_listCores", title: "List C2000 Cores", description: "List cores for a logical debug session (refreshes connection state via getState).", schema: sessionSchema, handlerName: "listCores", inputScope: "session", targetEffect: "session-read", role: "primary", family: "session", capability: "debug.manual" },
@@ -626,6 +626,24 @@ class ToolCapabilityController {
     return definitionsForDynamicExposure(this.profile, this.surface, this.sessions.activeCapabilities());
   }
 
+  nextToolGuidance(nextTools: string[]): { nextTools: string[]; nextCapabilities?: ToolCapability[] } {
+    const visible = new Set(this.visibleDefinitions().map(tool => tool.name));
+    const missing = nextTools.filter(name => !visible.has(name));
+    if (missing.length === 0) return { nextTools };
+
+    const allowed = new Map(definitionsForSafetyProfile(this.profile).map(tool => [tool.name, tool]));
+    const opener = "c2000_openCapabilitySession";
+    if (this.surface !== "agent" || !visible.has(opener)) return { nextTools: [] };
+
+    const capabilities = new Set<ToolCapability>();
+    for (const name of missing) {
+      const definition = allowed.get(name);
+      if (definition?.exposure !== "advanced" || !definition.capability) return { nextTools: [] };
+      capabilities.add(definition.capability);
+    }
+    return { nextTools: [opener], nextCapabilities: [...capabilities] };
+  }
+
   getExposureSummary(): ToolExposureSummary {
     return getToolExposureSummary(
       this.profile,
@@ -810,7 +828,12 @@ async function invokeRegisteredDefinition(
     const raw = await runtime.getServerHealth();
     return augmentServerHealthResult(raw, controller.getExposureSummary());
   }
-  return invoker.invokeTool(definition.name, input);
+  const result = await invoker.invokeTool(definition.name, input);
+  // Capability grants belong to the MCP endpoint, including when the report comes from the daemon.
+  if (definition.name === "c2000_getAcceptanceReadiness" && result.success === true && Array.isArray(result.nextTools)) {
+    return { ...result, ...controller.nextToolGuidance(result.nextTools) };
+  }
+  return result;
 }
 
 function supportsDynamicMcpServer(server: McpServer): boolean {
