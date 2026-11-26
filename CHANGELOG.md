@@ -1,11 +1,16 @@
 # Changelog
 
-## 0.7.17 - 2026-11-26
+## 0.7.18 - 2026-11-26
 
 ### DeepSeek Harness integration
 
 - Install the built npm package into DSH Web as a bundle that starts the
   existing stdio MCP server, with support for the existing C2000 config file.
+
+### Release packaging
+
+- Move macOS arm64 CI and release builds to macOS 15 and restore Node ZIP
+  extraction during Windows offline packaging.
 
 ### Target support and workflow reliability
 

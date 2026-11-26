@@ -49,7 +49,7 @@ npm ci
 npm run build
 npm pack
 dsh web --dump-default-config
-dsh plugin --profile web add ./c2000-multicore-mcp-0.7.17.tgz --ignore-scripts
+dsh plugin --profile web add ./c2000-multicore-mcp-0.7.18.tgz --ignore-scripts
 dsh web
 ```
 

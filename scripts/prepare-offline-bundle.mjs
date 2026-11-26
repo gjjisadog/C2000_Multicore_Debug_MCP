@@ -221,7 +221,11 @@ function extractZip(archivePath, destination) {
     "-ExecutionPolicy",
     "Bypass",
     "-Command",
-    "$ErrorActionPreference='Stop'; Expand-Archive -LiteralPath $env:C2000_RUNTIME_ARCHIVE -DestinationPath $env:C2000_RUNTIME_EXTRACT -Force"
+    [
+      "$ErrorActionPreference='Stop'",
+      "Add-Type -AssemblyName System.IO.Compression.FileSystem",
+      "[System.IO.Compression.ZipFile]::ExtractToDirectory($env:C2000_RUNTIME_ARCHIVE, $env:C2000_RUNTIME_EXTRACT)"
+    ].join("; ")
   ], {
     env: { ...process.env, C2000_RUNTIME_ARCHIVE: archivePath, C2000_RUNTIME_EXTRACT: destination },
     stdio: "inherit",
