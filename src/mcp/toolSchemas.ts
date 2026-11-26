@@ -961,7 +961,7 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
   flashIfChanged: z.object({
     cpu1ManifestUri: z.string().min(1),
     cpu2ManifestUri: z.string().min(1)
-  }).strict().optional().describe("Verify both resident Flash markers before paired programming. Skip programming and attach if both match; program and verify both images on a readable mismatch."),
+  }).strict().optional().describe("Verify both resident Flash markers before paired programming. Skip programming and attach if both match; program and verify both images on a readable mismatch. May be combined with afterFlashPowerCycle using the same manifests."),
   afterFlashPowerCycle: z.object({
     mode: z.enum(["auto", "manual", "auto_or_manual"]).default("auto_or_manual"),
     offSeconds: z.number().min(5).max(60).default(5),
@@ -971,8 +971,8 @@ export const launchAndRunIpcAcceptanceSchema = runIpcAcceptanceObjectSchema.omit
 }).superRefine((value, context) => {
   if (value.flashIfChanged && (value.startupPreset !== "f28p65x-paired-flash" || value.device !== "F28P65x" ||
       value.programPreparation !== "load" || !value.stopAfterFlashPreparation || value.loadPolicy !== "always" ||
-      value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.residentImageManifests || value.afterFlashPowerCycle)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, path: ["flashIfChanged"], message: "flashIfChanged requires the F28P65x paired Flash preset with coreIds 0/2 and cannot be combined with residentImageManifests or afterFlashPowerCycle" });
+      value.cpu1CoreId !== 0 || value.cpu2CoreId !== 2 || value.residentImageManifests)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["flashIfChanged"], message: "flashIfChanged requires the F28P65x paired Flash preset with coreIds 0/2 and cannot be combined with residentImageManifests" });
   }
   if (value.stopAfterFlashPreparation && !value.afterFlashPowerCycle &&
       (value.sessionMode !== "interactive" || value.autoCloseOnComplete)) {

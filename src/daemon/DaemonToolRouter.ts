@@ -161,18 +161,28 @@ export class DaemonToolRouter implements C2000ToolInvoker {
     const { afterFlashPowerCycle, ...flashInput } = parsed;
     if (!afterFlashPowerCycle) throw new DebugMcpError("EvidenceLimitExceeded", "Missing after-Flash power cycle plan");
     const boardId = this.selectBoard(parsed.boardId);
-    for (const [coreId, expectedProgram] of [[0, parsed.cpu1OutPath], [2, parsed.cpu2OutPath]] as const) {
+    const artifactPathKey = (uri: string) => {
+      const normalized = normalizeProgramUri(uri, this.workspacePath);
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    };
+    const flashChecks = [];
+    for (const [coreId, expectedProgram, expectedMap, conditionalManifest] of [
+      [0, parsed.cpu1OutPath, parsed.cpu1MapPath, parsed.flashIfChanged?.cpu1ManifestUri],
+      [2, parsed.cpu2OutPath, parsed.cpu2MapPath, parsed.flashIfChanged?.cpu2ManifestUri]
+    ] as const) {
       const check = afterFlashPowerCycle.flashChecks.find(item => item.coreId === coreId);
-      const actualUri = check ? normalizeProgramUri(check.programUri, this.workspacePath) : undefined;
-      const expectedUri = normalizeProgramUri(expectedProgram, this.workspacePath);
-      const sameFile = process.platform === "win32"
-        ? actualUri?.toLowerCase() === expectedUri.toLowerCase()
-        : actualUri === expectedUri;
-      if (!sameFile) {
+      if (!check || artifactPathKey(check.programUri) !== artifactPathKey(expectedProgram)) {
         throw new DebugMcpError("PowerCycleFlashIncomplete", "The after-Flash manifest checks must name the exact CPU1/CPU2 programs being written", {
           boardId, coreId, targetAccessAttempted: false, powerActionAttempted: false
         });
       }
+      if (conditionalManifest && (artifactPathKey(check.manifestUri) !== artifactPathKey(conditionalManifest) ||
+          (check.mapUri !== undefined && (!expectedMap || artifactPathKey(check.mapUri) !== artifactPathKey(expectedMap))))) {
+        throw new DebugMcpError("PowerCycleFlashIncomplete", "Conditional Flash and after-Flash checks must use the same manifests and linker maps", {
+          boardId, coreId, targetAccessAttempted: false, powerActionAttempted: false
+        });
+      }
+      flashChecks.push(conditionalManifest && expectedMap && !check.mapUri ? { ...check, mapUri: expectedMap } : check);
     }
     if (this.powerCycle?.safetyProfile === "readonly") {
       throw new DebugMcpError("PowerCycleUnavailable", "Board power control is disabled by the readonly safety profile", {
@@ -191,6 +201,13 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       ...flashInput, boardId, sessionMode: "interactive",
       autoCloseOnComplete: false, cleanupOnFailure: true
     });
+    if (parsed.flashIfChanged && flash.success === true && flash.status === "flash_skipped" && typeof flash.sessionId === "string") {
+      return {
+        success: true, status: "flash_skipped", boardId, sessionId: flash.sessionId, flash,
+        targetMemoryWritten: false, targetFlashVerified: true, powerActionAttempted: false,
+        ipcAcceptance: "NOT_RUN", coldStartVerified: false, readOnlyIpc: flash.readOnlyIpc
+      };
+    }
     if (flash.success !== true || flash.status !== "flash_prepared" || typeof flash.sessionId !== "string") {
       return { success: false, status: "flash_not_prepared", boardId, flash,
         powerActionAttempted: false, residentAttachAttempted: false };
@@ -201,7 +218,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
       powerCycle = await this.invokeTool("c2000_cycleBoardPower", {
         boardId, sessionId: flash.sessionId, reason: "after_flash",
         mode: afterFlashPowerCycle.mode, offSeconds: afterFlashPowerCycle.offSeconds,
-        flashChecks: afterFlashPowerCycle.flashChecks
+        flashChecks
       });
     } catch (error) {
       return { success: false, status: "power_cycle_blocked", boardId, flash,
@@ -221,7 +238,7 @@ export class DaemonToolRouter implements C2000ToolInvoker {
         cpu1CoreId: parsed.cpu1CoreId, cpu2CoreId: parsed.cpu2CoreId,
         cpu1OutPath: parsed.cpu1OutPath, cpu2OutPath: parsed.cpu2OutPath,
         cpu1MapPath: parsed.cpu1MapPath, cpu2MapPath: parsed.cpu2MapPath,
-        residentImageManifests: afterFlashPowerCycle.flashChecks,
+        residentImageManifests: flashChecks,
         residentIdentityPolicy: "require-known", mode: "attach-only",
         sessionMode: "interactive", cleanupOnFailure: false,
         autoCloseOnComplete: true, autoCloseIdleTimeoutMs: 180_000,

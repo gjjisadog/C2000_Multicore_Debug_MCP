@@ -20,6 +20,7 @@ export interface ProgramPairValidation {
   cpu1?: ProgramArtifactIdentity;
   cpu2?: ProgramArtifactIdentity;
   issues: string[];
+  warnings?: string[];
 }
 
 export interface ProgramDiscoveryEntry {
@@ -65,7 +66,8 @@ export async function discoverAcceptancePrograms(options: ProgramDiscoveryOption
       );
   const cpu1Selected = options.cpu1Program ?? selection.cpu1;
   const cpu2Selected = options.singleCore ? undefined : options.cpu2Program ?? selection.cpu2;
-  const pairing = validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x", options.singleCore);
+  const pairing = validateProgramPair(cpu1Selected, cpu2Selected, options.expectedDevice ?? "F28P65x", options.singleCore,
+    { explicitPair: explicitPrograms });
 
   return {
     searchRoots,
@@ -106,10 +108,14 @@ export function describeProgramArtifact(artifactPath: string): ProgramArtifactId
   };
 }
 
-export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expectedDevice?: string, singleCore = false): ProgramPairValidation {
+export function validateProgramPair(
+  cpu1Path?: string, cpu2Path?: string, expectedDevice?: string, singleCore = false,
+  { explicitPair = false }: { explicitPair?: boolean } = {}
+): ProgramPairValidation {
   const cpu1 = cpu1Path ? describeProgramArtifact(cpu1Path) : undefined;
   const cpu2 = cpu2Path ? describeProgramArtifact(cpu2Path) : undefined;
   const issues: string[] = [];
+  const warnings: string[] = [];
   if (!cpu1) {
     issues.push("CPU1 artifact is missing");
   }
@@ -129,7 +135,7 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
     compareKnownIdentity("device", cpu1.device, cpu2.device, issues);
     compareKnownIdentity("configuration", cpu1.configuration, cpu2.configuration, issues);
     if (cpu1.core && cpu2.core) {
-      compareKnownIdentity("build family", cpu1.pairKey ?? cpu1.example, cpu2.pairKey ?? cpu2.example, issues);
+      compareKnownIdentity("build family", cpu1.pairKey ?? cpu1.example, cpu2.pairKey ?? cpu2.example, explicitPair ? warnings : issues);
     }
   }
   const normalizedExpectedDevice = expectedDevice?.toLowerCase();
@@ -141,7 +147,8 @@ export function validateProgramPair(cpu1Path?: string, cpu2Path?: string, expect
     }
   }
   const complete = cpu1 !== undefined && (singleCore || cpu2 !== undefined);
-  return { complete, compatible: complete && issues.length === 0, ...(cpu1 ? { cpu1 } : {}), ...(cpu2 ? { cpu2 } : {}), issues };
+  return { complete, compatible: complete && issues.length === 0, ...(cpu1 ? { cpu1 } : {}), ...(cpu2 ? { cpu2 } : {}),
+    issues, ...(warnings.length ? { warnings } : {}) };
 }
 
 function matchesExpectedDevice(device: string, expectedDevice: string): boolean {

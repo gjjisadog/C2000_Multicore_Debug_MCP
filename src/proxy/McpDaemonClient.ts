@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { C2000ToolInvoker } from "../mcp/tools.js";
-import { c2000ToolDefinitions } from "../mcp/tools.js";
+import { c2000ToolDefinitions, parseToolInput } from "../mcp/tools.js";
 import type { LocalRpcClient } from "../rpc/RpcServer.js";
 import { DebugMcpError } from "../utils/errors.js";
 import type { OutcomeEvent } from "../analytics/OutcomeSchemas.js";
@@ -17,7 +17,7 @@ export class McpDaemonClient implements C2000ToolInvoker {
     if (!definition) {
       throw new DebugMcpError("ToolNotFound", `Unknown C2000 tool: ${toolName}`, { toolName });
     }
-    const parsedInput = definition.schema.parse(input);
+    const parsedInput = parseToolInput(definition, input);
     const request = () => this.client.request("invokeTool", {
       requestId: randomUUID(),
       toolName,

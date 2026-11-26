@@ -512,10 +512,11 @@ export class DebugWorkflowService {
         throw new DebugMcpError("StartupContractInvalid", "System Reset requires explicit F28P65x cores 0/2, cpu1_boots_cpu2, verified resident images with all four hashes, both-core guards, and no postLoadResetType");
       }
     }
-    if (input.postLoadResetType && !runPlan.releaseCpu2BeforeCpu1) {
+    if (!input.stopAfterFlashPreparation && input.postLoadResetType && !runPlan.releaseCpu2BeforeCpu1) {
       throw new DebugMcpError("StartupContractInvalid", "postLoadResetType requires firmware-owned CPU2 boot");
     }
-    if (runPlan.releaseCpu2BeforeCpu1 && (runPlan.coreOrder.length !== 1 || runPlan.coreOrder[0] !== input.cpu1CoreId)) {
+    if (!input.stopAfterFlashPreparation && runPlan.releaseCpu2BeforeCpu1 &&
+        (runPlan.coreOrder.length !== 1 || runPlan.coreOrder[0] !== input.cpu1CoreId)) {
       throw new DebugMcpError("Cpu2BootReleaseSequenceInvalid", "CPU2 release-before-CPU1 requires a CPU1-only run plan", {
         sessionId: input.sessionId,
         cpu1CoreId: input.cpu1CoreId,
@@ -523,7 +524,7 @@ export class DebugWorkflowService {
         runPlan
       });
     }
-    if (runPlan.releaseCpu2BeforeCpu1 && input.loadSequence.mode !== "cpu1-then-cpu2") {
+    if (!input.stopAfterFlashPreparation && runPlan.releaseCpu2BeforeCpu1 && input.loadSequence.mode !== "cpu1-then-cpu2") {
       throw new DebugMcpError("Cpu2BootReleaseSequenceInvalid", "Firmware-owned CPU2 boot requires both images to be loaded before CPU2 is disconnected and CPU1 is started", {
         sessionId: input.sessionId,
         loadSequence: input.loadSequence,
@@ -547,11 +548,11 @@ export class DebugWorkflowService {
         .flatMap(action => action.flashBanks)
     });
     if (pairedFlash.required && input.programPreparation !== "symbols-only" && !input.stopAfterFlashPreparation) {
-      throw new DebugMcpError("StartupContractInvalid", "Fresh paired Flash images require a product power cycle before startup or IPC acceptance", {
+      throw new DebugMcpError("StartupContractInvalid", "Paired Flash programming must stop before application startup or IPC acceptance", {
         sessionId: input.sessionId,
         targetMemoryWritten: false,
         coldStartVerified: false,
-        nextAction: "Set stopAfterFlashPreparation=true, verify both resident markers, call c2000_cycleBoardPower with offSeconds>=5, then use a fresh session for resident-image verification and startup."
+        nextAction: "Set stopAfterFlashPreparation=true. For product startup validation, verify both resident markers, perform a product-level restart, then attach in a fresh session."
       });
     }
     if (input.stopAfterFlashPreparation && (input.programPreparation === "symbols-only" || !pairedFlash.required)) {
@@ -560,7 +561,7 @@ export class DebugWorkflowService {
       });
     }
     performedSteps.push("artifactPreflight", "analyzeRamOwnership");
-    const applicationEntryPlan = runPlan.releaseCpu2BeforeCpu1
+    const applicationEntryPlan = !input.stopAfterFlashPreparation && runPlan.releaseCpu2BeforeCpu1
       ? createApplicationEntryPlan({
         coreId: input.cpu1CoreId,
         explicitAddress: input.cpu1EntryAddress,
@@ -576,7 +577,7 @@ export class DebugWorkflowService {
         diagnosisCode: "APPLICATION_ENTRY_NOT_CONFIGURED"
       });
     }
-    if (runPlan.releaseCpu2BeforeCpu1) {
+    if (applicationEntryPlan) {
       assertCpu1OnlyResetType(input.postLoadResetType ?? "restart", input.sessionId, input.cpu1CoreId);
     }
     if (input.preStartupSafetyGuard) {
@@ -758,7 +759,7 @@ export class DebugWorkflowService {
         initialHalt, reset, flashProgramming, load, artifactPreflight, performedSteps,
         targetMemoryWritten: true, targetFlashVerified: false,
         startupSequenceExecuted: false, ipcAcceptance: "NOT_RUN", coldStartVerified: false,
-        nextAction: "Call c2000_cycleBoardPower with CPU1/CPU2 flashChecks, then reconnect and verify both resident images before Flash startup or IPC conclusions."
+        nextAction: "For startup validation, verify both resident markers and perform a product-level restart. For a USB power cycle, use c2000_cycleBoardPower with CPU1/CPU2 flashChecks."
       };
     }
     let cpu2Release: ToolResult | undefined;
@@ -2056,6 +2057,7 @@ async function assertIpcArtifactSet(input: {
   cpu1MapPath?: string;
   cpu2MapPath?: string;
   programPreparation?: "load" | "symbols-only";
+  stopAfterFlashPreparation?: boolean;
   verifyRuntimeRamOwnership?: boolean;
   cpu1OutSha256?: string;
   cpu2OutSha256?: string;
@@ -2072,10 +2074,10 @@ async function assertIpcArtifactSet(input: {
     ...(input.cpu1MapPath ? { cpu1MapPath: normalizePath(input.cpu1MapPath) } : {}),
     ...(input.cpu2MapPath ? { cpu2MapPath: normalizePath(input.cpu2MapPath) } : {})
   };
-  const programPair = validateProgramPair(normalizedInput.cpu1OutPath, normalizedInput.cpu2OutPath, input.device);
+  const programPair = validateProgramPair(normalizedInput.cpu1OutPath, normalizedInput.cpu2OutPath, input.device, false, { explicitPair: true });
   const mapsComplete = Boolean(normalizedInput.cpu1MapPath && normalizedInput.cpu2MapPath);
   const allowMissingMaps = input.programPreparation === "symbols-only" && input.verifyRuntimeRamOwnership !== true;
-  const mapPair = validateProgramPair(normalizedInput.cpu1MapPath, normalizedInput.cpu2MapPath, input.device);
+  const mapPair = validateProgramPair(normalizedInput.cpu1MapPath, normalizedInput.cpu2MapPath, input.device, false, { explicitPair: true });
   const issues = [...programPair.issues];
   if (mapsComplete || !allowMissingMaps) {
     issues.push(...mapPair.issues.map(issue => `map: ${issue}`));
@@ -2125,7 +2127,7 @@ async function assertIpcArtifactSet(input: {
       cpu2CoreId: input.cpu2CoreId,
       cpu1MapPath: normalizedInput.cpu1MapPath!,
       cpu2MapPath: normalizedInput.cpu2MapPath!,
-      expressions: [
+      expressions: input.stopAfterFlashPreparation ? [] : [
         ...(input.ipcReadyExpressions ?? []),
         // Symbol validation only: these observations never become readiness gates.
         ...(input.bootSyncExpressions ?? []).map(expression => ({ coreId: input.cpu1CoreId, expression, expected: 0 })),
@@ -2194,7 +2196,7 @@ async function assertReloadArtifactSet(input: {
     ...(input.cpu1MapPath ? { cpu1MapPath: normalizePath(input.cpu1MapPath) } : {}),
     ...(input.cpu2MapPath ? { cpu2MapPath: normalizePath(input.cpu2MapPath) } : {})
   };
-  const programPair = validateProgramPair(normalized.cpu1OutPath, normalized.cpu2OutPath, input.device);
+  const programPair = validateProgramPair(normalized.cpu1OutPath, normalized.cpu2OutPath, input.device, false, { explicitPair: true });
   const issues = [...programPair.issues];
   const files = [
     ["CPU1 output", normalized.cpu1OutPath],
@@ -2224,7 +2226,7 @@ async function assertReloadArtifactSet(input: {
   let mapPair: ReturnType<typeof validateProgramPair> | undefined;
   let artifactSemantics: ToolResult | undefined;
   if (normalized.cpu1MapPath && normalized.cpu2MapPath) {
-    mapPair = validateProgramPair(normalized.cpu1MapPath, normalized.cpu2MapPath, input.device);
+    mapPair = validateProgramPair(normalized.cpu1MapPath, normalized.cpu2MapPath, input.device, false, { explicitPair: true });
     issues.push(...mapPair.issues.map(issue => `map: ${issue}`));
     const cpu1Map = describeProgramArtifact(normalized.cpu1MapPath);
     const cpu2Map = describeProgramArtifact(normalized.cpu2MapPath);
@@ -2526,9 +2528,11 @@ export function resolvePairedFlashContract(input: {
 }
 
 function assertWorkflowStartupContract(input: {
+  stopAfterFlashPreparation?: boolean;
   loadSequence: { mode: "cpu1-then-cpu2" | "cpu1-run-before-cpu2" };
   runSequence: { runMode?: "cpu1_boots_cpu2" | "debugger_runs_both" | "cpu2_pre_running"; runCpu1First: boolean; runCpu2: boolean; releaseCpu2BeforeCpu1?: boolean };
 }): void {
+  if (input.stopAfterFlashPreparation) return;
   const issues = workflowStartupContractIssues({
     loadMode: input.loadSequence.mode,
     runMode: input.runSequence.runMode,

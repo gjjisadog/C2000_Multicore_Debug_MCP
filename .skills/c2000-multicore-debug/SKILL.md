@@ -79,16 +79,13 @@ section for CLI discovery, filesystem roots and the real-engine test command.
 
 ## Workflow priority
 
-1. On the first C2000 MCP use in each new Codex conversation, call the read-only
-   `c2000_getServerHealth` tool and ask the user whether an automatic board
-   power switch is installed. Its `powerSwitchSetup.automaticControlConfigured`
-   field reports MCP configuration, not physical installation. Remember the
-   answer for this conversation and ask again in a new conversation. Use
-   automatic power control only when the user confirms installation and MCP
-   configuration is present; otherwise use the supported manual path when a
-   power cycle is needed. This check never operates the switch.
-2. Inspect environment, server/daemon health, board registration, filesystem
-   roots, and the applicable tool contract.
+1. Inspect environment, server/daemon health, board registration, filesystem
+   roots, and the applicable tool contract. Use `c2000_getServerHealth` for
+   server readiness.
+2. When a requested plan may use automatic power control, check
+   `powerSwitchSetup.automaticControlConfigured` in server health and confirm
+   which board the switch powers if the conversation has not already established
+   it. Use the supported manual path if automatic control is unavailable.
 3. For target work, use one server-side workflow or one durable job. Register a
    serial-bound board and wait for its worker before touching a target.
    Check `c2000_listBoards` before target access; if target identity is
@@ -311,6 +308,9 @@ personal rankings or causal claims from cross-improvement correlations.
   `sessionMode`, `autoCloseOnComplete`, and `cleanupOnFailure` for this one-call
   plan; the daemon owns the preparation session through verification and closes
   it before operating the plug.
+- Add `flashIfChanged` with the same manifests to skip the write and power cycle
+  when both resident markers already match. The result is `flash_skipped` with
+  a read-only attach in the current session.
 - Flash programming completion is not a cold-start result. Before making a
   Flash-boot or IPC conclusion, perform and record one product-level startup
   boundary after programming: (a) power off and power on the board, (b) use
@@ -320,7 +320,9 @@ personal rankings or causal claims from cross-improvement correlations.
   The `f28p65x-paired-flash` preset stops at `flash_prepared`; the optional
   `afterFlashPowerCycle` plan runs marker checks, `c2000_cycleBoardPower` with
   at least five seconds OFF, and a fresh read-only attach inside one MCP call.
-  Without that plan, perform these stages explicitly before debugger restart.
+  For programming only, stop at `flash_prepared`. For product startup
+  validation outside that plan, verify both images and record the chosen
+  product-level startup boundary before drawing startup or IPC conclusions.
 - Do not assign PWM, contactor, power-stage, or HV control variables as part of
   generic verification. Target writes and fault injection remain in existing
   safe/full and durable-job boundaries.

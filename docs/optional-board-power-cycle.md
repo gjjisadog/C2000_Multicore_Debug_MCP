@@ -71,6 +71,12 @@ marker verification fails, the daemon does not request power. If power returns
 `manual_required`, it pauses before the fresh attach. `mode="auto"` fails before
 programming when automatic power control is unavailable.
 
+To cycle power only after an actual write, add `flashIfChanged` to the same
+request and reference the same manifest for each core in both options. If
+both markers already match, the call returns `flash_skipped` with a read-only
+attach and `powerActionAttempted=false`. An unreadable marker stops the
+conditional flow. A readable mismatch enters the paired write and power cycle.
+
 An explicit user authorization remains valid throughout the same conversation
 for ongoing work on that board, including rebuilt CPU1/CPU2 images and
 intentional reprogramming after a mismatch. The agent records fresh artifact

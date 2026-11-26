@@ -1664,8 +1664,10 @@ marker readback, and attach or programming timings in milliseconds. A write also
 reports Flash preparation and per-core load timings under `flashProgramming.performance`.
 Both successful outcomes keep an interactive session. Close it when finished, or use
 the `flash_prepared` session for `c2000_cycleBoardPower` to verify product startup.
-Use `afterFlashPowerCycle` separately when the launch should always program,
-power cycle, and reconnect in one call.
+Add `afterFlashPowerCycle` with the same manifests to power cycle and reconnect
+in the same call after a write. A `flash_skipped` result keeps the read-only
+attach and skips power control. Use `afterFlashPowerCycle` on its own to always
+program, power cycle, and reconnect.
 
 IPC readiness expressions are firmware-specific and optional. When omitted,
 the workflow can load and start the target but reports `ipcAcceptance:

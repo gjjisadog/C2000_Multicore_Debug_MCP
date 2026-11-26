@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.22 - 2026-11-26
+
+- Combine conditional paired Flash programming with the post-write power
+  cycle. Matching resident markers skip both the write and the power cycle.
+- Treat build-family naming differences as warnings for explicitly selected
+  CPU1/CPU2 artifacts. Keep bank and image verification in the programming
+  flow and defer application startup checks until that stage is requested.
+- Delay automatic power-switch confirmation until the requested workflow may
+  use it.
+- Bind readiness checks to the selected board and probe, require a unique
+  compatible pair for automatic discovery, and report core connection
+  failures before resetting or loading firmware.
+
 ## 0.7.21 - 2026-11-26
 
 - Accept matching F28P650DK8 or F28P650DK9 CPU1/CPU2 images in F28P65x

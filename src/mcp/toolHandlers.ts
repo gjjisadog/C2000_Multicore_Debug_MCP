@@ -1772,7 +1772,7 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
           const cpu1Core = board.cores.find(core => core.load && isCpuCore(core, "cpu1"));
           const cpu2Core = board.cores.find(core => core.load && isCpuCore(core, "cpu2"));
           if (cpu1Core && cpu2Core) {
-            const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri);
+            const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri, undefined, false, { explicitPair: true });
             if (!pairing.compatible) {
               throw new DebugMcpError("ArtifactPairInvalid", `CPU1/CPU2 launch artifacts are incompatible for ${boardId}`, {
                 boardId,
@@ -1924,7 +1924,8 @@ export function createToolHandlers(manager: DebugSessionManager, deps: ToolHandl
         const cpu1Core = cores.find(core => core.load && isCpuCore(core, "cpu1"));
         const cpu2Core = cores.find(core => core.load && isCpuCore(core, "cpu2"));
         if (cpu1Core && cpu2Core) {
-          const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri, programDiscovery ? "F28P65x" : undefined);
+          const pairing = validateProgramPair(cpu1Core.programUri, cpu2Core.programUri, programDiscovery ? "F28P65x" : undefined,
+            false, { explicitPair: !programDiscovery || (programDiscovery.cpu1.source === "env" && programDiscovery.cpu2.source === "env") });
           failureContext = { ...failureContext, artifactPair: pairing };
           if (!pairing.compatible) {
             throw new DebugMcpError("ArtifactPairInvalid", "CPU1/CPU2 launch artifacts are incomplete or incompatible", { pairing });

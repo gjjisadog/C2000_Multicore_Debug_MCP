@@ -159,6 +159,28 @@ async function fixture(options: { cpu2Map?: string; cpu1Map?: string } = {}) {
 }
 
 describe("F28P65x paired Flash programming contract", () => {
+  test("burns explicitly paired images with different names without starting firmware", async () => {
+    const cpu1Map = `${FLASH_CPU1_MAP}\nGLOBAL SYMBOLS: SORTED BY Symbol Address\n00008000 unrelated`;
+    const { adapter, manager, input } = await fixture({ cpu1Map });
+    const directory = path.dirname(input.cpu1OutPath);
+    const paths = {
+      cpu1OutPath: path.join(directory, "cpu1_controller.out"), cpu2OutPath: path.join(directory, "cpu2_communications.out"),
+      cpu1MapPath: path.join(directory, "cpu1_controller.map"), cpu2MapPath: path.join(directory, "cpu2_communications.map")
+    };
+    await Promise.all([
+      writeFile(paths.cpu1OutPath, "cpu1-image"), writeFile(paths.cpu2OutPath, "cpu2-image"),
+      writeFile(paths.cpu1MapPath, cpu1Map), writeFile(paths.cpu2MapPath, FLASH_CPU2_MAP)
+    ]);
+    const result = await createC2000ToolInvoker(manager).invokeTool("c2000_runIpcAcceptance", {
+      ...input, ...paths, runSequence: { runMode: "cpu1_boots_cpu2" }
+    });
+    expect(result).toMatchObject({
+      success: true, status: "flash_prepared", ipcAcceptance: "NOT_RUN",
+      artifactPreflight: { programPair: { compatible: true, warnings: [expect.stringContaining("build family mismatch")] } }
+    });
+    expect(adapter.events.filter(event => event.startsWith("load:") || event.startsWith("run:"))).toEqual(["load:0", "load:2"]);
+  });
+
   test.each(["match", "changed", "read-failed", "readback-mismatch", "invalid-bank"] as const)("one-shot conditional Flash: %s", async scenario => {
     const { adapter, manager, input } = await fixture();
     const { sessionId: _sessionId, ...launchInput } = input;
